@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand};
+#[cfg(feature = "model-download")]
 use indicatif::{ProgressBar, ProgressStyle};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::hearing::breath::BreathGroupSegmenter;
@@ -24,6 +25,7 @@ use listenbury::time::ExactTimestamp;
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 #[cfg(feature = "tts-piper")]
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
@@ -52,73 +54,12 @@ enum Command {
         #[command(subcommand)]
         command: ModelsCommand,
     },
+    SpeechCache {
+        #[command(subcommand)]
+        command: SpeechCacheCommand,
+    },
 }
 
-    match command.as_str() {
-        "fake-turn" => {
-            let user_text = args.collect::<Vec<_>>().join(" ");
-            if user_text.is_empty() {
-                anyhow::bail!("usage: listenbury fake-turn \"hello there\"");
-            }
-            run_fake_turn(user_text)
-        }
-        "demo-vad" => run_demo_vad(),
-        "llama-turn" => {
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
-            };
-            let prompt = args.collect::<Vec<_>>().join(" ");
-            if prompt.is_empty() {
-                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
-            }
-            run_llama_turn(model_path, prompt)
-        }
-        "transcribe-synthetic" => {
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury transcribe-synthetic <model.bin>");
-            };
-            run_transcribe_synthetic(model_path)
-        }
-        "piper-say" => {
-            let Some(piper_bin) = args.next() else {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            };
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            };
-            let text = args.collect::<Vec<_>>().join(" ");
-            if text.is_empty() {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            }
-            run_piper_say(piper_bin, model_path, text)
-        }
-        "round-trip-wav" => {
-            let (input_wav, options) = parse_round_trip_wav_args(args)?;
-            run_round_trip_wav(input_wav, options)
-        }
-        "models" => run_models(args),
-        "speech-cache" => run_speech_cache(args),
-        _ => {
-            print_usage();
-            Ok(())
-        }
-    }
-}
-
-fn print_usage() {
-    println!("Usage:");
-    println!("  listenbury fake-turn \"hello there\"");
-    println!("  listenbury demo-vad");
-    println!("  listenbury llama-turn <model.gguf> \"prompt\"");
-    println!("  listenbury transcribe-synthetic <model.bin>");
-    println!("  listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-    println!(
-        "  listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
-    );
-    println!("  listenbury models <fetch|status|path>");
-    println!(
-        "  listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
-    );
 #[derive(Debug, Args)]
 struct TextCommand {
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
@@ -165,6 +106,21 @@ enum ModelsCommand {
     Path,
 }
 
+#[derive(Debug, Subcommand)]
+enum SpeechCacheCommand {
+    Prewarm(SpeechCachePrewarmCommand),
+}
+
+#[derive(Debug, Args)]
+struct SpeechCachePrewarmCommand {
+    #[arg(long)]
+    piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    listenbury_home: Option<PathBuf>,
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
@@ -192,6 +148,7 @@ fn main() -> Result<()> {
             },
         ),
         Command::Models { command } => run_models(command),
+        Command::SpeechCache { command } => run_speech_cache(command),
     }
 }
 
@@ -295,23 +252,14 @@ fn run_models(_command: ModelsCommand) -> Result<()> {
 }
 
 #[cfg(feature = "tts-piper")]
-fn run_speech_cache(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let Some(subcommand) = args.next() else {
-        anyhow::bail!(
-            "usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
-        );
-    };
-
-    match subcommand.as_str() {
-        "prewarm" => run_speech_cache_prewarm(args),
-        _ => anyhow::bail!(
-            "usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
-        ),
+fn run_speech_cache(command: SpeechCacheCommand) -> Result<()> {
+    match command {
+        SpeechCacheCommand::Prewarm(command) => run_speech_cache_prewarm(command),
     }
 }
 
 #[cfg(not(feature = "tts-piper"))]
-fn run_speech_cache(_args: impl Iterator<Item = String>) -> Result<()> {
+fn run_speech_cache(_command: SpeechCacheCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `tts-piper` feature")
 }
 
@@ -324,8 +272,8 @@ struct SpeechCachePrewarmOptions {
 }
 
 #[cfg(feature = "tts-piper")]
-fn run_speech_cache_prewarm(args: impl Iterator<Item = String>) -> Result<()> {
-    let options = parse_speech_cache_prewarm_args(args)?;
+fn run_speech_cache_prewarm(command: SpeechCachePrewarmCommand) -> Result<()> {
+    let options = SpeechCachePrewarmOptions::from_command(command)?;
     let config = piper_config_for_voice(&options.piper_bin, &options.piper_voice)?;
     let mut tts = CachedTextToSpeech::new(
         PiperTextToSpeech::new(config.clone()),
@@ -343,39 +291,29 @@ fn run_speech_cache_prewarm(args: impl Iterator<Item = String>) -> Result<()> {
 }
 
 #[cfg(feature = "tts-piper")]
-fn parse_speech_cache_prewarm_args(
-    mut args: impl Iterator<Item = String>,
-) -> Result<SpeechCachePrewarmOptions> {
-    let mut piper_bin = std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from);
-    let mut piper_voice = std::env::var_os("LISTENBURY_PIPER_VOICE").map(PathBuf::from);
-    let mut listenbury_home = std::env::var_os("LISTENBURY_HOME").map(PathBuf::from);
+impl SpeechCachePrewarmOptions {
+    fn from_command(command: SpeechCachePrewarmCommand) -> Result<Self> {
+        let piper_bin = command
+            .piper_bin
+            .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("piper"));
+        let piper_voice = command
+            .piper_voice
+            .or_else(|| std::env::var_os("LISTENBURY_PIPER_VOICE").map(PathBuf::from))
+            .context(
+                "missing Piper voice path; set LISTENBURY_PIPER_VOICE or pass --piper-voice <voice.onnx>",
+            )?;
+        let listenbury_home = command
+            .listenbury_home
+            .or_else(|| std::env::var_os("LISTENBURY_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from(".listenbury"));
 
-    while let Some(flag) = args.next() {
-        let value = args.next().with_context(|| {
-            format!(
-                "missing value for {flag}; usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
-            )
-        })?;
-        match flag.as_str() {
-            "--piper-bin" => piper_bin = Some(PathBuf::from(value)),
-            "--piper-voice" => piper_voice = Some(PathBuf::from(value)),
-            "--listenbury-home" => listenbury_home = Some(PathBuf::from(value)),
-            _ => anyhow::bail!(
-                "unknown speech-cache option {flag}; expected --piper-bin, --piper-voice, or --listenbury-home"
-            ),
-        }
+        Ok(Self {
+            piper_bin,
+            piper_voice,
+            listenbury_home,
+        })
     }
-
-    let piper_voice = piper_voice.context(
-        "missing Piper voice path; set LISTENBURY_PIPER_VOICE or pass --piper-voice <voice.onnx>",
-    )?;
-    let listenbury_home = listenbury_home.unwrap_or_else(|| PathBuf::from(".listenbury"));
-
-    Ok(SpeechCachePrewarmOptions {
-        piper_bin: piper_bin.unwrap_or_else(|| PathBuf::from("piper")),
-        piper_voice,
-        listenbury_home,
-    })
 }
 
 #[cfg(feature = "tts-piper")]
@@ -902,6 +840,14 @@ fn collect_tts_audio(tts: &mut impl TextToSpeech, timeout: Duration) -> Result<V
 }
 
 #[cfg(feature = "tts-piper")]
+#[cfg_attr(
+    not(all(
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )),
+    allow(dead_code)
+)]
 fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
     anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
 
