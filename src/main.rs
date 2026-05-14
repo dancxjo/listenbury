@@ -3,12 +3,18 @@ use listenbury::audio::frame::AudioFrame;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
+#[cfg(feature = "tts-piper")]
+use listenbury::mouth::planner::SpeechPlan;
 use listenbury::mouth::planner::SpeechPlanner;
+#[cfg(feature = "tts-piper")]
+use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "llm-llama-cpp")]
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
+#[cfg(feature = "tts-piper")]
+use listenbury::{PiperConfig, PiperTextToSpeech};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -44,6 +50,19 @@ fn main() -> Result<()> {
             };
             run_transcribe_synthetic(model_path)
         }
+        "piper-say" => {
+            let Some(piper_bin) = args.next() else {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            };
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            };
+            let text = args.collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            }
+            run_piper_say(piper_bin, model_path, text)
+        }
         _ => {
             print_usage();
             Ok(())
@@ -57,6 +76,7 @@ fn print_usage() {
     println!("  listenbury demo-vad");
     println!("  listenbury llama-turn <model.gguf> \"prompt\"");
     println!("  listenbury transcribe-synthetic <model.bin>");
+    println!("  listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
 }
 
 fn run_fake_turn(user_text: String) -> Result<()> {
@@ -205,4 +225,121 @@ fn run_transcribe_synthetic(model_path: String) -> Result<()> {
 #[cfg(not(feature = "asr-whisper"))]
 fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
     anyhow::bail!("listenbury was built without the `asr-whisper` feature")
+}
+
+#[cfg(feature = "tts-piper")]
+fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<()> {
+    let model_path = std::path::PathBuf::from(model_path);
+    let inferred_config_path = model_path.with_extension("onnx.json");
+    let mut config = PiperConfig::new(piper_bin, model_path);
+    if inferred_config_path.exists() {
+        if let Some(sample_rate_hz) = read_piper_sample_rate_hz(&inferred_config_path)? {
+            config.sample_rate_hz = sample_rate_hz;
+        }
+        config.config_path = Some(inferred_config_path);
+    }
+
+    let mut tts = PiperTextToSpeech::new(config);
+    tts.enqueue(SpeechPlan::FullTurn(text))?;
+
+    let mut frames = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let quiet_after_audio = std::time::Duration::from_millis(100);
+    let mut last_audio_at = None;
+    while std::time::Instant::now() < deadline {
+        let new_frames = tts.poll_audio()?;
+        if new_frames.is_empty() {
+            if let Some(last_audio_at) = last_audio_at {
+                if std::time::Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
+                    break;
+                }
+            }
+        } else {
+            frames.extend(new_frames);
+            last_audio_at = Some(std::time::Instant::now());
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    if frames.is_empty() {
+        anyhow::bail!("Piper produced no audio frames before timeout");
+    }
+
+    std::fs::create_dir_all("out").context("failed to create out directory")?;
+    let output_path = std::path::Path::new("out/listenbury-piper-test.wav");
+    write_wav(output_path, &frames)?;
+
+    let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    println!(
+        "Wrote {} frames / {} samples to {}",
+        frames.len(),
+        sample_count,
+        output_path.display()
+    );
+
+    Ok(())
+}
+
+#[cfg(not(feature = "tts-piper"))]
+fn run_piper_say(_piper_bin: String, _model_path: String, _text: String) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `tts-piper` feature")
+}
+
+#[cfg(feature = "tts-piper")]
+fn write_wav(path: &std::path::Path, frames: &[AudioFrame]) -> Result<()> {
+    let Some(first_frame) = frames.first() else {
+        anyhow::bail!("cannot write WAV without audio frames");
+    };
+
+    let spec = hound::WavSpec {
+        channels: first_frame.channels,
+        sample_rate: first_frame.sample_rate_hz,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)
+        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
+
+    for frame in frames {
+        anyhow::ensure!(
+            frame.channels == first_frame.channels,
+            "Piper frame channel count changed from {} to {}",
+            first_frame.channels,
+            frame.channels
+        );
+        anyhow::ensure!(
+            frame.sample_rate_hz == first_frame.sample_rate_hz,
+            "Piper frame sample rate changed from {} to {}",
+            first_frame.sample_rate_hz,
+            frame.sample_rate_hz
+        );
+
+        for sample in &frame.samples {
+            writer.write_sample(f32_to_i16(*sample))?;
+        }
+    }
+
+    writer.finalize()?;
+    Ok(())
+}
+
+#[cfg(feature = "tts-piper")]
+fn f32_to_i16(sample: f32) -> i16 {
+    let sample = sample.clamp(-1.0, 1.0);
+    (sample * i16::MAX as f32) as i16
+}
+
+#[cfg(feature = "tts-piper")]
+fn read_piper_sample_rate_hz(path: &std::path::Path) -> Result<Option<u32>> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read Piper config at {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse Piper config at {}", path.display()))?;
+
+    Ok(value
+        .get("audio")
+        .and_then(|audio| audio.get("sample_rate"))
+        .and_then(|sample_rate| sample_rate.as_u64())
+        .and_then(|sample_rate| u32::try_from(sample_rate).ok()))
 }

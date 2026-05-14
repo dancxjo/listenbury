@@ -22,7 +22,10 @@ pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
 pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 pub use mind::turn::{TurnState, TurnTracker};
+#[cfg(feature = "tts-piper")]
+pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
 pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner};
+pub use mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use time::{ExactTimestamp, Timed};

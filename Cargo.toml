@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 encoding_rs = { version = "0.8", optional = true }
+hound = { version = "3", optional = true }
 
 [features]
 default = []
@@ -28,7 +29,7 @@ asr-whisper-async = ["asr-whisper", "whisper-cpp-plus/async"]
 asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
 asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
-tts-piper = []
+tts-piper = ["dep:hound"]
 vision-webcam = []
 
 [dependencies.cpal]
