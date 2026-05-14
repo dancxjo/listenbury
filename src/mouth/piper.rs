@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 
 use crate::audio::frame::AudioFrame;
-use crate::mouth::planner::SpeechPlan;
+use crate::mouth::planner::{SpeechPlan, strip_emoji};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
 
@@ -142,7 +142,7 @@ fn should_shutdown_after_drain(rx: &Receiver<PiperCommand>) -> bool {
 }
 
 fn plan_text(plan: SpeechPlan) -> String {
-    plan.text().to_string()
+    strip_emoji(plan.text())
 }
 
 fn synthesize(config: &PiperConfig, text: &str) -> Result<Vec<f32>> {
