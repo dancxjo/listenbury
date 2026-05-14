@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
@@ -20,85 +22,121 @@ use listenbury::time::ExactTimestamp;
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 #[cfg(feature = "tts-piper")]
 use listenbury::{PiperConfig, PiperTextToSpeech};
+use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "tts-piper")]
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]
 use std::time::{Duration, Instant};
+
+#[derive(Debug, Parser)]
+#[command(name = "listenbury", version, about = "Low-latency PETE runtime")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    FakeTurn(TextCommand),
+    DemoVad,
+    LlamaTurn(LlamaTurnCommand),
+    TranscribeSynthetic(TranscribeSyntheticCommand),
+    PiperSay(PiperSayCommand),
+    RoundTripWav(RoundTripWavCommand),
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
+}
+
+#[derive(Debug, Args)]
+struct TextCommand {
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    text: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct LlamaTurnCommand {
+    model_path: String,
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    prompt: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct TranscribeSyntheticCommand {
+    model_path: String,
+}
+
+#[derive(Debug, Args)]
+struct PiperSayCommand {
+    piper_bin: String,
+    model_path: String,
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    text: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct RoundTripWavCommand {
+    input_wav: PathBuf,
+    #[arg(long)]
+    whisper_model: Option<PathBuf>,
+    #[arg(long)]
+    llm_model: Option<PathBuf>,
+    #[arg(long)]
+    piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    piper_voice: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum ModelsCommand {
+    Fetch,
+    Status,
+    Path,
+}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let mut args = std::env::args().skip(1);
-    let Some(command) = args.next() else {
-        print_usage();
+    let cli = Cli::parse();
+    let Some(command) = cli.command else {
+        let mut root = Cli::command();
+        root.print_help()?;
+        println!();
         return Ok(());
     };
 
-    match command.as_str() {
-        "fake-turn" => {
-            let user_text = args.collect::<Vec<_>>().join(" ");
-            if user_text.is_empty() {
-                anyhow::bail!("usage: listenbury fake-turn \"hello there\"");
-            }
-            run_fake_turn(user_text)
-        }
-        "demo-vad" => run_demo_vad(),
-        "llama-turn" => {
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
-            };
-            let prompt = args.collect::<Vec<_>>().join(" ");
-            if prompt.is_empty() {
-                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
-            }
-            run_llama_turn(model_path, prompt)
-        }
-        "transcribe-synthetic" => {
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury transcribe-synthetic <model.bin>");
-            };
-            run_transcribe_synthetic(model_path)
-        }
-        "piper-say" => {
-            let Some(piper_bin) = args.next() else {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            };
-            let Some(model_path) = args.next() else {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            };
-            let text = args.collect::<Vec<_>>().join(" ");
-            if text.is_empty() {
-                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-            }
-            run_piper_say(piper_bin, model_path, text)
-        }
-        "round-trip-wav" => {
-            let (input_wav, options) = parse_round_trip_wav_args(args)?;
-            run_round_trip_wav(input_wav, options)
-        }
-        "models" => run_models(args),
-        _ => {
-            print_usage();
-            Ok(())
-        }
+    match command {
+        Command::FakeTurn(cmd) => run_fake_turn(cmd.text.join(" ")),
+        Command::DemoVad => run_demo_vad(),
+        Command::LlamaTurn(cmd) => run_llama_turn(cmd.model_path, cmd.prompt.join(" ")),
+        Command::TranscribeSynthetic(cmd) => run_transcribe_synthetic(cmd.model_path),
+        Command::PiperSay(cmd) => run_piper_say(cmd.piper_bin, cmd.model_path, cmd.text.join(" ")),
+        Command::RoundTripWav(cmd) => run_round_trip_wav(
+            cmd.input_wav,
+            RoundTripWavOptions {
+                whisper_model: cmd.whisper_model,
+                llm_model: cmd.llm_model,
+                piper_bin: cmd.piper_bin,
+                piper_voice: cmd.piper_voice,
+            },
+        ),
+        Command::Models { command } => run_models(command),
     }
 }
 
-fn print_usage() {
-    println!("Usage:");
-    println!("  listenbury fake-turn \"hello there\"");
-    println!("  listenbury demo-vad");
-    println!("  listenbury llama-turn <model.gguf> \"prompt\"");
-    println!("  listenbury transcribe-synthetic <model.bin>");
-    println!("  listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
-    println!(
-        "  listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
-    );
-    println!("  listenbury models <fetch|status|path>");
-}
-
 #[derive(Debug, Default)]
+#[cfg_attr(
+    not(all(
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )),
+    allow(dead_code)
+)]
 struct RoundTripWavOptions {
     whisper_model: Option<PathBuf>,
     llm_model: Option<PathBuf>,
@@ -106,77 +144,70 @@ struct RoundTripWavOptions {
     piper_voice: Option<PathBuf>,
 }
 
-fn parse_round_trip_wav_args(
-    mut args: impl Iterator<Item = String>,
-) -> Result<(PathBuf, RoundTripWavOptions)> {
-    let Some(input_wav) = args.next() else {
-        anyhow::bail!(
-            "usage: listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
-        );
-    };
-
-    let mut options = RoundTripWavOptions::default();
-
-    while let Some(flag) = args.next() {
-        let value = args.next().with_context(|| {
-            format!(
-                "missing value for {flag}; usage: listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
-            )
-        })?;
-
-        match flag.as_str() {
-            "--whisper-model" => options.whisper_model = Some(PathBuf::from(value)),
-            "--llm-model" => options.llm_model = Some(PathBuf::from(value)),
-            "--piper-bin" => options.piper_bin = Some(PathBuf::from(value)),
-            "--piper-voice" => options.piper_voice = Some(PathBuf::from(value)),
-            _ => anyhow::bail!(
-                "unknown round-trip-wav option {flag}; expected --whisper-model, --llm-model, --piper-bin, or --piper-voice"
-            ),
-        }
-    }
-
-    Ok((PathBuf::from(input_wav), options))
-}
-
 #[cfg(feature = "model-download")]
-fn run_models(mut args: impl Iterator<Item = String>) -> Result<()> {
-    let Some(subcommand) = args.next() else {
-        anyhow::bail!("usage: listenbury models <fetch|status|path>");
-    };
-
-    match subcommand.as_str() {
-        "path" => {
+fn run_models(command: ModelsCommand) -> Result<()> {
+    match command {
+        ModelsCommand::Path => {
             let home = resolve_listenbury_home()?;
-            println!("listenbury_home={}", home.display());
-            println!("models_dir={}", home.join("models").display());
-            println!("bin_dir={}", home.join("bin").display());
+            println!("{}={}", "listenbury_home".cyan(), home.display());
+            println!("{}={}", "models_dir".cyan(), home.join("models").display());
+            println!("{}={}", "bin_dir".cyan(), home.join("bin").display());
             for (asset, path) in default_asset_paths()? {
-                println!("{}={}", asset.id, path.display());
+                println!("{}={}", asset.id.cyan(), path.display());
             }
             Ok(())
         }
-        "status" => {
+        ModelsCommand::Status => {
             for status in default_assets_status()? {
-                let state = if status.present { "present" } else { "missing" };
-                println!("{} {} {}", status.asset_id, state, status.path.display());
+                let state = if status.present {
+                    "present".green().to_string()
+                } else {
+                    "missing".red().to_string()
+                };
+                println!(
+                    "{} {} {}",
+                    status.asset_id.bold(),
+                    state,
+                    status.path.display()
+                );
             }
             Ok(())
         }
-        "fetch" => {
+        ModelsCommand::Fetch => {
+            let spinner = ProgressBar::new_spinner();
+            let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
+                .context("failed to create spinner style")?;
+            spinner.set_style(style);
+            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
+            spinner.set_message("Fetching default model assets...");
+
+            let results = fetch_default_assets()?;
+            spinner.finish_and_clear();
             let mut had_failure = false;
-            for result in fetch_default_assets()? {
+            for result in results {
                 match result.outcome {
                     FetchOutcome::SkippedExisting => {
-                        println!("{} skipped {}", result.asset_id, result.path.display());
+                        println!(
+                            "{} {} {}",
+                            result.asset_id.bold(),
+                            "skipped".yellow(),
+                            result.path.display()
+                        );
                     }
                     FetchOutcome::Downloaded => {
-                        println!("{} downloaded {}", result.asset_id, result.path.display());
+                        println!(
+                            "{} {} {}",
+                            result.asset_id.bold(),
+                            "downloaded".green(),
+                            result.path.display()
+                        );
                     }
                     FetchOutcome::Failed => {
                         had_failure = true;
                         println!(
-                            "{} failed {} ({})",
-                            result.asset_id,
+                            "{} {} {} ({})",
+                            result.asset_id.bold(),
+                            "failed".red(),
                             result.path.display(),
                             result.error.as_deref().unwrap_or("unknown error")
                         );
@@ -188,12 +219,11 @@ fn run_models(mut args: impl Iterator<Item = String>) -> Result<()> {
             }
             Ok(())
         }
-        _ => anyhow::bail!("usage: listenbury models <fetch|status|path>"),
     }
 }
 
 #[cfg(not(feature = "model-download"))]
-fn run_models(_args: impl Iterator<Item = String>) -> Result<()> {
+fn run_models(_command: ModelsCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `model-download` feature")
 }
 
@@ -782,6 +812,7 @@ fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<Aud
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tts-piper")]
     use super::*;
     #[cfg(feature = "tts-piper")]
     use std::fs;
