@@ -89,3 +89,9 @@ pub enum VisionEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct UtteranceId(pub Uuid);
+
+impl UtteranceId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}

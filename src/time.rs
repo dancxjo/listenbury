@@ -9,7 +9,7 @@ impl ExactTimestamp {
     pub fn now() -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
+            .expect("system clock must be set to Unix epoch or later")
             .as_nanos();
         Self { unix_nanos: nanos }
     }
