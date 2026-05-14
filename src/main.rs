@@ -3,6 +3,14 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 #[cfg(feature = "model-download")]
 use indicatif::{ProgressBar, ProgressStyle};
 use listenbury::audio::frame::AudioFrame;
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::audio::read_wav_as_audio_frames;
+#[cfg(feature = "tts-piper")]
+use listenbury::audio::write_wav;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
@@ -13,11 +21,15 @@ use listenbury::models::{
 };
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::mouth::planner::ExpressiveUnit;
 use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
-#[cfg(all(feature = "asr-whisper", feature = "llm-llama-cpp", feature = "tts-piper"))]
-use listenbury::mouth::planner::ExpressiveUnit;
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -31,7 +43,11 @@ use listenbury::{PiperConfig, PiperTextToSpeech};
 use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
-#[cfg(feature = "tts-piper")]
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]
@@ -740,50 +756,6 @@ fn build_round_trip_prompt(transcript: &str) -> String {
 }
 
 #[cfg(feature = "tts-piper")]
-fn write_wav(path: &std::path::Path, frames: &[AudioFrame]) -> Result<()> {
-    let Some(first_frame) = frames.first() else {
-        anyhow::bail!("cannot write WAV without audio frames");
-    };
-
-    let spec = hound::WavSpec {
-        channels: first_frame.channels,
-        sample_rate: first_frame.sample_rate_hz,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
-
-    for frame in frames {
-        anyhow::ensure!(
-            frame.channels == first_frame.channels,
-            "Piper frame channel count changed from {} to {}",
-            first_frame.channels,
-            frame.channels
-        );
-        anyhow::ensure!(
-            frame.sample_rate_hz == first_frame.sample_rate_hz,
-            "Piper frame sample rate changed from {} to {}",
-            first_frame.sample_rate_hz,
-            frame.sample_rate_hz
-        );
-
-        for sample in &frame.samples {
-            writer.write_sample(f32_to_i16(*sample))?;
-        }
-    }
-
-    writer.finalize()?;
-    Ok(())
-}
-
-#[cfg(feature = "tts-piper")]
-fn f32_to_i16(sample: f32) -> i16 {
-    let sample = sample.clamp(-1.0, 1.0);
-    (sample * i16::MAX as f32) as i16
-}
-
-#[cfg(feature = "tts-piper")]
 fn read_piper_sample_rate_hz(path: &std::path::Path) -> Result<Option<u32>> {
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read Piper config at {}", path.display()))?;
@@ -842,150 +814,4 @@ fn collect_tts_audio(tts: &mut impl TextToSpeech, timeout: Duration) -> Result<V
     }
 
     Ok(frames)
-}
-
-#[cfg(feature = "tts-piper")]
-#[cfg_attr(
-    not(all(
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )),
-    allow(dead_code)
-)]
-fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
-    anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
-
-    let mut reader = hound::WavReader::open(path)
-        .with_context(|| format!("failed to open WAV at {}", path.display()))?;
-    let spec = reader.spec();
-
-    anyhow::ensure!(
-        spec.channels == 1,
-        "expected mono WAV input at {}; got {} channels",
-        path.display(),
-        spec.channels
-    );
-    anyhow::ensure!(
-        spec.sample_rate == 16_000,
-        "expected 16 kHz WAV input at {}; got {} Hz",
-        path.display(),
-        spec.sample_rate
-    );
-    anyhow::ensure!(
-        spec.sample_format == hound::SampleFormat::Int,
-        "expected integer PCM WAV input at {}; floating-point WAV is not supported yet",
-        path.display()
-    );
-
-    let samples = match spec.bits_per_sample {
-        1..=8 => reader
-            .samples::<i8>()
-            .map(|sample| sample.map(|sample| sample as f32 / 128.0))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
-        9..=16 => reader
-            .samples::<i16>()
-            .map(|sample| sample.map(|sample| sample as f32 / i16::MAX as f32))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
-        17..=32 => {
-            let scale = if spec.bits_per_sample == 32 {
-                i32::MAX as f32
-            } else {
-                ((1_i64 << (spec.bits_per_sample - 1)) - 1) as f32
-            };
-            reader
-                .samples::<i32>()
-                .map(|sample| sample.map(|sample| sample as f32 / scale))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?
-        }
-        bits => anyhow::bail!(
-            "unsupported PCM bit depth {bits} for WAV input at {}",
-            path.display()
-        ),
-    };
-
-    Ok(samples
-        .chunks(frame_samples)
-        .map(|chunk| AudioFrame {
-            captured_at: ExactTimestamp::now(),
-            sample_rate_hz: spec.sample_rate,
-            channels: spec.channels,
-            samples: chunk.to_vec(),
-        })
-        .collect())
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(feature = "tts-piper")]
-    use super::*;
-    #[cfg(feature = "tts-piper")]
-    use std::fs;
-
-    #[cfg(feature = "tts-piper")]
-    fn unique_test_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("listenbury-{name}-{}.wav", std::process::id()))
-    }
-
-    #[cfg(feature = "tts-piper")]
-    const FLOAT_TOLERANCE: f32 = 0.0001;
-
-    #[cfg(feature = "tts-piper")]
-    #[test]
-    fn read_wav_as_audio_frames_chunks_pcm_samples() {
-        let path = unique_test_path("mono-16k");
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 16_000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
-        writer
-            .write_sample(i16::MIN)
-            .expect("sample write should succeed");
-        writer
-            .write_sample(0_i16)
-            .expect("sample write should succeed");
-        writer
-            .write_sample(i16::MAX)
-            .expect("sample write should succeed");
-        writer.finalize().expect("WAV should finalize");
-
-        let frames = read_wav_as_audio_frames(&path, 2).expect("WAV should be read");
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0].sample_rate_hz, 16_000);
-        assert_eq!(frames[0].channels, 1);
-        assert_eq!(frames[0].samples.len(), 2);
-        assert_eq!(frames[1].samples.len(), 1);
-        assert!(frames[0].samples[0] <= -1.0 + FLOAT_TOLERANCE);
-        assert!(frames[1].samples[0] >= 1.0 - FLOAT_TOLERANCE);
-
-        fs::remove_file(path).expect("temporary WAV should be removed");
-    }
-
-    #[cfg(feature = "tts-piper")]
-    #[test]
-    fn read_wav_as_audio_frames_rejects_wrong_sample_rate() {
-        let path = unique_test_path("wrong-rate");
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: 8_000,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
-        writer
-            .write_sample(0_i16)
-            .expect("sample write should succeed");
-        writer.finalize().expect("WAV should finalize");
-
-        let error = read_wav_as_audio_frames(&path, 1600).expect_err("sample rate should fail");
-        assert!(error.to_string().contains("expected 16 kHz WAV input"));
-
-        fs::remove_file(path).expect("temporary WAV should be removed");
-    }
 }
