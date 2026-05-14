@@ -16,6 +16,8 @@ use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
+#[cfg(all(feature = "asr-whisper", feature = "llm-llama-cpp", feature = "tts-piper"))]
+use listenbury::mouth::planner::ExpressiveUnit;
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -339,9 +341,9 @@ fn run_fake_turn(user_text: String) -> Result<()> {
             }
         }
 
-        for plan in planner.ingest(&events) {
+        for unit in planner.ingest(&events) {
             println!();
-            println!("SpeechPlan: {plan:?}");
+            println!("ExpressiveUnit: {unit:?}");
         }
 
         if events.iter().any(|event| {
@@ -559,7 +561,10 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
         }
 
         let emitted = planner.ingest(&events);
-        if let Some(plan) = emitted.last().cloned() {
+        if let Some(plan) = emitted.into_iter().rev().find_map(|u| match u {
+            ExpressiveUnit::Speech(plan) => Some(plan),
+            ExpressiveUnit::Face(_) => None,
+        }) {
             last_plan = Some(plan);
         }
 

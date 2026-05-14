@@ -30,7 +30,9 @@ pub use mind::controller::{
 pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
-pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
+pub use mouth::planner::{
+    ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit, strip_emoji,
+};
 pub use mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;

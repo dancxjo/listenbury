@@ -1,5 +1,69 @@
 use crate::mind::llm::LlmEvent;
 
+/// Remove all emoji characters from a string, leaving only non-emoji text.
+pub fn strip_emoji(text: &str) -> String {
+    text.chars().filter(|&ch| !is_emoji_char(ch)).collect()
+}
+
+/// Returns `true` if `ch` is an emoji character.
+fn is_emoji_char(ch: char) -> bool {
+    let cp = ch as u32;
+    matches!(
+        cp,
+        0x00A9
+            | 0x00AE
+            | 0x2194..=0x2199
+            | 0x21A9..=0x21AA
+            | 0x231A..=0x231B
+            | 0x23E9..=0x23F3
+            | 0x23F8..=0x23FA
+            | 0x25AA..=0x25AB
+            | 0x25B6
+            | 0x25C0
+            | 0x25FB..=0x25FE
+            | 0x2600..=0x27BF
+            | 0x2934..=0x2935
+            | 0x2B05..=0x2B07
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+            | 0x1F000..=0x1FFFF
+    )
+}
+
+/// A face expression command emitted when emoji are detected in LLM output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FaceCommand {
+    /// Set Pete's facial expression to the given emoji.
+    SetEmoji(String),
+    /// Clear any active facial expression.
+    Clear,
+}
+
+/// A single unit in the expressive output stream.
+///
+/// The planner emits an ordered sequence of `ExpressiveUnit`s. Speech units are
+/// sent to TTS; face units update Pete's displayed countenance inline with
+/// speech.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpressiveUnit {
+    Speech(SpeechPlan),
+    Face(FaceCommand),
+}
+
+/// Internal result type for boundary detection.
+enum BoundaryResult {
+    /// A sentence-ending boundary; the payload is the byte offset just after
+    /// the terminating character.
+    SentenceEnd(usize),
+    /// An emoji character at `(start, end)` byte offsets within the buffer.
+    EmojiMarker(usize, usize),
+}
+
 const MIN_NON_BACKCHANNEL_CHARS: usize = 12;
 pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "Okay.",
@@ -69,7 +133,7 @@ pub struct SpeechPlanner {
 }
 
 impl SpeechPlanner {
-    pub fn ingest(&mut self, events: &[LlmEvent]) -> Vec<SpeechPlan> {
+    pub fn ingest(&mut self, events: &[LlmEvent]) -> Vec<ExpressiveUnit> {
         let mut completed = false;
         for event in events {
             match event {
@@ -87,38 +151,66 @@ impl SpeechPlanner {
         self.emit_ready(completed)
     }
 
-    fn emit_ready(&mut self, completed: bool) -> Vec<SpeechPlan> {
-        let mut plans = Vec::new();
-        while let Some(boundary) = self.next_boundary(completed) {
-            let candidate = self.buffer[..boundary].trim();
-            if candidate.is_empty() {
-                self.buffer.drain(..boundary);
-                continue;
+    fn emit_ready(&mut self, completed: bool) -> Vec<ExpressiveUnit> {
+        let mut units = Vec::new();
+        loop {
+            match self.next_boundary(completed) {
+                None => break,
+                Some(BoundaryResult::SentenceEnd(end)) => {
+                    let candidate = self.buffer[..end].trim().to_string();
+                    if candidate.is_empty() {
+                        self.buffer.drain(..end);
+                        continue;
+                    }
+                    if let Some(unit) = classify_boundary_unit(&candidate) {
+                        units.push(ExpressiveUnit::Speech(unit.into()));
+                        self.buffer.drain(..end);
+                    } else if self.buffer[end..].chars().any(is_emoji_char) {
+                        // Emoji follows; flush as FullTurn to preserve ordering.
+                        units.push(ExpressiveUnit::Speech(
+                            SpeechUnit::FullTurn(candidate).into(),
+                        ));
+                        self.buffer.drain(..end);
+                    } else {
+                        break;
+                    }
+                }
+                Some(BoundaryResult::EmojiMarker(start, end)) => {
+                    let before = self.buffer[..start].trim().to_string();
+                    if !before.is_empty() {
+                        let unit = classify_completed_unit(&before)
+                            .unwrap_or(SpeechUnit::FullTurn(before));
+                        units.push(ExpressiveUnit::Speech(unit.into()));
+                    }
+                    let emoji = self.buffer[start..end].to_string();
+                    units.push(ExpressiveUnit::Face(FaceCommand::SetEmoji(emoji)));
+                    self.buffer.drain(..end);
+                }
             }
-
-            let Some(unit) = classify_boundary_unit(candidate) else {
-                break;
-            };
-            plans.push(unit.into());
-            self.buffer.drain(..boundary);
         }
 
         if completed {
-            let trailing = self.buffer.trim();
-            if let Some(unit) = classify_completed_unit(trailing) {
-                plans.push(unit.into());
+            let trailing = self.buffer.trim().to_string();
+            if let Some(unit) = classify_completed_unit(&trailing) {
+                units.push(ExpressiveUnit::Speech(unit.into()));
             }
             self.buffer.clear();
         }
 
-        plans
+        units
     }
 
-    fn next_boundary(&self, completed: bool) -> Option<usize> {
+    fn next_boundary(&self, completed: bool) -> Option<BoundaryResult> {
         for (index, ch) in self.buffer.char_indices() {
-            let boundary = index + ch.len_utf8();
-            let is_end = boundary == self.buffer.len();
-            let next_is_whitespace = self.buffer[boundary..]
+            let end = index + ch.len_utf8();
+
+            // Emoji characters always act as an immediate boundary.
+            if is_emoji_char(ch) {
+                return Some(BoundaryResult::EmojiMarker(index, end));
+            }
+
+            let is_end = end == self.buffer.len();
+            let next_is_whitespace = self.buffer[end..]
                 .chars()
                 .next()
                 .is_some_and(char::is_whitespace);
@@ -131,17 +223,17 @@ impl SpeechPlanner {
 
             match ch {
                 '.' => {
-                    let candidate = self.buffer[..boundary].trim();
+                    let candidate = self.buffer[..end].trim();
                     if is_common_abbreviation(candidate) {
                         continue;
                     }
-                    return Some(boundary);
+                    return Some(BoundaryResult::SentenceEnd(end));
                 }
-                '?' | '!' | ';' | ':' => return Some(boundary),
+                '?' | '!' | ';' | ':' => return Some(BoundaryResult::SentenceEnd(end)),
                 ',' => {
-                    let candidate = self.buffer[..boundary].trim();
+                    let candidate = self.buffer[..end].trim();
                     if is_safe_discourse_marker(candidate) {
-                        return Some(boundary);
+                        return Some(BoundaryResult::SentenceEnd(end));
                     }
                 }
                 _ => {}
@@ -203,20 +295,28 @@ mod tests {
         }
     }
 
+    fn speech(unit: SpeechUnit) -> ExpressiveUnit {
+        ExpressiveUnit::Speech(SpeechPlan::from(unit))
+    }
+
+    fn face(emoji: &str) -> ExpressiveUnit {
+        ExpressiveUnit::Face(FaceCommand::SetEmoji(emoji.to_string()))
+    }
+
     #[test]
     fn partial_fragment_emits_nothing() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("I think that")]);
-        assert!(plans.is_empty());
+        let units = planner.ingest(&[token("I think that")]);
+        assert!(units.is_empty());
     }
 
     #[test]
     fn complete_sentence_emits_unit() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("I think that works.")]);
+        let units = planner.ingest(&[token("I think that works.")]);
         assert_eq!(
-            plans,
-            vec![SpeechPlan::from(SpeechUnit::CompleteSentence(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
         );
@@ -225,29 +325,27 @@ mod tests {
     #[test]
     fn safe_backchannel_emits_early() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("Okay.")]);
+        let units = planner.ingest(&[token("Okay.")]);
         assert_eq!(
-            plans,
-            vec![SpeechPlan::from(SpeechUnit::Backchannel(
-                "Okay.".to_string()
-            ))]
+            units,
+            vec![speech(SpeechUnit::Backchannel("Okay.".to_string()))]
         );
     }
 
     #[test]
     fn comma_fragment_without_allowlist_emits_nothing() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("Not exactly,")]);
-        assert!(plans.is_empty());
+        let units = planner.ingest(&[token("Not exactly,")]);
+        assert!(units.is_empty());
     }
 
     #[test]
     fn comma_clause_emits_when_sentence_completes() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("Not exactly, there is a catch.")]);
+        let units = planner.ingest(&[token("Not exactly, there is a catch.")]);
         assert_eq!(
-            plans,
-            vec![SpeechPlan::from(SpeechUnit::CompleteSentence(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
                 "Not exactly, there is a catch.".to_string()
             ))]
         );
@@ -256,12 +354,73 @@ mod tests {
     #[test]
     fn planner_does_not_split_common_abbreviation() {
         let mut planner = SpeechPlanner::default();
-        let plans = planner.ingest(&[token("Dr. Smith arrived.")]);
+        let units = planner.ingest(&[token("Dr. Smith arrived.")]);
         assert_eq!(
-            plans,
-            vec![SpeechPlan::from(SpeechUnit::CompleteSentence(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
                 "Dr. Smith arrived.".to_string()
             ))]
         );
+    }
+
+    // --- Emoji tests ---
+
+    #[test]
+    fn emoji_at_start_emits_face_then_speech() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("🙂 Okay.")]);
+        assert_eq!(
+            units,
+            vec![
+                face("🙂"),
+                speech(SpeechUnit::Backchannel("Okay.".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn emoji_in_middle_splits_speech() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Okay 🙂 I see.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::FullTurn("Okay".to_string())),
+                face("🙂"),
+                speech(SpeechUnit::Backchannel("I see.".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn emoji_at_end_follows_speech() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("That works. 😄")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::FullTurn("That works.".to_string())),
+                face("😄"),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_without_emoji_unaffected() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("I think that works.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "I think that works.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn strip_emoji_removes_emoji_only() {
+        assert_eq!(strip_emoji("Hello 🙂 world"), "Hello  world");
+        assert_eq!(strip_emoji("No emoji here."), "No emoji here.");
+        assert_eq!(strip_emoji("😄"), "");
     }
 }

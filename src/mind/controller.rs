@@ -1,6 +1,6 @@
 use crate::mind::llm::LlmEvent;
 use crate::mind::turn::{TurnState, TurnTracker};
-use crate::mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
+use crate::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
 
@@ -201,7 +201,7 @@ impl ConversationController {
         }
     }
 
-    pub fn ingest_llm_events(&mut self, events: &[LlmEvent]) -> Vec<SpeechPlan> {
+    pub fn ingest_llm_events(&mut self, events: &[LlmEvent]) -> Vec<ExpressiveUnit> {
         self.speech_planner.ingest(events)
     }
 }
