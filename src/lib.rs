@@ -20,13 +20,13 @@ pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };
 pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
+pub use mind::controller::{
+    BackchannelId, ConversationController, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
+    FillerDecision, FillerPlanner, FillerPlannerConfig, RuntimePacket,
+};
 #[cfg(feature = "llm-llama-cpp")]
 pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
-pub use mind::controller::{
-    BackchannelId, ConversationController, FillerContext, FillerDecision, FillerPlanner,
-    FillerPlannerConfig, RuntimePacket, DEFAULT_FILLER_REPEAT_COOLDOWN_MS,
-};
 pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};

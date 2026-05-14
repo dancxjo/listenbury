@@ -120,12 +120,8 @@ fn normalize_signed_sample(sample: i64, bits_per_sample: u16) -> f32 {
 }
 
 fn f32_to_i16(sample: f32) -> i16 {
-    let sample = sample.clamp(-1.0, 1.0);
-    if sample < 0.0 {
-        (sample * -(i16::MIN as f32)).round() as i16
-    } else {
-        (sample * i16::MAX as f32).round() as i16
-    }
+    let scaled = (sample.clamp(-1.0, 1.0) * (i16::MAX as f32 + 1.0)).round();
+    scaled.clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
 #[cfg(test)]
@@ -215,5 +211,31 @@ mod tests {
         assert!(error.to_string().contains("expected mono WAV input"));
 
         fs::remove_file(path).expect("temporary WAV should be removed");
+    }
+
+    #[test]
+    fn normalize_signed_sample_maps_boundaries() {
+        assert_eq!(normalize_signed_sample(0, 8), 0.0);
+        assert_eq!(normalize_signed_sample(-128, 8), -1.0);
+        assert_eq!(normalize_signed_sample(127, 8), 1.0);
+
+        assert_eq!(normalize_signed_sample(-32_768, 16), -1.0);
+        assert_eq!(normalize_signed_sample(32_767, 16), 1.0);
+
+        assert_eq!(normalize_signed_sample(-8_388_608, 24), -1.0);
+        assert_eq!(normalize_signed_sample(8_388_607, 24), 1.0);
+
+        assert_eq!(normalize_signed_sample(i32::MIN as i64, 32), -1.0);
+        assert_eq!(normalize_signed_sample(i32::MAX as i64, 32), 1.0);
+    }
+
+    #[test]
+    fn f32_to_i16_clamps_and_rounds_samples() {
+        assert_eq!(f32_to_i16(-1.5), i16::MIN);
+        assert_eq!(f32_to_i16(-1.0), i16::MIN);
+        assert_eq!(f32_to_i16(0.0), 0);
+        assert_eq!(f32_to_i16(0.5), 16_384);
+        assert_eq!(f32_to_i16(1.0), i16::MAX);
+        assert_eq!(f32_to_i16(1.5), i16::MAX);
     }
 }
