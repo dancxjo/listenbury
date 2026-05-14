@@ -14,8 +14,6 @@ use listenbury::audio::{read_wav_frames, write_wav};
 #[cfg(feature = "audio-cpal")]
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "audio-cpal")]
-use std::path::Path;
-#[cfg(feature = "audio-cpal")]
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
