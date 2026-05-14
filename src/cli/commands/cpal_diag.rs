@@ -65,11 +65,32 @@ pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
         cpal::SampleFormat::F32 => {
             build_input_stream::<f32>(&device, &stream_config, sample_tx.clone(), err_fn)?
         }
+        cpal::SampleFormat::F64 => {
+            build_input_stream::<f64>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
+        cpal::SampleFormat::I8 => {
+            build_input_stream::<i8>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
         cpal::SampleFormat::I16 => {
             build_input_stream::<i16>(&device, &stream_config, sample_tx.clone(), err_fn)?
         }
+        cpal::SampleFormat::I32 => {
+            build_input_stream::<i32>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
+        cpal::SampleFormat::I64 => {
+            build_input_stream::<i64>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
+        cpal::SampleFormat::U8 => {
+            build_input_stream::<u8>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
         cpal::SampleFormat::U16 => {
             build_input_stream::<u16>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
+        cpal::SampleFormat::U32 => {
+            build_input_stream::<u32>(&device, &stream_config, sample_tx.clone(), err_fn)?
+        }
+        cpal::SampleFormat::U64 => {
+            build_input_stream::<u64>(&device, &stream_config, sample_tx.clone(), err_fn)?
         }
         sample_format => anyhow::bail!("unsupported input sample format: {sample_format:?}"),
     };
@@ -173,6 +194,20 @@ pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
             Arc::clone(&playback_cursor),
             err_fn,
         )?,
+        cpal::SampleFormat::F64 => build_output_stream::<f64>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I8 => build_output_stream::<i8>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
         cpal::SampleFormat::I16 => build_output_stream::<i16>(
             &device,
             &stream_config,
@@ -180,7 +215,42 @@ pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
             Arc::clone(&playback_cursor),
             err_fn,
         )?,
+        cpal::SampleFormat::I32 => build_output_stream::<i32>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I64 => build_output_stream::<i64>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U8 => build_output_stream::<u8>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
         cpal::SampleFormat::U16 => build_output_stream::<u16>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U32 => build_output_stream::<u32>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U64 => build_output_stream::<u64>(
             &device,
             &stream_config,
             Arc::clone(&samples),
