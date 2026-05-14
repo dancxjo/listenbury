@@ -8,8 +8,10 @@ use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets,
-    paths::resolve_listenbury_home,
+    default_asset_paths, default_assets_status, fetch_default_assets,
+    manifest::DEFAULT_MODELS,
+    paths::{asset_path, resolve_listenbury_home},
+    FetchOutcome,
 };
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
@@ -31,7 +33,6 @@ use listenbury::{PiperConfig, PiperTextToSpeech};
 use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
-#[cfg(feature = "tts-piper")]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]
@@ -82,10 +83,12 @@ struct TranscribeSyntheticCommand {
 
 #[derive(Debug, Args)]
 struct PiperSayCommand {
-    piper_bin: String,
-    model_path: String,
+    #[arg(long)]
+    piper_bin: Option<PathBuf>,
+    #[arg(long, alias = "model-path")]
+    piper_voice: Option<PathBuf>,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
-    text: Vec<String>,
+    words: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -139,7 +142,7 @@ fn main() -> Result<()> {
         Command::DemoVad => run_demo_vad(),
         Command::LlamaTurn(cmd) => run_llama_turn(cmd.model_path, cmd.prompt.join(" ")),
         Command::TranscribeSynthetic(cmd) => run_transcribe_synthetic(cmd.model_path),
-        Command::PiperSay(cmd) => run_piper_say(cmd.piper_bin, cmd.model_path, cmd.text.join(" ")),
+        Command::PiperSay(cmd) => run_piper_say(cmd),
         Command::RoundTripWav(cmd) => run_round_trip_wav(
             cmd.input_wav,
             RoundTripWavOptions {
@@ -299,12 +302,7 @@ impl SpeechCachePrewarmOptions {
             .piper_bin
             .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from("piper"));
-        let piper_voice = command
-            .piper_voice
-            .or_else(|| std::env::var_os("LISTENBURY_PIPER_VOICE").map(PathBuf::from))
-            .context(
-                "missing Piper voice path; set LISTENBURY_PIPER_VOICE or pass --piper-voice <voice.onnx>",
-            )?;
+        let piper_voice = resolve_piper_voice(command.piper_voice)?;
         let listenbury_home = command
             .listenbury_home
             .or_else(|| std::env::var_os("LISTENBURY_HOME").map(PathBuf::from))
@@ -467,9 +465,12 @@ fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
 }
 
 #[cfg(feature = "tts-piper")]
-fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<()> {
-    let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, model_path)?);
-    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
+fn run_piper_say(command: PiperSayCommand) -> Result<()> {
+    let piper_args = PiperSayArgs::from_command(command)?;
+    let piper_bin = resolve_piper_bin(piper_args.piper_bin);
+    let piper_voice = resolve_piper_voice(piper_args.piper_voice)?;
+    let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?);
+    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
     let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
     std::fs::create_dir_all("out").context("failed to create out directory")?;
@@ -488,8 +489,82 @@ fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<
 }
 
 #[cfg(not(feature = "tts-piper"))]
-fn run_piper_say(_piper_bin: String, _model_path: String, _text: String) -> Result<()> {
+fn run_piper_say(_command: PiperSayCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `tts-piper` feature")
+}
+
+#[cfg(feature = "tts-piper")]
+#[derive(Debug)]
+struct PiperSayArgs {
+    piper_bin: Option<PathBuf>,
+    piper_voice: Option<PathBuf>,
+    text: String,
+}
+
+#[cfg(feature = "tts-piper")]
+impl PiperSayArgs {
+    fn from_command(command: PiperSayCommand) -> Result<Self> {
+        let mut words = command.words;
+        let mut piper_bin = command.piper_bin;
+        let mut piper_voice = command.piper_voice;
+
+        if piper_bin.is_none() && words.first().is_some_and(|word| looks_like_piper_bin(word)) {
+            piper_bin = Some(PathBuf::from(words.remove(0)));
+        }
+
+        if piper_voice.is_none() && words.first().is_some_and(|word| word.ends_with(".onnx")) {
+            piper_voice = Some(PathBuf::from(words.remove(0)));
+        }
+
+        anyhow::ensure!(
+            !words.is_empty(),
+            "missing text to speak; try `piper-say hello`"
+        );
+
+        Ok(Self {
+            piper_bin,
+            piper_voice,
+            text: words.join(" "),
+        })
+    }
+}
+
+#[cfg(feature = "tts-piper")]
+fn looks_like_piper_bin(word: &str) -> bool {
+    let path = Path::new(word);
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.contains("piper"))
+}
+
+#[cfg(feature = "tts-piper")]
+fn resolve_piper_bin(explicit: Option<PathBuf>) -> PathBuf {
+    explicit
+        .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
+        .or_else(|| find_piper_executable("piper"))
+        .or_else(|| find_piper_executable("piper-tts.piper-cli"))
+        .unwrap_or_else(|| PathBuf::from("piper"))
+}
+
+#[cfg(feature = "tts-piper")]
+fn find_piper_executable(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+#[cfg(feature = "tts-piper")]
+fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    resolve_model_path(
+        explicit,
+        "LISTENBURY_PIPER_VOICE",
+        "Piper voice",
+        "--piper-voice",
+        Some("piper-lessac-medium"),
+        |path| path.extension().is_some_and(|ext| ext == "onnx"),
+    )
 }
 
 #[cfg(all(
@@ -630,11 +705,12 @@ struct RoundTripModelPaths {
 impl RoundTripModelPaths {
     fn discover(options: RoundTripWavOptions) -> Result<Self> {
         Ok(Self {
-            whisper_model: resolve_round_trip_path(
+            whisper_model: resolve_model_path(
                 options.whisper_model,
                 "LISTENBURY_WHISPER_MODEL",
                 "Whisper model",
                 "--whisper-model",
+                Some("whisper-tiny-en"),
                 |path| {
                     path.extension().is_some_and(|ext| ext == "bin")
                         && path
@@ -643,38 +719,34 @@ impl RoundTripModelPaths {
                             .is_some_and(|name| name.contains("ggml"))
                 },
             )?,
-            llm_model: resolve_round_trip_path(
+            llm_model: resolve_model_path(
                 options.llm_model,
                 "LISTENBURY_LLM_MODEL",
                 "llama.cpp model",
                 "--llm-model",
+                Some("tinyllama-q4-k-m"),
                 |path| path.extension().is_some_and(|ext| ext == "gguf"),
             )?,
-            piper_bin: options
-                .piper_bin
-                .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
-                .unwrap_or_else(|| PathBuf::from("piper")),
-            piper_voice: resolve_round_trip_path(
+            piper_bin: resolve_piper_bin(options.piper_bin),
+            piper_voice: resolve_model_path(
                 options.piper_voice,
                 "LISTENBURY_PIPER_VOICE",
                 "Piper voice",
                 "--piper-voice",
+                Some("piper-lessac-medium"),
                 |path| path.extension().is_some_and(|ext| ext == "onnx"),
             )?,
         })
     }
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-fn resolve_round_trip_path(
+#[cfg(feature = "tts-piper")]
+fn resolve_model_path(
     explicit: Option<PathBuf>,
     env_var: &str,
     label: &str,
     flag: &str,
+    default_asset_id: Option<&str>,
     matches: impl Fn(&Path) -> bool,
 ) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -685,18 +757,40 @@ fn resolve_round_trip_path(
         return Ok(PathBuf::from(path));
     }
 
+    #[cfg(feature = "model-download")]
+    if let Some(asset_id) = default_asset_id {
+        let path = default_asset_path(asset_id)?;
+        if is_non_empty_file(&path) {
+            return Ok(path);
+        }
+    }
+
     if let Some(path) = discover_model_file(&matches)? {
         return Ok(path);
     }
 
-    anyhow::bail!("could not discover {label}; set {env_var} or pass {flag}")
+    let fetch_hint = if default_asset_id.is_some() && cfg!(feature = "model-download") {
+        ", or run `cargo run -- models fetch`"
+    } else {
+        ""
+    };
+    anyhow::bail!("could not discover {label}; set {env_var}, pass {flag}{fetch_hint}")
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "model-download")]
+fn default_asset_path(asset_id: &str) -> Result<PathBuf> {
+    let Some(asset) = DEFAULT_MODELS.iter().find(|asset| asset.id == asset_id) else {
+        anyhow::bail!("default model asset `{asset_id}` is not registered");
+    };
+    let home = resolve_listenbury_home()?;
+    Ok(asset_path(&home, asset))
+}
+
+#[cfg(feature = "model-download")]
+fn is_non_empty_file(path: &Path) -> bool {
+    path.metadata().map(|meta| meta.len() > 0).unwrap_or(false)
+}
+
 fn discover_model_file(matches: &impl Fn(&Path) -> bool) -> Result<Option<PathBuf>> {
     let models_dir = Path::new("models");
     if !models_dir.exists() {
@@ -802,7 +896,8 @@ fn piper_config_for_voice(
     piper_bin: impl Into<PathBuf>,
     model_path: impl Into<PathBuf>,
 ) -> Result<PiperConfig> {
-    let model_path = model_path.into();
+    let piper_bin = piper_bin.into();
+    let model_path = prepare_piper_model_path(&piper_bin, model_path.into())?;
     let inferred_config_path = model_path.with_extension("onnx.json");
     let mut config = PiperConfig::new(piper_bin, model_path);
     if inferred_config_path.exists() {
@@ -812,6 +907,73 @@ fn piper_config_for_voice(
         config.config_path = Some(inferred_config_path);
     }
     Ok(config)
+}
+
+#[cfg(feature = "tts-piper")]
+fn prepare_piper_model_path(piper_bin: &Path, model_path: PathBuf) -> Result<PathBuf> {
+    if !uses_snap_piper(piper_bin) || !has_hidden_component(&model_path) {
+        return Ok(model_path);
+    }
+
+    let destination_dir = Path::new("out/piper-models");
+    std::fs::create_dir_all(destination_dir)
+        .context("failed to create Snap-readable Piper model directory")?;
+
+    let model_filename = model_path
+        .file_name()
+        .context("Piper model path has no filename")?;
+    let copied_model_path = destination_dir.join(model_filename);
+    copy_if_needed(&model_path, &copied_model_path)?;
+
+    let config_path = model_path.with_extension("onnx.json");
+    if config_path.exists() {
+        let config_filename = config_path
+            .file_name()
+            .context("Piper config path has no filename")?;
+        copy_if_needed(&config_path, &destination_dir.join(config_filename))?;
+    }
+
+    Ok(copied_model_path)
+}
+
+#[cfg(feature = "tts-piper")]
+fn uses_snap_piper(piper_bin: &Path) -> bool {
+    piper_bin
+        .to_str()
+        .is_some_and(|path| path.starts_with("/snap/bin/") || path.contains("piper-tts.piper-cli"))
+}
+
+#[cfg(feature = "tts-piper")]
+fn has_hidden_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|part| part.starts_with('.') && part != "." && part != "..")
+    })
+}
+
+#[cfg(feature = "tts-piper")]
+fn copy_if_needed(source: &Path, destination: &Path) -> Result<()> {
+    let should_copy = match (source.metadata(), destination.metadata()) {
+        (Ok(source_meta), Ok(destination_meta)) => source_meta.len() != destination_meta.len(),
+        (Ok(_), Err(_)) => true,
+        (Err(error), _) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", source.display()));
+        }
+    };
+
+    if should_copy {
+        std::fs::copy(source, destination).with_context(|| {
+            format!(
+                "failed to copy Piper asset from {} to {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "tts-piper")]
@@ -932,6 +1094,64 @@ mod tests {
 
     #[cfg(feature = "tts-piper")]
     const FLOAT_TOLERANCE: f32 = 0.0001;
+
+    #[cfg(feature = "tts-piper")]
+    #[test]
+    fn piper_say_args_treats_single_word_as_text() {
+        let args = PiperSayArgs::from_command(PiperSayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("single word should be text");
+
+        assert!(args.piper_bin.is_none());
+        assert!(args.piper_voice.is_none());
+        assert_eq!(args.text, "hello");
+    }
+
+    #[cfg(feature = "tts-piper")]
+    #[test]
+    fn piper_say_args_accepts_legacy_piper_bin_position() {
+        let args = PiperSayArgs::from_command(PiperSayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            words: vec![
+                "/snap/bin/piper-tts.piper-cli".to_string(),
+                "hello".to_string(),
+            ],
+        })
+        .expect("legacy Piper executable should be accepted");
+
+        assert_eq!(
+            args.piper_bin,
+            Some(PathBuf::from("/snap/bin/piper-tts.piper-cli"))
+        );
+        assert!(args.piper_voice.is_none());
+        assert_eq!(args.text, "hello");
+    }
+
+    #[cfg(feature = "tts-piper")]
+    #[test]
+    fn piper_say_args_accepts_legacy_voice_position() {
+        let args = PiperSayArgs::from_command(PiperSayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            words: vec![
+                "/snap/bin/piper-tts.piper-cli".to_string(),
+                "voice.onnx".to_string(),
+                "hello".to_string(),
+            ],
+        })
+        .expect("legacy Piper executable and voice should be accepted");
+
+        assert_eq!(
+            args.piper_bin,
+            Some(PathBuf::from("/snap/bin/piper-tts.piper-cli"))
+        );
+        assert_eq!(args.piper_voice, Some(PathBuf::from("voice.onnx")));
+        assert_eq!(args.text, "hello");
+    }
 
     #[cfg(feature = "tts-piper")]
     #[test]
