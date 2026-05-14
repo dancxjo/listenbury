@@ -1,3 +1,4 @@
+pub mod breath_asr;
 pub mod recognizer;
 pub mod transcript;
 

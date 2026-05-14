@@ -24,6 +24,7 @@ enum Command {
     FakeTurn(TextCommand),
     DemoVad,
     VadTrace(VadTraceCommand),
+    BreathTranscribe(BreathTranscribeCommand),
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
@@ -63,6 +64,21 @@ pub(crate) struct VadTraceCommand {
     pub(crate) input_wav: PathBuf,
     #[arg(long)]
     pub(crate) jsonl: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct BreathTranscribeCommand {
+    pub(crate) input_wav: PathBuf,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, default_value_t = 100)]
+    pub(crate) pre_roll_ms: u64,
+    #[arg(long, default_value_t = 100)]
+    pub(crate) trailing_pad_ms: u64,
+    #[arg(long, default_value_t = 150)]
+    pub(crate) min_group_ms: u64,
+    #[arg(long, default_value_t = 15_000)]
+    pub(crate) max_group_ms: u64,
 }
 
 #[derive(Debug, Args)]
@@ -137,6 +153,7 @@ pub(crate) fn run() -> Result<()> {
         Command::FakeTurn(cmd) => commands::run_fake_turn(cmd.text.join(" ")),
         Command::DemoVad => commands::run_demo_vad(),
         Command::VadTrace(cmd) => commands::run_vad_trace(cmd),
+        Command::BreathTranscribe(cmd) => commands::run_breath_transcribe(cmd),
         Command::RecordWav(cmd) => commands::run_record_wav(cmd),
         Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
@@ -210,5 +227,35 @@ mod tests {
             PathBuf::from("samples/silence-16k-mono.wav")
         );
         assert_eq!(command.jsonl, Some(PathBuf::from("out/vad-trace.jsonl")));
+    }
+
+    #[test]
+    fn breath_transcribe_parses_config() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "breath-transcribe",
+            "samples/hello-16k-mono.wav",
+            "--pre-roll-ms",
+            "60",
+            "--trailing-pad-ms",
+            "120",
+            "--min-group-ms",
+            "80",
+            "--max-group-ms",
+            "3000",
+        ])
+        .expect("breath-transcribe should parse");
+
+        let Some(Command::BreathTranscribe(command)) = cli.command else {
+            panic!("expected breath-transcribe command");
+        };
+        assert_eq!(
+            command.input_wav,
+            PathBuf::from("samples/hello-16k-mono.wav")
+        );
+        assert_eq!(command.pre_roll_ms, 60);
+        assert_eq!(command.trailing_pad_ms, 120);
+        assert_eq!(command.min_group_ms, 80);
+        assert_eq!(command.max_group_ms, 3000);
     }
 }
