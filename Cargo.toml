@@ -29,6 +29,7 @@ default = [
     "asr-whisper",
     "tts-piper",
     "vision-webcam",
+    "model-download",
 ]
 audio-cpal = ["dep:cpal"]
 resample-rubato = ["dep:rubato"]
