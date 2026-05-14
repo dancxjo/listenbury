@@ -3,6 +3,14 @@ use clap::{Args, CommandFactory, Parser, Subcommand};
 #[cfg(feature = "model-download")]
 use indicatif::{ProgressBar, ProgressStyle};
 use listenbury::audio::frame::AudioFrame;
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::audio::read_wav_as_audio_frames;
+#[cfg(feature = "tts-piper")]
+use listenbury::audio::write_wav;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
@@ -23,7 +31,7 @@ use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 use listenbury::mouth::planner::ExpressiveUnit;
 use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit, DEFAULT_SAFE_BACKCHANNELS};
+use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -37,6 +45,11 @@ use listenbury::{PiperConfig, PiperTextToSpeech};
 use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use std::path::Path;
 use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]
@@ -883,50 +896,6 @@ fn build_round_trip_prompt(transcript: &str) -> String {
     format!(
         "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
-}
-
-#[cfg(feature = "tts-piper")]
-fn write_wav(path: &std::path::Path, frames: &[AudioFrame]) -> Result<()> {
-    let Some(first_frame) = frames.first() else {
-        anyhow::bail!("cannot write WAV without audio frames");
-    };
-
-    let spec = hound::WavSpec {
-        channels: first_frame.channels,
-        sample_rate: first_frame.sample_rate_hz,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
-
-    for frame in frames {
-        anyhow::ensure!(
-            frame.channels == first_frame.channels,
-            "Piper frame channel count changed from {} to {}",
-            first_frame.channels,
-            frame.channels
-        );
-        anyhow::ensure!(
-            frame.sample_rate_hz == first_frame.sample_rate_hz,
-            "Piper frame sample rate changed from {} to {}",
-            first_frame.sample_rate_hz,
-            frame.sample_rate_hz
-        );
-
-        for sample in &frame.samples {
-            writer.write_sample(f32_to_i16(*sample))?;
-        }
-    }
-
-    writer.finalize()?;
-    Ok(())
-}
-
-#[cfg(feature = "tts-piper")]
-fn f32_to_i16(sample: f32) -> i16 {
-    let sample = sample.clamp(-1.0, 1.0);
-    (sample * i16::MAX as f32) as i16
 }
 
 #[cfg(feature = "tts-piper")]

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::audio::frame::AudioFrame;
+use crate::audio::write_wav;
 #[cfg(feature = "tts-piper")]
 use crate::mouth::piper::PiperConfig;
 use crate::mouth::planner::{SpeechPlan, SpeechUnit};
@@ -273,36 +274,9 @@ fn unit_kind(unit: &SpeechUnit) -> &'static str {
 }
 
 fn write_wav_frames(path: &Path, frames: &[AudioFrame]) -> Result<()> {
-    let Some(first_frame) = frames.first() else {
-        anyhow::bail!("cannot cache empty audio frame buffer");
-    };
-    let spec = hound::WavSpec {
-        channels: first_frame.channels,
-        sample_rate: first_frame.sample_rate_hz,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .with_context(|| format!("failed to create cached WAV {}", path.display()))?;
-    for frame in frames {
-        anyhow::ensure!(
-            frame.channels == first_frame.channels,
-            "speech cache frame channels changed from {} to {}",
-            first_frame.channels,
-            frame.channels
-        );
-        anyhow::ensure!(
-            frame.sample_rate_hz == first_frame.sample_rate_hz,
-            "speech cache frame sample rate changed from {} to {}",
-            first_frame.sample_rate_hz,
-            frame.sample_rate_hz
-        );
-        for sample in &frame.samples {
-            writer.write_sample(f32_to_i16(*sample))?;
-        }
-    }
-    writer.finalize()?;
-    Ok(())
+    anyhow::ensure!(!frames.is_empty(), "cannot cache empty audio frame buffer");
+    write_wav(path, frames)
+        .with_context(|| format!("failed to write cached WAV {}", path.display()))
 }
 
 fn read_wav_frames(path: &Path) -> Result<Vec<AudioFrame>> {
@@ -322,11 +296,6 @@ fn read_wav_frames(path: &Path) -> Result<Vec<AudioFrame>> {
             .map(|sample| sample as f32 / 32768.0)
             .collect(),
     }])
-}
-
-fn f32_to_i16(sample: f32) -> i16 {
-    let sample = sample.clamp(-1.0, 1.0);
-    (sample * i16::MAX as f32) as i16
 }
 
 #[cfg(test)]
