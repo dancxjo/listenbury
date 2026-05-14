@@ -65,8 +65,9 @@ pub fn collect_breath_segments(
                     group_start_ms.insert(id, start_ms);
                 }
                 HearingEvent::BreathGroupClosed { id, .. } => {
-                    let opened_ms = group_start_ms.remove(&id).unwrap_or(start_ms);
-                    closed_groups.push((opened_ms, end_ms));
+                    if let Some(opened_ms) = group_start_ms.remove(&id) {
+                        closed_groups.push((opened_ms, end_ms));
+                    }
                 }
                 HearingEvent::SpeechStarted
                 | HearingEvent::SpeechContinued { .. }

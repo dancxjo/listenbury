@@ -14,8 +14,6 @@ use listenbury::{BreathAsrConfig, WhisperSpeechRecognizer, collect_breath_segmen
 #[cfg(feature = "asr-whisper")]
 pub(crate) fn run_breath_transcribe(command: BreathTranscribeCommand) -> Result<()> {
     let model_path = resolve_whisper_model(command.whisper_model)?;
-    let mut recognizer = WhisperSpeechRecognizer::new(&model_path)
-        .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
 
     let frames = read_wav_as_audio_frames(&command.input_wav, 160)
         .with_context(|| format!("failed to read WAV {}", command.input_wav.display()))?;
@@ -33,6 +31,8 @@ pub(crate) fn run_breath_transcribe(command: BreathTranscribeCommand) -> Result<
     }
 
     for (idx, segment) in segments.iter().enumerate() {
+        let mut recognizer = WhisperSpeechRecognizer::new(&model_path)
+            .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
         for frame in &segment.frames {
             recognizer.push_frame(frame)?;
         }
