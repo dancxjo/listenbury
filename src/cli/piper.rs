@@ -1,5 +1,5 @@
-use crate::cli::model_paths::resolve_piper_voice;
 use crate::cli::PiperSayCommand;
+use crate::cli::model_paths::resolve_piper_voice;
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::audio::write_wav;

@@ -8,13 +8,13 @@ use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice};
 #[cfg(feature = "tts-piper")]
+use listenbury::PiperTextToSpeech;
+#[cfg(feature = "tts-piper")]
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit, DEFAULT_SAFE_BACKCHANNELS};
+use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(feature = "tts-piper")]
-use listenbury::PiperTextToSpeech;
 #[cfg(feature = "tts-piper")]
 use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]

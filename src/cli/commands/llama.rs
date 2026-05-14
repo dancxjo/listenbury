@@ -1,6 +1,6 @@
+use crate::cli::LlamaTurnCommand;
 #[cfg(feature = "llm-llama-cpp")]
 use crate::cli::model_paths::resolve_llm_model;
-use crate::cli::LlamaTurnCommand;
 #[cfg(feature = "llm-llama-cpp")]
 use anyhow::Context;
 use anyhow::Result;

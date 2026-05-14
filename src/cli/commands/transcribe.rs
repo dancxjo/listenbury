@@ -1,6 +1,6 @@
+use crate::cli::TranscribeSyntheticCommand;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
-use crate::cli::TranscribeSyntheticCommand;
 #[cfg(feature = "asr-whisper")]
 use anyhow::Context;
 use anyhow::Result;

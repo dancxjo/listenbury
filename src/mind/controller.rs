@@ -120,7 +120,8 @@ impl FillerPlanner {
 
         let selected = select_backchannel(ctx.transcript_so_far.as_deref());
         if let Some((last_id, last_used_at_ms)) = self.last_filler {
-            let still_in_cooldown = ctx.now_ms.saturating_sub(last_used_at_ms) < self.config.repeat_cooldown_ms;
+            let still_in_cooldown =
+                ctx.now_ms.saturating_sub(last_used_at_ms) < self.config.repeat_cooldown_ms;
             if still_in_cooldown && last_id == selected {
                 return FillerDecision::Silence;
             }
@@ -189,15 +190,13 @@ impl ConversationController {
             FillerDecision::Silence => None,
             FillerDecision::PlayCachedBackchannel { id } => {
                 self.record_runtime_packet(RuntimePacket::BackchannelPlayed { id });
-                Some(MouthCommand::Speak(SpeechPlan::from(SpeechUnit::Backchannel(
-                    id.text().to_string(),
-                ))))
+                Some(MouthCommand::Speak(SpeechPlan::from(
+                    SpeechUnit::Backchannel(id.text().to_string()),
+                )))
             }
-            FillerDecision::SynthesizeBackchannel { text } => {
-                Some(MouthCommand::Speak(SpeechPlan::from(SpeechUnit::Backchannel(
-                    text,
-                ))))
-            }
+            FillerDecision::SynthesizeBackchannel { text } => Some(MouthCommand::Speak(
+                SpeechPlan::from(SpeechUnit::Backchannel(text)),
+            )),
         }
     }
 
