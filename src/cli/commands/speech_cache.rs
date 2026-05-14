@@ -6,7 +6,7 @@ use anyhow::Result;
 #[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
-use crate::cli::piper::{collect_tts_audio, piper_config_for_voice};
+use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
 #[cfg(feature = "tts-piper")]
 use listenbury::PiperTextToSpeech;
 #[cfg(feature = "tts-piper")]
@@ -62,10 +62,7 @@ fn run_speech_cache_prewarm(command: SpeechCachePrewarmCommand) -> Result<()> {
 #[cfg(feature = "tts-piper")]
 impl SpeechCachePrewarmOptions {
     fn from_command(command: SpeechCachePrewarmCommand) -> Result<Self> {
-        let piper_bin = command
-            .piper_bin
-            .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("piper"));
+        let piper_bin = resolve_piper_bin(command.piper_bin)?;
         let piper_voice = resolve_piper_voice(command.piper_voice)?;
         let listenbury_home = command
             .listenbury_home

@@ -23,7 +23,7 @@ impl BackchannelId {
             BackchannelId::ISee => "I see.",
             BackchannelId::MmHm => "Mm-hm.",
             BackchannelId::LetMeThink => "Let me think.",
-            BackchannelId::OneThingJumpsOut => "One thing jumps out.",
+            BackchannelId::OneThingJumpsOut => "Well, boy howdy! I declare.",
             BackchannelId::ThatMakesSense => "That makes sense.",
         }
     }

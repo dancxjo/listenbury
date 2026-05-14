@@ -135,7 +135,7 @@ impl RoundTripModelPaths {
             input_wav: command.input_wav,
             whisper_model: resolve_whisper_model(command.whisper_model)?,
             llm_model: resolve_llm_model(command.llm_model)?,
-            piper_bin: resolve_piper_bin(command.piper_bin),
+            piper_bin: resolve_piper_bin(command.piper_bin)?,
             piper_voice: resolve_piper_voice(command.piper_voice)?,
         })
     }

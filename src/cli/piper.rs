@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 pub(crate) fn run_piper_say(command: PiperSayCommand) -> Result<()> {
     let piper_args = PiperSayArgs::from_command(command)?;
-    let piper_bin = resolve_piper_bin(piper_args.piper_bin);
+    let piper_bin = resolve_piper_bin(piper_args.piper_bin)?;
     let piper_voice = resolve_piper_voice(piper_args.piper_voice)?;
     let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?);
     tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
@@ -73,12 +73,14 @@ fn looks_like_piper_bin(word: &str) -> bool {
         .is_some_and(|name| name.contains("piper"))
 }
 
-pub(crate) fn resolve_piper_bin(explicit: Option<PathBuf>) -> PathBuf {
+pub(crate) fn resolve_piper_bin(explicit: Option<PathBuf>) -> Result<PathBuf> {
     explicit
         .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
         .or_else(|| find_piper_executable("piper"))
         .or_else(|| find_piper_executable("piper-tts.piper-cli"))
-        .unwrap_or_else(|| PathBuf::from("piper"))
+        .with_context(|| {
+            "failed to find Piper executable; install `piper` or set LISTENBURY_PIPER_BIN / --piper-bin"
+        })
 }
 
 fn find_piper_executable(name: &str) -> Option<PathBuf> {
