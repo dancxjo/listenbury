@@ -363,7 +363,6 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
             match event {
                 LlmEvent::Token { text } => {
                     print!("{text}");
-                    use std::io::Write;
                     std::io::stdout().flush()?;
                 }
                 LlmEvent::Error { message } => {
@@ -678,7 +677,7 @@ fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<Aud
     let samples = match spec.bits_per_sample {
         1..=8 => reader
             .samples::<i8>()
-            .map(|sample| sample.map(|sample| sample as f32 / i8::MAX as f32))
+            .map(|sample| sample.map(|sample| sample as f32 / 128.0))
             .collect::<std::result::Result<Vec<_>, _>>()
             .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
         9..=16 => reader
@@ -727,6 +726,9 @@ mod tests {
     }
 
     #[cfg(feature = "tts-piper")]
+    const FLOAT_TOLERANCE: f32 = 0.0001;
+
+    #[cfg(feature = "tts-piper")]
     #[test]
     fn read_wav_as_audio_frames_chunks_pcm_samples() {
         let path = unique_test_path("mono-16k");
@@ -754,8 +756,8 @@ mod tests {
         assert_eq!(frames[0].channels, 1);
         assert_eq!(frames[0].samples.len(), 2);
         assert_eq!(frames[1].samples.len(), 1);
-        assert!(frames[0].samples[0] <= -1.0 + 0.0001);
-        assert!(frames[1].samples[0] >= 0.9999);
+        assert!(frames[0].samples[0] <= -1.0 + FLOAT_TOLERANCE);
+        assert!(frames[1].samples[0] >= 1.0 - FLOAT_TOLERANCE);
 
         fs::remove_file(path).expect("temporary WAV should be removed");
     }
