@@ -95,3 +95,9 @@ impl UtteranceId {
         Self(Uuid::new_v4())
     }
 }
+
+impl Default for UtteranceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
