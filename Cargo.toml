@@ -21,7 +21,11 @@ resample-rubato = ["dep:rubato"]
 vad-silero = []
 vad-webrtc = []
 llm-llama-cpp = []
-asr-whisper = []
+asr-whisper = ["dep:whisper-cpp-plus"]
+asr-whisper-async = ["asr-whisper", "whisper-cpp-plus/async"]
+asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
+asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
+asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = []
 vision-webcam = []
 
@@ -32,3 +36,8 @@ optional = true
 [dependencies.rubato]
 version = "0.16"
 optional = true
+
+[dependencies.whisper-cpp-plus]
+version = "0.1.4"
+optional = true
+default-features = false
