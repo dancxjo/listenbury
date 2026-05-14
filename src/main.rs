@@ -4,6 +4,8 @@ use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 use listenbury::mouth::planner::SpeechPlanner;
+#[cfg(feature = "asr-whisper")]
+use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 
 fn main() -> Result<()> {
@@ -24,6 +26,12 @@ fn main() -> Result<()> {
             run_fake_turn(user_text)
         }
         "demo-vad" => run_demo_vad(),
+        "transcribe-synthetic" => {
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury transcribe-synthetic <model.bin>");
+            };
+            run_transcribe_synthetic(model_path)
+        }
         _ => {
             print_usage();
             Ok(())
@@ -35,6 +43,7 @@ fn print_usage() {
     println!("Usage:");
     println!("  listenbury fake-turn \"hello there\"");
     println!("  listenbury demo-vad");
+    println!("  listenbury transcribe-synthetic <model.bin>");
 }
 
 fn run_fake_turn(user_text: String) -> Result<()> {
@@ -98,4 +107,34 @@ fn run_demo_vad() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(feature = "asr-whisper")]
+fn run_transcribe_synthetic(model_path: String) -> Result<()> {
+    let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&model_path)
+        .with_context(|| format!("failed to load Whisper model at {model_path}"))?;
+
+    recognizer.push_frame(&AudioFrame {
+        captured_at: ExactTimestamp::now(),
+        sample_rate_hz: 16_000,
+        channels: 1,
+        samples: vec![0.0; 16_000],
+    })?;
+
+    let chunks = recognizer.poll_chunks()?;
+    if chunks.is_empty() {
+        println!("No transcript chunks produced.");
+        return Ok(());
+    }
+
+    for chunk in chunks {
+        println!("{chunk:?}");
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "asr-whisper"))]
+fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `asr-whisper` feature")
 }

@@ -21,4 +21,6 @@ pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 pub use mind::turn::{TurnState, TurnTracker};
 pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner};
+#[cfg(feature = "asr-whisper")]
+pub use speech::whisper::WhisperSpeechRecognizer;
 pub use time::{ExactTimestamp, Timed};
