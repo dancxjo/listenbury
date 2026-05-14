@@ -22,7 +22,7 @@ pub struct MemorySpeechCache {
 
 impl MemorySpeechCache {
     fn key(unit: &SpeechUnit) -> String {
-        format!("{unit:?}")
+        format!("{}:{}", unit_kind(unit), normalize_text(unit_text(unit)))
     }
 }
 
@@ -202,31 +202,47 @@ impl SpeechCache for FileSpeechCache {
 }
 
 fn sanitize_segment(segment: &str) -> String {
-    let mut cleaned = segment
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>();
-    while cleaned.contains("--") {
-        cleaned = cleaned.replace("--", "-");
-    }
-    cleaned.trim_matches('-').to_ascii_lowercase()
+    collapse_repeated_dashes(
+        segment
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+            .trim_matches('-'),
+    )
+    .to_ascii_lowercase()
 }
 
 fn slugify(text: &str) -> String {
     let normalized = normalize_text(text);
-    let mut slug = normalized
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
-        .collect::<String>();
-    while slug.contains("--") {
-        slug = slug.replace("--", "-");
-    }
-    let slug = slug.trim_matches('-').to_string();
+    let slug = collapse_repeated_dashes(
+        normalized
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect::<String>()
+            .trim_matches('-'),
+    );
     if slug.is_empty() {
         "speech-unit".to_string()
     } else {
         slug
     }
+}
+
+fn collapse_repeated_dashes(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut previous_dash = false;
+    for ch in input.chars() {
+        if ch == '-' {
+            if !previous_dash {
+                output.push(ch);
+            }
+            previous_dash = true;
+        } else {
+            output.push(ch);
+            previous_dash = false;
+        }
+    }
+    output
 }
 
 fn normalize_text(text: &str) -> String {
@@ -243,6 +259,16 @@ fn unit_text(unit: &SpeechUnit) -> &str {
         | SpeechUnit::CompleteClause(text)
         | SpeechUnit::CompleteSentence(text)
         | SpeechUnit::FullTurn(text) => text,
+    }
+}
+
+fn unit_kind(unit: &SpeechUnit) -> &'static str {
+    match unit {
+        SpeechUnit::Backchannel(_) => "backchannel",
+        SpeechUnit::DiscourseMarker(_) => "discourse-marker",
+        SpeechUnit::CompleteClause(_) => "complete-clause",
+        SpeechUnit::CompleteSentence(_) => "complete-sentence",
+        SpeechUnit::FullTurn(_) => "full-turn",
     }
 }
 
@@ -293,7 +319,7 @@ fn read_wav_frames(path: &Path) -> Result<Vec<AudioFrame>> {
         channels: spec.channels,
         samples: samples
             .into_iter()
-            .map(|sample| sample as f32 / i16::MAX as f32)
+            .map(|sample| sample as f32 / 32768.0)
             .collect(),
     }])
 }

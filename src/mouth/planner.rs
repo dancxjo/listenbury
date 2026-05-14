@@ -1,7 +1,7 @@
 use crate::mind::llm::LlmEvent;
 
 const MIN_NON_BACKCHANNEL_CHARS: usize = 12;
-const SAFE_BACKCHANNELS: &[&str] = &[
+pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "Okay.",
     "Right.",
     "I see.",
@@ -162,7 +162,7 @@ fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
     if is_safe_discourse_marker(text) {
         return Some(SpeechUnit::DiscourseMarker(text.to_string()));
     }
-    if text.chars().count() < MIN_NON_BACKCHANNEL_CHARS {
+    if text.len() < MIN_NON_BACKCHANNEL_CHARS {
         return None;
     }
     if text.ends_with(['.', '?', '!']) {
@@ -179,7 +179,7 @@ fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
 }
 
 fn is_safe_backchannel(text: &str) -> bool {
-    SAFE_BACKCHANNELS.iter().any(|entry| *entry == text)
+    DEFAULT_SAFE_BACKCHANNELS.iter().any(|entry| *entry == text)
 }
 
 fn is_safe_discourse_marker(text: &str) -> bool {

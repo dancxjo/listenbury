@@ -12,7 +12,7 @@ use listenbury::models::{
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -241,7 +241,7 @@ fn run_speech_cache_prewarm(args: impl Iterator<Item = String>) -> Result<()> {
         FileSpeechCache::for_piper(&options.listenbury_home, &config),
     );
 
-    for text in SAFE_BACKCHANNELS {
+    for text in DEFAULT_SAFE_BACKCHANNELS {
         let plan = SpeechPlan::from(SpeechUnit::Backchannel((*text).to_string()));
         tts.enqueue(plan)?;
         let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
@@ -288,16 +288,6 @@ fn parse_speech_cache_prewarm_args(
 }
 
 #[cfg(feature = "tts-piper")]
-const SAFE_BACKCHANNELS: &[&str] = &[
-    "Okay.",
-    "Right.",
-    "I see.",
-    "Mm-hm.",
-    "Let me think.",
-    "One thing jumps out.",
-    "That makes sense.",
-];
-
 fn run_fake_turn(user_text: String) -> Result<()> {
     let mut llm = MockLlmEngine::with_response(vec!["I ".into(), "heard ".into(), "you.".into()]);
     let request = GenerationRequest {
