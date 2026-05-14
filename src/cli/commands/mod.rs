@@ -1,3 +1,4 @@
+mod cpal_diag;
 mod demos;
 mod llama;
 mod models;
@@ -5,6 +6,7 @@ mod round_trip;
 mod speech_cache;
 mod transcribe;
 
+pub(crate) use cpal_diag::{run_play_wav, run_record_wav};
 pub(crate) use demos::{run_demo_vad, run_fake_turn};
 pub(crate) use llama::run_llama_turn;
 pub(crate) use models::run_models;
