@@ -5,7 +5,14 @@ pub fn strip_emoji(text: &str) -> String {
     text.chars().filter(|&ch| !is_emoji_char(ch)).collect()
 }
 
-/// Returns `true` if `ch` is an emoji character.
+/// Returns `true` if `ch` is a common emoji character.
+///
+/// This covers the most-used Unicode emoji ranges (emoticons, symbols,
+/// pictographs, etc.) but is **not** an exhaustive implementation of the full
+/// Unicode emoji specification.  Sequences such as ZWJ chains or skin-tone
+/// modifiers are handled character-by-character; isolated modifier codepoints
+/// may not be detected.  This is intentionally lightweight—sufficient for
+/// stripping conversational emoji from LLM output.
 fn is_emoji_char(ch: char) -> bool {
     let cp = ch as u32;
     matches!(
@@ -166,10 +173,13 @@ impl SpeechPlanner {
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
                     } else if self.buffer[end..].chars().any(is_emoji_char) {
-                        // Emoji follows; flush as FullTurn to preserve ordering.
-                        units.push(ExpressiveUnit::Speech(
-                            SpeechUnit::FullTurn(candidate).into(),
-                        ));
+                        // Emoji follows in the remaining buffer (linear scan over
+                        // a typically short conversational fragment, acceptable
+                        // here).  Flush the sentence-punctuated text with an
+                        // appropriate classification rather than waiting for more
+                        // tokens, so face and speech events stay in order.
+                        let unit = classify_emoji_flushed_text(&candidate);
+                        units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
                     } else {
                         break;
@@ -268,6 +278,30 @@ fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
 
 fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
     classify_boundary_unit(text)
+}
+
+/// Classify text that is being force-flushed because an emoji follows it.
+///
+/// Unlike [`classify_boundary_unit`], this bypasses the minimum-length guard so
+/// that short but grammatically complete phrases (e.g. "That works.") are
+/// emitted with the right type rather than falling back to `FullTurn`.
+fn classify_emoji_flushed_text(text: &str) -> SpeechUnit {
+    if text.is_empty() {
+        return SpeechUnit::FullTurn(text.to_string());
+    }
+    if is_safe_backchannel(text) {
+        return SpeechUnit::Backchannel(text.to_string());
+    }
+    if is_safe_discourse_marker(text) {
+        return SpeechUnit::DiscourseMarker(text.to_string());
+    }
+    if text.ends_with(['.', '?', '!']) {
+        return SpeechUnit::CompleteSentence(text.to_string());
+    }
+    if text.ends_with([';', ':']) {
+        return SpeechUnit::CompleteClause(text.to_string());
+    }
+    SpeechUnit::FullTurn(text.to_string())
 }
 
 fn is_safe_backchannel(text: &str) -> bool {
@@ -399,7 +433,7 @@ mod tests {
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::FullTurn("That works.".to_string())),
+                speech(SpeechUnit::CompleteSentence("That works.".to_string())),
                 face("😄"),
             ]
         );
