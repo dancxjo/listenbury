@@ -23,6 +23,7 @@ struct Cli {
 enum Command {
     FakeTurn(TextCommand),
     DemoVad,
+    VadTrace(VadTraceCommand),
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
@@ -55,6 +56,13 @@ pub(crate) struct RecordWavCommand {
 #[derive(Debug, Args)]
 pub(crate) struct PlayWavCommand {
     pub(crate) input_wav: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct VadTraceCommand {
+    pub(crate) input_wav: PathBuf,
+    #[arg(long)]
+    pub(crate) jsonl: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -128,6 +136,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::FakeTurn(cmd) => commands::run_fake_turn(cmd.text.join(" ")),
         Command::DemoVad => commands::run_demo_vad(),
+        Command::VadTrace(cmd) => commands::run_vad_trace(cmd),
         Command::RecordWav(cmd) => commands::run_record_wav(cmd),
         Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
@@ -180,5 +189,26 @@ mod tests {
             command.input_wav,
             PathBuf::from("out/listenbury-round-trip.wav")
         );
+    }
+
+    #[test]
+    fn vad_trace_parses_input_and_jsonl() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "vad-trace",
+            "samples/silence-16k-mono.wav",
+            "--jsonl",
+            "out/vad-trace.jsonl",
+        ])
+        .expect("vad-trace should parse");
+
+        let Some(Command::VadTrace(command)) = cli.command else {
+            panic!("expected vad-trace command");
+        };
+        assert_eq!(
+            command.input_wav,
+            PathBuf::from("samples/silence-16k-mono.wav")
+        );
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/vad-trace.jsonl")));
     }
 }

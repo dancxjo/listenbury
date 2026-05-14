@@ -8,7 +8,7 @@ Part of [Project PETE](https://dancxjo.github.io/project-pete.html): the Pseudoc
 
 Listenbury is an active prototype with working pipeline components and CLI demos:
 
-- Hearing/turn-taking demos (`demo-vad`, `fake-turn`)
+- Hearing/turn-taking demos (`demo-vad`, `vad-trace`, `fake-turn`)
 - Local LLM turn demo (`llama-turn`, feature-gated)
 - Whisper ASR synthetic transcription demo (`transcribe-synthetic`, feature-gated)
 - Piper TTS demo (`piper-say`, feature-gated)
@@ -109,6 +109,7 @@ CLI commands:
 ```text
 listenbury fake-turn "hello there"
 listenbury demo-vad
+listenbury vad-trace <input.wav> [--jsonl <out/vad-trace.jsonl>]
 listenbury llama-turn [--llm-model <model.gguf>] "prompt"
 listenbury transcribe-synthetic [--whisper-model <model.bin>]
 listenbury piper-say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
@@ -120,6 +121,7 @@ listenbury models <fetch|status|path>
 
 - `fake-turn`: uses mock token streaming and speech planning
 - `demo-vad`: emits VAD/breath-grouping events from synthetic amplitudes
+- `vad-trace`: runs frame-by-frame VAD and breath-group tracing on mono 16kHz WAV input (optional JSONL export)
 - `llama-turn`: streams text tokens from a local llama.cpp model
 - `transcribe-synthetic`: pushes synthetic audio into Whisper recognizer
 - `piper-say`: writes synthesized WAV to `out/listenbury-piper-test.wav`
