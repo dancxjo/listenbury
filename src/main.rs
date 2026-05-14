@@ -1,0 +1,99 @@
+use anyhow::{Context, Result};
+use listenbury::audio::frame::AudioFrame;
+use listenbury::hearing::breath::BreathGroupSegmenter;
+use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
+use listenbury::mouth::planner::SpeechPlanner;
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let mut args = std::env::args().skip(1);
+    let Some(command) = args.next() else {
+        print_usage();
+        return Ok(());
+    };
+
+    match command.as_str() {
+        "fake-turn" => {
+            let user_text = args.collect::<Vec<_>>().join(" ");
+            if user_text.is_empty() {
+                anyhow::bail!("usage: listenbury fake-turn \"hello there\"");
+            }
+            run_fake_turn(user_text)
+        }
+        "demo-vad" => run_demo_vad(),
+        _ => {
+            print_usage();
+            Ok(())
+        }
+    }
+}
+
+fn print_usage() {
+    println!("Usage:");
+    println!("  listenbury fake-turn \"hello there\"");
+    println!("  listenbury demo-vad");
+}
+
+fn run_fake_turn(user_text: String) -> Result<()> {
+    let mut llm = MockLlmEngine::with_response(vec!["I ".into(), "heard ".into(), "you.".into()]);
+    let request = GenerationRequest {
+        prompt: format!("User said: {user_text}"),
+    };
+
+    let id = llm.start(request).context("failed to start generation")?;
+    let mut planner = SpeechPlanner::default();
+
+    loop {
+        let events = llm.poll(id)?;
+        if events.is_empty() {
+            continue;
+        }
+
+        for event in &events {
+            if let LlmEvent::Token { text } = event {
+                print!("{text}");
+            }
+        }
+
+        if let Some(plan) = planner.ingest(&events) {
+            println!();
+            println!("SpeechPlan: {plan:?}");
+        }
+
+        if events.iter().any(|event| {
+            matches!(
+                event,
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
+            )
+        }) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_demo_vad() -> Result<()> {
+    let mut vad = EnergyVad::new(0.02);
+    let mut segmenter = BreathGroupSegmenter::default();
+
+    let amplitudes = [
+        0.0_f32, 0.0, 0.2, 0.2, 0.2, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    ];
+
+    for amp in amplitudes {
+        let frame = AudioFrame {
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![amp; 160],
+        };
+        let vad_result = vad.process_frame(&frame)?;
+        for event in segmenter.process(vad_result) {
+            println!("{event:?}");
+        }
+    }
+
+    Ok(())
+}
