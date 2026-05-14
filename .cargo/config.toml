@@ -1,0 +1,2 @@
+[env]
+BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu = { value = "-I/usr/lib/gcc/x86_64-linux-gnu/15/include -I/usr/lib/gcc/x86_64-linux-gnu/13/include -I/usr/include/x86_64-linux-gnu -I/usr/include", force = false }
