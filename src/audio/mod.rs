@@ -7,7 +7,7 @@ pub mod ring;
 pub mod wav;
 
 use crate::audio::frame::AudioFrame;
-pub use wav::{read_wav_as_audio_frames, read_wav_frames, write_wav};
+pub use wav::{read_wav_as_audio_frames, read_wav_as_whisper_frames, read_wav_frames, write_wav};
 
 pub trait AudioInput {
     fn poll_frames(&mut self) -> anyhow::Result<Vec<AudioFrame>>;

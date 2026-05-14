@@ -24,7 +24,7 @@ use anyhow::Context;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::audio::{read_wav_as_audio_frames, write_wav};
+use listenbury::audio::{read_wav_as_whisper_frames, write_wav};
 #[cfg(all(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -81,7 +81,7 @@ use std::time::Duration;
 ))]
 pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     let paths = RoundTripModelPaths::discover(command)?;
-    let frames = read_wav_as_audio_frames(&paths.input_wav, 1_600)?;
+    let frames = read_wav_as_whisper_frames(&paths.input_wav, 1_600)?;
     let transcript = transcribe_frames(&paths, &frames)?;
     println!("Heard: {transcript}");
 

@@ -5,6 +5,9 @@ use anyhow::{Context, Result};
 use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
 
+const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
+const MONO_CHANNELS: u16 = 1;
+
 pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
     let frames = read_wav_frames(path, frame_samples)?;
     let Some(first) = frames.first() else {
@@ -23,6 +26,55 @@ pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec
         first.sample_rate_hz
     );
     Ok(frames)
+}
+
+pub fn read_wav_as_whisper_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
+
+    let frames = read_wav_frames(path, frame_samples)?;
+    let Some(first) = frames.first() else {
+        return Ok(frames);
+    };
+
+    let sample_rate_hz = first.sample_rate_hz;
+    let channels = first.channels;
+    anyhow::ensure!(
+        channels > 0,
+        "WAV input at {} reported zero channels",
+        path.display()
+    );
+
+    let mut samples = Vec::new();
+    for frame in &frames {
+        anyhow::ensure!(
+            frame.sample_rate_hz == sample_rate_hz,
+            "WAV {} changed sample rate mid-stream ({} -> {})",
+            path.display(),
+            sample_rate_hz,
+            frame.sample_rate_hz
+        );
+        anyhow::ensure!(
+            frame.channels == channels,
+            "WAV {} changed channel count mid-stream ({} -> {})",
+            path.display(),
+            channels,
+            frame.channels
+        );
+        samples.extend_from_slice(&frame.samples);
+    }
+
+    let mono_samples = mix_to_mono(&samples, channels);
+    let whisper_samples = resample_linear(&mono_samples, sample_rate_hz, WHISPER_SAMPLE_RATE_HZ);
+
+    Ok(whisper_samples
+        .chunks(frame_samples)
+        .map(|chunk| AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: WHISPER_SAMPLE_RATE_HZ,
+            channels: MONO_CHANNELS,
+            samples: chunk.to_vec(),
+        })
+        .collect())
 }
 
 pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
@@ -144,6 +196,38 @@ fn f32_to_i16(sample: f32) -> i16 {
     scaled.clamp(i16::MIN as f32, i16::MAX as f32) as i16
 }
 
+fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let channel_count = usize::from(channels);
+    samples
+        .chunks_exact(channel_count)
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
+        .collect()
+}
+
+fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
+    if samples.is_empty() || source_rate_hz == target_rate_hz {
+        return samples.to_vec();
+    }
+
+    let output_len = ((samples.len() as f64 * f64::from(target_rate_hz))
+        / f64::from(source_rate_hz))
+    .round() as usize;
+    let mut output = Vec::with_capacity(output_len);
+    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
+
+    for output_idx in 0..output_len {
+        let source_pos = output_idx as f64 * source_step;
+        let left_idx = source_pos.floor() as usize;
+        let right_idx = (left_idx + 1).min(samples.len() - 1);
+        let fraction = (source_pos - left_idx as f64) as f32;
+        let left = samples[left_idx];
+        let right = samples[right_idx];
+        output.push(left + (right - left) * fraction);
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -260,6 +344,40 @@ mod tests {
     }
 
     #[test]
+    fn read_wav_as_whisper_frames_mixes_stereo_and_resamples_to_16khz() {
+        let path = unique_test_path("whisper-convert");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 32_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
+        for _ in 0..32_000 {
+            writer
+                .write_sample(i16::MAX)
+                .expect("left sample should write");
+            writer
+                .write_sample(0_i16)
+                .expect("right sample should write");
+        }
+        writer.finalize().expect("WAV should finalize");
+
+        let got = read_wav_as_whisper_frames(&path, 1_600).expect("WAV should convert");
+
+        assert_eq!(got.len(), 10);
+        assert!(
+            got.iter()
+                .all(|frame| frame.sample_rate_hz == WHISPER_SAMPLE_RATE_HZ)
+        );
+        assert!(got.iter().all(|frame| frame.channels == MONO_CHANNELS));
+        assert!(got.iter().all(|frame| frame.samples.len() == 1_600));
+        assert!((got[0].samples[0] - 0.5).abs() <= FLOAT_TOLERANCE);
+
+        fs::remove_file(path).expect("temporary WAV should be removed");
+    }
+
+    #[test]
     fn normalize_signed_sample_maps_boundaries() {
         assert_eq!(normalize_signed_sample(0, 8), 0.0);
         assert_eq!(normalize_signed_sample(-128, 8), -1.0);
@@ -283,5 +401,17 @@ mod tests {
         assert_eq!(f32_to_i16(0.5), 16_384);
         assert_eq!(f32_to_i16(1.0), i16::MAX);
         assert_eq!(f32_to_i16(1.5), i16::MAX);
+    }
+
+    #[test]
+    fn mix_to_mono_averages_interleaved_channels() {
+        assert_eq!(mix_to_mono(&[1.0, 0.0, -0.5, 0.5], 2), vec![0.5, 0.0]);
+    }
+
+    #[test]
+    fn resample_linear_downsamples_by_duration() {
+        let got = resample_linear(&[0.0, 1.0, 0.0, -1.0], 4, 2);
+
+        assert_eq!(got, vec![0.0, 0.0]);
     }
 }
