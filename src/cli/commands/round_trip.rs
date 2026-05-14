@@ -54,6 +54,12 @@ use listenbury::speech::recognizer::SpeechRecognizer;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::{BreathAsrConfig, collect_breath_segments};
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(all(
     feature = "asr-whisper",
@@ -150,23 +156,28 @@ fn transcribe_frames(
     paths: &RoundTripModelPaths,
     frames: &[listenbury::AudioFrame],
 ) -> Result<String> {
-    let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
-        .with_context(|| {
-            format!(
-                "failed to load Whisper model at {}",
-                paths.whisper_model.display()
-            )
-        })?;
-    for frame in frames {
-        recognizer.push_frame(frame)?;
+    let segments = collect_breath_segments(frames, BreathAsrConfig::default())?;
+    let mut transcripts = Vec::new();
+    for segment in segments {
+        let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
+            .with_context(|| {
+                format!(
+                    "failed to load Whisper model at {}",
+                    paths.whisper_model.display()
+                )
+            })?;
+        for frame in &segment.frames {
+            recognizer.push_frame(frame)?;
+        }
+        transcripts.extend(
+            recognizer
+                .poll_chunks()?
+                .into_iter()
+                .map(|chunk| chunk.text),
+        );
     }
 
-    Ok(recognizer
-        .poll_chunks()?
-        .into_iter()
-        .map(|chunk| chunk.text)
-        .collect::<Vec<_>>()
-        .join(" "))
+    Ok(transcripts.join(" "))
 }
 
 #[cfg(all(

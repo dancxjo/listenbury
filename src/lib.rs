@@ -34,6 +34,7 @@ pub use mouth::planner::{
     ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit, strip_emoji,
 };
 pub use mouth::tts::TextToSpeech;
+pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use time::{ExactTimestamp, Timed};
