@@ -199,11 +199,11 @@ pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
     std::thread::sleep(Duration::from_millis(20));
     drop(stream);
 
-    let duration = playback_duration(total_samples, sample_rate, channels);
+    let audio_duration = playback_duration(total_samples, sample_rate, channels);
     println!(
         "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {}",
         sample_rate,
-        duration.as_secs_f64(),
+        audio_duration.as_secs_f64(),
         command.input_wav.display()
     );
 

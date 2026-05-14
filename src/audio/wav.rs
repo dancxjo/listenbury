@@ -75,7 +75,7 @@ pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFra
             );
             reader
                 .samples::<f32>()
-                .map(|sample| sample.map(|sample| sample.clamp(-1.0, 1.0)))
+                .map(|sample| sample.map(|pcm| pcm.clamp(-1.0, 1.0)))
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .with_context(|| format!("failed to read PCM samples from {}", path.display()))?
         }
