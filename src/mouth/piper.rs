@@ -142,11 +142,7 @@ fn should_shutdown_after_drain(rx: &Receiver<PiperCommand>) -> bool {
 }
 
 fn plan_text(plan: SpeechPlan) -> String {
-    match plan {
-        SpeechPlan::Backchannel(text) | SpeechPlan::Clause(text) | SpeechPlan::FullTurn(text) => {
-            text
-        }
-    }
+    plan.text().to_string()
 }
 
 fn synthesize(config: &PiperConfig, text: &str) -> Result<Vec<f32>> {

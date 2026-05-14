@@ -26,7 +26,7 @@ pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLl
 pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
-pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner};
+pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
 pub use mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
