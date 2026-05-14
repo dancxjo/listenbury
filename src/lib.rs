@@ -18,6 +18,8 @@ pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };
 pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
+#[cfg(feature = "llm-llama-cpp")]
+pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 pub use mind::turn::{TurnState, TurnTracker};
 pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner};

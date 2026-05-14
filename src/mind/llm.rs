@@ -8,6 +8,7 @@ pub struct GenerationId(pub Uuid);
 #[derive(Debug, Clone)]
 pub struct GenerationRequest {
     pub prompt: String,
+    pub max_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +79,7 @@ impl Default for GenerationRequest {
     fn default() -> Self {
         Self {
             prompt: String::new(),
+            max_tokens: None,
         }
     }
 }
@@ -98,6 +100,7 @@ mod tests {
         let id = engine
             .start(GenerationRequest {
                 prompt: "hello".to_string(),
+                max_tokens: None,
             })
             .expect("start should succeed");
 

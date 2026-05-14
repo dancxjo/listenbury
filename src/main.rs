@@ -7,6 +7,8 @@ use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
+#[cfg(feature = "llm-llama-cpp")]
+use listenbury::{LlamaCppConfig, LlamaCppEngine};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -26,6 +28,16 @@ fn main() -> Result<()> {
             run_fake_turn(user_text)
         }
         "demo-vad" => run_demo_vad(),
+        "llama-turn" => {
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
+            };
+            let prompt = args.collect::<Vec<_>>().join(" ");
+            if prompt.is_empty() {
+                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
+            }
+            run_llama_turn(model_path, prompt)
+        }
         "transcribe-synthetic" => {
             let Some(model_path) = args.next() else {
                 anyhow::bail!("usage: listenbury transcribe-synthetic <model.bin>");
@@ -43,6 +55,7 @@ fn print_usage() {
     println!("Usage:");
     println!("  listenbury fake-turn \"hello there\"");
     println!("  listenbury demo-vad");
+    println!("  listenbury llama-turn <model.gguf> \"prompt\"");
     println!("  listenbury transcribe-synthetic <model.bin>");
 }
 
@@ -50,6 +63,7 @@ fn run_fake_turn(user_text: String) -> Result<()> {
     let mut llm = MockLlmEngine::with_response(vec!["I ".into(), "heard ".into(), "you.".into()]);
     let request = GenerationRequest {
         prompt: format!("User said: {user_text}"),
+        max_tokens: None,
     };
 
     let id = llm.start(request).context("failed to start generation")?;
@@ -83,6 +97,60 @@ fn run_fake_turn(user_text: String) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(feature = "llm-llama-cpp")]
+fn run_llama_turn(model_path: String, prompt: String) -> Result<()> {
+    let config = LlamaCppConfig {
+        model_path: model_path.into(),
+        ..Default::default()
+    };
+    let mut llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
+    let id = llm
+        .start(GenerationRequest {
+            prompt,
+            max_tokens: None,
+        })
+        .context("failed to start llama.cpp generation")?;
+
+    loop {
+        let events = llm.poll(id)?;
+        if events.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            continue;
+        }
+
+        for event in &events {
+            match event {
+                LlmEvent::Token { text } => {
+                    print!("{text}");
+                    use std::io::Write;
+                    std::io::stdout().flush()?;
+                }
+                LlmEvent::Error { message } => {
+                    anyhow::bail!("llama.cpp generation failed: {message}");
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled => {}
+            }
+        }
+
+        if events.iter().any(|event| {
+            matches!(
+                event,
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
+            )
+        }) {
+            println!();
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(feature = "llm-llama-cpp"))]
+fn run_llama_turn(_model_path: String, _prompt: String) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `llm-llama-cpp` feature")
 }
 
 fn run_demo_vad() -> Result<()> {

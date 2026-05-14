@@ -13,6 +13,7 @@ rtrb = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
+encoding_rs = { version = "0.8", optional = true }
 
 [features]
 default = []
@@ -20,7 +21,8 @@ audio-cpal = ["dep:cpal"]
 resample-rubato = ["dep:rubato"]
 vad-silero = []
 vad-webrtc = []
-llm-llama-cpp = []
+llm-llama-cpp = ["dep:encoding_rs", "dep:llama-cpp-2", "llama-cpp-2/sampler"]
+llm-llama-cpp-cuda = ["llm-llama-cpp", "llama-cpp-2/cuda"]
 asr-whisper = ["dep:whisper-cpp-plus"]
 asr-whisper-async = ["asr-whisper", "whisper-cpp-plus/async"]
 asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
@@ -36,6 +38,11 @@ optional = true
 [dependencies.rubato]
 version = "0.16"
 optional = true
+
+[dependencies.llama-cpp-2]
+version = "0.1.146"
+optional = true
+default-features = false
 
 [dependencies.whisper-cpp-plus]
 version = "0.1.4"
