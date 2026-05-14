@@ -25,7 +25,9 @@ use listenbury::{PiperConfig, PiperTextToSpeech};
 use owo_colors::OwoColorize;
 #[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "tts-piper")]
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(feature = "tts-piper")]
 use std::time::{Duration, Instant};
 
@@ -44,7 +46,10 @@ enum Command {
     TranscribeSynthetic(TranscribeSyntheticCommand),
     PiperSay(PiperSayCommand),
     RoundTripWav(RoundTripWavCommand),
-    Models(ModelsCommand),
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -119,11 +124,19 @@ fn main() -> Result<()> {
                 piper_voice: cmd.piper_voice,
             },
         ),
-        Command::Models(cmd) => run_models(cmd),
+        Command::Models { command } => run_models(command),
     }
 }
 
 #[derive(Debug, Default)]
+#[cfg_attr(
+    not(all(
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )),
+    allow(dead_code)
+)]
 struct RoundTripWavOptions {
     whisper_model: Option<PathBuf>,
     llm_model: Option<PathBuf>,
@@ -151,7 +164,12 @@ fn run_models(command: ModelsCommand) -> Result<()> {
                 } else {
                     "missing".red().to_string()
                 };
-                println!("{} {} {}", status.asset_id.bold(), state, status.path.display());
+                println!(
+                    "{} {} {}",
+                    status.asset_id.bold(),
+                    state,
+                    status.path.display()
+                );
             }
             Ok(())
         }
@@ -794,6 +812,7 @@ fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<Aud
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tts-piper")]
     use super::*;
     #[cfg(feature = "tts-piper")]
     use std::fs;
