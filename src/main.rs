@@ -15,6 +15,7 @@ use listenbury::time::ExactTimestamp;
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 #[cfg(feature = "tts-piper")]
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "tts-piper")]
@@ -195,7 +196,6 @@ fn run_llama_turn(model_path: String, prompt: String) -> Result<()> {
             match event {
                 LlmEvent::Token { text } => {
                     print!("{text}");
-                    use std::io::Write;
                     std::io::stdout().flush()?;
                 }
                 LlmEvent::Error { message } => {
@@ -363,6 +363,7 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
             match event {
                 LlmEvent::Token { text } => {
                     print!("{text}");
+                    use std::io::Write;
                     std::io::stdout().flush()?;
                 }
                 LlmEvent::Error { message } => {
