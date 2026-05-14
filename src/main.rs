@@ -20,6 +20,11 @@ use listenbury::time::ExactTimestamp;
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 #[cfg(feature = "tts-piper")]
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "llm-llama-cpp")]
+use std::io::Write;
+use std::path::{Path, PathBuf};
+#[cfg(feature = "tts-piper")]
+use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -68,6 +73,10 @@ fn main() -> Result<()> {
             }
             run_piper_say(piper_bin, model_path, text)
         }
+        "round-trip-wav" => {
+            let (input_wav, options) = parse_round_trip_wav_args(args)?;
+            run_round_trip_wav(input_wav, options)
+        }
         "models" => run_models(args),
         _ => {
             print_usage();
@@ -83,7 +92,50 @@ fn print_usage() {
     println!("  listenbury llama-turn <model.gguf> \"prompt\"");
     println!("  listenbury transcribe-synthetic <model.bin>");
     println!("  listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+    println!(
+        "  listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
+    );
     println!("  listenbury models <fetch|status|path>");
+}
+
+#[derive(Debug, Default)]
+struct RoundTripWavOptions {
+    whisper_model: Option<PathBuf>,
+    llm_model: Option<PathBuf>,
+    piper_bin: Option<PathBuf>,
+    piper_voice: Option<PathBuf>,
+}
+
+fn parse_round_trip_wav_args(
+    mut args: impl Iterator<Item = String>,
+) -> Result<(PathBuf, RoundTripWavOptions)> {
+    let Some(input_wav) = args.next() else {
+        anyhow::bail!(
+            "usage: listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
+        );
+    };
+
+    let mut options = RoundTripWavOptions::default();
+
+    while let Some(flag) = args.next() {
+        let value = args.next().with_context(|| {
+            format!(
+                "missing value for {flag}; usage: listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
+            )
+        })?;
+
+        match flag.as_str() {
+            "--whisper-model" => options.whisper_model = Some(PathBuf::from(value)),
+            "--llm-model" => options.llm_model = Some(PathBuf::from(value)),
+            "--piper-bin" => options.piper_bin = Some(PathBuf::from(value)),
+            "--piper-voice" => options.piper_voice = Some(PathBuf::from(value)),
+            _ => anyhow::bail!(
+                "unknown round-trip-wav option {flag}; expected --whisper-model, --llm-model, --piper-bin, or --piper-voice"
+            ),
+        }
+    }
+
+    Ok((PathBuf::from(input_wav), options))
 }
 
 #[cfg(feature = "model-download")]
@@ -210,7 +262,6 @@ fn run_llama_turn(model_path: String, prompt: String) -> Result<()> {
             match event {
                 LlmEvent::Token { text } => {
                     print!("{text}");
-                    use std::io::Write;
                     std::io::stdout().flush()?;
                 }
                 LlmEvent::Error { message } => {
@@ -295,42 +346,9 @@ fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
 
 #[cfg(feature = "tts-piper")]
 fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<()> {
-    let model_path = std::path::PathBuf::from(model_path);
-    let inferred_config_path = model_path.with_extension("onnx.json");
-    let mut config = PiperConfig::new(piper_bin, model_path);
-    if inferred_config_path.exists() {
-        if let Some(sample_rate_hz) = read_piper_sample_rate_hz(&inferred_config_path)? {
-            config.sample_rate_hz = sample_rate_hz;
-        }
-        config.config_path = Some(inferred_config_path);
-    }
-
-    let mut tts = PiperTextToSpeech::new(config);
+    let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, model_path)?);
     tts.enqueue(SpeechPlan::FullTurn(text))?;
-
-    let mut frames = Vec::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let quiet_after_audio = std::time::Duration::from_millis(100);
-    let mut last_audio_at = None;
-    while std::time::Instant::now() < deadline {
-        let new_frames = tts.poll_audio()?;
-        if new_frames.is_empty() {
-            if let Some(last_audio_at) = last_audio_at {
-                if std::time::Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
-                    break;
-                }
-            }
-        } else {
-            frames.extend(new_frames);
-            last_audio_at = Some(std::time::Instant::now());
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-
-    if frames.is_empty() {
-        anyhow::bail!("Piper produced no audio frames before timeout");
-    }
+    let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
     std::fs::create_dir_all("out").context("failed to create out directory")?;
     let output_path = std::path::Path::new("out/listenbury-piper-test.wav");
@@ -350,6 +368,245 @@ fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<
 #[cfg(not(feature = "tts-piper"))]
 fn run_piper_say(_piper_bin: String, _model_path: String, _text: String) -> Result<()> {
     anyhow::bail!("listenbury was built without the `tts-piper` feature")
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Result<()> {
+    let paths = RoundTripModelPaths::discover(options)?;
+    let frames = read_wav_as_audio_frames(&input_wav, 1_600)?;
+
+    let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
+        .with_context(|| {
+            format!(
+                "failed to load Whisper model at {}",
+                paths.whisper_model.display()
+            )
+        })?;
+    for frame in &frames {
+        recognizer.push_frame(frame)?;
+    }
+
+    let transcript = recognizer
+        .poll_chunks()?
+        .into_iter()
+        .map(|chunk| chunk.text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("Heard: {transcript}");
+
+    let mut llm = LlamaCppEngine::new(LlamaCppConfig {
+        model_path: paths.llm_model.clone(),
+        ..Default::default()
+    })
+    .with_context(|| {
+        format!(
+            "failed to initialize llama.cpp with {}",
+            paths.llm_model.display()
+        )
+    })?;
+
+    let generation_id = llm
+        .start(GenerationRequest {
+            prompt: build_round_trip_prompt(&transcript),
+            max_tokens: Some(96),
+        })
+        .context("failed to start llama.cpp generation")?;
+
+    let mut planner = SpeechPlanner::default();
+    let mut full_events = Vec::new();
+    loop {
+        let events = llm.poll(generation_id)?;
+        if events.is_empty() {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
+
+        for event in &events {
+            match event {
+                LlmEvent::Token { text } => {
+                    print!("{text}");
+                    std::io::stdout().flush()?;
+                }
+                LlmEvent::Error { message } => {
+                    anyhow::bail!("llama.cpp generation failed: {message}");
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled => {}
+            }
+        }
+
+        full_events.extend(events.clone());
+
+        if events.iter().any(|event| {
+            matches!(
+                event,
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
+            )
+        }) {
+            println!();
+            break;
+        }
+    }
+
+    let plan = planner
+        .ingest(&full_events)
+        .unwrap_or_else(|| SpeechPlan::FullTurn("I heard you, but I lost my words.".to_string()));
+
+    let mut tts =
+        PiperTextToSpeech::new(piper_config_for_voice(paths.piper_bin, paths.piper_voice)?);
+    tts.enqueue(plan)?;
+    let audio = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+
+    std::fs::create_dir_all("out").context("failed to create out directory")?;
+    let output_path = Path::new("out/listenbury-round-trip.wav");
+    write_wav(output_path, &audio)?;
+    println!("Wrote {}", output_path.display());
+
+    Ok(())
+}
+
+#[cfg(not(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+)))]
+fn run_round_trip_wav(_input_wav: PathBuf, _options: RoundTripWavOptions) -> Result<()> {
+    anyhow::bail!(
+        "listenbury was built without the `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
+    )
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone)]
+struct RoundTripModelPaths {
+    whisper_model: PathBuf,
+    llm_model: PathBuf,
+    piper_bin: PathBuf,
+    piper_voice: PathBuf,
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl RoundTripModelPaths {
+    fn discover(options: RoundTripWavOptions) -> Result<Self> {
+        Ok(Self {
+            whisper_model: resolve_round_trip_path(
+                options.whisper_model,
+                "LISTENBURY_WHISPER_MODEL",
+                "Whisper model",
+                "--whisper-model",
+                |path| {
+                    path.extension().is_some_and(|ext| ext == "bin")
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.contains("ggml"))
+                },
+            )?,
+            llm_model: resolve_round_trip_path(
+                options.llm_model,
+                "LISTENBURY_LLM_MODEL",
+                "llama.cpp model",
+                "--llm-model",
+                |path| path.extension().is_some_and(|ext| ext == "gguf"),
+            )?,
+            piper_bin: options
+                .piper_bin
+                .or_else(|| std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from("piper")),
+            piper_voice: resolve_round_trip_path(
+                options.piper_voice,
+                "LISTENBURY_PIPER_VOICE",
+                "Piper voice",
+                "--piper-voice",
+                |path| path.extension().is_some_and(|ext| ext == "onnx"),
+            )?,
+        })
+    }
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn resolve_round_trip_path(
+    explicit: Option<PathBuf>,
+    env_var: &str,
+    label: &str,
+    flag: &str,
+    matches: impl Fn(&Path) -> bool,
+) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+
+    if let Some(path) = std::env::var_os(env_var) {
+        return Ok(PathBuf::from(path));
+    }
+
+    if let Some(path) = discover_model_file(&matches)? {
+        return Ok(path);
+    }
+
+    anyhow::bail!("could not discover {label}; set {env_var} or pass {flag}")
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn discover_model_file(matches: &impl Fn(&Path) -> bool) -> Result<Option<PathBuf>> {
+    let models_dir = Path::new("models");
+    if !models_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut stack = vec![models_dir.to_path_buf()];
+    let mut found = Vec::new();
+
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to read model directory {}", dir.display()))?
+        {
+            let entry = entry
+                .with_context(|| format!("failed to inspect model directory {}", dir.display()))?;
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .with_context(|| format!("failed to inspect {}", path.display()))?;
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() && matches(&path) {
+                found.push(path);
+            }
+        }
+    }
+
+    found.sort();
+    Ok(found.into_iter().next())
+}
+
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_round_trip_prompt(transcript: &str) -> String {
+    format!(
+        "<|system|>\nYou are Pete. Reply briefly and naturally.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+    )
 }
 
 #[cfg(feature = "tts-piper")]
@@ -408,4 +665,188 @@ fn read_piper_sample_rate_hz(path: &std::path::Path) -> Result<Option<u32>> {
         .and_then(|audio| audio.get("sample_rate"))
         .and_then(|sample_rate| sample_rate.as_u64())
         .and_then(|sample_rate| u32::try_from(sample_rate).ok()))
+}
+
+#[cfg(feature = "tts-piper")]
+fn piper_config_for_voice(
+    piper_bin: impl Into<PathBuf>,
+    model_path: impl Into<PathBuf>,
+) -> Result<PiperConfig> {
+    let model_path = model_path.into();
+    let inferred_config_path = model_path.with_extension("onnx.json");
+    let mut config = PiperConfig::new(piper_bin, model_path);
+    if inferred_config_path.exists() {
+        if let Some(sample_rate_hz) = read_piper_sample_rate_hz(&inferred_config_path)? {
+            config.sample_rate_hz = sample_rate_hz;
+        }
+        config.config_path = Some(inferred_config_path);
+    }
+    Ok(config)
+}
+
+#[cfg(feature = "tts-piper")]
+fn collect_tts_audio(tts: &mut impl TextToSpeech, timeout: Duration) -> Result<Vec<AudioFrame>> {
+    let deadline = Instant::now() + timeout;
+    let quiet_after_audio = Duration::from_millis(100);
+    let mut frames = Vec::new();
+    let mut last_audio_at = None;
+
+    while Instant::now() < deadline {
+        let new_frames = tts.poll_audio()?;
+        if new_frames.is_empty() {
+            if let Some(last_audio_at) = last_audio_at {
+                if Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
+                    break;
+                }
+            }
+        } else {
+            frames.extend(new_frames);
+            last_audio_at = Some(Instant::now());
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if frames.is_empty() {
+        anyhow::bail!("Piper produced no audio frames before timeout");
+    }
+
+    Ok(frames)
+}
+
+#[cfg(feature = "tts-piper")]
+fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
+
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("failed to open WAV at {}", path.display()))?;
+    let spec = reader.spec();
+
+    anyhow::ensure!(
+        spec.channels == 1,
+        "expected mono WAV input at {}; got {} channels",
+        path.display(),
+        spec.channels
+    );
+    anyhow::ensure!(
+        spec.sample_rate == 16_000,
+        "expected 16 kHz WAV input at {}; got {} Hz",
+        path.display(),
+        spec.sample_rate
+    );
+    anyhow::ensure!(
+        spec.sample_format == hound::SampleFormat::Int,
+        "expected integer PCM WAV input at {}; floating-point WAV is not supported yet",
+        path.display()
+    );
+
+    let samples = match spec.bits_per_sample {
+        1..=8 => reader
+            .samples::<i8>()
+            .map(|sample| sample.map(|sample| sample as f32 / 128.0))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
+        9..=16 => reader
+            .samples::<i16>()
+            .map(|sample| sample.map(|sample| sample as f32 / i16::MAX as f32))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
+        17..=32 => {
+            let scale = if spec.bits_per_sample == 32 {
+                i32::MAX as f32
+            } else {
+                ((1_i64 << (spec.bits_per_sample - 1)) - 1) as f32
+            };
+            reader
+                .samples::<i32>()
+                .map(|sample| sample.map(|sample| sample as f32 / scale))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?
+        }
+        bits => anyhow::bail!(
+            "unsupported PCM bit depth {bits} for WAV input at {}",
+            path.display()
+        ),
+    };
+
+    Ok(samples
+        .chunks(frame_samples)
+        .map(|chunk| AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: spec.sample_rate,
+            channels: spec.channels,
+            samples: chunk.to_vec(),
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(feature = "tts-piper")]
+    use std::fs;
+
+    #[cfg(feature = "tts-piper")]
+    fn unique_test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("listenbury-{name}-{}.wav", std::process::id()))
+    }
+
+    #[cfg(feature = "tts-piper")]
+    const FLOAT_TOLERANCE: f32 = 0.0001;
+
+    #[cfg(feature = "tts-piper")]
+    #[test]
+    fn read_wav_as_audio_frames_chunks_pcm_samples() {
+        let path = unique_test_path("mono-16k");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
+        writer
+            .write_sample(i16::MIN)
+            .expect("sample write should succeed");
+        writer
+            .write_sample(0_i16)
+            .expect("sample write should succeed");
+        writer
+            .write_sample(i16::MAX)
+            .expect("sample write should succeed");
+        writer.finalize().expect("WAV should finalize");
+
+        let frames = read_wav_as_audio_frames(&path, 2).expect("WAV should be read");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].sample_rate_hz, 16_000);
+        assert_eq!(frames[0].channels, 1);
+        assert_eq!(frames[0].samples.len(), 2);
+        assert_eq!(frames[1].samples.len(), 1);
+        assert!(frames[0].samples[0] <= -1.0 + FLOAT_TOLERANCE);
+        assert!(frames[1].samples[0] >= 1.0 - FLOAT_TOLERANCE);
+
+        fs::remove_file(path).expect("temporary WAV should be removed");
+    }
+
+    #[cfg(feature = "tts-piper")]
+    #[test]
+    fn read_wav_as_audio_frames_rejects_wrong_sample_rate() {
+        let path = unique_test_path("wrong-rate");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
+        writer
+            .write_sample(0_i16)
+            .expect("sample write should succeed");
+        writer.finalize().expect("WAV should finalize");
+
+        let error = read_wav_as_audio_frames(&path, 1600).expect_err("sample rate should fail");
+        assert!(error.to_string().contains("expected 16 kHz WAV input"));
+
+        fs::remove_file(path).expect("temporary WAV should be removed");
+    }
 }
