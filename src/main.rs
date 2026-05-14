@@ -3,6 +3,11 @@ use listenbury::audio::frame::AudioFrame;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
+#[cfg(feature = "model-download")]
+use listenbury::models::{
+    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets,
+    paths::resolve_listenbury_home,
+};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::planner::SpeechPlan;
 use listenbury::mouth::planner::SpeechPlanner;
@@ -72,6 +77,7 @@ fn main() -> Result<()> {
             let (input_wav, options) = parse_round_trip_wav_args(args)?;
             run_round_trip_wav(input_wav, options)
         }
+        "models" => run_models(args),
         _ => {
             print_usage();
             Ok(())
@@ -89,6 +95,7 @@ fn print_usage() {
     println!(
         "  listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
     );
+    println!("  listenbury models <fetch|status|path>");
 }
 
 #[derive(Debug, Default)]
@@ -129,6 +136,65 @@ fn parse_round_trip_wav_args(
     }
 
     Ok((PathBuf::from(input_wav), options))
+}
+
+#[cfg(feature = "model-download")]
+fn run_models(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let Some(subcommand) = args.next() else {
+        anyhow::bail!("usage: listenbury models <fetch|status|path>");
+    };
+
+    match subcommand.as_str() {
+        "path" => {
+            let home = resolve_listenbury_home()?;
+            println!("listenbury_home={}", home.display());
+            println!("models_dir={}", home.join("models").display());
+            println!("bin_dir={}", home.join("bin").display());
+            for (asset, path) in default_asset_paths()? {
+                println!("{}={}", asset.id, path.display());
+            }
+            Ok(())
+        }
+        "status" => {
+            for status in default_assets_status()? {
+                let state = if status.present { "present" } else { "missing" };
+                println!("{} {} {}", status.asset_id, state, status.path.display());
+            }
+            Ok(())
+        }
+        "fetch" => {
+            let mut had_failure = false;
+            for result in fetch_default_assets()? {
+                match result.outcome {
+                    FetchOutcome::SkippedExisting => {
+                        println!("{} skipped {}", result.asset_id, result.path.display());
+                    }
+                    FetchOutcome::Downloaded => {
+                        println!("{} downloaded {}", result.asset_id, result.path.display());
+                    }
+                    FetchOutcome::Failed => {
+                        had_failure = true;
+                        println!(
+                            "{} failed {} ({})",
+                            result.asset_id,
+                            result.path.display(),
+                            result.error.as_deref().unwrap_or("unknown error")
+                        );
+                    }
+                }
+            }
+            if had_failure {
+                anyhow::bail!("one or more model assets failed to fetch");
+            }
+            Ok(())
+        }
+        _ => anyhow::bail!("usage: listenbury models <fetch|status|path>"),
+    }
+}
+
+#[cfg(not(feature = "model-download"))]
+fn run_models(_args: impl Iterator<Item = String>) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `model-download` feature")
 }
 
 fn run_fake_turn(user_text: String) -> Result<()> {

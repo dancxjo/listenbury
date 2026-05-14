@@ -3,6 +3,8 @@ pub mod config;
 pub mod event;
 pub mod hearing;
 pub mod mind;
+#[cfg(feature = "model-download")]
+pub mod models;
 pub mod mouth;
 pub mod speech;
 pub mod time;
