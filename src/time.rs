@@ -1,4 +1,19 @@
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExactTimestamp {
+    pub unix_nanos: u128,
+}
+
+impl ExactTimestamp {
+    pub fn now() -> Self {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        Self { unix_nanos: nanos }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Timed<T> {

@@ -11,7 +11,8 @@ pub mod vision;
 pub use audio::frame::AudioFrame;
 pub use audio::{AudioInput, AudioOutput};
 pub use event::{
-    AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, VisionEvent,
+    AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
+    VisionEvent,
 };
 pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
@@ -20,4 +21,4 @@ pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 pub use mind::turn::{TurnState, TurnTracker};
 pub use mouth::planner::{MouthCommand, SpeechPlan, SpeechPlanner};
-pub use time::Timed;
+pub use time::{ExactTimestamp, Timed};

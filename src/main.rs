@@ -4,6 +4,7 @@ use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 use listenbury::mouth::planner::SpeechPlanner;
+use listenbury::time::ExactTimestamp;
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -85,6 +86,7 @@ fn run_demo_vad() -> Result<()> {
 
     for amp in amplitudes {
         let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![amp; 160],
