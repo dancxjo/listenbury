@@ -1,4 +1,6 @@
-use crate::cli::{SpeechCacheCommand, SpeechCachePrewarmCommand};
+use crate::cli::SpeechCacheCommand;
+#[cfg(feature = "tts-piper")]
+use crate::cli::SpeechCachePrewarmCommand;
 use anyhow::Result;
 
 #[cfg(feature = "tts-piper")]

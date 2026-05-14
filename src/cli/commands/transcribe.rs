@@ -1,9 +1,9 @@
-use crate::cli::TranscribeSyntheticCommand;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
-use anyhow::Result;
+use crate::cli::TranscribeSyntheticCommand;
 #[cfg(feature = "asr-whisper")]
 use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "asr-whisper")]
 use listenbury::audio::frame::AudioFrame;
 #[cfg(feature = "asr-whisper")]

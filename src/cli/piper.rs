@@ -2,6 +2,7 @@ use crate::cli::model_paths::resolve_piper_voice;
 use crate::cli::PiperSayCommand;
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
+use listenbury::audio::write_wav;
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{PiperConfig, PiperTextToSpeech};
@@ -18,7 +19,7 @@ pub(crate) fn run_piper_say(command: PiperSayCommand) -> Result<()> {
 
     std::fs::create_dir_all("out").context("failed to create out directory")?;
     let output_path = std::path::Path::new("out/listenbury-piper-test.wav");
-    crate::cli::wav::write_wav(output_path, &frames)?;
+    write_wav(output_path, &frames)?;
 
     let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
     println!(

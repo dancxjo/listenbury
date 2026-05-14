@@ -16,9 +16,9 @@ pub(crate) use transcribe::run_transcribe_synthetic;
 pub(crate) use crate::cli::piper::run_piper_say;
 
 #[cfg(not(feature = "tts-piper"))]
-use anyhow::Result;
-#[cfg(not(feature = "tts-piper"))]
 use crate::cli::PiperSayCommand;
+#[cfg(not(feature = "tts-piper"))]
+use anyhow::Result;
 
 #[cfg(not(feature = "tts-piper"))]
 pub(crate) fn run_piper_say(_command: PiperSayCommand) -> Result<()> {

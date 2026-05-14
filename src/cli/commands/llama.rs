@@ -1,9 +1,9 @@
-use crate::cli::LlamaTurnCommand;
 #[cfg(feature = "llm-llama-cpp")]
 use crate::cli::model_paths::resolve_llm_model;
-use anyhow::Result;
+use crate::cli::LlamaTurnCommand;
 #[cfg(feature = "llm-llama-cpp")]
 use anyhow::Context;
+use anyhow::Result;
 #[cfg(feature = "llm-llama-cpp")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 #[cfg(feature = "llm-llama-cpp")]

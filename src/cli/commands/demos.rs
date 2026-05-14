@@ -1,8 +1,12 @@
-use anyhow::{Context, Result};
+#[cfg(feature = "tts-piper")]
+use anyhow::Context;
+use anyhow::Result;
 use listenbury::audio::frame::AudioFrame;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+#[cfg(feature = "tts-piper")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
+#[cfg(feature = "tts-piper")]
 use listenbury::mouth::planner::SpeechPlanner;
 use listenbury::time::ExactTimestamp;
 

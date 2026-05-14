@@ -1,7 +1,12 @@
 mod commands;
+#[cfg(any(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 mod model_paths;
+#[cfg(feature = "tts-piper")]
 mod piper;
-mod wav;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand};
@@ -120,7 +125,9 @@ pub(crate) fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "asr-whisper")]
     use super::*;
+    #[cfg(feature = "asr-whisper")]
     use clap::Parser;
 
     #[cfg(feature = "asr-whisper")]
