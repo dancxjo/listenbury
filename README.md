@@ -109,9 +109,9 @@ CLI commands:
 ```text
 listenbury fake-turn "hello there"
 listenbury demo-vad
-listenbury llama-turn <model.gguf> "prompt"
-listenbury transcribe-synthetic <model.bin>
-listenbury piper-say <piper-bin> <voice.onnx> "text"
+listenbury llama-turn [--llm-model <model.gguf>] "prompt"
+listenbury transcribe-synthetic [--whisper-model <model.bin>]
+listenbury piper-say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
 listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
 ```
@@ -151,7 +151,7 @@ Default model assets fetched by `models fetch`:
 - `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
 - `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
 
-`round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> first matching file discovered under `./models`.
+`transcribe-synthetic`, `llama-turn`, `piper-say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
 ## Validation
 

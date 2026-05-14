@@ -16,6 +16,7 @@ pub struct PiperConfig {
     pub executable: PathBuf,
     pub model_path: PathBuf,
     pub config_path: Option<PathBuf>,
+    pub num_threads: Option<usize>,
     pub sample_rate_hz: u32,
     pub channels: u16,
     pub frame_samples: usize,
@@ -27,6 +28,7 @@ impl PiperConfig {
             executable: executable.into(),
             model_path: model_path.into(),
             config_path: None,
+            num_threads: Some(1),
             sample_rate_hz: 22_050,
             channels: 1,
             frame_samples: 1024,
@@ -154,6 +156,10 @@ fn synthesize(config: &PiperConfig, text: &str) -> Result<Vec<f32>> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if let Some(num_threads) = config.num_threads {
+        command.arg("--num-threads").arg(num_threads.to_string());
+    }
 
     if let Some(config_path) = &config.config_path {
         command.arg("--config").arg(config_path);
