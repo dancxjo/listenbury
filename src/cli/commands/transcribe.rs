@@ -1,28 +1,25 @@
-use crate::cli::TranscribeSyntheticCommand;
+use crate::cli::TranscribeCommand;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
 #[cfg(feature = "asr-whisper")]
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(feature = "asr-whisper")]
-use listenbury::audio::frame::AudioFrame;
+use listenbury::audio::read_wav_as_whisper_frames;
 #[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(feature = "asr-whisper")]
-use listenbury::time::ExactTimestamp;
 
 #[cfg(feature = "asr-whisper")]
-pub(crate) fn run_transcribe_synthetic(command: TranscribeSyntheticCommand) -> Result<()> {
+pub(crate) fn run_transcribe(command: TranscribeCommand) -> Result<()> {
     let model_path = resolve_whisper_model(command.whisper_model)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&model_path)
         .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
+    let frames = read_wav_as_whisper_frames(&command.input_wav, 1_600)
+        .with_context(|| format!("failed to read WAV at {}", command.input_wav.display()))?;
 
-    recognizer.push_frame(&AudioFrame {
-        captured_at: ExactTimestamp::now(),
-        sample_rate_hz: 16_000,
-        channels: 1,
-        samples: vec![0.0; 16_000],
-    })?;
+    for frame in &frames {
+        recognizer.push_frame(frame)?;
+    }
 
     let chunks = recognizer.poll_chunks()?;
     if chunks.is_empty() {
@@ -38,6 +35,6 @@ pub(crate) fn run_transcribe_synthetic(command: TranscribeSyntheticCommand) -> R
 }
 
 #[cfg(not(feature = "asr-whisper"))]
-pub(crate) fn run_transcribe_synthetic(_command: TranscribeSyntheticCommand) -> Result<()> {
+pub(crate) fn run_transcribe(_command: TranscribeCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `asr-whisper` feature")
 }

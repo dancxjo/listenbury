@@ -27,7 +27,7 @@ enum Command {
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
-    TranscribeSynthetic(TranscribeSyntheticCommand),
+    Transcribe(TranscribeCommand),
     PiperSay(PiperSayCommand),
     RoundTripWav(RoundTripWavCommand),
     Models {
@@ -74,7 +74,8 @@ pub(crate) struct LlamaTurnCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct TranscribeSyntheticCommand {
+pub(crate) struct TranscribeCommand {
+    pub(crate) input_wav: PathBuf,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
 }
@@ -140,7 +141,7 @@ pub(crate) fn run() -> Result<()> {
         Command::RecordWav(cmd) => commands::run_record_wav(cmd),
         Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
-        Command::TranscribeSynthetic(cmd) => commands::run_transcribe_synthetic(cmd),
+        Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::PiperSay(cmd) => commands::run_piper_say(cmd),
         Command::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         Command::Models { command } => commands::run_models(command),
@@ -154,13 +155,14 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn transcribe_synthetic_accepts_default_model() {
-        let cli = Cli::try_parse_from(["listenbury", "transcribe-synthetic"])
-            .expect("transcribe-synthetic should not require a model path");
+    fn transcribe_accepts_input_and_default_model() {
+        let cli = Cli::try_parse_from(["listenbury", "transcribe", "welcome.wav"])
+            .expect("transcribe should parse an input path and optional model path");
 
-        let Some(Command::TranscribeSynthetic(command)) = cli.command else {
-            panic!("expected transcribe-synthetic command");
+        let Some(Command::Transcribe(command)) = cli.command else {
+            panic!("expected transcribe command");
         };
+        assert_eq!(command.input_wav, PathBuf::from("welcome.wav"));
         assert!(command.whisper_model.is_none());
     }
 

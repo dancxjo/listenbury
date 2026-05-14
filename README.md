@@ -10,7 +10,7 @@ Listenbury is an active prototype with working pipeline components and CLI demos
 
 - Hearing/turn-taking demos (`demo-vad`, `vad-trace`, `fake-turn`)
 - Local LLM turn demo (`llama-turn`, feature-gated)
-- Whisper ASR synthetic transcription demo (`transcribe-synthetic`, feature-gated)
+- Whisper ASR WAV transcription (`transcribe`, feature-gated)
 - Piper TTS demo (`piper-say`, feature-gated)
 - End-to-end WAV round trip (ASR -> LLM -> TTS) (`round-trip-wav`, feature-gated)
 - Model asset inspection/fetch utilities (`models`, feature-gated)
@@ -111,7 +111,7 @@ listenbury fake-turn "hello there"
 listenbury demo-vad
 listenbury vad-trace <input.wav> [--jsonl <out/vad-trace.jsonl>]
 listenbury llama-turn [--llm-model <model.gguf>] "prompt"
-listenbury transcribe-synthetic [--whisper-model <model.bin>]
+listenbury transcribe <input.wav> [--whisper-model <model.bin>]
 listenbury piper-say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
 listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
@@ -123,7 +123,7 @@ listenbury models <fetch|status|path>
 - `demo-vad`: emits VAD/breath-grouping events from synthetic amplitudes
 - `vad-trace`: runs frame-by-frame VAD and breath-group tracing on mono 16kHz WAV input (optional JSONL export)
 - `llama-turn`: streams text tokens from a local llama.cpp model
-- `transcribe-synthetic`: pushes synthetic audio into Whisper recognizer
+- `transcribe`: transcribes WAV input with Whisper
 - `piper-say`: writes synthesized WAV to `out/listenbury-piper-test.wav`
 - `round-trip-wav`:
   - input must be mono, 16kHz PCM WAV
@@ -153,7 +153,7 @@ Default model assets fetched by `models fetch`:
 - `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
 - `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
 
-`transcribe-synthetic`, `llama-turn`, `piper-say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
+`transcribe`, `llama-turn`, `piper-say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
 ## Validation
 

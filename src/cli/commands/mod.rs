@@ -13,7 +13,7 @@ pub(crate) use llama::run_llama_turn;
 pub(crate) use models::run_models;
 pub(crate) use round_trip::run_round_trip_wav;
 pub(crate) use speech_cache::run_speech_cache;
-pub(crate) use transcribe::run_transcribe_synthetic;
+pub(crate) use transcribe::run_transcribe;
 pub(crate) use vad_trace::run_vad_trace;
 
 #[cfg(feature = "tts-piper")]
