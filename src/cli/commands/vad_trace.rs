@@ -1,7 +1,7 @@
 use crate::cli::VadTraceCommand;
 use anyhow::{Context, Result};
-use listenbury::audio::read_wav_as_audio_frames;
 use listenbury::AudioFrame;
+use listenbury::audio::read_wav_as_audio_frames;
 use listenbury::event::HearingEvent;
 use listenbury::hearing::breath::BreathGroupSegmenter;
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
@@ -267,5 +267,89 @@ mod tests {
         assert_eq!(lines[2]["kind"], "breath_group_end");
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn frame_duration_ms_handles_expected_and_edge_cases() {
+        let frame_10ms = AudioFrame {
+            captured_at: listenbury::ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.0; 160],
+        };
+        assert_eq!(frame_duration_ms(&frame_10ms), 10);
+
+        let stereo_frame_10ms = AudioFrame {
+            captured_at: listenbury::ExactTimestamp::now(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            samples: vec![0.0; 960],
+        };
+        assert_eq!(frame_duration_ms(&stereo_frame_10ms), 10);
+
+        let zero_rate = AudioFrame {
+            captured_at: listenbury::ExactTimestamp::now(),
+            sample_rate_hz: 0,
+            channels: 1,
+            samples: vec![0.0; 160],
+        };
+        assert_eq!(frame_duration_ms(&zero_rate), 0);
+    }
+
+    #[test]
+    fn rms_handles_known_values() {
+        assert_eq!(rms(&[]), 0.0);
+        assert_eq!(rms(&[0.0, 0.0, 0.0]), 0.0);
+        assert_eq!(rms(&[1.0, -1.0]), 1.0);
+
+        let got = rms(&[0.0, 1.0, 0.0, -1.0]);
+        assert!((got - 0.70710677).abs() < 1e-6);
+    }
+
+    #[test]
+    fn collect_vad_trace_events_advances_time_and_emits_ordered_events() {
+        let frames = vec![
+            AudioFrame {
+                captured_at: listenbury::ExactTimestamp::now(),
+                sample_rate_hz: 16_000,
+                channels: 1,
+                samples: vec![0.0; 160],
+            },
+            AudioFrame {
+                captured_at: listenbury::ExactTimestamp::now(),
+                sample_rate_hz: 16_000,
+                channels: 1,
+                samples: vec![0.3; 160],
+            },
+            AudioFrame {
+                captured_at: listenbury::ExactTimestamp::now(),
+                sample_rate_hz: 16_000,
+                channels: 1,
+                samples: vec![0.3; 160],
+            },
+            AudioFrame {
+                captured_at: listenbury::ExactTimestamp::now(),
+                sample_rate_hz: 16_000,
+                channels: 1,
+                samples: vec![0.3; 160],
+            },
+        ];
+        let events = collect_vad_trace_events(&frames).unwrap();
+        let frame_events = events
+            .iter()
+            .filter_map(|event| match event {
+                VadTraceEvent::VadFrame { t_ms, speech, .. } => Some((*t_ms, *speech)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            frame_events,
+            vec![(0, false), (10, true), (20, true), (30, true)]
+        );
+        assert!(matches!(
+            events.last(),
+            Some(VadTraceEvent::BreathGroupStart { t_ms: 30 })
+        ));
     }
 }
