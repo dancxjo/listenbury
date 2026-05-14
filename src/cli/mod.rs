@@ -29,7 +29,7 @@ enum Command {
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
     Transcribe(TranscribeCommand),
-    PiperSay(PiperSayCommand),
+    Say(SayCommand),
     RoundTripWav(RoundTripWavCommand),
     Models {
         #[command(subcommand)]
@@ -97,7 +97,7 @@ pub(crate) struct TranscribeCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct PiperSayCommand {
+pub(crate) struct SayCommand {
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
@@ -159,7 +159,7 @@ pub(crate) fn run() -> Result<()> {
         Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
-        Command::PiperSay(cmd) => commands::run_piper_say(cmd),
+        Command::Say(cmd) => commands::run_say(cmd),
         Command::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::SpeechCache { command } => commands::run_speech_cache(command),
@@ -181,6 +181,19 @@ mod tests {
         };
         assert_eq!(command.input_wav, PathBuf::from("welcome.wav"));
         assert!(command.whisper_model.is_none());
+    }
+
+    #[test]
+    fn say_accepts_text_and_default_piper_options() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "hello", "there"])
+            .expect("say should parse text and optional Piper options");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.piper_bin.is_none());
+        assert!(command.piper_voice.is_none());
+        assert_eq!(command.words, ["hello", "there"]);
     }
 
     #[test]

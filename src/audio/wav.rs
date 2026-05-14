@@ -9,26 +9,14 @@ const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
 const MONO_CHANNELS: u16 = 1;
 
 pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
-    let frames = read_wav_frames(path, frame_samples)?;
-    let Some(first) = frames.first() else {
-        return Ok(frames);
-    };
-    anyhow::ensure!(
-        first.channels == 1,
-        "expected mono WAV input at {}; got {} channels",
-        path.display(),
-        first.channels
-    );
-    anyhow::ensure!(
-        first.sample_rate_hz == 16_000,
-        "expected 16 kHz WAV input at {}; got {} Hz",
-        path.display(),
-        first.sample_rate_hz
-    );
-    Ok(frames)
+    read_wav_as_mono_16khz_frames(path, frame_samples)
 }
 
 pub fn read_wav_as_whisper_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    read_wav_as_mono_16khz_frames(path, frame_samples)
+}
+
+fn read_wav_as_mono_16khz_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
     anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
 
     let frames = read_wav_frames(path, frame_samples)?;
@@ -64,9 +52,9 @@ pub fn read_wav_as_whisper_frames(path: &Path, frame_samples: usize) -> Result<V
     }
 
     let mono_samples = mix_to_mono(&samples, channels);
-    let whisper_samples = resample_linear(&mono_samples, sample_rate_hz, WHISPER_SAMPLE_RATE_HZ);
+    let resampled_samples = resample_linear(&mono_samples, sample_rate_hz, WHISPER_SAMPLE_RATE_HZ);
 
-    Ok(whisper_samples
+    Ok(resampled_samples
         .chunks(frame_samples)
         .map(|chunk| AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -273,29 +261,38 @@ mod tests {
     }
 
     #[test]
-    fn read_wav_rejects_wrong_sample_rate() {
-        let path = unique_test_path("wrong-rate");
+    fn read_wav_as_audio_frames_resamples_to_16khz() {
+        let path = unique_test_path("resample");
         let spec = hound::WavSpec {
             channels: 1,
-            sample_rate: 8_000,
+            sample_rate: 22_050,
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
-        writer
-            .write_sample(0_i16)
-            .expect("sample write should succeed");
+        for _ in 0..22_050 {
+            writer
+                .write_sample(i16::MAX)
+                .expect("sample write should succeed");
+        }
         writer.finalize().expect("WAV should finalize");
 
-        let error = read_wav_as_audio_frames(&path, 1600).expect_err("sample rate should fail");
-        assert!(error.to_string().contains("expected 16 kHz WAV input"));
+        let got = read_wav_as_audio_frames(&path, 1_600).expect("WAV should convert");
+
+        assert_eq!(got.len(), 10);
+        assert!(
+            got.iter()
+                .all(|frame| frame.sample_rate_hz == WHISPER_SAMPLE_RATE_HZ)
+        );
+        assert!(got.iter().all(|frame| frame.channels == MONO_CHANNELS));
+        assert!(got.iter().all(|frame| frame.samples.len() == 1_600));
 
         fs::remove_file(path).expect("temporary WAV should be removed");
     }
 
     #[test]
-    fn read_wav_rejects_stereo_input() {
-        let path = unique_test_path("stereo");
+    fn read_wav_as_audio_frames_mixes_stereo_to_mono() {
+        let path = unique_test_path("audio-stereo");
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate: 16_000,
@@ -303,16 +300,21 @@ mod tests {
             sample_format: hound::SampleFormat::Int,
         };
         let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
-        writer
-            .write_sample(0_i16)
-            .expect("left sample write should succeed");
-        writer
-            .write_sample(0_i16)
-            .expect("right sample write should succeed");
+        for _ in 0..16_000 {
+            writer
+                .write_sample(i16::MAX)
+                .expect("left sample should write");
+            writer
+                .write_sample(0_i16)
+                .expect("right sample should write");
+        }
         writer.finalize().expect("WAV should finalize");
 
-        let error = read_wav_as_audio_frames(&path, 1600).expect_err("channels should fail");
-        assert!(error.to_string().contains("expected mono WAV input"));
+        let got = read_wav_as_audio_frames(&path, 1_600).expect("WAV should convert");
+
+        assert_eq!(got.len(), 10);
+        assert!(got.iter().all(|frame| frame.channels == MONO_CHANNELS));
+        assert!((got[0].samples[0] - 0.5).abs() <= FLOAT_TOLERANCE);
 
         fs::remove_file(path).expect("temporary WAV should be removed");
     }

@@ -19,14 +19,14 @@ pub(crate) use transcribe::run_transcribe;
 pub(crate) use vad_trace::run_vad_trace;
 
 #[cfg(feature = "tts-piper")]
-pub(crate) use crate::cli::piper::run_piper_say;
+pub(crate) use crate::cli::piper::run_say;
 
 #[cfg(not(feature = "tts-piper"))]
-use crate::cli::PiperSayCommand;
+use crate::cli::SayCommand;
 #[cfg(not(feature = "tts-piper"))]
 use anyhow::Result;
 
 #[cfg(not(feature = "tts-piper"))]
-pub(crate) fn run_piper_say(_command: PiperSayCommand) -> Result<()> {
+pub(crate) fn run_say(_command: SayCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `tts-piper` feature")
 }

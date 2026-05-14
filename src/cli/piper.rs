@@ -1,4 +1,4 @@
-use crate::cli::PiperSayCommand;
+use crate::cli::SayCommand;
 use crate::cli::model_paths::resolve_piper_voice;
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
@@ -9,8 +9,8 @@ use listenbury::{PiperConfig, PiperTextToSpeech};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub(crate) fn run_piper_say(command: PiperSayCommand) -> Result<()> {
-    let piper_args = PiperSayArgs::from_command(command)?;
+pub(crate) fn run_say(command: SayCommand) -> Result<()> {
+    let piper_args = SayArgs::from_command(command)?;
     let piper_bin = resolve_piper_bin(piper_args.piper_bin)?;
     let piper_voice = resolve_piper_voice(piper_args.piper_voice)?;
     let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?);
@@ -33,14 +33,14 @@ pub(crate) fn run_piper_say(command: PiperSayCommand) -> Result<()> {
 }
 
 #[derive(Debug)]
-struct PiperSayArgs {
+struct SayArgs {
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
     text: String,
 }
 
-impl PiperSayArgs {
-    fn from_command(command: PiperSayCommand) -> Result<Self> {
+impl SayArgs {
+    fn from_command(command: SayCommand) -> Result<Self> {
         let mut words = command.words;
         let mut piper_bin = command.piper_bin;
         let mut piper_voice = command.piper_voice;
@@ -53,10 +53,7 @@ impl PiperSayArgs {
             piper_voice = Some(PathBuf::from(words.remove(0)));
         }
 
-        anyhow::ensure!(
-            !words.is_empty(),
-            "missing text to speak; try `piper-say hello`"
-        );
+        anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
 
         Ok(Self {
             piper_bin,
@@ -221,8 +218,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn piper_say_args_treats_single_word_as_text() {
-        let args = PiperSayArgs::from_command(PiperSayCommand {
+    fn say_args_treats_single_word_as_text() {
+        let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
             words: vec!["hello".to_string()],
@@ -235,8 +232,8 @@ mod tests {
     }
 
     #[test]
-    fn piper_say_args_accepts_legacy_piper_bin_position() {
-        let args = PiperSayArgs::from_command(PiperSayCommand {
+    fn say_args_accepts_legacy_piper_bin_position() {
+        let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
             words: vec![
@@ -255,8 +252,8 @@ mod tests {
     }
 
     #[test]
-    fn piper_say_args_accepts_legacy_voice_position() {
-        let args = PiperSayArgs::from_command(PiperSayCommand {
+    fn say_args_accepts_legacy_voice_position() {
+        let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
             words: vec![
