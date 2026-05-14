@@ -63,10 +63,11 @@ pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
 }
 
 fn is_non_empty_file(path: &Path) -> Result<bool> {
-    if !path.is_file() {
-        return Ok(false);
+    match fs::metadata(path) {
+        Ok(metadata) => Ok(metadata.is_file() && metadata.len() > 0),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read file metadata {}", path.display()))
+        }
     }
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("failed to read file metadata {}", path.display()))?;
-    Ok(metadata.len() > 0)
 }
