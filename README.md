@@ -22,9 +22,17 @@ The repository currently emphasizes local backend integration and CLI-driven val
 - Rust toolchain (edition 2024; stable toolchain recommended)
 - Cargo
 
+On Debian/Ubuntu systems, install the native build dependencies for the
+default feature set before running `cargo build` or `cargo run`:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake clang libclang-dev pkg-config libasound2-dev
+```
+
 Depending on enabled features, additional runtime/system dependencies are needed:
 
-- `audio-cpal` (enabled by default): Linux builds require ALSA development files (`alsa.pc`, commonly from `libasound2-dev`)
+- `audio-cpal` (enabled by default): Linux builds require ALSA development files (`alsa.pc`, from `libasound2-dev` on Debian/Ubuntu) and `pkg-config`
 - `llm-llama-cpp`: local GGUF model file(s)
 - `asr-whisper`: local Whisper `.bin` model file(s)
 - `tts-piper`: Piper executable and Piper `.onnx` voice model (and optional `.onnx.json` config)
@@ -36,6 +44,12 @@ Depending on enabled features, additional runtime/system dependencies are needed
 
 ```bash
 cargo build
+```
+
+If this fails with `Package 'alsa' not found` or `alsa.pc` missing, install:
+
+```bash
+sudo apt install -y pkg-config libasound2-dev
 ```
 
 This enables default features:
