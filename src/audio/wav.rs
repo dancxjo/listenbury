@@ -6,59 +6,79 @@ use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
 
 pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    let frames = read_wav_frames(path, frame_samples)?;
+    let Some(first) = frames.first() else {
+        return Ok(frames);
+    };
+    anyhow::ensure!(
+        first.channels == 1,
+        "expected mono WAV input at {}; got {} channels",
+        path.display(),
+        first.channels
+    );
+    anyhow::ensure!(
+        first.sample_rate_hz == 16_000,
+        "expected 16 kHz WAV input at {}; got {} Hz",
+        path.display(),
+        first.sample_rate_hz
+    );
+    Ok(frames)
+}
+
+pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
     anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
 
     let mut reader = hound::WavReader::open(path)
         .with_context(|| format!("failed to open WAV at {}", path.display()))?;
     let spec = reader.spec();
 
-    anyhow::ensure!(
-        spec.channels == 1,
-        "expected mono WAV input at {}; got {} channels",
-        path.display(),
-        spec.channels
-    );
-    anyhow::ensure!(
-        spec.sample_rate == 16_000,
-        "expected 16 kHz WAV input at {}; got {} Hz",
-        path.display(),
-        spec.sample_rate
-    );
-    anyhow::ensure!(
-        spec.sample_format == hound::SampleFormat::Int,
-        "expected integer PCM WAV input at {}; floating-point WAV is not supported yet",
-        path.display()
-    );
-
-    let samples = match spec.bits_per_sample {
-        1..=8 => reader
-            .samples::<i8>()
-            .map(|sample| {
-                sample
-                    .map(|sample| normalize_signed_sample(i64::from(sample), spec.bits_per_sample))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
-        9..=16 => reader
-            .samples::<i16>()
-            .map(|sample| {
-                sample
-                    .map(|sample| normalize_signed_sample(i64::from(sample), spec.bits_per_sample))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
-        17..=32 => reader
-            .samples::<i32>()
-            .map(|sample| {
-                sample
-                    .map(|sample| normalize_signed_sample(i64::from(sample), spec.bits_per_sample))
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
-        bits => anyhow::bail!(
-            "unsupported PCM bit depth {bits} for WAV input at {}",
-            path.display()
-        ),
+    let samples = match spec.sample_format {
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            1..=8 => reader
+                .samples::<i8>()
+                .map(|sample| {
+                    sample.map(|sample| {
+                        normalize_signed_sample(i64::from(sample), spec.bits_per_sample)
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
+            9..=16 => reader
+                .samples::<i16>()
+                .map(|sample| {
+                    sample.map(|sample| {
+                        normalize_signed_sample(i64::from(sample), spec.bits_per_sample)
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
+            17..=32 => reader
+                .samples::<i32>()
+                .map(|sample| {
+                    sample.map(|sample| {
+                        normalize_signed_sample(i64::from(sample), spec.bits_per_sample)
+                    })
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?,
+            bits => anyhow::bail!(
+                "unsupported PCM bit depth {bits} for WAV input at {}",
+                path.display()
+            ),
+        },
+        hound::SampleFormat::Float => {
+            anyhow::ensure!(
+                spec.bits_per_sample == 32,
+                "unsupported floating-point bit depth {} for WAV input at {}",
+                spec.bits_per_sample,
+                path.display()
+            );
+            reader
+                .samples::<f32>()
+                .map(|sample| sample.map(|sample| sample.clamp(-1.0, 1.0)))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("failed to read PCM samples from {}", path.display()))?
+        }
     };
 
     Ok(samples
@@ -209,6 +229,32 @@ mod tests {
 
         let error = read_wav_as_audio_frames(&path, 1600).expect_err("channels should fail");
         assert!(error.to_string().contains("expected mono WAV input"));
+
+        fs::remove_file(path).expect("temporary WAV should be removed");
+    }
+
+    #[test]
+    fn read_wav_frames_accepts_non_16khz_and_stereo() {
+        let path = unique_test_path("playback");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("WAV should be created");
+        writer
+            .write_sample(0_i16)
+            .expect("left sample should write");
+        writer
+            .write_sample(0_i16)
+            .expect("right sample should write");
+        writer.finalize().expect("WAV should finalize");
+
+        let got = read_wav_frames(&path, 4).expect("generic WAV reader should succeed");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].sample_rate_hz, 44_100);
+        assert_eq!(got[0].channels, 2);
 
         fs::remove_file(path).expect("temporary WAV should be removed");
     }

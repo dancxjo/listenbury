@@ -23,6 +23,8 @@ struct Cli {
 enum Command {
     FakeTurn(TextCommand),
     DemoVad,
+    RecordWav(RecordWavCommand),
+    PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
     TranscribeSynthetic(TranscribeSyntheticCommand),
     PiperSay(PiperSayCommand),
@@ -41,6 +43,18 @@ enum Command {
 pub(crate) struct TextCommand {
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) text: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RecordWavCommand {
+    pub(crate) output_wav: PathBuf,
+    #[arg(long, default_value_t = 5)]
+    pub(crate) seconds: u64,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PlayWavCommand {
+    pub(crate) input_wav: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -114,6 +128,8 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::FakeTurn(cmd) => commands::run_fake_turn(cmd.text.join(" ")),
         Command::DemoVad => commands::run_demo_vad(),
+        Command::RecordWav(cmd) => commands::run_record_wav(cmd),
+        Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
         Command::TranscribeSynthetic(cmd) => commands::run_transcribe_synthetic(cmd),
         Command::PiperSay(cmd) => commands::run_piper_say(cmd),
@@ -125,12 +141,9 @@ pub(crate) fn run() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "asr-whisper")]
     use super::*;
-    #[cfg(feature = "asr-whisper")]
     use clap::Parser;
 
-    #[cfg(feature = "asr-whisper")]
     #[test]
     fn transcribe_synthetic_accepts_default_model() {
         let cli = Cli::try_parse_from(["listenbury", "transcribe-synthetic"])
@@ -140,5 +153,32 @@ mod tests {
             panic!("expected transcribe-synthetic command");
         };
         assert!(command.whisper_model.is_none());
+    }
+
+    #[test]
+    fn record_wav_parses_seconds_and_output_path() {
+        let cli =
+            Cli::try_parse_from(["listenbury", "record-wav", "out/mic.wav", "--seconds", "5"])
+                .expect("record-wav should parse");
+
+        let Some(Command::RecordWav(command)) = cli.command else {
+            panic!("expected record-wav command");
+        };
+        assert_eq!(command.output_wav, PathBuf::from("out/mic.wav"));
+        assert_eq!(command.seconds, 5);
+    }
+
+    #[test]
+    fn play_wav_parses_input_path() {
+        let cli = Cli::try_parse_from(["listenbury", "play-wav", "out/listenbury-round-trip.wav"])
+            .expect("play-wav should parse");
+
+        let Some(Command::PlayWav(command)) = cli.command else {
+            panic!("expected play-wav command");
+        };
+        assert_eq!(
+            command.input_wav,
+            PathBuf::from("out/listenbury-round-trip.wav")
+        );
     }
 }
