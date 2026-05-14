@@ -15,11 +15,15 @@ use listenbury::models::{
 };
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
+#[cfg(all(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::mouth::planner::ExpressiveUnit;
 use listenbury::mouth::planner::SpeechPlanner;
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
-#[cfg(all(feature = "asr-whisper", feature = "llm-llama-cpp", feature = "tts-piper"))]
-use listenbury::mouth::planner::ExpressiveUnit;
+use listenbury::mouth::planner::{SpeechPlan, SpeechUnit, DEFAULT_SAFE_BACKCHANNELS};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -79,7 +83,8 @@ struct LlamaTurnCommand {
 
 #[derive(Debug, Args)]
 struct TranscribeSyntheticCommand {
-    model_path: String,
+    #[arg(long, alias = "model-path")]
+    whisper_model: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -142,7 +147,7 @@ fn main() -> Result<()> {
         Command::FakeTurn(cmd) => run_fake_turn(cmd.text.join(" ")),
         Command::DemoVad => run_demo_vad(),
         Command::LlamaTurn(cmd) => run_llama_turn(cmd),
-        Command::TranscribeSynthetic(cmd) => run_transcribe_synthetic(cmd.model_path),
+        Command::TranscribeSynthetic(cmd) => run_transcribe_synthetic(cmd),
         Command::PiperSay(cmd) => run_piper_say(cmd),
         Command::RoundTripWav(cmd) => run_round_trip_wav(
             cmd.input_wav,
@@ -479,9 +484,10 @@ fn run_demo_vad() -> Result<()> {
 }
 
 #[cfg(feature = "asr-whisper")]
-fn run_transcribe_synthetic(model_path: String) -> Result<()> {
+fn run_transcribe_synthetic(command: TranscribeSyntheticCommand) -> Result<()> {
+    let model_path = resolve_whisper_model(command.whisper_model)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&model_path)
-        .with_context(|| format!("failed to load Whisper model at {model_path}"))?;
+        .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
 
     recognizer.push_frame(&AudioFrame {
         captured_at: ExactTimestamp::now(),
@@ -504,8 +510,26 @@ fn run_transcribe_synthetic(model_path: String) -> Result<()> {
 }
 
 #[cfg(not(feature = "asr-whisper"))]
-fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
+fn run_transcribe_synthetic(_command: TranscribeSyntheticCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `asr-whisper` feature")
+}
+
+#[cfg(feature = "asr-whisper")]
+fn resolve_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    resolve_model_path(
+        explicit,
+        "LISTENBURY_WHISPER_MODEL",
+        "Whisper model",
+        "--whisper-model",
+        Some("whisper-tiny-en"),
+        |path| {
+            path.extension().is_some_and(|ext| ext == "bin")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains("ggml"))
+        },
+    )
 }
 
 #[cfg(feature = "tts-piper")]
@@ -749,20 +773,7 @@ struct RoundTripModelPaths {
 impl RoundTripModelPaths {
     fn discover(options: RoundTripWavOptions) -> Result<Self> {
         Ok(Self {
-            whisper_model: resolve_model_path(
-                options.whisper_model,
-                "LISTENBURY_WHISPER_MODEL",
-                "Whisper model",
-                "--whisper-model",
-                Some("whisper-tiny-en"),
-                |path| {
-                    path.extension().is_some_and(|ext| ext == "bin")
-                        && path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.contains("ggml"))
-                },
-            )?,
+            whisper_model: resolve_whisper_model(options.whisper_model)?,
             llm_model: resolve_llm_model(options.llm_model)?,
             piper_bin: resolve_piper_bin(options.piper_bin),
             piper_voice: resolve_model_path(
@@ -777,7 +788,11 @@ impl RoundTripModelPaths {
     }
 }
 
-#[cfg(any(feature = "llm-llama-cpp", feature = "tts-piper"))]
+#[cfg(any(
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn resolve_model_path(
     explicit: Option<PathBuf>,
     env_var: &str,
@@ -1119,7 +1134,11 @@ fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<Aud
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "tts-piper")]
+    #[cfg(any(
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
     use super::*;
     #[cfg(feature = "tts-piper")]
     use std::fs;
@@ -1131,6 +1150,18 @@ mod tests {
 
     #[cfg(feature = "tts-piper")]
     const FLOAT_TOLERANCE: f32 = 0.0001;
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
+    fn transcribe_synthetic_accepts_default_model() {
+        let cli = Cli::try_parse_from(["listenbury", "transcribe-synthetic"])
+            .expect("transcribe-synthetic should not require a model path");
+
+        let Some(Command::TranscribeSynthetic(command)) = cli.command else {
+            panic!("expected transcribe-synthetic command");
+        };
+        assert!(command.whisper_model.is_none());
+    }
 
     #[cfg(feature = "llm-llama-cpp")]
     #[test]
