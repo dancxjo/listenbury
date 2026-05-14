@@ -40,6 +40,7 @@ asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = ["dep:hound"]
 vision-webcam = []
+model-download = ["dep:ureq", "dep:dirs"]
 
 [dependencies.cpal]
 version = "0.15"
@@ -58,3 +59,13 @@ default-features = false
 version = "0.1.4"
 optional = true
 default-features = false
+
+[dependencies.ureq]
+version = "3"
+optional = true
+default-features = false
+features = ["rustls"]
+
+[dependencies.dirs]
+version = "6"
+optional = true
