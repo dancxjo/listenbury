@@ -17,7 +17,16 @@ encoding_rs = { version = "0.8", optional = true }
 hound = { version = "3", optional = true }
 
 [features]
-default = []
+default = [
+    "audio-cpal",
+    "resample-rubato",
+    "vad-silero",
+    "vad-webrtc",
+    "llm-llama-cpp",
+    "asr-whisper",
+    "tts-piper",
+    "vision-webcam",
+]
 audio-cpal = ["dep:cpal"]
 resample-rubato = ["dep:rubato"]
 vad-silero = []
