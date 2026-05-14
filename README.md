@@ -17,6 +17,27 @@ Listenbury is an active prototype with working pipeline components and CLI demos
 
 The repository currently emphasizes local backend integration and CLI-driven validation.
 
+## Low-latency reflex planning (design)
+
+Listenbury now includes a controller/filler-planner skeleton for low-latency social reflexes while the main LLM is still generating.
+
+- `FillerPlanner` produces `FillerDecision` from `FillerContext`.
+- Initial path is intentionally conservative and silence-first.
+- Cached backchannels are selected through `BackchannelId` and converted into safe `SpeechUnit::Backchannel` values for `SpeechPlanner` / mouth playback.
+- Repetition guards are included by default:
+  - avoid repeating the same filler within 60 seconds,
+  - avoid more than one filler per user turn unless explicitly configured.
+
+### Runtime context updates: append-only at safe boundaries
+
+The controller uses append-only `RuntimePacket` events and applies updates at safe boundaries (especially between committed `SpeechUnit`s), instead of pretending earlier prompt text was mutated in place.
+
+Initial stance:
+
+- append new runtime facts to ongoing context,
+- decide continue/cancel/restart at safe boundaries,
+- avoid token-level prompt mutation/KV-cache surgery for v1.
+
 ## Requirements
 
 - Rust toolchain (edition 2024; stable toolchain recommended)
