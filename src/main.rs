@@ -11,8 +11,10 @@ use listenbury::models::{
     paths::resolve_listenbury_home,
 };
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::SpeechPlan;
+use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 use listenbury::mouth::planner::SpeechPlanner;
+#[cfg(feature = "tts-piper")]
+use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
@@ -52,6 +54,71 @@ enum Command {
     },
 }
 
+    match command.as_str() {
+        "fake-turn" => {
+            let user_text = args.collect::<Vec<_>>().join(" ");
+            if user_text.is_empty() {
+                anyhow::bail!("usage: listenbury fake-turn \"hello there\"");
+            }
+            run_fake_turn(user_text)
+        }
+        "demo-vad" => run_demo_vad(),
+        "llama-turn" => {
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
+            };
+            let prompt = args.collect::<Vec<_>>().join(" ");
+            if prompt.is_empty() {
+                anyhow::bail!("usage: listenbury llama-turn <model.gguf> \"prompt\"");
+            }
+            run_llama_turn(model_path, prompt)
+        }
+        "transcribe-synthetic" => {
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury transcribe-synthetic <model.bin>");
+            };
+            run_transcribe_synthetic(model_path)
+        }
+        "piper-say" => {
+            let Some(piper_bin) = args.next() else {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            };
+            let Some(model_path) = args.next() else {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            };
+            let text = args.collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                anyhow::bail!("usage: listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+            }
+            run_piper_say(piper_bin, model_path, text)
+        }
+        "round-trip-wav" => {
+            let (input_wav, options) = parse_round_trip_wav_args(args)?;
+            run_round_trip_wav(input_wav, options)
+        }
+        "models" => run_models(args),
+        "speech-cache" => run_speech_cache(args),
+        _ => {
+            print_usage();
+            Ok(())
+        }
+    }
+}
+
+fn print_usage() {
+    println!("Usage:");
+    println!("  listenbury fake-turn \"hello there\"");
+    println!("  listenbury demo-vad");
+    println!("  listenbury llama-turn <model.gguf> \"prompt\"");
+    println!("  listenbury transcribe-synthetic <model.bin>");
+    println!("  listenbury piper-say <piper-bin> <voice.onnx> \"text\"");
+    println!(
+        "  listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]"
+    );
+    println!("  listenbury models <fetch|status|path>");
+    println!(
+        "  listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
+    );
 #[derive(Debug, Args)]
 struct TextCommand {
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
@@ -227,6 +294,91 @@ fn run_models(_command: ModelsCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `model-download` feature")
 }
 
+#[cfg(feature = "tts-piper")]
+fn run_speech_cache(mut args: impl Iterator<Item = String>) -> Result<()> {
+    let Some(subcommand) = args.next() else {
+        anyhow::bail!(
+            "usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
+        );
+    };
+
+    match subcommand.as_str() {
+        "prewarm" => run_speech_cache_prewarm(args),
+        _ => anyhow::bail!(
+            "usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
+        ),
+    }
+}
+
+#[cfg(not(feature = "tts-piper"))]
+fn run_speech_cache(_args: impl Iterator<Item = String>) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `tts-piper` feature")
+}
+
+#[cfg(feature = "tts-piper")]
+#[derive(Debug)]
+struct SpeechCachePrewarmOptions {
+    piper_bin: PathBuf,
+    piper_voice: PathBuf,
+    listenbury_home: PathBuf,
+}
+
+#[cfg(feature = "tts-piper")]
+fn run_speech_cache_prewarm(args: impl Iterator<Item = String>) -> Result<()> {
+    let options = parse_speech_cache_prewarm_args(args)?;
+    let config = piper_config_for_voice(&options.piper_bin, &options.piper_voice)?;
+    let mut tts = CachedTextToSpeech::new(
+        PiperTextToSpeech::new(config.clone()),
+        FileSpeechCache::for_piper(&options.listenbury_home, &config),
+    );
+
+    for text in DEFAULT_SAFE_BACKCHANNELS {
+        let plan = SpeechPlan::from(SpeechUnit::Backchannel((*text).to_string()));
+        tts.enqueue(plan)?;
+        let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+        println!("warmed backchannel \"{text}\" ({} frames)", frames.len());
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tts-piper")]
+fn parse_speech_cache_prewarm_args(
+    mut args: impl Iterator<Item = String>,
+) -> Result<SpeechCachePrewarmOptions> {
+    let mut piper_bin = std::env::var_os("LISTENBURY_PIPER_BIN").map(PathBuf::from);
+    let mut piper_voice = std::env::var_os("LISTENBURY_PIPER_VOICE").map(PathBuf::from);
+    let mut listenbury_home = std::env::var_os("LISTENBURY_HOME").map(PathBuf::from);
+
+    while let Some(flag) = args.next() {
+        let value = args.next().with_context(|| {
+            format!(
+                "missing value for {flag}; usage: listenbury speech-cache prewarm [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--listenbury-home <dir>]"
+            )
+        })?;
+        match flag.as_str() {
+            "--piper-bin" => piper_bin = Some(PathBuf::from(value)),
+            "--piper-voice" => piper_voice = Some(PathBuf::from(value)),
+            "--listenbury-home" => listenbury_home = Some(PathBuf::from(value)),
+            _ => anyhow::bail!(
+                "unknown speech-cache option {flag}; expected --piper-bin, --piper-voice, or --listenbury-home"
+            ),
+        }
+    }
+
+    let piper_voice = piper_voice.context(
+        "missing Piper voice path; set LISTENBURY_PIPER_VOICE or pass --piper-voice <voice.onnx>",
+    )?;
+    let listenbury_home = listenbury_home.unwrap_or_else(|| PathBuf::from(".listenbury"));
+
+    Ok(SpeechCachePrewarmOptions {
+        piper_bin: piper_bin.unwrap_or_else(|| PathBuf::from("piper")),
+        piper_voice,
+        listenbury_home,
+    })
+}
+
+#[cfg(feature = "tts-piper")]
 fn run_fake_turn(user_text: String) -> Result<()> {
     let mut llm = MockLlmEngine::with_response(vec!["I ".into(), "heard ".into(), "you.".into()]);
     let request = GenerationRequest {
@@ -249,7 +401,7 @@ fn run_fake_turn(user_text: String) -> Result<()> {
             }
         }
 
-        if let Some(plan) = planner.ingest(&events) {
+        for plan in planner.ingest(&events) {
             println!();
             println!("SpeechPlan: {plan:?}");
         }
@@ -377,7 +529,7 @@ fn run_transcribe_synthetic(_model_path: String) -> Result<()> {
 #[cfg(feature = "tts-piper")]
 fn run_piper_say(piper_bin: String, model_path: String, text: String) -> Result<()> {
     let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, model_path)?);
-    tts.enqueue(SpeechPlan::FullTurn(text))?;
+    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
     let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
     std::fs::create_dir_all("out").context("failed to create out directory")?;
@@ -447,7 +599,7 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
         .context("failed to start llama.cpp generation")?;
 
     let mut planner = SpeechPlanner::default();
-    let mut full_events = Vec::new();
+    let mut last_plan = None;
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
@@ -468,7 +620,10 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
             }
         }
 
-        full_events.extend(events.clone());
+        let emitted = planner.ingest(&events);
+        if let Some(plan) = emitted.last().cloned() {
+            last_plan = Some(plan);
+        }
 
         if events.iter().any(|event| {
             matches!(
@@ -481,9 +636,11 @@ fn run_round_trip_wav(input_wav: PathBuf, options: RoundTripWavOptions) -> Resul
         }
     }
 
-    let plan = planner
-        .ingest(&full_events)
-        .unwrap_or_else(|| SpeechPlan::FullTurn("I heard you, but I lost my words.".to_string()));
+    let plan = last_plan.unwrap_or_else(|| {
+        SpeechPlan::from(SpeechUnit::FullTurn(
+            "I heard you, but I lost my words.".to_string(),
+        ))
+    });
 
     let mut tts =
         PiperTextToSpeech::new(piper_config_for_voice(paths.piper_bin, paths.piper_voice)?);
@@ -635,7 +792,7 @@ fn discover_model_file(matches: &impl Fn(&Path) -> bool) -> Result<Option<PathBu
 ))]
 fn build_round_trip_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete. Reply briefly and naturally.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
 }
 
