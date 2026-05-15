@@ -5,15 +5,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use anyhow::{bail, Context, Result};
-use crossbeam_channel::{unbounded, Receiver};
+use anyhow::{Context, Result, bail};
+use crossbeam_channel::{Receiver, unbounded};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
+use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 use uuid::Uuid;
 
 use crate::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
