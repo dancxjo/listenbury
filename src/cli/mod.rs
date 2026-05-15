@@ -273,6 +273,8 @@ pub(crate) fn run() -> Result<()> {
         return Ok(());
     };
 
+    listenbury::set_developer_diagnostics_enabled(matches!(&command, Command::Dev { .. }));
+
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),

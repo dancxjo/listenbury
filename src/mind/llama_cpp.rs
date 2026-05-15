@@ -5,17 +5,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use anyhow::{Context, Result, bail};
-use crossbeam_channel::{Receiver, unbounded};
+use anyhow::{bail, Context, Result};
+use crossbeam_channel::{unbounded, Receiver};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use uuid::Uuid;
 
 use crate::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
+use crate::runtime::developer_diagnostics_enabled;
 
 static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
@@ -271,6 +273,7 @@ fn llama_backend() -> Result<Arc<LlamaBackend>> {
         return Ok(Arc::clone(backend));
     }
 
+    send_logs_to_tracing(LogOptions::default().with_logs_enabled(developer_diagnostics_enabled()));
     let backend = Arc::new(LlamaBackend::init().context("failed to initialize llama.cpp backend")?);
     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
     Ok(backend)

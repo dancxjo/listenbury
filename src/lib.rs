@@ -6,6 +6,7 @@ pub mod mind;
 #[cfg(feature = "model-download")]
 pub mod models;
 pub mod mouth;
+pub mod runtime;
 pub mod speech;
 pub mod time;
 pub mod vision;
@@ -19,13 +20,13 @@ pub use event::{
 pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };
-pub use hearing::suppression::{SUPPRESSION_TAIL_MS, SelfHearingState, SuppressionDecision};
+pub use hearing::suppression::{SelfHearingState, SuppressionDecision, SUPPRESSION_TAIL_MS};
 pub use hearing::vad::{
-    EnergyVad, VadBackendKind, VadResult, VoiceActivityDetector, create_vad_backend,
+    create_vad_backend, EnergyVad, VadBackendKind, VadResult, VoiceActivityDetector,
 };
 pub use mind::controller::{
-    BackchannelId, ConversationController, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
-    FillerDecision, FillerPlanner, FillerPlannerConfig, RuntimePacket,
+    BackchannelId, ConversationController, FillerContext, FillerDecision, FillerPlanner,
+    FillerPlannerConfig, RuntimePacket, DEFAULT_FILLER_REPEAT_COOLDOWN_MS,
 };
 #[cfg(feature = "llm-llama-cpp")]
 pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};
@@ -34,11 +35,12 @@ pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
 pub use mouth::planner::{
-    ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechPlannerConfig,
-    SpeechUnit, strip_emoji,
+    strip_emoji, ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner,
+    SpeechPlannerConfig, SpeechUnit,
 };
 pub use mouth::tts::TextToSpeech;
-pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
+pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
+pub use speech::breath_asr::{collect_breath_segments, BreathAsrConfig, BreathAudioSegment};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use time::{ExactTimestamp, Timed};

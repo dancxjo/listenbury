@@ -1,6 +1,9 @@
 use crate::audio::frame::AudioFrame;
+use crate::developer_diagnostics_enabled;
 use crate::speech::recognizer::SpeechRecognizer;
 use crate::speech::transcript::TranscriptChunk;
+use std::sync::OnceLock;
+use whisper_cpp_plus::whisper_cpp_plus_sys as whisper_ffi;
 
 pub struct WhisperSpeechRecognizer {
     ctx: whisper_cpp_plus::WhisperContext,
@@ -10,6 +13,7 @@ pub struct WhisperSpeechRecognizer {
 
 impl WhisperSpeechRecognizer {
     pub fn new(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        configure_whisper_logging();
         let ctx = whisper_cpp_plus::WhisperContext::new(model_path.as_ref())?;
 
         Ok(Self {
@@ -36,6 +40,24 @@ impl WhisperSpeechRecognizer {
         self.pending.extend_from_slice(&frame.samples);
         Ok(())
     }
+}
+
+fn configure_whisper_logging() {
+    static LOGGING_CONFIGURED: OnceLock<()> = OnceLock::new();
+    LOGGING_CONFIGURED.get_or_init(|| {
+        if !developer_diagnostics_enabled() {
+            unsafe {
+                whisper_ffi::whisper_log_set(Some(drop_whisper_log), std::ptr::null_mut());
+            }
+        }
+    });
+}
+
+unsafe extern "C" fn drop_whisper_log(
+    _level: whisper_ffi::ggml_log_level,
+    _text: *const std::ffi::c_char,
+    _user_data: *mut std::ffi::c_void,
+) {
 }
 
 impl SpeechRecognizer for WhisperSpeechRecognizer {
