@@ -209,6 +209,16 @@ const AUDIO_RING_CAPACITY: usize = 256;
     feature = "tts-piper"
 ))]
 const FILLER_SILENCE_DURATION_MS: u64 = 1_200;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const FILLER_PLANNING_ENABLED: bool = false;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -1103,7 +1113,7 @@ fn maybe_plan_cached_backchannel(
     main_llm_has_emitted_token: bool,
     main_llm_has_safe_speech_unit: bool,
 ) -> Option<SpeechPlan> {
-    if no_backchannels {
+    if !FILLER_PLANNING_ENABLED || no_backchannels {
         return None;
     }
     let ctx = FillerContext {
@@ -1624,7 +1634,7 @@ mod tests {
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
-    use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlannerConfig, SpeechUnit};
+    use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, RuntimePacket,
     };
@@ -1838,11 +1848,11 @@ mod tests {
     }
 
     #[test]
-    fn filler_planning_can_emit_cached_backchannel_before_safe_speech() {
+    fn filler_planning_is_disabled_for_now() {
         let mut controller = ConversationController::default();
         controller.turn_tracker.on_pete_thinking_started();
 
-        let first = maybe_plan_cached_backchannel(
+        let filler = maybe_plan_cached_backchannel(
             &mut controller,
             "Can you explain this?",
             false,
@@ -1852,36 +1862,11 @@ mod tests {
             false,
             false,
         );
-        let safe_backchannels = SpeechPlannerConfig::default().safe_backchannels;
-        assert!(matches!(
-            first.as_ref().map(|plan| plan.unit()),
-            Some(SpeechUnit::Backchannel(text)) if safe_backchannels.contains(text)
-        ));
-
-        if let Some(plan) = first {
-            controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
-                text: plan.text().to_string(),
-            });
-            controller.apply_safe_boundary_updates();
-        }
-        assert!(
-            controller
-                .runtime_context()
-                .iter()
-                .any(|packet| matches!(packet, RuntimePacket::BackchannelPlayed { .. }))
-        );
-
-        let second = maybe_plan_cached_backchannel(
-            &mut controller,
-            "Can you explain this?",
-            false,
-            42,
-            10_100,
-            11_300,
-            false,
-            false,
-        );
-        assert!(second.is_none());
+        assert!(filler.is_none());
+        assert!(!controller
+            .runtime_context()
+            .iter()
+            .any(|packet| matches!(packet, RuntimePacket::BackchannelPlayed { .. })));
     }
 
     #[test]
