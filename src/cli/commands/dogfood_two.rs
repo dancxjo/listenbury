@@ -329,7 +329,11 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
         println!("[{listener}] Heard: {asr_transcript}");
 
         // Step 5 – Safety guards
-        let listener_history = if speaker_is_a { &history_b } else { &history_a };
+        let listener_history = if speaker_is_a {
+            &history_b
+        } else {
+            &history_a
+        };
 
         let stop_reason = asr_stop.or_else(|| {
             if is_empty_transcript(&asr_transcript) {

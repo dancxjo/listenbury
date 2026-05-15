@@ -108,7 +108,7 @@ mod tests {
 
     use crate::time::ExactTimestamp;
 
-    use super::{SUPPRESSION_TAIL_MS, SelfHearingState, SuppressionDecision};
+    use super::{SelfHearingState, SuppressionDecision, SUPPRESSION_TAIL_MS};
 
     #[test]
     fn initial_state_allows_all_frames() {
