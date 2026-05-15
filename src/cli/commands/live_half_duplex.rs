@@ -350,7 +350,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         "live-half-duplex listening on {input_name}: {} Hz, {} channel(s).",
         input_sample_rate_hz, input_channels
     );
-    println!("half-duplex mode: no barge-in, no interruption during Pete speech.");
+    println!("half-duplex mode: no barge-in, no interruption during Pete's speech.");
 
     let stop_deadline = Instant::now() + Duration::from_secs(command.seconds);
     let input_frame_samples =
