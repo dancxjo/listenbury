@@ -63,6 +63,13 @@ use cpal::{FromSample, Sample, SizedSample};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::RuntimePacket;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::audio::ring::make_audio_ring;
 #[cfg(all(
     feature = "audio-cpal",
@@ -108,7 +115,7 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::SpeechPlan;
+use listenbury::mouth::planner::FaceCommand;
 #[cfg(any(
     test,
     all(
@@ -118,7 +125,7 @@ use listenbury::mouth::planner::SpeechPlan;
         feature = "tts-piper"
     )
 ))]
-use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlanner, SpeechUnit};
+use listenbury::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechUnit};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -140,6 +147,16 @@ use listenbury::speech::recognizer::SpeechRecognizer;
     feature = "tts-piper"
 ))]
 use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::{ConversationController, FillerContext};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -179,6 +196,30 @@ const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
     feature = "tts-piper"
 ))]
 const AUDIO_RING_CAPACITY: usize = 256;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const FILLER_SILENCE_DURATION_MS: u64 = 1_200;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const AUDIO_DRAIN_QUIET_THRESHOLD_MS: u64 = 100;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const NANOS_PER_MILLI: u128 = 1_000_000;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -191,6 +232,7 @@ struct LiveHalfDuplexState {
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     self_hearing: listenbury::SelfHearingState,
+    controller: ConversationController,
 }
 
 #[cfg(all(
@@ -206,6 +248,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("segmenter", &self.segmenter)
             .field("active_groups", &self.active_groups)
             .field("self_hearing", &self.self_hearing)
+            .field("controller", &self.controller)
             .finish()
     }
 }
@@ -402,6 +445,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
         self_hearing: listenbury::SelfHearingState::default(),
+        controller: ConversationController::default(),
     };
     let mut turns = 0usize;
 
@@ -431,6 +475,13 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             }
 
             println!("Heard: {transcript}");
+            state
+                .controller
+                .record_runtime_packet(RuntimePacket::TranscriptUpdated {
+                    text: transcript.to_string(),
+                    confidence: 1.0,
+                });
+            state.controller.apply_safe_boundary_updates();
             capture_enabled.store(false, Ordering::SeqCst);
             stream_speech_to_tts(
                 &mut llm,
@@ -439,30 +490,10 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 command.model_profile,
                 command.no_backchannels,
                 &mut state.self_hearing,
+                &mut state.controller,
+                turns as u64 + 1,
             )?;
-            tts.enqueue(plan)?;
-            let audio = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
-            let audio_dur = tts_audio_duration(&audio);
-            state
-                .self_hearing
-                .mark_output_started(transcript, audio_dur);
-            eprintln!(
-                "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
-                state
-                    .self_hearing
-                    .current_utterance_text
-                    .as_deref()
-                    .unwrap_or("")
-            );
-            play_audio_frames(&audio, "live-half-duplex response")?;
-            state.self_hearing.mark_output_finished();
-            eprintln!(
-                "[self-hearing] playback finished; tail window active until unix_ns={:?}",
-                state
-                    .self_hearing
-                    .output_expected_until
-                    .map(|t| t.unix_nanos)
-            );
+            state.controller.apply_safe_boundary_updates();
             capture_enabled.store(true, Ordering::SeqCst);
             turns += 1;
             println!("Listening...");
@@ -509,7 +540,25 @@ fn process_live_frame(
     }
     let vad_result = state.vad.process_frame(&frame)?;
     let events = state.segmenter.process(vad_result);
+    let now_ms = unix_nanos_to_millis(frame.captured_at.unix_nanos);
     for event in &events {
+        state.controller.on_hearing_event(event, now_ms);
+        match event {
+            HearingEvent::SpeechStarted => {
+                state
+                    .controller
+                    .record_runtime_packet(RuntimePacket::UserStartedSpeaking);
+            }
+            HearingEvent::BreathGroupClosed { .. } => {
+                state
+                    .controller
+                    .record_runtime_packet(RuntimePacket::UserStoppedSpeaking);
+                state.controller.apply_safe_boundary_updates();
+            }
+            HearingEvent::SpeechContinued { .. }
+            | HearingEvent::PauseStarted
+            | HearingEvent::BreathGroupOpened { .. } => {}
+        }
         if let HearingEvent::BreathGroupOpened { id } = event {
             state.active_groups.entry(*id).or_default();
         }
@@ -559,7 +608,10 @@ fn stream_speech_to_tts(
     model_profile: ModelProfile,
     no_backchannels: bool,
     self_hearing: &mut listenbury::SelfHearingState,
+    controller: &mut ConversationController,
+    user_turn_id: u64,
 ) -> Result<()> {
+    controller.turn_tracker.on_pete_thinking_started();
     let generation_id = llm
         .start(GenerationRequest {
             prompt: build_prompt(transcript),
@@ -567,13 +619,40 @@ fn stream_speech_to_tts(
         })
         .context("failed to start llama.cpp generation")?;
 
-    let mut planner = SpeechPlanner::default();
+    let llm_started_at_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
+    eprintln!(
+        "[live-half-duplex] controller turn state after llm start: {:?}",
+        controller.turn_tracker.state()
+    );
+    if let Some(filler_plan) = maybe_plan_cached_backchannel(
+        controller,
+        transcript,
+        no_backchannels,
+        user_turn_id,
+        llm_started_at_ms,
+        false,
+    ) {
+        eprintln!(
+            "[live-half-duplex] controller filler decision: speaking backchannel {:?}",
+            filler_plan.unit()
+        );
+        let filler_text = filler_plan.text().to_string();
+        tts.enqueue(filler_plan)?;
+        controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text: filler_text });
+        controller.apply_safe_boundary_updates();
+    }
+
     let mut played_any_audio = false;
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
-            played_any_audio |=
-                drain_ready_tts_audio(tts, transcript, self_hearing, "live-half-duplex response")?;
+            played_any_audio |= drain_ready_tts_audio(
+                tts,
+                transcript,
+                self_hearing,
+                "live-half-duplex response",
+                controller,
+            )?;
             std::thread::sleep(Duration::from_millis(5));
             continue;
         }
@@ -583,18 +662,32 @@ fn stream_speech_to_tts(
                 anyhow::bail!("llama.cpp generation failed: {message}");
             }
         }
-        for unit in planner_units_from_events(&mut planner, &events, no_backchannels) {
+        for unit in planner_units_from_events(controller, &events, no_backchannels) {
             match unit {
                 ExpressiveUnit::Speech(plan) => {
+                    let text = plan.text().to_string();
                     tts.enqueue(plan)?;
+                    controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
+                    controller.apply_safe_boundary_updates();
                 }
                 ExpressiveUnit::Face(command) => {
                     eprintln!("[live-half-duplex] face event: {command:?}");
+                    let emoji = match command {
+                        FaceCommand::SetEmoji(emoji) => emoji,
+                        FaceCommand::Clear => String::new(),
+                    };
+                    controller.record_runtime_packet(RuntimePacket::FaceChanged { emoji });
+                    controller.apply_safe_boundary_updates();
                 }
             }
         }
-        played_any_audio |=
-            drain_ready_tts_audio(tts, transcript, self_hearing, "live-half-duplex response")?;
+        played_any_audio |= drain_ready_tts_audio(
+            tts,
+            transcript,
+            self_hearing,
+            "live-half-duplex response",
+            controller,
+        )?;
 
         if events.iter().any(is_terminal_llm_event) {
             break;
@@ -607,6 +700,7 @@ fn stream_speech_to_tts(
         self_hearing,
         "live-half-duplex response",
         Duration::from_secs(30),
+        controller,
     )?;
     if !played_any_audio {
         tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
@@ -618,12 +712,18 @@ fn stream_speech_to_tts(
             self_hearing,
             "live-half-duplex response fallback",
             Duration::from_secs(30),
+            controller,
         )?;
         anyhow::ensure!(
             played_fallback,
             "Piper produced no audio frames before timeout"
         );
     }
+    self_hearing.mark_output_finished();
+    eprintln!(
+        "[self-hearing] playback finished; tail window active until unix_ns={:?}",
+        self_hearing.output_expected_until.map(|t| t.unix_nanos)
+    );
     Ok(())
 }
 
@@ -637,12 +737,12 @@ fn stream_speech_to_tts(
     )
 ))]
 fn planner_units_from_events(
-    planner: &mut SpeechPlanner,
+    controller: &mut ConversationController,
     events: &[LlmEvent],
     no_backchannels: bool,
 ) -> Vec<ExpressiveUnit> {
-    planner
-        .ingest(events)
+    controller
+        .ingest_llm_events(events)
         .into_iter()
         .filter_map(|unit| match unit {
             ExpressiveUnit::Speech(plan)
@@ -653,6 +753,44 @@ fn planner_units_from_events(
             _ => Some(unit),
         })
         .collect()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn maybe_plan_cached_backchannel(
+    controller: &mut ConversationController,
+    transcript: &str,
+    no_backchannels: bool,
+    user_turn_id: u64,
+    now_ms: u64,
+    main_llm_has_safe_speech_unit: bool,
+) -> Option<SpeechPlan> {
+    if no_backchannels {
+        return None;
+    }
+    let ctx = FillerContext {
+        turn_state: controller.turn_tracker.state(),
+        transcript_so_far: Some(transcript.to_string()),
+        vad_confidence: 0.0,
+        silence_duration_ms: FILLER_SILENCE_DURATION_MS,
+        main_llm_started_at_ms: Some(now_ms),
+        main_llm_has_emitted_token: false,
+        main_llm_has_safe_speech_unit,
+        user_interrupted_recently: false,
+        now_ms,
+        user_turn_id: Some(user_turn_id),
+    };
+    match controller.decide_filler_command(&ctx) {
+        Some(MouthCommand::Speak(plan)) => Some(plan),
+        Some(MouthCommand::FadeOut { .. }) | Some(MouthCommand::StopNow) | None => None,
+    }
 }
 
 #[cfg(all(
@@ -666,12 +804,18 @@ fn drain_ready_tts_audio(
     transcript: &str,
     self_hearing: &mut listenbury::SelfHearingState,
     source: &str,
+    controller: &mut ConversationController,
 ) -> Result<bool> {
     let frames = tts.poll_audio()?;
     if frames.is_empty() {
         return Ok(false);
     }
     let audio_dur = tts_audio_duration(&frames);
+    controller.on_pete_speech_started();
+    controller.record_runtime_packet(RuntimePacket::TtsQueueChanged {
+        queued_ms: u64::try_from(audio_dur.as_millis()).unwrap_or(u64::MAX),
+    });
+    controller.apply_safe_boundary_updates();
     self_hearing.mark_output_started(transcript, audio_dur);
     eprintln!(
         "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
@@ -693,14 +837,15 @@ fn flush_tts_audio(
     self_hearing: &mut listenbury::SelfHearingState,
     source: &str,
     timeout: Duration,
+    controller: &mut ConversationController,
 ) -> Result<bool> {
-    let quiet_after_audio = Duration::from_millis(100);
+    let quiet_after_audio = Duration::from_millis(AUDIO_DRAIN_QUIET_THRESHOLD_MS);
     let deadline = Instant::now() + timeout;
     let mut played_any_audio = false;
     let mut last_audio_at = None;
 
     while Instant::now() < deadline {
-        if drain_ready_tts_audio(tts, transcript, self_hearing, source)? {
+        if drain_ready_tts_audio(tts, transcript, self_hearing, source, controller)? {
             played_any_audio = true;
             last_audio_at = Some(Instant::now());
             continue;
@@ -714,6 +859,16 @@ fn flush_tts_audio(
     }
 
     Ok(played_any_audio)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
+    u64::try_from(unix_nanos / NANOS_PER_MILLI).unwrap_or(u64::MAX)
 }
 
 #[cfg(all(
@@ -859,9 +1014,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::planner_units_from_events;
+    use super::{maybe_plan_cached_backchannel, planner_units_from_events};
     use listenbury::mind::llm::LlmEvent;
-    use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlanner, SpeechUnit};
+    use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
+    use listenbury::{ConversationController, RuntimePacket};
 
     fn token(text: &str) -> LlmEvent {
         LlmEvent::Token {
@@ -871,24 +1027,24 @@ mod tests {
 
     #[test]
     fn planner_units_emit_speech_before_completed_event() {
-        let mut planner = SpeechPlanner::default();
+        let mut controller = ConversationController::default();
         let emitted_before_completed =
-            planner_units_from_events(&mut planner, &[token("I think that works.")], false);
+            planner_units_from_events(&mut controller, &[token("I think that works.")], false);
         assert!(matches!(
             emitted_before_completed.first(),
             Some(ExpressiveUnit::Speech(_))
         ));
 
         let emitted_on_completed =
-            planner_units_from_events(&mut planner, &[LlmEvent::Completed], false);
+            planner_units_from_events(&mut controller, &[LlmEvent::Completed], false);
         assert!(emitted_on_completed.is_empty());
     }
 
     #[test]
     fn planner_units_still_filter_backchannels() {
-        let mut planner = SpeechPlanner::default();
+        let mut controller = ConversationController::default();
         let without_filter = planner_units_from_events(
-            &mut planner,
+            &mut controller,
             &[token("Okay. This should still be spoken.")],
             false,
         );
@@ -897,9 +1053,9 @@ mod tests {
             ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
         )));
 
-        let mut planner = SpeechPlanner::default();
+        let mut controller = ConversationController::default();
         let with_filter = planner_units_from_events(
-            &mut planner,
+            &mut controller,
             &[token("Okay. This should still be spoken.")],
             true,
         );
@@ -911,10 +1067,52 @@ mod tests {
 
     #[test]
     fn planner_units_preserve_face_event_order() {
-        let mut planner = SpeechPlanner::default();
-        let units = planner_units_from_events(&mut planner, &[token("Okay 🙂 I see.")], false);
+        let mut controller = ConversationController::default();
+        let units = planner_units_from_events(&mut controller, &[token("Okay 🙂 I see.")], false);
         assert!(matches!(units.first(), Some(ExpressiveUnit::Speech(_))));
         assert!(matches!(units.get(1), Some(ExpressiveUnit::Face(_))));
         assert!(matches!(units.get(2), Some(ExpressiveUnit::Speech(_))));
+    }
+
+    #[test]
+    fn filler_planning_can_emit_cached_backchannel_before_safe_speech() {
+        let mut controller = ConversationController::default();
+        controller.turn_tracker.on_pete_thinking_started();
+
+        let first = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            42,
+            10_000,
+            false,
+        );
+        assert!(matches!(
+            first.as_ref().map(|plan| plan.unit()),
+            Some(SpeechUnit::Backchannel(text)) if text == "Let me think."
+        ));
+
+        if let Some(plan) = first {
+            controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
+                text: plan.text().to_string(),
+            });
+            controller.apply_safe_boundary_updates();
+        }
+        assert!(
+            controller
+                .runtime_context()
+                .iter()
+                .any(|packet| matches!(packet, RuntimePacket::BackchannelPlayed { .. }))
+        );
+
+        let second = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            42,
+            10_100,
+            false,
+        );
+        assert!(second.is_none());
     }
 }
