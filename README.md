@@ -43,6 +43,7 @@ Initial stance:
 
 - Rust toolchain (edition 2024; stable toolchain recommended)
 - Cargo
+- [`just`](https://github.com/casey/just), optional but recommended for project shortcuts
 
 On Debian/Ubuntu systems, install the native build dependencies for the
 default feature set before running `cargo build` or `cargo run`:
@@ -50,6 +51,18 @@ default feature set before running `cargo build` or `cargo run`:
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake clang libclang-dev pkg-config libasound2-dev
+```
+
+Install `just` with Cargo:
+
+```bash
+cargo install just
+```
+
+Or use your system package manager if it has a recent package, for example:
+
+```bash
+sudo apt install -y just
 ```
 
 Depending on enabled features, additional runtime/system dependencies are needed:
@@ -67,7 +80,7 @@ Depending on enabled features, additional runtime/system dependencies are needed
 ### 1) Build with defaults (full local stack)
 
 ```bash
-cargo build
+just build
 ```
 
 If this fails with `Package 'alsa' not found` or `alsa.pc` missing, install:
@@ -107,23 +120,35 @@ cargo build --no-default-features --features "asr-whisper llm-llama-cpp tts-pipe
 For NVIDIA GPU builds, use the CUDA feature variants:
 
 ```bash
-cargo build --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda tts-piper model-download"
+just build-cuda
 ```
 
 When switching an existing checkout from CPU-only to CUDA, a clean rebuild avoids
 reusing a previously compiled CPU-only native backend:
 
 ```bash
-cargo clean
-cargo build --features asr-whisper-cuda
+just clean
+just build-cuda
+```
+
+Useful `just` recipes:
+
+```bash
+just              # list available recipes
+just run --help   # cargo run -- --help
+just cuda --help  # cargo run with asr-whisper-cuda and llm-llama-cpp-cuda
+just check
+just check-cuda
+just test
 ```
 
 ## Usage
 
-Run commands with Cargo:
+Run commands with `just`:
 
 ```bash
-cargo run -- <command> [args...]
+just run <command> [args...]
+just cuda <command> [args...]
 ```
 
 CLI commands:
