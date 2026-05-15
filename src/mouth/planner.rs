@@ -530,7 +530,7 @@ fn classify_boundary_unit(text: &str, config: &SpeechPlannerConfig) -> Option<Sp
     if is_safe_discourse_marker(text, config) {
         return Some(SpeechUnit::DiscourseMarker(text.to_string()));
     }
-    if text.ends_with(['.', '?', '!']) {
+    if ends_with_sentence_punctuation(text) {
         if text.len() < config.min_non_backchannel_chars
             && meaningful_char_count(text) < MIN_SHORT_COMPLETE_CHARS
         {
@@ -553,6 +553,11 @@ fn meaningful_char_count(text: &str) -> usize {
         .count()
 }
 
+fn ends_with_sentence_punctuation(text: &str) -> bool {
+    text.trim_end_matches(['"', '\'', '”', '’'])
+        .ends_with(['.', '?', '!'])
+}
+
 fn classify_completed_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
     classify_boundary_unit(text, config)
 }
@@ -572,7 +577,7 @@ fn classify_text_before_emoji(text: &str, config: &SpeechPlannerConfig) -> Speec
     if is_safe_discourse_marker(text, config) {
         return SpeechUnit::DiscourseMarker(text.to_string());
     }
-    if text.ends_with(['.', '?', '!']) {
+    if ends_with_sentence_punctuation(text) {
         return SpeechUnit::CompleteSentence(text.to_string());
     }
     if text.ends_with([';', ':']) {
@@ -702,6 +707,21 @@ mod tests {
             vec![speech(SpeechUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
+        );
+    }
+
+    #[test]
+    fn quoted_sentence_emits_at_closing_quote() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("\"This is spoken.\" Yes, it is.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::CompleteSentence(
+                    "\"This is spoken.\"".to_string()
+                )),
+                speech(SpeechUnit::CompleteSentence("Yes, it is.".to_string()))
+            ]
         );
     }
 
