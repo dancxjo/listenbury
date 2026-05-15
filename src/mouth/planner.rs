@@ -80,7 +80,7 @@ pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "I see.",
     "Mm-hm.",
     "Let me think.",
-    "Well, boy howdy! I declare.",
+    "Well, I dee-clare!",
     "That makes sense.",
 ];
 const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];

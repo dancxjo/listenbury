@@ -1,5 +1,7 @@
 set positional-arguments
 
+cuda-library-path := env_var_or_default("CUDA_LIBRARY_PATH", "/usr/lib/x86_64-linux-gnu")
+
 default:
     @just --list
 
@@ -9,7 +11,7 @@ run *args:
 
 # Run the CLI with both local CUDA backend feature flags enabled.
 cuda *args:
-    cargo run --features "asr-whisper-cuda llm-llama-cpp-cuda" -- "$@"
+    CUDA_LIBRARY_PATH="{{cuda-library-path}}" cargo run --features "asr-whisper-cuda llm-llama-cpp-cuda" -- "$@"
 
 # Build the default local stack.
 build:
@@ -17,7 +19,7 @@ build:
 
 # Build with both local CUDA backend feature flags enabled.
 build-cuda:
-    cargo build --features "asr-whisper-cuda llm-llama-cpp-cuda"
+    CUDA_LIBRARY_PATH="{{cuda-library-path}}" cargo build --features "asr-whisper-cuda llm-llama-cpp-cuda"
 
 # Check the default local stack.
 check:
@@ -25,7 +27,7 @@ check:
 
 # Check the CUDA feature path without building every default dependency.
 check-cuda:
-    cargo check --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda tts-piper model-download"
+    CUDA_LIBRARY_PATH="{{cuda-library-path}}" cargo check --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda tts-piper model-download"
 
 # Run the test suite.
 test:
