@@ -109,7 +109,7 @@ pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
-))))]
+)))]
 pub(crate) fn run_round_trip_wav(_command: RoundTripWavCommand) -> Result<()> {
     anyhow::bail!(
         "listenbury was built without the `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
