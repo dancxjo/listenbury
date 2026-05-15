@@ -35,6 +35,54 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     )
 }
 
+#[cfg(feature = "llm-llama-cpp")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LlmRuntimePlacement {
+    pub(crate) gpu_layers: Option<u32>,
+    pub(crate) cpu_only: bool,
+}
+
+#[cfg(feature = "llm-llama-cpp")]
+pub(crate) fn llm_runtime_placement(
+    model_path: &Path,
+    explicit_gpu_layers: Option<u32>,
+    default_gpu_layers: Option<u32>,
+) -> Result<LlmRuntimePlacement> {
+    if let Some(gpu_layers) = explicit_gpu_layers {
+        return Ok(LlmRuntimePlacement {
+            gpu_layers: Some(gpu_layers),
+            cpu_only: gpu_layers == 0,
+        });
+    }
+
+    if llm_model_needs_cpu_runtime(model_path) {
+        return Ok(LlmRuntimePlacement {
+            gpu_layers: Some(0),
+            cpu_only: true,
+        });
+    }
+
+    Ok(LlmRuntimePlacement {
+        gpu_layers: default_gpu_layers,
+        cpu_only: default_gpu_layers == Some(0),
+    })
+}
+
+#[cfg(feature = "llm-llama-cpp")]
+fn llm_model_needs_cpu_runtime(model_path: &Path) -> bool {
+    llm_model_filename(model_path).contains("gpt-oss")
+}
+
+#[cfg(feature = "llm-llama-cpp")]
+fn llm_model_filename(model_path: &Path) -> String {
+    let filename = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    filename
+}
+
 #[cfg(feature = "asr-whisper")]
 pub(crate) fn resolve_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(

@@ -6,7 +6,9 @@ use anyhow::Result;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::model_paths::{resolve_llm_model, resolve_piper_voice, resolve_whisper_model};
+use crate::cli::model_paths::{
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
+};
 #[cfg(all(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -138,11 +140,13 @@ struct RoundTripModelPaths {
 ))]
 impl RoundTripModelPaths {
     fn discover(command: RoundTripWavCommand) -> Result<Self> {
+        let llm_model = resolve_llm_model(command.llm_model)?;
+        let llm_placement = llm_runtime_placement(&llm_model, command.llm_gpu_layers, None)?;
         Ok(Self {
             input_wav: command.input_wav,
             whisper_model: resolve_whisper_model(command.whisper_model)?,
-            llm_model: resolve_llm_model(command.llm_model)?,
-            llm_gpu_layers: command.llm_gpu_layers.or(Some(0)),
+            llm_model,
+            llm_gpu_layers: llm_placement.gpu_layers,
             piper_bin: resolve_piper_bin(command.piper_bin)?,
             piper_voice: resolve_piper_voice(command.piper_voice)?,
         })
@@ -191,6 +195,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: paths.llm_model.clone(),
         gpu_layers: paths.llm_gpu_layers,
+        cpu_only: paths.llm_gpu_layers == Some(0),
         ..Default::default()
     })
     .with_context(|| {

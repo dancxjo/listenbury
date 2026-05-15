@@ -51,7 +51,9 @@ pub(crate) fn is_repeated_transcript(history: &[String], new_entry: &str) -> boo
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::model_paths::{resolve_llm_model, resolve_piper_voice, resolve_whisper_model};
+use crate::cli::model_paths::{
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
+};
 #[cfg(all(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -202,6 +204,7 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
     // ── Resolve model paths ──────────────────────────────────────────────────
     let whisper_model = resolve_whisper_model(command.whisper_model)?;
     let llm_model = resolve_llm_model(command.llm_model)?;
+    let llm_placement = llm_runtime_placement(&llm_model, command.llm_gpu_layers, None)?;
     let piper_bin = resolve_piper_bin(command.piper_bin)?;
     let piper_voice_a = resolve_piper_voice(command.piper_voice_a)?;
     // Instance B defaults to the same voice as A when --piper-voice-b is absent.
@@ -214,7 +217,8 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
     // ── LLM engine ───────────────────────────────────────────────────────────
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: llm_model,
-        gpu_layers: command.llm_gpu_layers.or(Some(0)),
+        gpu_layers: llm_placement.gpu_layers,
+        cpu_only: llm_placement.cpu_only,
         ..Default::default()
     })
     .context("failed to initialise LLM engine")?;

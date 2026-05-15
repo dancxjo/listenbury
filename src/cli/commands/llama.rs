@@ -2,7 +2,7 @@ use crate::cli::LlamaTurnCommand;
 #[cfg(feature = "llm-llama-cpp")]
 use crate::cli::PromptMode;
 #[cfg(feature = "llm-llama-cpp")]
-use crate::cli::model_paths::resolve_llm_model;
+use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
 #[cfg(feature = "llm-llama-cpp")]
 use anyhow::Context;
 use anyhow::Result;
@@ -19,9 +19,11 @@ use std::path::PathBuf;
 pub(crate) fn run_llama_turn(command: LlamaTurnCommand) -> Result<()> {
     let args = LlamaTurnArgs::from_command(command)?;
     let model_path = resolve_llm_model(args.llm_model)?;
+    let llm_placement = llm_runtime_placement(&model_path, args.llm_gpu_layers, None)?;
     let config = LlamaCppConfig {
         model_path,
-        gpu_layers: args.llm_gpu_layers.or(Some(0)),
+        gpu_layers: llm_placement.gpu_layers,
+        cpu_only: llm_placement.cpu_only,
         ..Default::default()
     };
     let mut llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;

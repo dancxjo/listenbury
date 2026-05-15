@@ -28,7 +28,9 @@ use crate::cli::commands::mic_transcribe::transcribe_group;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::model_paths::{resolve_llm_model, resolve_piper_voice, resolve_whisper_model};
+use crate::cli::model_paths::{
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -236,7 +238,7 @@ const NANOS_PER_MILLI: u128 = 1_000_000;
     feature = "llm-llama-cpp-cuda",
     feature = "tts-piper"
 ))]
-const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(0);
+const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(16);
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -334,9 +336,15 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 paths.whisper_model.display()
             )
         })?;
+    let llm_placement = llm_runtime_placement(
+        &paths.llm_model,
+        command.llm_gpu_layers,
+        DEFAULT_LIVE_LLAMA_GPU_LAYERS,
+    )?;
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: paths.llm_model.clone(),
-        gpu_layers: command.llm_gpu_layers.or(DEFAULT_LIVE_LLAMA_GPU_LAYERS),
+        gpu_layers: llm_placement.gpu_layers,
+        cpu_only: llm_placement.cpu_only,
         ..Default::default()
     })
     .with_context(|| {

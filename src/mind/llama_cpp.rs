@@ -25,6 +25,7 @@ static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 pub struct LlamaCppConfig {
     pub model_path: PathBuf,
     pub gpu_layers: Option<u32>,
+    pub cpu_only: bool,
     pub context_size: u32,
     pub max_tokens: usize,
     pub threads: usize,
@@ -36,7 +37,8 @@ impl Default for LlamaCppConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::new(),
-            gpu_layers: Some(0),
+            gpu_layers: None,
+            cpu_only: false,
             context_size: 2048,
             max_tokens: 128,
             threads: std::thread::available_parallelism()
@@ -77,10 +79,13 @@ impl LlamaCppEngine {
         if config.threads == 0 {
             bail!("llama.cpp threads must be greater than zero");
         }
+        ensure_model_runtime_supported(&config.model_path)?;
 
         let backend = llama_backend()?;
         let mut model_params = LlamaModelParams::default();
-        if let Some(gpu_layers) = config.gpu_layers {
+        if config.cpu_only {
+            model_params = model_params.with_n_gpu_layers(0);
+        } else if let Some(gpu_layers) = config.gpu_layers {
             model_params = model_params.with_n_gpu_layers(gpu_layers);
         }
         let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
@@ -98,6 +103,23 @@ impl LlamaCppEngine {
             active: HashMap::new(),
         })
     }
+}
+
+fn ensure_model_runtime_supported(model_path: &std::path::Path) -> Result<()> {
+    let filename = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if filename.contains("gemma-4") {
+        bail!(
+            "llama.cpp runtime is incompatible with this LLM: {}. Select a supported model with `cargo run -- models use llm llama`, or pass `--llm-model <path>`.",
+            model_path.display()
+        );
+    }
+
+    Ok(())
 }
 
 impl LlmEngine for LlamaCppEngine {
@@ -207,6 +229,14 @@ impl LlamaGenerationWorker {
             .with_n_ctx(Some(context_size))
             .with_n_threads(thread_count)
             .with_n_threads_batch(thread_count);
+        let ctx_params = if self.config.cpu_only {
+            ctx_params
+                .with_offload_kqv(false)
+                .with_op_offload(false)
+                .with_flash_attention_policy(llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_DISABLED)
+        } else {
+            ctx_params
+        };
         let mut ctx = self
             .model
             .new_context(&self.backend, ctx_params)

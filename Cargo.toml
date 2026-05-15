@@ -39,8 +39,8 @@ audio-cpal = ["dep:cpal"]
 resample-rubato = ["dep:rubato"]
 vad-silero = []
 vad-webrtc = ["dep:webrtc-vad"]
-llm-llama-cpp = ["dep:encoding_rs", "dep:llama-cpp-2", "llama-cpp-2/sampler"]
-llm-llama-cpp-cuda = ["llm-llama-cpp", "llama-cpp-2/cuda"]
+llm-llama-cpp = ["dep:encoding_rs", "dep:llama-cpp-2", "dep:llama-cpp-sys-2", "llama-cpp-2/sampler"]
+llm-llama-cpp-cuda = ["llm-llama-cpp", "llama-cpp-2/cuda", "llama-cpp-sys-2/cuda"]
 asr-whisper = ["dep:whisper-cpp-plus"]
 asr-whisper-async = ["asr-whisper", "whisper-cpp-plus/async"]
 asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
@@ -59,6 +59,12 @@ version = "0.16"
 optional = true
 
 [dependencies.llama-cpp-2]
+git = "https://github.com/utilityai/llama-cpp-rs.git"
+rev = "6feffc60b5277b1fb9a718857736194cfdc736ac"
+optional = true
+default-features = false
+
+[dependencies.llama-cpp-sys-2]
 git = "https://github.com/utilityai/llama-cpp-rs.git"
 rev = "6feffc60b5277b1fb9a718857736194cfdc736ac"
 optional = true
