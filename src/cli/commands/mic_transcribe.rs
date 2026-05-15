@@ -41,6 +41,18 @@ const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
 const WHISPER_FRAME_SAMPLES: usize = 160;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+struct MicTranscribeState {
+    vad: EnergyVad,
+    segmenter: BreathGroupSegmenter,
+    active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    frame_time_ms: u64,
+    last_vad_state: Option<bool>,
+    groups_closed: usize,
+    transcripts_emitted: usize,
+    recognizer: WhisperSpeechRecognizer,
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     if !command.until_ctrl_c {
         anyhow::ensure!(
@@ -50,6 +62,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     }
 
     let model_path = resolve_whisper_model(command.whisper_model)?;
+    let recognizer = WhisperSpeechRecognizer::new(&model_path)
+        .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -174,13 +188,16 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
-    let mut vad = EnergyVad::default();
-    let mut segmenter = BreathGroupSegmenter::default();
-    let mut active_groups = HashMap::<BreathGroupId, Vec<AudioFrame>>::new();
-    let mut frame_time_ms = 0_u64;
-    let mut last_vad_state = None;
-    let mut transcripts_emitted = 0_usize;
-    let mut groups_closed = 0_usize;
+    let mut state = MicTranscribeState {
+        vad: EnergyVad::default(),
+        segmenter: BreathGroupSegmenter::default(),
+        active_groups: HashMap::new(),
+        frame_time_ms: 0,
+        last_vad_state: None,
+        groups_closed: 0,
+        transcripts_emitted: 0,
+        recognizer,
+    };
 
     loop {
         if stop_requested.load(Ordering::SeqCst) {
@@ -205,41 +222,15 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         while let Ok(sample) = sample_rx.try_recv() {
             pending.push_back(sample);
         }
-
-        while pending.len() >= input_frame_samples {
-            let mut samples = Vec::with_capacity(input_frame_samples);
-            for _ in 0..input_frame_samples {
-                if let Some(sample) = pending.pop_front() {
-                    samples.push(sample);
-                }
-            }
-            if samples.len() < input_frame_samples {
-                break;
-            }
-            let frame = AudioFrame {
-                captured_at: ExactTimestamp::now(),
-                sample_rate_hz: input_sample_rate_hz,
-                channels: input_channels,
-                samples,
-            };
-            if ring_tx.try_push(frame).is_err() {
-                dropped_in_ring.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-
-        while let Some(frame) = ring_rx.try_pop() {
-            process_live_frame(
-                frame,
-                &mut vad,
-                &mut segmenter,
-                &mut active_groups,
-                &mut last_vad_state,
-                &model_path,
-                &mut frame_time_ms,
-                &mut groups_closed,
-                &mut transcripts_emitted,
-            )?;
-        }
+        drain_pending_into_ring(
+            &mut pending,
+            input_frame_samples,
+            input_sample_rate_hz,
+            input_channels,
+            &mut ring_tx,
+            &dropped_in_ring,
+        );
+        process_ring_frames(&mut ring_rx, &mut state)?;
     }
 
     drop(stream);
@@ -247,6 +238,132 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     while let Ok(sample) = sample_rx.try_recv() {
         pending.push_back(sample);
     }
+    drain_pending_into_ring(
+        &mut pending,
+        input_frame_samples,
+        input_sample_rate_hz,
+        input_channels,
+        &mut ring_tx,
+        &dropped_in_ring,
+    );
+    process_ring_frames(&mut ring_rx, &mut state)?;
+
+    if !state.active_groups.is_empty() {
+        println!(
+            "forcing transcription of {} active breath group(s) on shutdown",
+            state.active_groups.len()
+        );
+    }
+    for (id, frames) in state.active_groups.drain() {
+        state.groups_closed += 1;
+        println!("breath-group forced-close id={id:?} reason=shutdown");
+        let text = transcribe_group(&frames, &mut state.recognizer)?;
+        if text.is_empty() {
+            println!("transcript group={} text=<empty>", state.groups_closed);
+        } else {
+            state.transcripts_emitted += 1;
+            println!("transcript group={} text={}", state.groups_closed, text);
+        }
+    }
+
+    let callback_drops = dropped_in_callback.load(Ordering::Relaxed);
+    let ring_drops = dropped_in_ring.load(Ordering::Relaxed);
+    println!(
+        "mic-transcribe finished: closed_groups={}, non_empty_transcripts={}, callback_drops={}, ring_drops={}",
+        state.groups_closed, state.transcripts_emitted, callback_drops, ring_drops
+    );
+
+    Ok(())
+}
+
+#[cfg(not(all(feature = "asr-whisper", feature = "audio-cpal")))]
+pub(crate) fn run_mic_transcribe(_command: MicTranscribeCommand) -> Result<()> {
+    anyhow::bail!("listenbury mic-transcribe requires the `audio-cpal` and `asr-whisper` features")
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Result<()> {
+    let frame_duration_ms = frame_duration_ms(&frame);
+    let vad_result = state.vad.process_frame(&frame)?;
+
+    if state.last_vad_state != Some(vad_result.is_speech) {
+        println!(
+            "vad t_ms={} speech={} prob={:.3}",
+            state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
+        );
+        state.last_vad_state = Some(vad_result.is_speech);
+    }
+
+    let events = state.segmenter.process(vad_result);
+    for event in &events {
+        if let HearingEvent::BreathGroupOpened { id } = event {
+            println!("breath-group open id={id:?} t_ms={}", state.frame_time_ms);
+            state.active_groups.entry(*id).or_default();
+        }
+    }
+
+    for group in state.active_groups.values_mut() {
+        group.push(frame.clone());
+    }
+
+    for event in events {
+        if let HearingEvent::BreathGroupClosed { id, reason } = event {
+            state.groups_closed += 1;
+            println!(
+                "breath-group close id={id:?} t_ms={} reason={reason:?}",
+                state.frame_time_ms.saturating_add(frame_duration_ms)
+            );
+            if let Some(group_frames) = state.active_groups.remove(&id) {
+                let text = transcribe_group(&group_frames, &mut state.recognizer)?;
+                if text.is_empty() {
+                    println!("transcript group={} text=<empty>", state.groups_closed);
+                } else {
+                    state.transcripts_emitted += 1;
+                    println!("transcript group={} text={}", state.groups_closed, text);
+                }
+            } else {
+                println!(
+                    "transcript group={} text=<missing audio>",
+                    state.groups_closed
+                );
+            }
+        }
+    }
+
+    state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+    Ok(())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn transcribe_group(
+    frames: &[AudioFrame],
+    recognizer: &mut WhisperSpeechRecognizer,
+) -> Result<String> {
+    let whisper_frames = prepare_whisper_frames(frames, WHISPER_FRAME_SAMPLES)?;
+    if whisper_frames.is_empty() {
+        return Ok(String::new());
+    }
+    for frame in &whisper_frames {
+        recognizer.push_frame(frame)?;
+    }
+    let text = recognizer
+        .poll_chunks()?
+        .into_iter()
+        .map(|chunk| chunk.text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(text.trim().to_string())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn drain_pending_into_ring(
+    pending: &mut VecDeque<f32>,
+    input_frame_samples: usize,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+    ring_tx: &mut listenbury::audio::ring::AudioRingTx,
+    dropped_in_ring: &AtomicUsize,
+) {
     while pending.len() >= input_frame_samples {
         let mut samples = Vec::with_capacity(input_frame_samples);
         for _ in 0..input_frame_samples {
@@ -267,132 +384,17 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);
         }
     }
-    while let Some(frame) = ring_rx.try_pop() {
-        process_live_frame(
-            frame,
-            &mut vad,
-            &mut segmenter,
-            &mut active_groups,
-            &mut last_vad_state,
-            &model_path,
-            &mut frame_time_ms,
-            &mut groups_closed,
-            &mut transcripts_emitted,
-        )?;
-    }
-
-    if !active_groups.is_empty() {
-        println!(
-            "forcing transcription of {} active breath group(s) on shutdown",
-            active_groups.len()
-        );
-    }
-    for (id, frames) in active_groups.drain() {
-        groups_closed += 1;
-        println!("breath-group forced-close id={id:?} reason=shutdown");
-        let text = transcribe_group(&frames, &model_path)?;
-        if text.is_empty() {
-            println!("transcript group={} text=<empty>", groups_closed);
-        } else {
-            transcripts_emitted += 1;
-            println!("transcript group={} text={}", groups_closed, text);
-        }
-    }
-
-    let callback_drops = dropped_in_callback.load(Ordering::Relaxed);
-    let ring_drops = dropped_in_ring.load(Ordering::Relaxed);
-    println!(
-        "mic-transcribe finished: closed_groups={}, non_empty_transcripts={}, callback_drops={}, ring_drops={}",
-        groups_closed, transcripts_emitted, callback_drops, ring_drops
-    );
-
-    Ok(())
-}
-
-#[cfg(not(all(feature = "asr-whisper", feature = "audio-cpal")))]
-pub(crate) fn run_mic_transcribe(_command: MicTranscribeCommand) -> Result<()> {
-    anyhow::bail!("listenbury mic-transcribe requires the `audio-cpal` and `asr-whisper` features")
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn process_live_frame(
-    frame: AudioFrame,
-    vad: &mut EnergyVad,
-    segmenter: &mut BreathGroupSegmenter,
-    active_groups: &mut HashMap<BreathGroupId, Vec<AudioFrame>>,
-    last_vad_state: &mut Option<bool>,
-    model_path: &std::path::Path,
-    frame_time_ms: &mut u64,
-    groups_closed: &mut usize,
-    transcripts_emitted: &mut usize,
+fn process_ring_frames(
+    ring_rx: &mut listenbury::audio::ring::AudioRingRx,
+    state: &mut MicTranscribeState,
 ) -> Result<()> {
-    let frame_duration_ms = frame_duration_ms(&frame);
-    let vad_result = vad.process_frame(&frame)?;
-
-    if last_vad_state != &Some(vad_result.is_speech) {
-        println!(
-            "vad t_ms={} speech={} prob={:.3}",
-            *frame_time_ms, vad_result.is_speech, vad_result.speech_prob
-        );
-        *last_vad_state = Some(vad_result.is_speech);
+    while let Some(frame) = ring_rx.try_pop() {
+        process_live_frame(frame, state)?;
     }
-
-    let events = segmenter.process(vad_result);
-    for event in &events {
-        if let HearingEvent::BreathGroupOpened { id } = event {
-            println!("breath-group open id={id:?} t_ms={}", *frame_time_ms);
-            active_groups.entry(*id).or_default();
-        }
-    }
-
-    for group in active_groups.values_mut() {
-        group.push(frame.clone());
-    }
-
-    for event in events {
-        if let HearingEvent::BreathGroupClosed { id, reason } = event {
-            *groups_closed += 1;
-            println!(
-                "breath-group close id={id:?} t_ms={} reason={reason:?}",
-                (*frame_time_ms).saturating_add(frame_duration_ms)
-            );
-            if let Some(group_frames) = active_groups.remove(&id) {
-                let text = transcribe_group(&group_frames, model_path)?;
-                if text.is_empty() {
-                    println!("transcript group={} text=<empty>", *groups_closed);
-                } else {
-                    *transcripts_emitted += 1;
-                    println!("transcript group={} text={}", *groups_closed, text);
-                }
-            } else {
-                println!("transcript group={} text=<missing audio>", *groups_closed);
-            }
-        }
-    }
-
-    *frame_time_ms = frame_time_ms.saturating_add(frame_duration_ms);
     Ok(())
-}
-
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn transcribe_group(frames: &[AudioFrame], model_path: &std::path::Path) -> Result<String> {
-    let whisper_frames = prepare_whisper_frames(frames, WHISPER_FRAME_SAMPLES)?;
-    if whisper_frames.is_empty() {
-        return Ok(String::new());
-    }
-
-    let mut recognizer = WhisperSpeechRecognizer::new(model_path)
-        .with_context(|| format!("failed to load Whisper model at {}", model_path.display()))?;
-    for frame in &whisper_frames {
-        recognizer.push_frame(frame)?;
-    }
-    let text = recognizer
-        .poll_chunks()?
-        .into_iter()
-        .map(|chunk| chunk.text)
-        .collect::<Vec<_>>()
-        .join(" ");
-    Ok(text.trim().to_string())
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
