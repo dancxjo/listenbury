@@ -33,6 +33,7 @@ enum Command {
     Say(SayCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
+    DogfoodTwo(DogfoodTwoCommand),
     Models {
         #[command(subcommand)]
         command: ModelsCommand,
@@ -131,6 +132,37 @@ pub(crate) struct RoundTripWavCommand {
     pub(crate) piper_voice: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct DogfoodTwoCommand {
+    /// Initial utterance that instance A speaks on turn one.
+    #[arg(long, default_value = "Hello.")]
+    pub(crate) seed: String,
+    /// Total number of TTS→ASR exchanges to run (hard-capped at 32).
+    #[arg(long, default_value_t = 6)]
+    pub(crate) turns: usize,
+    /// Maximum tokens the LLM may generate per turn.
+    #[arg(long, default_value_t = 128)]
+    pub(crate) max_tokens: u32,
+    #[arg(long, alias = "model-path")]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) llm_model: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    /// Piper voice used by instance A.
+    #[arg(long)]
+    pub(crate) piper_voice_a: Option<PathBuf>,
+    /// Piper voice used by instance B (defaults to the same voice as A).
+    #[arg(long)]
+    pub(crate) piper_voice_b: Option<PathBuf>,
+    /// Write a structured JSONL trace to this path.
+    #[arg(long)]
+    pub(crate) jsonl: Option<PathBuf>,
+    /// Save per-turn WAV files to this directory.
+    #[arg(long)]
+    pub(crate) save_audio_dir: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub(crate) enum ModelProfile {
     #[default]
@@ -199,6 +231,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Say(cmd) => commands::run_say(cmd),
         Command::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         Command::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
+        Command::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::SpeechCache { command } => commands::run_speech_cache(command),
     }
@@ -378,5 +411,89 @@ mod tests {
         assert_eq!(command.seconds, 12);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
+    }
+
+    #[test]
+    fn dogfood_two_parses_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "dogfood-two"])
+            .expect("dogfood-two should parse with all defaults");
+
+        let Some(Command::DogfoodTwo(command)) = cli.command else {
+            panic!("expected dogfood-two command");
+        };
+        assert_eq!(command.seed, "Hello.");
+        assert_eq!(command.turns, 6);
+        assert_eq!(command.max_tokens, 128);
+        assert!(command.whisper_model.is_none());
+        assert!(command.llm_model.is_none());
+        assert!(command.piper_bin.is_none());
+        assert!(command.piper_voice_a.is_none());
+        assert!(command.piper_voice_b.is_none());
+        assert!(command.jsonl.is_none());
+        assert!(command.save_audio_dir.is_none());
+    }
+
+    #[test]
+    fn dogfood_two_parses_all_flags() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dogfood-two",
+            "--seed",
+            "Hi there.",
+            "--turns",
+            "4",
+            "--max-tokens",
+            "64",
+            "--whisper-model",
+            "models/ggml-tiny.bin",
+            "--llm-model",
+            "models/tiny.gguf",
+            "--piper-bin",
+            "/usr/bin/piper",
+            "--piper-voice-a",
+            "voices/a.onnx",
+            "--piper-voice-b",
+            "voices/b.onnx",
+            "--jsonl",
+            "out/dogfood-two.jsonl",
+            "--save-audio-dir",
+            "out/dogfood-two-audio",
+        ])
+        .expect("dogfood-two should parse all flags");
+
+        let Some(Command::DogfoodTwo(command)) = cli.command else {
+            panic!("expected dogfood-two command");
+        };
+        assert_eq!(command.seed, "Hi there.");
+        assert_eq!(command.turns, 4);
+        assert_eq!(command.max_tokens, 64);
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-tiny.bin"))
+        );
+        assert_eq!(
+            command.llm_model,
+            Some(PathBuf::from("models/tiny.gguf"))
+        );
+        assert_eq!(
+            command.piper_bin,
+            Some(PathBuf::from("/usr/bin/piper"))
+        );
+        assert_eq!(
+            command.piper_voice_a,
+            Some(PathBuf::from("voices/a.onnx"))
+        );
+        assert_eq!(
+            command.piper_voice_b,
+            Some(PathBuf::from("voices/b.onnx"))
+        );
+        assert_eq!(
+            command.jsonl,
+            Some(PathBuf::from("out/dogfood-two.jsonl"))
+        );
+        assert_eq!(
+            command.save_audio_dir,
+            Some(PathBuf::from("out/dogfood-two-audio"))
+        );
     }
 }
