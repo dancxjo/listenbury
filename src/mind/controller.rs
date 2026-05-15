@@ -34,28 +34,120 @@ pub struct ConversationMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackchannelId {
+    AhOkay,
+    Alright,
+    GotIt,
+    GotItOneSecond,
+    HangOn,
+    Hmm,
+    IAmThinking,
     Okay,
+    OkayLetMeSee,
+    OkayOneMoment,
+    OkayYeah,
     Right,
+    RightYeah,
     ISee,
+    JustASecond,
+    JustAMoment,
+    LetMeSee,
     MmHm,
+    Mm,
     LetMeThink,
     OneThingJumpsOut,
+    OneMoment,
+    OneSecond,
+    Sure,
+    SureOneSecond,
     ThatMakesSense,
+    Uh,
+    Um,
+    Yeah,
 }
 
 impl BackchannelId {
     pub fn text(self) -> &'static str {
         match self {
+            BackchannelId::AhOkay => "Ah, okay.",
+            BackchannelId::Alright => "Alright.",
+            BackchannelId::GotIt => "Got it.",
+            BackchannelId::GotItOneSecond => "Got it, one second.",
+            BackchannelId::HangOn => "Hang on.",
+            BackchannelId::Hmm => "Hmm.",
+            BackchannelId::IAmThinking => "I'm thinking.",
             BackchannelId::Okay => "Okay.",
+            BackchannelId::OkayLetMeSee => "Okay, let me see.",
+            BackchannelId::OkayOneMoment => "Okay, one moment.",
+            BackchannelId::OkayYeah => "Okay, yeah.",
             BackchannelId::Right => "Right.",
+            BackchannelId::RightYeah => "Right, yeah.",
             BackchannelId::ISee => "I see.",
+            BackchannelId::JustASecond => "Just a second.",
+            BackchannelId::JustAMoment => "Just a moment.",
+            BackchannelId::LetMeSee => "Let me see.",
             BackchannelId::MmHm => "Mm-hm.",
+            BackchannelId::Mm => "Mm.",
             BackchannelId::LetMeThink => "Let me think.",
             BackchannelId::OneThingJumpsOut => "Well, I dee-clare!",
+            BackchannelId::OneMoment => "One moment.",
+            BackchannelId::OneSecond => "One second.",
+            BackchannelId::Sure => "Sure.",
+            BackchannelId::SureOneSecond => "Sure, one second.",
             BackchannelId::ThatMakesSense => "That makes sense.",
+            BackchannelId::Uh => "Uh.",
+            BackchannelId::Um => "Um.",
+            BackchannelId::Yeah => "Yeah.",
         }
     }
 }
+
+const ACK_FILLERS: &[BackchannelId] = &[
+    BackchannelId::Okay,
+    BackchannelId::Alright,
+    BackchannelId::Right,
+    BackchannelId::Sure,
+    BackchannelId::Yeah,
+    BackchannelId::MmHm,
+    BackchannelId::Mm,
+    BackchannelId::ISee,
+    BackchannelId::GotIt,
+    BackchannelId::AhOkay,
+    BackchannelId::OkayYeah,
+    BackchannelId::RightYeah,
+    BackchannelId::ThatMakesSense,
+];
+
+const THINKING_FILLERS: &[BackchannelId] = &[
+    BackchannelId::Hmm,
+    BackchannelId::Um,
+    BackchannelId::Uh,
+    BackchannelId::LetMeThink,
+    BackchannelId::LetMeSee,
+    BackchannelId::OkayLetMeSee,
+    BackchannelId::IAmThinking,
+    BackchannelId::OneSecond,
+    BackchannelId::OneMoment,
+    BackchannelId::JustASecond,
+    BackchannelId::JustAMoment,
+    BackchannelId::OkayOneMoment,
+    BackchannelId::SureOneSecond,
+    BackchannelId::GotItOneSecond,
+    BackchannelId::HangOn,
+];
+
+const LONG_TURN_FILLERS: &[BackchannelId] = &[
+    BackchannelId::Okay,
+    BackchannelId::Right,
+    BackchannelId::ISee,
+    BackchannelId::GotIt,
+    BackchannelId::MmHm,
+    BackchannelId::OneThingJumpsOut,
+    BackchannelId::ThatMakesSense,
+    BackchannelId::OkayLetMeSee,
+    BackchannelId::LetMeSee,
+    BackchannelId::Hmm,
+    BackchannelId::Alright,
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FillerDecision {
@@ -163,19 +255,27 @@ impl FillerPlanner {
 
 fn select_backchannel(transcript_so_far: Option<&str>) -> BackchannelId {
     let Some(transcript) = transcript_so_far.map(str::trim) else {
-        return BackchannelId::Okay;
+        return ACK_FILLERS[0];
     };
     if transcript.is_empty() {
-        return BackchannelId::Okay;
+        return ACK_FILLERS[0];
     }
 
     if transcript.ends_with('?') {
-        BackchannelId::LetMeThink
+        select_from_fillers(transcript, THINKING_FILLERS)
     } else if transcript.len() > 80 {
-        BackchannelId::OneThingJumpsOut
+        select_from_fillers(transcript, LONG_TURN_FILLERS)
     } else {
-        BackchannelId::Okay
+        select_from_fillers(transcript, ACK_FILLERS)
     }
+}
+
+fn select_from_fillers(transcript: &str, fillers: &[BackchannelId]) -> BackchannelId {
+    let mut hash = 0usize;
+    for byte in transcript.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(byte as usize);
+    }
+    fillers[hash % fillers.len()]
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -424,6 +524,10 @@ mod tests {
         }
     }
 
+    fn is_thinking_filler(id: BackchannelId) -> bool {
+        THINKING_FILLERS.contains(&id)
+    }
+
     #[test]
     fn planner_prefers_silence_when_llm_already_has_tokens() {
         let mut planner = FillerPlanner::default();
@@ -436,12 +540,10 @@ mod tests {
     fn planner_chooses_cached_backchannel_while_waiting() {
         let mut planner = FillerPlanner::default();
         let ctx = thinking_context(10_000, 1);
-        assert_eq!(
+        assert!(matches!(
             planner.decide(&ctx),
-            FillerDecision::PlayCachedBackchannel {
-                id: BackchannelId::LetMeThink
-            }
-        );
+            FillerDecision::PlayCachedBackchannel { id } if is_thinking_filler(id)
+        ));
     }
 
     #[test]
@@ -476,7 +578,12 @@ mod tests {
         assert!(matches!(
             command,
             Some(MouthCommand::Speak(plan))
-                if plan.unit() == &SpeechUnit::Backchannel("Let me think.".to_string())
+                if match plan.unit() {
+                    SpeechUnit::Backchannel(text) => THINKING_FILLERS
+                        .iter()
+                        .any(|id| text == id.text()),
+                    _ => false,
+                }
         ));
     }
 

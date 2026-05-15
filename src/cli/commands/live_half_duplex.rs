@@ -1598,7 +1598,7 @@ mod tests {
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
-    use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
+    use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlannerConfig, SpeechUnit};
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, RuntimePacket,
     };
@@ -1826,9 +1826,10 @@ mod tests {
             false,
             false,
         );
+        let safe_backchannels = SpeechPlannerConfig::default().safe_backchannels;
         assert!(matches!(
             first.as_ref().map(|plan| plan.unit()),
-            Some(SpeechUnit::Backchannel(text)) if text == "Let me think."
+            Some(SpeechUnit::Backchannel(text)) if safe_backchannels.contains(text)
         ));
 
         if let Some(plan) = first {

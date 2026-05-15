@@ -136,13 +136,35 @@ enum BoundaryResult {
 const MIN_NON_BACKCHANNEL_CHARS: usize = 12;
 const MIN_SHORT_COMPLETE_CHARS: usize = 4;
 pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
+    "Ah, okay.",
+    "Alright.",
+    "Got it.",
+    "Got it, one second.",
+    "Hang on.",
+    "Hmm.",
+    "I'm thinking.",
     "Okay.",
+    "Okay, let me see.",
+    "Okay, one moment.",
+    "Okay, yeah.",
     "Right.",
+    "Right, yeah.",
     "I see.",
+    "Just a second.",
+    "Just a moment.",
+    "Let me see.",
     "Mm-hm.",
+    "Mm.",
     "Let me think.",
     "Well, I dee-clare!",
+    "One moment.",
+    "One second.",
+    "Sure.",
+    "Sure, one second.",
     "That makes sense.",
+    "Uh.",
+    "Um.",
+    "Yeah.",
 ];
 const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];
 /// Short sentences that are safe to emit immediately even though they fall
