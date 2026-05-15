@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::models::download::fetch_asset_with_progress;
-use crate::models::manifest::{DEFAULT_MODELS, ModelAsset};
+use crate::models::manifest::{ModelAsset, DEFAULT_MODELS};
 use crate::models::paths::{asset_path, resolve_listenbury_home};
 
 #[derive(Debug, Clone)]
@@ -122,7 +122,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{FetchOutcome, fetch_assets_at_home};
+    use super::{fetch_assets_at_home, FetchOutcome};
     use crate::models::manifest::ModelAsset;
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -148,9 +148,8 @@ mod tests {
             expected_size_hint: None,
         }];
 
-        let results =
-            fetch_assets_at_home(&home, &assets, &mut |_| {})
-                .expect("fetch should skip existing file");
+        let results = fetch_assets_at_home(&home, &assets, &mut |_| {})
+            .expect("fetch should skip existing file");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].outcome, FetchOutcome::SkippedExisting);
         assert_eq!(results[0].path, asset_path);

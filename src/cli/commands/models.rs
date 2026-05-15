@@ -7,8 +7,8 @@ use anyhow::Context;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets_with_progress,
-    paths::resolve_listenbury_home,
+    default_asset_paths, default_assets_status, fetch_default_assets_with_progress,
+    paths::resolve_listenbury_home, FetchOutcome,
 };
 #[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
@@ -45,10 +45,11 @@ pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
         ModelsCommand::Fetch => {
             let bars = MultiProgress::new();
             let overall = bars.add(ProgressBar::new(default_asset_paths()?.len() as u64));
-            let overall_style =
-                ProgressStyle::with_template("{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {pos}/{len} ETA {eta_precise}")
-                    .context("failed to create overall progress style")?
-                    .progress_chars("=>-");
+            let overall_style = ProgressStyle::with_template(
+                "{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {pos}/{len} ETA {eta_precise}",
+            )
+            .context("failed to create overall progress style")?
+            .progress_chars("=>-");
             overall.set_style(overall_style);
             overall.enable_steady_tick(std::time::Duration::from_millis(100));
             overall.set_message("Fetching default model assets...");

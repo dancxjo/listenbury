@@ -42,7 +42,10 @@ pub fn fetch_asset_with_progress(
     let response = ureq::get(asset.url)
         .call()
         .with_context(|| format!("failed to download {}", asset.url))?;
-    let total_bytes = response.body().content_length().or(asset.expected_size_hint);
+    let total_bytes = response
+        .body()
+        .content_length()
+        .or(asset.expected_size_hint);
 
     let mut body = response.into_body();
     let mut reader = body.as_reader();
