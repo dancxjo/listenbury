@@ -833,6 +833,7 @@ fn is_thinking_leak(text: &str) -> bool {
 
     [
         "<think>",
+        "pete, speaking aloud through a tts system",
         "assistant should",
         "the assistant should",
         "the assistant's response",
@@ -995,7 +996,7 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
 ))]
 fn build_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|start_header_id|>system<|end_header_id|>\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{transcript}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
     )
 }
 
@@ -1010,6 +1011,9 @@ fn build_prompt(transcript: &str) -> String {
 ))]
 fn live_half_duplex_stops() -> Vec<String> {
     vec![
+        "<|eot_id|>".to_string(),
+        "<|start_header_id|>".to_string(),
+        "<|end_header_id|>".to_string(),
         "</s>".to_string(),
         "\n<|user|>".to_string(),
         "\n<|assistant|>".to_string(),
@@ -1358,6 +1362,8 @@ mod tests {
     #[test]
     fn live_half_duplex_stops_at_chat_boundaries() {
         let stops = live_half_duplex_stops();
+        assert!(stops.iter().any(|stop| stop == "<|eot_id|>"));
+        assert!(stops.iter().any(|stop| stop == "<|start_header_id|>"));
         assert!(stops.iter().any(|stop| stop == "</s>"));
         assert!(stops.iter().any(|stop| stop == "\n<|user|>"));
         assert!(stops.iter().any(|stop| stop == "\n<|assistant|>"));
