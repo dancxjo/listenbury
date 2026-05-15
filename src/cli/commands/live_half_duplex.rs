@@ -610,7 +610,7 @@ fn stream_speech_to_tts(
         .start(GenerationRequest {
             prompt: build_prompt(transcript),
             max_tokens: Some(max_tokens(model_profile)),
-            stop: Vec::new(),
+            stop: live_half_duplex_stops(),
         })
         .context("failed to start llama.cpp generation")?;
 
@@ -901,8 +901,32 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
 ))]
 fn build_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn live_half_duplex_stops() -> Vec<String> {
+    vec![
+        "</s>".to_string(),
+        "\n<|user|>".to_string(),
+        "\n<|assistant|>".to_string(),
+        "\n<|system|>".to_string(),
+        "<|user|>".to_string(),
+        "<|assistant|>".to_string(),
+        "<|system|>".to_string(),
+        "\nUser:".to_string(),
+        "\nPete:".to_string(),
+        "\nAssistant:".to_string(),
+    ]
 }
 
 #[cfg(all(
@@ -1036,7 +1060,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{maybe_plan_cached_backchannel, planner_units_from_events};
+    use super::{live_half_duplex_stops, maybe_plan_cached_backchannel, planner_units_from_events};
     use listenbury::mind::llm::LlmEvent;
     use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
     use listenbury::{ConversationController, RuntimePacket};
@@ -1094,6 +1118,15 @@ mod tests {
         assert!(matches!(units.first(), Some(ExpressiveUnit::Speech(_))));
         assert!(matches!(units.get(1), Some(ExpressiveUnit::Face(_))));
         assert!(matches!(units.get(2), Some(ExpressiveUnit::Speech(_))));
+    }
+
+    #[test]
+    fn live_half_duplex_stops_at_chat_boundaries() {
+        let stops = live_half_duplex_stops();
+        assert!(stops.iter().any(|stop| stop == "</s>"));
+        assert!(stops.iter().any(|stop| stop == "\n<|user|>"));
+        assert!(stops.iter().any(|stop| stop == "\n<|assistant|>"));
+        assert!(stops.iter().any(|stop| stop == "\nUser:"));
     }
 
     #[test]
