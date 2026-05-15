@@ -135,8 +135,8 @@ Useful `just` recipes:
 
 ```bash
 just              # list available recipes
-just run --help   # cargo run -- --help
-just cuda --help  # cargo run with asr-whisper-cuda and llm-llama-cpp-cuda
+just run -- --help   # cargo run -- --help
+just cuda -- --help  # cargo run with asr-whisper-cuda and llm-llama-cpp-cuda
 just check
 just check-cuda
 just test
@@ -147,8 +147,8 @@ just test
 Run commands with `just`:
 
 ```bash
-just run <command> [args...]
-just cuda <command> [args...]
+just run -- <command> [args...]
+just cuda -- <command> [args...]
 ```
 
 CLI commands:
