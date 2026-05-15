@@ -91,7 +91,7 @@ pub(crate) struct VadTraceCommand {
     pub(crate) input_wav: PathBuf,
     #[arg(long)]
     pub(crate) jsonl: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
 }
 
@@ -118,7 +118,7 @@ pub(crate) struct MicTranscribeCommand {
     pub(crate) until_ctrl_c: bool,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
 }
 
@@ -145,7 +145,7 @@ pub(crate) struct TranscribeCommand {
     pub(crate) seconds: u64,
     #[arg(long)]
     pub(crate) until_ctrl_c: bool,
-    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
 }
 
@@ -237,14 +237,14 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
     pub(crate) piper_voice: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub(crate) enum VadBackendOption {
-    #[default]
     Energy,
+    #[default]
     #[value(name = "webrtc")]
     WebRtc,
     Silero,
@@ -342,7 +342,7 @@ mod tests {
         assert!(command.whisper_model.is_none());
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
         assert!(command.whisper_model.is_none());
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -488,7 +488,7 @@ mod tests {
             PathBuf::from("samples/silence-16k-mono.wav")
         );
         assert_eq!(command.jsonl, Some(PathBuf::from("out/vad-trace.jsonl")));
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
         assert!(command.whisper_model.is_none());
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -565,7 +565,7 @@ mod tests {
             command.whisper_model,
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
         assert_eq!(command.seconds, None);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(command.seconds, Some(12));
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
-        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
