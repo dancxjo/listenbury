@@ -526,7 +526,11 @@ fn process_live_frame(
     frame: AudioFrame,
     state: &mut LiveHalfDuplexState,
 ) -> Result<Vec<Vec<AudioFrame>>> {
-    if state.self_hearing.suppression_decision() == listenbury::SuppressionDecision::Suppress {
+    if state
+        .self_hearing
+        .suppression_decision_at(frame.captured_at)
+        == listenbury::SuppressionDecision::Suppress
+    {
         // Pete is speaking or the echo-tail window is still active; drop the frame
         // so that VAD/ASR cannot transcribe Pete's own voice.
         return Ok(vec![]);
@@ -618,6 +622,7 @@ fn stream_speech_to_tts(
         "[live-half-duplex] controller turn state after llm start: {:?}",
         controller.turn_tracker.state()
     );
+    let mut current_spoken_text = String::new();
     if let Some(filler_plan) = maybe_plan_cached_backchannel(
         controller,
         transcript,
@@ -631,6 +636,7 @@ fn stream_speech_to_tts(
             filler_plan.unit()
         );
         let filler_text = filler_plan.text().to_string();
+        current_spoken_text = filler_text.clone();
         tts.enqueue(filler_plan)?;
         controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text: filler_text });
         controller.apply_safe_boundary_updates();
@@ -642,7 +648,7 @@ fn stream_speech_to_tts(
         if events.is_empty() {
             played_any_audio |= drain_ready_tts_audio(
                 tts,
-                transcript,
+                &current_spoken_text,
                 self_hearing,
                 "live-half-duplex response",
                 controller,
@@ -660,6 +666,7 @@ fn stream_speech_to_tts(
             match unit {
                 ExpressiveUnit::Speech(plan) => {
                     let text = plan.text().to_string();
+                    current_spoken_text = text.clone();
                     tts.enqueue(plan)?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
                     controller.apply_safe_boundary_updates();
@@ -677,7 +684,7 @@ fn stream_speech_to_tts(
         }
         played_any_audio |= drain_ready_tts_audio(
             tts,
-            transcript,
+            &current_spoken_text,
             self_hearing,
             "live-half-duplex response",
             controller,
@@ -690,19 +697,20 @@ fn stream_speech_to_tts(
 
     played_any_audio |= flush_tts_audio(
         tts,
-        transcript,
+        &current_spoken_text,
         self_hearing,
         "live-half-duplex response",
         Duration::from_secs(30),
         controller,
     )?;
     if !played_any_audio {
+        current_spoken_text = "I heard you, but I lost my words.".to_string();
         tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
-            "I heard you, but I lost my words.".to_string(),
+            current_spoken_text.clone(),
         )))?;
         let played_fallback = flush_tts_audio(
             tts,
-            transcript,
+            &current_spoken_text,
             self_hearing,
             "live-half-duplex response fallback",
             Duration::from_secs(30),
@@ -795,7 +803,7 @@ fn maybe_plan_cached_backchannel(
 ))]
 fn drain_ready_tts_audio(
     tts: &mut impl TextToSpeech,
-    transcript: &str,
+    spoken_text: &str,
     self_hearing: &mut listenbury::SelfHearingState,
     source: &str,
     controller: &mut ConversationController,
@@ -810,7 +818,7 @@ fn drain_ready_tts_audio(
         queued_ms: u64::try_from(audio_dur.as_millis()).unwrap_or(u64::MAX),
     });
     controller.apply_safe_boundary_updates();
-    self_hearing.mark_output_started(transcript, audio_dur);
+    self_hearing.mark_output_started(spoken_text, audio_dur);
     eprintln!(
         "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
         self_hearing.current_utterance_text.as_deref().unwrap_or("")
@@ -827,7 +835,7 @@ fn drain_ready_tts_audio(
 ))]
 fn flush_tts_audio(
     tts: &mut impl TextToSpeech,
-    transcript: &str,
+    spoken_text: &str,
     self_hearing: &mut listenbury::SelfHearingState,
     source: &str,
     timeout: Duration,
@@ -839,7 +847,7 @@ fn flush_tts_audio(
     let mut last_audio_at = None;
 
     while Instant::now() < deadline {
-        if drain_ready_tts_audio(tts, transcript, self_hearing, source, controller)? {
+        if drain_ready_tts_audio(tts, spoken_text, self_hearing, source, controller)? {
             played_any_audio = true;
             last_audio_at = Some(Instant::now());
             continue;

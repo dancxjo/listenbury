@@ -83,12 +83,20 @@ impl SelfHearingState {
     /// [`SuppressionDecision::Allow`] once the window has fully elapsed and no
     /// output is active.
     pub fn suppression_decision(&self) -> SuppressionDecision {
+        self.suppression_decision_at(ExactTimestamp::now())
+    }
+
+    /// Decide how a microphone frame captured at `timestamp` should be treated.
+    ///
+    /// This is preferred for queued audio frames: a frame captured during Pete's
+    /// suppression window should still be dropped even if it is processed after
+    /// the wall-clock window has elapsed.
+    pub fn suppression_decision_at(&self, timestamp: ExactTimestamp) -> SuppressionDecision {
         if self.pete_speaking {
             return SuppressionDecision::Suppress;
         }
         if let Some(until) = self.output_expected_until {
-            let now = ExactTimestamp::now();
-            if now.unix_nanos <= until.unix_nanos {
+            if timestamp.unix_nanos <= until.unix_nanos {
                 return SuppressionDecision::Suppress;
             }
         }
@@ -142,6 +150,23 @@ mod tests {
         state.output_started_at = Some(ExactTimestamp { unix_nanos: 1 });
         state.output_expected_until = Some(ExactTimestamp { unix_nanos: 2 });
         assert_eq!(state.suppression_decision(), SuppressionDecision::Allow);
+    }
+
+    #[test]
+    fn suppresses_queued_frames_captured_during_tail_window() {
+        let mut state = SelfHearingState::new();
+        state.pete_speaking = false;
+        state.output_started_at = Some(ExactTimestamp { unix_nanos: 1_000 });
+        state.output_expected_until = Some(ExactTimestamp { unix_nanos: 2_000 });
+
+        assert_eq!(
+            state.suppression_decision_at(ExactTimestamp { unix_nanos: 1_500 }),
+            SuppressionDecision::Suppress
+        );
+        assert_eq!(
+            state.suppression_decision_at(ExactTimestamp { unix_nanos: 2_001 }),
+            SuppressionDecision::Allow
+        );
     }
 
     #[test]
