@@ -34,7 +34,8 @@ pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
 pub use mouth::planner::{
-    ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit, strip_emoji,
+    ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechPlannerConfig,
+    SpeechUnit, strip_emoji,
 };
 pub use mouth::tts::TextToSpeech;
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};

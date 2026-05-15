@@ -153,6 +153,37 @@ const COMMON_ABBREVIATIONS: &[&str] = &[
     "dr.", "mr.", "mrs.", "ms.", "prof.", "sr.", "jr.", "vs.", "etc.", "e.g.", "i.e.", "u.s.",
     "u.k.",
 ];
+
+/// Persona- and language-specific heuristics used by [`SpeechPlanner`].
+///
+/// The defaults preserve the original English conversational behavior. Callers
+/// can provide a custom config to swap in a different persona or language
+/// without changing the planner's boundary detection machinery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeechPlannerConfig {
+    pub min_non_backchannel_chars: usize,
+    pub safe_backchannels: Vec<String>,
+    pub safe_discourse_markers: Vec<String>,
+    pub safe_short_sentences: Vec<String>,
+    pub common_abbreviations: Vec<String>,
+}
+
+impl Default for SpeechPlannerConfig {
+    fn default() -> Self {
+        Self {
+            min_non_backchannel_chars: MIN_NON_BACKCHANNEL_CHARS,
+            safe_backchannels: strings_from(DEFAULT_SAFE_BACKCHANNELS),
+            safe_discourse_markers: strings_from(SAFE_DISCOURSE_MARKERS),
+            safe_short_sentences: strings_from(SAFE_SHORT_SENTENCES),
+            common_abbreviations: strings_from(COMMON_ABBREVIATIONS),
+        }
+    }
+}
+
+fn strings_from(entries: &[&str]) -> Vec<String> {
+    entries.iter().map(|entry| (*entry).to_string()).collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeechUnit {
     Backchannel(String),
@@ -200,12 +231,30 @@ pub enum MouthCommand {
     StopNow,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SpeechPlanner {
     buffer: String,
+    config: SpeechPlannerConfig,
+}
+
+impl Default for SpeechPlanner {
+    fn default() -> Self {
+        Self::new(SpeechPlannerConfig::default())
+    }
 }
 
 impl SpeechPlanner {
+    pub fn new(config: SpeechPlannerConfig) -> Self {
+        Self {
+            buffer: String::new(),
+            config,
+        }
+    }
+
+    pub fn config(&self) -> &SpeechPlannerConfig {
+        &self.config
+    }
+
     pub fn ingest(&mut self, events: &[LlmEvent]) -> Vec<ExpressiveUnit> {
         let mut completed = false;
         for event in events {
@@ -235,7 +284,7 @@ impl SpeechPlanner {
                         self.buffer.drain(..end);
                         continue;
                     }
-                    if let Some(unit) = classify_boundary_unit(&candidate) {
+                    if let Some(unit) = classify_boundary_unit(&candidate, &self.config) {
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
                     } else if self.buffer[end..].chars().any(is_emoji_char) {
@@ -244,16 +293,18 @@ impl SpeechPlanner {
                         // here).  Flush the sentence-punctuated text with an
                         // appropriate classification rather than waiting for more
                         // tokens, so face and speech events stay in order.
-                        let unit = classify_text_before_emoji(&candidate);
+                        let unit = classify_text_before_emoji(&candidate, &self.config);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
-                    } else if let Some(next_rel) = find_sentence_end(&self.buffer[end..]) {
+                    } else if let Some(next_rel) =
+                        find_sentence_end(&self.buffer[end..], &self.config)
+                    {
                         // The current boundary produced an unclassifiable short text.
                         // There is a further sentence boundary in the buffer, so merge
                         // the short prefix into the next chunk rather than blocking it.
                         let merged_end = end + next_rel;
                         let merged = self.buffer[..merged_end].trim().to_string();
-                        if let Some(unit) = classify_boundary_unit(&merged) {
+                        if let Some(unit) = classify_boundary_unit(&merged, &self.config) {
                             units.push(ExpressiveUnit::Speech(unit.into()));
                             self.buffer.drain(..merged_end);
                         } else {
@@ -266,7 +317,7 @@ impl SpeechPlanner {
                 Some(BoundaryResult::EmojiMarker(start, end)) => {
                     let before = self.buffer[..start].trim().to_string();
                     if !before.is_empty() {
-                        let unit = classify_text_before_emoji(&before);
+                        let unit = classify_text_before_emoji(&before, &self.config);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                     }
                     let emoji = self.buffer[start..end].to_string();
@@ -278,7 +329,7 @@ impl SpeechPlanner {
 
         if completed {
             let trailing = self.buffer.trim().to_string();
-            if let Some(unit) = classify_completed_unit(&trailing) {
+            if let Some(unit) = classify_completed_unit(&trailing, &self.config) {
                 units.push(ExpressiveUnit::Speech(unit.into()));
             }
             self.buffer.clear();
@@ -319,7 +370,7 @@ impl SpeechPlanner {
     }
 
     fn next_sentence_boundary(&self) -> Option<usize> {
-        find_sentence_end(&self.buffer)
+        find_sentence_end(&self.buffer, &self.config)
     }
 
     fn next_clause_boundary(&self) -> Option<usize> {
@@ -358,7 +409,7 @@ impl SpeechPlanner {
                 continue;
             }
             let candidate = self.buffer[..end].trim();
-            if is_safe_discourse_marker(candidate) {
+            if is_safe_discourse_marker(candidate, &self.config) {
                 return Some(end);
             }
         }
@@ -366,17 +417,17 @@ impl SpeechPlanner {
     }
 }
 
-fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
+fn classify_boundary_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
     if text.is_empty() {
         return None;
     }
-    if is_safe_backchannel(text) || is_safe_short_sentence(text) {
+    if is_safe_backchannel(text, config) || is_safe_short_sentence(text, config) {
         return Some(SpeechUnit::Backchannel(text.to_string()));
     }
-    if is_safe_discourse_marker(text) {
+    if is_safe_discourse_marker(text, config) {
         return Some(SpeechUnit::DiscourseMarker(text.to_string()));
     }
-    if text.len() < MIN_NON_BACKCHANNEL_CHARS {
+    if text.len() < config.min_non_backchannel_chars {
         return None;
     }
     if text.ends_with(['.', '?', '!']) {
@@ -388,8 +439,8 @@ fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
     None
 }
 
-fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
-    classify_boundary_unit(text)
+fn classify_completed_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
+    classify_boundary_unit(text, config)
 }
 
 /// Classify text that is being force-flushed because an emoji follows it.
@@ -397,14 +448,14 @@ fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
 /// Unlike [`classify_boundary_unit`], this bypasses the minimum-length guard so
 /// that short but grammatically complete phrases (e.g. "That works.") are
 /// emitted with the right type rather than falling back to `FullTurn`.
-fn classify_text_before_emoji(text: &str) -> SpeechUnit {
+fn classify_text_before_emoji(text: &str, config: &SpeechPlannerConfig) -> SpeechUnit {
     if text.is_empty() {
         return SpeechUnit::FullTurn(text.to_string());
     }
-    if is_safe_backchannel(text) {
+    if is_safe_backchannel(text, config) {
         return SpeechUnit::Backchannel(text.to_string());
     }
-    if is_safe_discourse_marker(text) {
+    if is_safe_discourse_marker(text, config) {
         return SpeechUnit::DiscourseMarker(text.to_string());
     }
     if text.ends_with(['.', '?', '!']) {
@@ -416,21 +467,28 @@ fn classify_text_before_emoji(text: &str) -> SpeechUnit {
     SpeechUnit::FullTurn(text.to_string())
 }
 
-fn is_safe_backchannel(text: &str) -> bool {
-    DEFAULT_SAFE_BACKCHANNELS.iter().any(|entry| *entry == text)
+fn is_safe_backchannel(text: &str, config: &SpeechPlannerConfig) -> bool {
+    config.safe_backchannels.iter().any(|entry| entry == text)
 }
 
-fn is_safe_short_sentence(text: &str) -> bool {
-    SAFE_SHORT_SENTENCES.iter().any(|entry| *entry == text)
+fn is_safe_short_sentence(text: &str, config: &SpeechPlannerConfig) -> bool {
+    config
+        .safe_short_sentences
+        .iter()
+        .any(|entry| entry == text)
 }
 
-fn is_safe_discourse_marker(text: &str) -> bool {
-    SAFE_DISCOURSE_MARKERS.iter().any(|entry| *entry == text)
+fn is_safe_discourse_marker(text: &str, config: &SpeechPlannerConfig) -> bool {
+    config
+        .safe_discourse_markers
+        .iter()
+        .any(|entry| entry == text)
 }
 
-fn is_common_abbreviation(text: &str) -> bool {
+fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
     let lowercase = text.trim().to_ascii_lowercase();
-    COMMON_ABBREVIATIONS
+    config
+        .common_abbreviations
         .iter()
         .any(|abbreviation| lowercase.ends_with(abbreviation))
 }
@@ -439,7 +497,7 @@ fn is_common_abbreviation(text: &str) -> bool {
 ///
 /// Tries the seams dialog detector first; falls back to a simple punctuation
 /// scan with abbreviation guarding when seams is unavailable.
-fn find_sentence_end(text: &str) -> Option<usize> {
+fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
     if let Some(detector) = sentence_detector() {
         if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
             let mut search_from = 0;
@@ -455,13 +513,13 @@ fn find_sentence_end(text: &str) -> Option<usize> {
             }
         }
     }
-    punctuation_sentence_end(text)
+    punctuation_sentence_end(text, config)
 }
 
 /// Deterministic punctuation-based sentence boundary scan used as a fallback
 /// when the seams detector is unavailable.  Uses the abbreviation guard to
 /// avoid splitting on `Dr.`, `Mr.`, etc.
-fn punctuation_sentence_end(text: &str) -> Option<usize> {
+fn punctuation_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
     for (index, ch) in text.char_indices() {
         let end = index + ch.len_utf8();
         let is_end = end == text.len();
@@ -471,7 +529,7 @@ fn punctuation_sentence_end(text: &str) -> Option<usize> {
         }
         match ch {
             '?' | '!' => return Some(end),
-            '.' if !is_common_abbreviation(text[..end].trim()) => return Some(end),
+            '.' if !is_common_abbreviation(text[..end].trim(), config) => return Some(end),
             _ => {}
         }
     }
@@ -526,6 +584,40 @@ mod tests {
     }
 
     #[test]
+    fn custom_config_controls_safe_backchannels() {
+        let config = SpeechPlannerConfig {
+            safe_backchannels: vec!["Indeed.".to_string()],
+            safe_short_sentences: Vec::new(),
+            ..SpeechPlannerConfig::default()
+        };
+        let mut planner = SpeechPlanner::new(config);
+
+        let units = planner.ingest(&[token("Indeed.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::Backchannel("Indeed.".to_string()))]
+        );
+    }
+
+    #[test]
+    fn custom_config_can_make_default_short_sentence_wait() {
+        let config = SpeechPlannerConfig {
+            safe_backchannels: Vec::new(),
+            safe_short_sentences: Vec::new(),
+            ..SpeechPlannerConfig::default()
+        };
+        let mut planner = SpeechPlanner::new(config);
+
+        let units = planner.ingest(&[token("Yep. I think that works.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Yep. I think that works.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
     fn comma_fragment_without_allowlist_emits_nothing() {
         let mut planner = SpeechPlanner::default();
         let units = planner.ingest(&[token("Not exactly,")]);
@@ -545,6 +637,24 @@ mod tests {
     }
 
     #[test]
+    fn custom_config_controls_discourse_markers() {
+        let config = SpeechPlannerConfig {
+            safe_discourse_markers: vec!["Pues,".to_string()],
+            ..SpeechPlannerConfig::default()
+        };
+        let mut planner = SpeechPlanner::new(config);
+
+        let units = planner.ingest(&[token("Pues, seguimos.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::DiscourseMarker("Pues,".to_string())),
+                speech(SpeechUnit::CompleteSentence("seguimos.".to_string())),
+            ]
+        );
+    }
+
+    #[test]
     fn planner_does_not_split_common_abbreviation() {
         let mut planner = SpeechPlanner::default();
         let units = planner.ingest(&[token("Dr. Smith arrived.")]);
@@ -553,6 +663,19 @@ mod tests {
             vec![speech(SpeechUnit::CompleteSentence(
                 "Dr. Smith arrived.".to_string()
             ))]
+        );
+    }
+
+    #[test]
+    fn custom_config_controls_punctuation_abbreviations() {
+        let config = SpeechPlannerConfig {
+            common_abbreviations: vec!["sra.".to_string()],
+            ..SpeechPlannerConfig::default()
+        };
+
+        assert_eq!(
+            punctuation_sentence_end("Sra. Garcia llego.", &config),
+            Some(18)
         );
     }
 
@@ -712,7 +835,7 @@ mod tests {
             token("👨"),
             token("\u{200D}👩"),
             token("\u{200D}👧"),
-            token("\u{200D}👦 Okay.")
+            token("\u{200D}👦 Okay."),
         ]);
         assert_eq!(
             units,
@@ -727,11 +850,7 @@ mod tests {
     fn emoji_with_skin_tone_not_split() {
         let mut planner = SpeechPlanner::default();
         // 👋🏽 Waving hand + medium skin tone
-        let units = planner.ingest(&[
-            token("👋"),
-            token("🏽"),
-            token(" Hi!")
-        ]);
+        let units = planner.ingest(&[token("👋"), token("🏽"), token(" Hi!")]);
         assert_eq!(
             units,
             vec![

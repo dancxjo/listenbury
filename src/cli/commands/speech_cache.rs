@@ -12,7 +12,7 @@ use listenbury::PiperTextToSpeech;
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::cache::{CachedTextToSpeech, FileSpeechCache};
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::{DEFAULT_SAFE_BACKCHANNELS, SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{SpeechPlan, SpeechPlannerConfig, SpeechUnit};
 #[cfg(feature = "tts-piper")]
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "tts-piper")]
@@ -49,8 +49,8 @@ fn run_speech_cache_prewarm(command: SpeechCachePrewarmCommand) -> Result<()> {
         FileSpeechCache::for_piper(&options.listenbury_home, &config),
     );
 
-    for text in DEFAULT_SAFE_BACKCHANNELS {
-        let plan = SpeechPlan::from(SpeechUnit::Backchannel((*text).to_string()));
+    for text in SpeechPlannerConfig::default().safe_backchannels {
+        let plan = SpeechPlan::from(SpeechUnit::Backchannel(text.clone()));
         tts.enqueue(plan)?;
         let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
         println!("warmed backchannel \"{text}\" ({} frames)", frames.len());

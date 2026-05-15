@@ -285,7 +285,10 @@ mod tests {
             .expect("enqueue");
 
         let frames = collect_audio(&mut tts, Duration::from_secs(2));
-        assert!(!frames.is_empty(), "expected audio frames from mock backend");
+        assert!(
+            !frames.is_empty(),
+            "expected audio frames from mock backend"
+        );
     }
 
     #[test]
@@ -345,4 +348,3 @@ mod tests {
         assert!(!frames.is_empty(), "expected audio after stop+enqueue");
     }
 }
-
