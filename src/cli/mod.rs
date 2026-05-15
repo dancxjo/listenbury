@@ -171,6 +171,9 @@ pub(crate) struct RoundTripWavCommand {
     pub(crate) whisper_model: Option<PathBuf>,
     #[arg(long)]
     pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
