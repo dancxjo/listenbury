@@ -235,8 +235,7 @@ impl Default for ConversationController {
 impl ConversationController {
     pub fn on_pete_speech_started(&mut self) {
         self.turn_tracker.on_pete_speech_started();
-        self.interruption_started_at_ms = None;
-        self.interruption_faded = false;
+        self.reset_interruption_state();
         self.interruption_recorded = false;
     }
 
@@ -256,8 +255,7 @@ impl ConversationController {
             }
             HearingEvent::SpeechContinued { .. } => self.interruption_decision(now_ms),
             HearingEvent::PauseStarted | HearingEvent::BreathGroupClosed { .. } => {
-                self.interruption_started_at_ms = None;
-                self.interruption_faded = false;
+                self.reset_interruption_state();
                 InterruptionDecision::default()
             }
             HearingEvent::BreathGroupOpened { .. } => InterruptionDecision::default(),
@@ -277,8 +275,7 @@ impl ConversationController {
         if elapsed_ms >= self.interruption_policy.stop_threshold_ms {
             self.turn_tracker.on_pete_interrupted();
             self.record_interruption_packet_once();
-            self.interruption_started_at_ms = None;
-            self.interruption_faded = false;
+            self.reset_interruption_state();
             return InterruptionDecision {
                 mouth_command: Some(MouthCommand::StopNow),
                 cancel_generation: true,
@@ -300,6 +297,11 @@ impl ConversationController {
         }
 
         InterruptionDecision::default()
+    }
+
+    fn reset_interruption_state(&mut self) {
+        self.interruption_started_at_ms = None;
+        self.interruption_faded = false;
     }
 
     fn record_interruption_packet_once(&mut self) {

@@ -46,7 +46,15 @@ impl TurnTracker {
                 }
             }
             HearingEvent::BreathGroupClosed { .. } => {
-                self.state = TurnState::UserTurnComplete;
+                if matches!(
+                    self.state,
+                    TurnState::UserSpeaking
+                        | TurnState::UserPauseLikelyContinuing
+                        | TurnState::PeteInterrupted
+                        | TurnState::UserTurnComplete
+                ) {
+                    self.state = TurnState::UserTurnComplete;
+                }
             }
             HearingEvent::SpeechContinued { .. } | HearingEvent::BreathGroupOpened { .. } => {}
         }
@@ -99,6 +107,7 @@ mod tests {
     #[test]
     fn turn_tracker_marks_user_turn_complete_when_breath_group_closes() {
         let mut tracker = TurnTracker::default();
+        tracker.on_hearing_event(&HearingEvent::SpeechStarted);
         tracker.on_hearing_event(&HearingEvent::BreathGroupClosed {
             id: BreathGroupId(Uuid::nil()),
             reason: BreathGroupEndReason::Silence,
