@@ -56,7 +56,9 @@ Depending on enabled features, additional runtime/system dependencies are needed
 
 - `audio-cpal` (enabled by default): Linux builds require ALSA development files (`alsa.pc`, from `libasound2-dev` on Debian/Ubuntu) and `pkg-config`
 - `llm-llama-cpp`: local GGUF model file(s)
+- `llm-llama-cpp-cuda`: NVIDIA CUDA toolkit for llama.cpp GPU offload
 - `asr-whisper`: local Whisper `.bin` model file(s)
+- `asr-whisper-cuda`: NVIDIA CUDA toolkit for whisper.cpp GPU execution
 - `tts-piper`: Piper executable and Piper `.onnx` voice model (and optional `.onnx.json` config)
 - `model-download`: network access for model downloads
 
@@ -85,6 +87,11 @@ This enables default features:
 - `tts-piper`
 - `vision-webcam`
 
+The default feature set is CPU-only for Whisper and llama.cpp. If Whisper logs
+`whisper_backend_init_gpu: no GPU found` while `nvidia-smi` can see your GPU,
+rebuild with `asr-whisper-cuda`; the plain `asr-whisper` feature does not compile
+the CUDA backend.
+
 ### 2) Build a minimal profile (avoids audio backend/system ALSA dependency)
 
 ```bash
@@ -95,6 +102,20 @@ cargo build --no-default-features --features tts-piper
 
 ```bash
 cargo build --no-default-features --features "asr-whisper llm-llama-cpp tts-piper model-download"
+```
+
+For NVIDIA GPU builds, use the CUDA feature variants:
+
+```bash
+cargo build --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda tts-piper model-download"
+```
+
+When switching an existing checkout from CPU-only to CUDA, a clean rebuild avoids
+reusing a previously compiled CPU-only native backend:
+
+```bash
+cargo clean
+cargo build --features asr-whisper-cuda
 ```
 
 ## Usage
