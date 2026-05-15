@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 use crate::models::download::fetch_asset_with_progress;
-use crate::models::manifest::{ModelAsset, DEFAULT_MODELS};
+use crate::models::manifest::{DEFAULT_MODELS, ModelAsset};
 use crate::models::paths::{asset_path, resolve_listenbury_home};
 
 #[derive(Debug, Clone)]
@@ -122,7 +122,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{fetch_assets_at_home, FetchOutcome};
+    use super::{FetchOutcome, fetch_assets_at_home};
     use crate::models::manifest::ModelAsset;
 
     fn temp_dir(label: &str) -> PathBuf {

@@ -7,8 +7,8 @@ use anyhow::Context;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    default_asset_paths, default_assets_status, fetch_default_assets_with_progress,
-    paths::resolve_listenbury_home, FetchOutcome,
+    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets_with_progress,
+    paths::resolve_listenbury_home,
 };
 #[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
