@@ -471,26 +471,11 @@ mod tests {
             command.whisper_model,
             Some(PathBuf::from("models/ggml-tiny.bin"))
         );
-        assert_eq!(
-            command.llm_model,
-            Some(PathBuf::from("models/tiny.gguf"))
-        );
-        assert_eq!(
-            command.piper_bin,
-            Some(PathBuf::from("/usr/bin/piper"))
-        );
-        assert_eq!(
-            command.piper_voice_a,
-            Some(PathBuf::from("voices/a.onnx"))
-        );
-        assert_eq!(
-            command.piper_voice_b,
-            Some(PathBuf::from("voices/b.onnx"))
-        );
-        assert_eq!(
-            command.jsonl,
-            Some(PathBuf::from("out/dogfood-two.jsonl"))
-        );
+        assert_eq!(command.llm_model, Some(PathBuf::from("models/tiny.gguf")));
+        assert_eq!(command.piper_bin, Some(PathBuf::from("/usr/bin/piper")));
+        assert_eq!(command.piper_voice_a, Some(PathBuf::from("voices/a.onnx")));
+        assert_eq!(command.piper_voice_b, Some(PathBuf::from("voices/b.onnx")));
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/dogfood-two.jsonl")));
         assert_eq!(
             command.save_audio_dir,
             Some(PathBuf::from("out/dogfood-two-audio"))
