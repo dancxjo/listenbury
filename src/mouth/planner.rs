@@ -4,17 +4,21 @@ use std::sync::OnceLock;
 
 /// Remove all emoji characters from a string, leaving only non-emoji text.
 pub fn strip_emoji(text: &str) -> String {
-    text.chars().filter(|&ch| !is_emoji_char(ch)).collect()
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some((start, end)) = find_first_emoji_sequence(remaining, true) {
+        result.push_str(&remaining[..start]);
+        remaining = &remaining[end..];
+    }
+    result.push_str(remaining);
+    result
 }
 
-/// Returns `true` if `ch` is a common emoji character.
+/// Returns `true` if `ch` is a common base emoji character.
 ///
 /// This covers the most-used Unicode emoji ranges (emoticons, symbols,
 /// pictographs, etc.) but is **not** an exhaustive implementation of the full
-/// Unicode emoji specification.  Sequences such as ZWJ chains or skin-tone
-/// modifiers are handled character-by-character; isolated modifier codepoints
-/// may not be detected.  This is intentionally lightweight—sufficient for
-/// stripping conversational emoji from LLM output.
+/// Unicode emoji specification.
 fn is_emoji_char(ch: char) -> bool {
     let cp = ch as u32;
     matches!(
@@ -42,6 +46,62 @@ fn is_emoji_char(ch: char) -> bool {
             | 0x3299
             | 0x1F000..=0x1FFFF
     )
+}
+
+/// Finds the byte offset range `(start, end)` of the first emoji sequence in `text`.
+///
+/// An emoji sequence consists of a base emoji character, followed by zero or more
+/// modifiers (e.g., skin tones, Variation Selector-16), and optionally chained
+/// to other base emojis via Zero Width Joiners (ZWJ).
+///
+/// If `completed` is `false` and the sequence touches the end of the string,
+/// this returns `None` so the caller can wait for more text to ensure the sequence
+/// isn't split across chunks.
+fn find_first_emoji_sequence(text: &str, completed: bool) -> Option<(usize, usize)> {
+    let mut start = None;
+    let mut end = 0;
+    let mut expect_zwj_target = false;
+
+    for (i, ch) in text.char_indices() {
+        let is_mod = matches!(ch as u32, 0x1F3FB..=0x1F3FF) || ch == '\u{FE0F}';
+        let is_base = !is_mod && is_emoji_char(ch);
+        let is_zwj = ch == '\u{200D}';
+
+        if start.is_none() {
+            if is_base {
+                start = Some(i);
+                end = i + ch.len_utf8();
+            }
+            continue;
+        }
+
+        if expect_zwj_target {
+            if is_base {
+                end = i + ch.len_utf8();
+                expect_zwj_target = false;
+            } else {
+                break;
+            }
+        } else {
+            if is_mod {
+                end = i + ch.len_utf8();
+            } else if is_zwj {
+                end = i + ch.len_utf8();
+                expect_zwj_target = true;
+            } else {
+                break;
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        if !completed && end == text.len() {
+            return None;
+        }
+        Some((s, end))
+    } else {
+        None
+    }
 }
 
 /// A face expression command emitted when emoji are detected in LLM output.
@@ -228,10 +288,7 @@ impl SpeechPlanner {
     }
 
     fn next_boundary(&self, completed: bool) -> Option<BoundaryResult> {
-        let emoji_boundary = self
-            .buffer
-            .char_indices()
-            .find_map(|(index, ch)| is_emoji_char(ch).then_some((index, index + ch.len_utf8())));
+        let emoji_boundary = find_first_emoji_sequence(&self.buffer, completed);
         let text_boundary = self.next_text_boundary(completed);
 
         match (emoji_boundary, text_boundary) {
@@ -645,5 +702,48 @@ mod tests {
                 "Hm. I think that works.".to_string()
             ))]
         );
+    }
+
+    #[test]
+    fn compound_emoji_not_split() {
+        let mut planner = SpeechPlanner::default();
+        // 👨‍👩‍👧‍👦 Family
+        let units = planner.ingest(&[
+            token("👨"),
+            token("\u{200D}👩"),
+            token("\u{200D}👧"),
+            token("\u{200D}👦 Okay.")
+        ]);
+        assert_eq!(
+            units,
+            vec![
+                face("👨‍👩‍👧‍👦"),
+                speech(SpeechUnit::Backchannel("Okay.".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn emoji_with_skin_tone_not_split() {
+        let mut planner = SpeechPlanner::default();
+        // 👋🏽 Waving hand + medium skin tone
+        let units = planner.ingest(&[
+            token("👋"),
+            token("🏽"),
+            token(" Hi!")
+        ]);
+        assert_eq!(
+            units,
+            vec![
+                face("👋🏽"),
+                speech(SpeechUnit::CompleteSentence("Hi!".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_emoji_removes_compound_emojis() {
+        assert_eq!(strip_emoji("Hello 👨‍👩‍👧‍👦 world"), "Hello  world");
+        assert_eq!(strip_emoji("Hi 👋🏽 there"), "Hi  there");
     }
 }

@@ -125,8 +125,10 @@ just build-cuda
 
 The CUDA recipes default `CUDA_LIBRARY_PATH` to `/usr/lib/x86_64-linux-gnu`,
 which is where Debian/Ubuntu CUDA packages commonly install `libcudart_static.a`,
-`libcublas_static.a`, and related libraries. If your CUDA toolkit is elsewhere,
-set it explicitly before running Cargo or `just`:
+`libcublas_static.a`, and related libraries. The recipes also pass that path to
+Rust via `RUSTFLAGS` so native CUDA archives can be found during the final link.
+If your CUDA toolkit is elsewhere, set it explicitly before running Cargo or
+`just`:
 
 ```bash
 CUDA_LIBRARY_PATH=/path/to/cuda/lib64 just build-cuda
