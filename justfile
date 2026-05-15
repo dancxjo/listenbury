@@ -11,9 +11,13 @@ default:
 run *args:
     cargo run -- "$@"
 
+# Start the live PETE listening loop.
+listen *args:
+    cargo run -- listen "$@"
+
 # Download the default model assets into LISTENBURY_HOME.
-fetch:
-    cargo run -- models fetch
+fetch *args:
+    cargo run -- models fetch "$@"
 
 # Run the CLI with both local CUDA backend feature flags enabled.
 cuda *args:

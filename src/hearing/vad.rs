@@ -111,14 +111,16 @@ impl VoiceActivityDetector for EnergyVad {
 pub struct WebRtcVad {
     engine: webrtc_vad::Vad,
     sample_rate_hz: Option<u32>,
+    energy_fallback: EnergyVad,
 }
 
 #[cfg(feature = "vad-webrtc")]
 impl Default for WebRtcVad {
     fn default() -> Self {
         Self {
-            engine: webrtc_vad::Vad::new_with_mode(webrtc_vad::VadMode::Aggressive),
+            engine: webrtc_vad::Vad::new_with_mode(webrtc_vad::VadMode::Quality),
             sample_rate_hz: None,
+            energy_fallback: EnergyVad::default(),
         }
     }
 }
@@ -158,9 +160,10 @@ impl VoiceActivityDetector for WebRtcVad {
             .engine
             .is_voice_segment(&mono_i16)
             .map_err(|_| anyhow::anyhow!("invalid WebRTC VAD frame length"))?;
+        let fallback = self.energy_fallback.process_frame(frame)?;
         Ok(VadResult {
-            speech_prob: if is_speech { 1.0 } else { 0.0 },
-            is_speech,
+            speech_prob: if is_speech { 1.0 } else { fallback.speech_prob },
+            is_speech: is_speech || fallback.is_speech,
         })
     }
 }

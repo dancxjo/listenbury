@@ -4,10 +4,10 @@ pub mod paths;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::models::download::fetch_asset_with_progress;
-use crate::models::manifest::{DEFAULT_MODELS, ModelAsset};
+use crate::models::manifest::{DEFAULT_MODELS, MODEL_BUNDLES, ModelAsset, ModelBundle, ModelKind};
 use crate::models::paths::{asset_path, resolve_listenbury_home};
 
 #[derive(Debug, Clone)]
@@ -42,6 +42,211 @@ pub struct FetchProgress {
     pub total_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+pub struct ModelSelection {
+    pub llm: Option<String>,
+    pub voice: Option<String>,
+}
+
+pub fn model_selection_path() -> Result<PathBuf> {
+    Ok(resolve_listenbury_home()?
+        .join("models")
+        .join("selection.json"))
+}
+
+pub fn read_model_selection() -> Result<ModelSelection> {
+    let path = model_selection_path()?;
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents)
+            .with_context(|| format!("failed to parse model selection {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ModelSelection::default()),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read model selection {}", path.display()))
+        }
+    }
+}
+
+pub fn write_model_selection(selection: &ModelSelection) -> Result<()> {
+    let path = model_selection_path()?;
+    let parent = path
+        .parent()
+        .context("model selection path had no parent directory")?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create model selection directory {}",
+            parent.display()
+        )
+    })?;
+    let contents =
+        serde_json::to_string_pretty(selection).context("failed to encode model selection")?;
+    std::fs::write(&path, format!("{contents}\n"))
+        .with_context(|| format!("failed to write model selection {}", path.display()))
+}
+
+pub fn default_bundle_id(kind: ModelKind) -> &'static str {
+    match kind {
+        ModelKind::Llm => "llama-3-2-3b-instruct-q4-k-m",
+        ModelKind::Voice => "ryan",
+        ModelKind::Whisper => "whisper-tiny-en",
+    }
+}
+
+pub fn find_asset(asset_id: &str) -> Option<&'static ModelAsset> {
+    DEFAULT_MODELS.iter().find(|asset| asset.id == asset_id)
+}
+
+pub fn find_bundle(kind: ModelKind, name: &str) -> Option<&'static ModelBundle> {
+    let normalized = normalize_model_name(name);
+    MODEL_BUNDLES.iter().find(|bundle| {
+        bundle.kind == kind
+            && (normalize_model_name(bundle.id) == normalized
+                || normalize_model_name(bundle.display_name) == normalized
+                || bundle
+                    .aliases
+                    .iter()
+                    .any(|alias| normalize_model_name(alias) == normalized)
+                || bundle
+                    .asset_ids
+                    .iter()
+                    .any(|asset_id| normalize_model_name(asset_id) == normalized))
+    })
+}
+
+pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
+    let env_value = match kind {
+        ModelKind::Llm => std::env::var("PETE_LLM")
+            .ok()
+            .or_else(|| std::env::var("LISTENBURY_LLM").ok()),
+        ModelKind::Voice => std::env::var("PETE_VOICE")
+            .ok()
+            .or_else(|| std::env::var("LISTENBURY_VOICE").ok()),
+        ModelKind::Whisper => None,
+    };
+    let selection = if env_value.is_none() {
+        Some(read_model_selection()?)
+    } else {
+        None
+    };
+    let configured = env_value
+        .or_else(|| {
+            selection.and_then(|selection| match kind {
+                ModelKind::Llm => selection.llm,
+                ModelKind::Voice => selection.voice,
+                ModelKind::Whisper => None,
+            })
+        })
+        .unwrap_or_else(|| default_bundle_id(kind).to_string());
+
+    find_bundle(kind, &configured).with_context(|| {
+        format!(
+            "unknown {} model `{configured}`; run `listenbury models list`",
+            model_kind_label(kind)
+        )
+    })
+}
+
+pub fn model_kind_label(kind: ModelKind) -> &'static str {
+    match kind {
+        ModelKind::Llm => "llm",
+        ModelKind::Voice => "voice",
+        ModelKind::Whisper => "whisper",
+    }
+}
+
+pub fn bundle_primary_path(bundle: &ModelBundle) -> Result<PathBuf> {
+    let asset = find_asset(bundle.primary_asset_id).with_context(|| {
+        format!(
+            "model asset `{}` is not registered",
+            bundle.primary_asset_id
+        )
+    })?;
+    let home = resolve_listenbury_home()?;
+    Ok(asset_path(&home, asset))
+}
+
+pub fn bundle_assets(bundle: &ModelBundle) -> Result<Vec<&'static ModelAsset>> {
+    bundle
+        .asset_ids
+        .iter()
+        .map(|asset_id| {
+            find_asset(asset_id)
+                .with_context(|| format!("model asset `{asset_id}` is not registered"))
+        })
+        .collect()
+}
+
+pub fn bundle_present(bundle: &ModelBundle) -> Result<bool> {
+    let home = resolve_listenbury_home()?;
+    for asset in bundle_assets(bundle)? {
+        if !asset_path(&home, asset)
+            .metadata()
+            .map(|meta| meta.len() > 0)
+            .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub fn fetch_bundle_with_progress(
+    bundle: &ModelBundle,
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let home = resolve_listenbury_home()?;
+    let assets = bundle_assets(bundle)?;
+    fetch_asset_refs_at_home(&home, &assets, &mut progress)
+}
+
+pub fn fetch_selected_assets_with_progress(
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let bundles = [
+        selected_bundle(ModelKind::Whisper)?,
+        selected_bundle(ModelKind::Llm)?,
+        selected_bundle(ModelKind::Voice)?,
+    ];
+    fetch_bundles_with_progress(&bundles, &mut progress)
+}
+
+pub fn fetch_bundles_with_progress(
+    bundles: &[&ModelBundle],
+    progress: &mut impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let home = resolve_listenbury_home()?;
+    let assets = assets_for_bundles(bundles)?;
+    fetch_asset_refs_at_home(&home, &assets, progress)
+}
+
+pub fn fetch_all_assets_with_progress(
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let home = resolve_listenbury_home()?;
+    fetch_assets_at_home(&home, DEFAULT_MODELS, &mut progress)
+}
+
+fn assets_for_bundles(bundles: &[&ModelBundle]) -> Result<Vec<&'static ModelAsset>> {
+    let mut assets = Vec::new();
+    for bundle in bundles {
+        for asset in bundle_assets(bundle)? {
+            if !assets
+                .iter()
+                .any(|existing: &&ModelAsset| existing.id == asset.id)
+            {
+                assets.push(asset);
+            }
+        }
+    }
+    Ok(assets)
+}
+
+fn normalize_model_name(name: &str) -> String {
+    name.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
 pub fn default_asset_paths() -> Result<Vec<(&'static ModelAsset, PathBuf)>> {
     let home = resolve_listenbury_home()?;
     Ok(DEFAULT_MODELS
@@ -73,13 +278,51 @@ pub fn fetch_default_assets() -> Result<Vec<FetchResult>> {
 pub fn fetch_default_assets_with_progress(
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
-    let home = resolve_listenbury_home()?;
-    fetch_assets_at_home(&home, DEFAULT_MODELS, &mut progress)
+    fetch_selected_assets_with_progress(&mut progress)
 }
 
 fn fetch_assets_at_home(
     home: &std::path::Path,
     assets: &[ModelAsset],
+    progress: &mut impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let mut results = Vec::with_capacity(assets.len());
+    for (asset_index, asset) in assets.iter().enumerate() {
+        let path = asset_path(home, asset);
+        match fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
+            progress(FetchProgress {
+                asset_id: asset.id,
+                asset_index,
+                asset_count: assets.len(),
+                path: path.clone(),
+                downloaded_bytes,
+                total_bytes,
+            });
+        }) {
+            Ok(downloaded) => results.push(FetchResult {
+                asset_id: asset.id,
+                path,
+                outcome: if downloaded {
+                    FetchOutcome::Downloaded
+                } else {
+                    FetchOutcome::SkippedExisting
+                },
+                error: None,
+            }),
+            Err(error) => results.push(FetchResult {
+                asset_id: asset.id,
+                path,
+                outcome: FetchOutcome::Failed,
+                error: Some(error.to_string()),
+            }),
+        }
+    }
+    Ok(results)
+}
+
+fn fetch_asset_refs_at_home(
+    home: &std::path::Path,
+    assets: &[&ModelAsset],
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let mut results = Vec::with_capacity(assets.len());

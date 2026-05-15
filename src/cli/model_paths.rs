@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use listenbury::models::manifest::ModelKind;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    manifest::DEFAULT_MODELS,
+    bundle_assets, bundle_primary_path, find_asset,
+    manifest::ModelBundle,
     paths::{asset_path, resolve_listenbury_home},
+    selected_bundle,
 };
 
 #[cfg(feature = "llm-llama-cpp")]
@@ -15,6 +18,7 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
         "llama.cpp model",
         "--llm-model",
         Some("llama-3-2-3b-instruct-q4-k-m"),
+        Some(ModelKind::Llm),
         |path| path.extension().is_some_and(|ext| ext == "gguf"),
     )
 }
@@ -27,6 +31,7 @@ pub(crate) fn resolve_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf
         "Whisper model",
         "--whisper-model",
         Some("whisper-tiny-en"),
+        Some(ModelKind::Whisper),
         |path| {
             path.extension().is_some_and(|ext| ext == "bin")
                 && path
@@ -45,6 +50,7 @@ pub(crate) fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> 
         "Piper voice",
         "--piper-voice",
         Some("piper-ryan-medium"),
+        Some(ModelKind::Voice),
         |path| path.extension().is_some_and(|ext| ext == "onnx"),
     )
 }
@@ -60,6 +66,7 @@ fn resolve_model_path(
     label: &str,
     flag: &str,
     default_asset_id: Option<&str>,
+    selected_kind: Option<ModelKind>,
     matches: impl Fn(&Path) -> bool,
 ) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -68,6 +75,13 @@ fn resolve_model_path(
 
     if let Some(path) = std::env::var_os(env_var) {
         return Ok(PathBuf::from(path));
+    }
+
+    #[cfg(feature = "model-download")]
+    if let Some(kind) = selected_kind {
+        let bundle = selected_bundle(kind)?;
+        ensure_bundle_available(bundle)?;
+        return bundle_primary_path(bundle);
     }
 
     #[cfg(feature = "model-download")]
@@ -92,11 +106,41 @@ fn resolve_model_path(
 
 #[cfg(feature = "model-download")]
 fn default_asset_path(asset_id: &str) -> Result<PathBuf> {
-    let Some(asset) = DEFAULT_MODELS.iter().find(|asset| asset.id == asset_id) else {
+    let Some(asset) = find_asset(asset_id) else {
         anyhow::bail!("default model asset `{asset_id}` is not registered");
     };
     let home = resolve_listenbury_home()?;
     Ok(asset_path(&home, asset))
+}
+
+#[cfg(feature = "model-download")]
+fn ensure_bundle_available(bundle: &ModelBundle) -> Result<()> {
+    let home = resolve_listenbury_home()?;
+    let assets = bundle_assets(bundle)?;
+    let missing: Vec<_> = assets
+        .iter()
+        .filter(|asset| !is_non_empty_file(&asset_path(&home, asset)))
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    eprintln!(
+        "{} model `{}` is missing locally; downloading {} asset(s). This can take a while...",
+        listenbury::models::model_kind_label(bundle.kind),
+        bundle.display_name,
+        missing.len()
+    );
+    for asset in missing {
+        eprintln!(
+            "downloading {} -> {}",
+            asset.id,
+            asset_path(&home, asset).display()
+        );
+        listenbury::models::download::fetch_asset(&home, asset)?;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "model-download")]

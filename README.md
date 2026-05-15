@@ -170,7 +170,7 @@ listenbury listen [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--
 listenbury ask [--llm-model <model.gguf>] [--mode <spoken|chat|inner|raw>] [--max-tokens <n>] "prompt"
 listenbury complete [--llm-model <model.gguf>] [--max-tokens <n>] "prompt"
 listenbury reply <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
-listenbury models <fetch|status|path>
+listenbury models <list|use|fetch|status|path>
 ```
 
 ### Command notes
@@ -195,15 +195,31 @@ If built with `model-download`, use:
 
 ```bash
 cargo run -- models path
+cargo run -- models list
 cargo run -- models status
+cargo run -- models use voice Amy
+cargo run -- models use llm gpt-oss
 cargo run -- models fetch
 ```
 
-Default model assets fetched by `models fetch`:
+`models fetch` downloads the currently selected Whisper, LLM, and Piper voice assets. Use `models fetch <name>` for one selectable bundle, or `models fetch --all` to download every registered asset.
+
+Runtime commands also download the selected registered model on demand if it is missing locally, so the first `listen`, `ask`, `say`, or `reply` after a model switch may wait while the model arrives.
+
+Quick voice and LLM overrides:
+
+```bash
+export PETE_VOICE=Amy
+export PETE_LLM=gpt-oss
+just listen
+```
+
+Registered model assets include:
 
 - `ggml-tiny.en.bin` (Whisper)
 - `llama-3.2-3b-instruct-q4_k_m.gguf` (Llama 3.2 3B Instruct via llama.cpp)
-- `en_US-ryan-medium.onnx` + `en_US-ryan-medium.onnx.json` (Piper)
+- `gpt-oss-20b-mxfp4.gguf` (gpt-oss 20B via llama.cpp)
+- Piper voices: Ryan, Amy, HFC Male, HFC Female, John, LJSpeech, and LibriTTS
 
 ### Environment variables
 
@@ -212,8 +228,10 @@ Default model assets fetched by `models fetch`:
 - `LISTENBURY_LLM_MODEL`: path override for round-trip llama.cpp model
 - `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
 - `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
+- `PETE_LLM`: selected registered LLM alias, for example `gpt-oss`
+- `PETE_VOICE`: selected registered Piper voice alias, for example `Amy`
 
-`transcribe`, `listen`, `ask`, `say`, and `reply` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
+`transcribe`, `listen`, `ask`, `say`, and `reply` model resolution order is: explicit CLI flag -> path environment variable -> selected registered model under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
 ## Validation
 

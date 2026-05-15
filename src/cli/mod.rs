@@ -262,9 +262,33 @@ impl VadBackendOption {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelsCommand {
-    Fetch,
+    Fetch(ModelsFetchCommand),
+    List,
+    Use(ModelsUseCommand),
     Status,
     Path,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ModelsFetchCommand {
+    /// Fetch one model bundle by name instead of the currently selected models.
+    pub(crate) model: Option<String>,
+    /// Fetch every registered asset.
+    #[arg(long)]
+    pub(crate) all: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ModelsUseCommand {
+    #[arg(value_enum)]
+    pub(crate) kind: ModelsUseKind,
+    pub(crate) model: String,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub(crate) enum ModelsUseKind {
+    Llm,
+    Voice,
 }
 
 #[derive(Debug, Subcommand)]

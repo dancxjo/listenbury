@@ -218,7 +218,7 @@ const POST_PLAYBACK_TTS_GRACE_MS: u64 = 1_500;
     feature = "tts-piper"
 ))]
 const NANOS_PER_MILLI: u128 = 1_000_000;
-const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 48_000;
+const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
 const MONO_CHANNELS: u16 = 1;
 
 #[cfg(all(
@@ -233,6 +233,8 @@ struct LiveHalfDuplexState {
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     self_hearing: listenbury::SelfHearingState,
     controller: ConversationController,
+    frame_time_ms: u64,
+    last_vad_state: Option<bool>,
 }
 
 #[cfg(all(
@@ -249,6 +251,8 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("active_groups", &self.active_groups)
             .field("self_hearing", &self.self_hearing)
             .field("controller", &self.controller)
+            .field("frame_time_ms", &self.frame_time_ms)
+            .field("last_vad_state", &self.last_vad_state)
             .finish()
     }
 }
@@ -452,6 +456,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         active_groups: HashMap::new(),
         self_hearing: listenbury::SelfHearingState::default(),
         controller: ConversationController::default(),
+        frame_time_ms: 0,
+        last_vad_state: None,
     };
     let mut turns = 0usize;
 
@@ -550,7 +556,17 @@ fn process_live_frame(
         // so that VAD/ASR cannot transcribe Pete's own voice.
         return Ok(vec![]);
     }
+    let frame_duration_ms = frame_duration_ms(&frame);
     let vad_result = state.vad.process_frame(&frame)?;
+    if listenbury::developer_diagnostics_enabled()
+        && state.last_vad_state != Some(vad_result.is_speech)
+    {
+        println!(
+            "vad t_ms={} speech={} prob={:.3}",
+            state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
+        );
+        state.last_vad_state = Some(vad_result.is_speech);
+    }
     let events = state.segmenter.process(vad_result);
     let now_ms = unix_nanos_to_millis(frame.captured_at.unix_nanos);
     for event in &events {
@@ -587,6 +603,7 @@ fn process_live_frame(
             }
         }
     }
+    state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
     Ok(closed_groups)
 }
 
@@ -1135,6 +1152,20 @@ fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn frame_duration_ms(frame: &AudioFrame) -> u64 {
+    if frame.sample_rate_hz == 0 || frame.channels == 0 {
+        return 0;
+    }
+    let samples_per_channel = frame.samples.len() as f64 / f64::from(frame.channels);
+    ((samples_per_channel / f64::from(frame.sample_rate_hz)) * 1000.0).round() as u64
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -1245,7 +1276,7 @@ mod tests {
     fn webrtc_vad_frames_use_supported_mono_rate() {
         assert_eq!(
             vad_frame_format(VadBackendKind::WebRtc, 44_100, 2),
-            (48_000, 1)
+            (16_000, 1)
         );
         assert_eq!(
             vad_frame_format(VadBackendKind::Energy, 44_100, 2),
@@ -1254,11 +1285,11 @@ mod tests {
     }
 
     #[test]
-    fn webrtc_conversion_turns_44100_stereo_10ms_into_48000_mono_10ms() {
+    fn webrtc_conversion_turns_44100_stereo_10ms_into_16000_mono_10ms() {
         let input = vec![1.0; 882];
-        let converted = convert_frame_samples(&input, 44_100, 2, 48_000, 1);
+        let converted = convert_frame_samples(&input, 44_100, 2, 16_000, 1);
 
-        assert_eq!(converted.len(), 480);
+        assert_eq!(converted.len(), 160);
         assert!(
             converted
                 .iter()
