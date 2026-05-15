@@ -6,7 +6,8 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, bail};
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -61,8 +62,14 @@ pub struct LlamaCppEngine {
 #[derive(Debug)]
 struct ActiveGeneration {
     events: Receiver<LlmEvent>,
+    controls: Sender<GenerationControl>,
     cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum GenerationControl {
+    AppendPrompt { text: String },
 }
 
 impl LlamaCppEngine {
@@ -126,12 +133,14 @@ impl LlmEngine for LlamaCppEngine {
     fn start(&mut self, request: GenerationRequest) -> Result<GenerationId> {
         let id = GenerationId(Uuid::new_v4());
         let (sender, receiver) = unbounded();
+        let (control_sender, control_receiver) = unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let worker = LlamaGenerationWorker {
             backend: Arc::clone(&self.backend),
             model: Arc::clone(&self.model),
             config: self.config.clone(),
             request,
+            controls: control_receiver,
             cancel: Arc::clone(&cancel),
         };
 
@@ -153,6 +162,7 @@ impl LlmEngine for LlamaCppEngine {
             id,
             ActiveGeneration {
                 events: receiver,
+                controls: control_sender,
                 cancel,
                 handle: Some(handle),
             },
@@ -186,6 +196,20 @@ impl LlmEngine for LlamaCppEngine {
         active.cancel.store(true, Ordering::Relaxed);
         Ok(())
     }
+
+    fn append_prompt(&mut self, id: GenerationId, text: String) -> Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        let Some(active) = self.active.get(&id) else {
+            bail!("generation not found");
+        };
+        active
+            .controls
+            .send(GenerationControl::AppendPrompt { text })
+            .context("generation is no longer accepting prompt appends")
+    }
 }
 
 impl Drop for LlamaCppEngine {
@@ -207,6 +231,7 @@ struct LlamaGenerationWorker {
     model: Arc<LlamaModel>,
     config: LlamaCppConfig,
     request: GenerationRequest,
+    controls: Receiver<GenerationControl>,
     cancel: Arc<AtomicBool>,
 }
 
@@ -257,7 +282,7 @@ impl LlamaGenerationWorker {
             );
         }
 
-        let mut batch = LlamaBatch::new(prompt_tokens.len().max(1), 1);
+        let mut batch = LlamaBatch::new(n_ctx, 1);
         let last_index = prompt_tokens.len() - 1;
         for (index, token) in prompt_tokens.into_iter().enumerate() {
             let position =
@@ -268,13 +293,28 @@ impl LlamaGenerationWorker {
             .context("failed to decode prompt with llama.cpp")?;
 
         let mut n_cur = batch.n_tokens();
+        let mut generated_tokens = 0usize;
         let mut sampler = build_sampler(self.config.temperature, self.config.top_p);
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut stop_detector = StopDetector::new(self.request.stop);
 
-        while (n_cur as usize) < max_total_tokens {
+        while generated_tokens < max_tokens && (n_cur as usize) < n_ctx {
             if self.cancel.load(Ordering::Relaxed) {
                 return Ok(GenerationOutcome::Cancelled);
+            }
+            // Apply append-only live input at token boundaries. This preserves a single KV
+            // context: pending appends are decoded after all prior prompt/generated tokens and
+            // before the next assistant token is sampled.
+            drain_generation_controls(
+                &self.model,
+                &mut ctx,
+                &mut batch,
+                &mut n_cur,
+                n_ctx,
+                &self.controls,
+            )?;
+            if (n_cur as usize) >= n_ctx {
+                break;
             }
 
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -304,6 +344,7 @@ impl LlamaGenerationWorker {
                 .add(token, n_cur, &[0], true)
                 .context("failed to add sampled token to llama.cpp batch")?;
             n_cur += 1;
+            generated_tokens += 1;
             ctx.decode(&mut batch)
                 .context("failed to decode sampled token with llama.cpp")?;
         }
@@ -315,6 +356,65 @@ impl LlamaGenerationWorker {
 
         Ok(GenerationOutcome::Completed)
     }
+}
+
+fn drain_generation_controls(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext<'_>,
+    batch: &mut LlamaBatch<'_>,
+    n_cur: &mut i32,
+    n_ctx: usize,
+    controls: &Receiver<GenerationControl>,
+) -> Result<()> {
+    loop {
+        match controls.try_recv() {
+            Ok(GenerationControl::AppendPrompt { text }) => {
+                decode_appended_prompt(model, ctx, batch, n_cur, n_ctx, &text)?;
+            }
+            Err(TryRecvError::Empty) => return Ok(()),
+            Err(TryRecvError::Disconnected) => return Ok(()),
+        }
+    }
+}
+
+fn decode_appended_prompt(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext<'_>,
+    batch: &mut LlamaBatch<'_>,
+    n_cur: &mut i32,
+    n_ctx: usize,
+    text: &str,
+) -> Result<()> {
+    let tokens = model
+        .str_to_token(text, AddBos::Never)
+        .context("failed to tokenize appended prompt")?;
+    if tokens.is_empty() {
+        return Ok(());
+    }
+
+    let required_tokens = (*n_cur as usize)
+        .checked_add(tokens.len())
+        .context("context token count overflowed usize")?;
+    if required_tokens > n_ctx {
+        bail!(
+            "appended prompt needs {required_tokens} context tokens, but context_size is {n_ctx}"
+        );
+    }
+
+    batch.clear();
+    let last_index = tokens.len() - 1;
+    for (index, token) in tokens.into_iter().enumerate() {
+        let offset = i32::try_from(index).context("appended prompt position exceeds i32::MAX")?;
+        batch
+            .add(token, *n_cur + offset, &[0], index == last_index)
+            .context("failed to add appended prompt token to llama.cpp batch")?;
+    }
+
+    ctx.decode(batch)
+        .context("failed to decode appended prompt with llama.cpp")?;
+    *n_cur += batch.n_tokens();
+
+    Ok(())
 }
 
 #[derive(Debug, Default)]

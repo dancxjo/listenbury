@@ -1,4 +1,5 @@
 mod breath_transcribe;
+mod continue_generation;
 mod cpal_diag;
 mod demos;
 mod dogfood_two;
@@ -12,6 +13,7 @@ mod transcribe;
 mod vad_trace;
 
 pub(crate) use breath_transcribe::run_breath_transcribe;
+pub(crate) use continue_generation::run_continue;
 #[cfg(feature = "audio-cpal")]
 pub(crate) use cpal_diag::play_audio_frames;
 pub(crate) use cpal_diag::{run_play_wav, run_record_wav};

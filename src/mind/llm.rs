@@ -24,6 +24,15 @@ pub trait LlmEngine {
     fn start(&mut self, request: GenerationRequest) -> anyhow::Result<GenerationId>;
     fn poll(&mut self, id: GenerationId) -> anyhow::Result<Vec<LlmEvent>>;
     fn cancel(&mut self, id: GenerationId) -> anyhow::Result<()>;
+    /// Append-only continuation for an active generation.
+    ///
+    /// Implementations that support this must not mutate or rebuild the original prompt. They
+    /// should enqueue `text` for the active generation worker, decode it at the current context
+    /// position before the next sampling step, and then continue generation from that updated
+    /// context. Generated tokens remain part of the same context as well.
+    fn append_prompt(&mut self, id: GenerationId, _text: String) -> anyhow::Result<()> {
+        anyhow::bail!("generation {id:?} does not support prompt appends")
+    }
 }
 
 #[derive(Debug)]
@@ -69,6 +78,14 @@ impl LlmEngine for MockLlmEngine {
 
     fn cancel(&mut self, id: GenerationId) -> anyhow::Result<()> {
         if self.active.remove(&id).is_some() {
+            Ok(())
+        } else {
+            anyhow::bail!("generation not found")
+        }
+    }
+
+    fn append_prompt(&mut self, id: GenerationId, _text: String) -> anyhow::Result<()> {
+        if self.active.contains_key(&id) {
             Ok(())
         } else {
             anyhow::bail!("generation not found")

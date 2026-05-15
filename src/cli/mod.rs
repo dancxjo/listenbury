@@ -61,6 +61,7 @@ enum DevCommand {
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
+    Continue(ContinueCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
     DogfoodTwo(DogfoodTwoCommand),
@@ -138,6 +139,27 @@ pub(crate) struct LlamaTurnCommand {
     #[arg(long, default_value_t = 48)]
     pub(crate) max_tokens: u32,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    pub(crate) prompt: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ContinueCommand {
+    #[arg(long, alias = "model-path")]
+    pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
+    /// Prompt framing to apply to the initial prompt only. Stdin appends are inserted raw.
+    #[arg(long, value_enum, default_value_t = PromptMode::Raw)]
+    pub(crate) mode: PromptMode,
+    /// Maximum tokens the LLM may generate while accepting prompt appends.
+    #[arg(long, default_value_t = 512)]
+    pub(crate) max_tokens: u32,
+    /// llama.cpp context size for the live session.
+    #[arg(long, default_value_t = 4096)]
+    pub(crate) context_size: u32,
+    /// Initial prompt text. If omitted, generation starts from a small continued-inference seed.
+    #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
 }
 
@@ -361,6 +383,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
         DevCommand::RecordWav(cmd) => commands::run_record_wav(cmd),
         DevCommand::PlayWav(cmd) => commands::run_play_wav(cmd),
         DevCommand::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
+        DevCommand::Continue(cmd) => commands::run_continue(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         DevCommand::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
@@ -705,6 +728,24 @@ mod tests {
         assert!(command.piper_voice_b.is_none());
         assert!(command.jsonl.is_none());
         assert!(command.save_audio_dir.is_none());
+    }
+
+    #[test]
+    fn dev_continue_parses_defaults_and_prompt() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "continue", "seed", "prompt"])
+            .expect("dev continue should parse with a seed prompt");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert!(command.llm_model.is_none());
+        assert_eq!(command.mode, PromptMode::Raw);
+        assert_eq!(command.max_tokens, 512);
+        assert_eq!(command.context_size, 4096);
+        assert_eq!(command.prompt, ["seed", "prompt"]);
     }
 
     #[test]

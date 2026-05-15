@@ -116,7 +116,7 @@ impl LlamaTurnArgs {
 }
 
 #[cfg(feature = "llm-llama-cpp")]
-fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<String>) {
+pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<String>) {
     match mode {
         PromptMode::Raw => (user_prompt.to_string(), Vec::new()),
         PromptMode::Spoken => (
