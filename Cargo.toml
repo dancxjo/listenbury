@@ -19,6 +19,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 encoding_rs = { version = "0.8", optional = true }
 hound = "3"
 ctrlc = "3.5.2"
+seams = "0.1.1"
 
 [features]
 default = [

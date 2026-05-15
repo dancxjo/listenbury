@@ -1,4 +1,6 @@
 use crate::mind::llm::LlmEvent;
+use seams::sentence_detector::dialog_detector::SentenceDetectorDialog;
+use std::sync::OnceLock;
 
 /// Remove all emoji characters from a string, leaving only non-emoji text.
 pub fn strip_emoji(text: &str) -> String {
@@ -82,11 +84,15 @@ pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "That makes sense.",
 ];
 const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];
+/// Short sentences that are safe to emit immediately even though they fall
+/// below the `MIN_NON_BACKCHANNEL_CHARS` length guard.
+const SAFE_SHORT_SENTENCES: &[&str] = &[
+    "Yes.", "No.", "Yep.", "Nope.", "Sure.", "Okay.", "Right.", "Good.", "Great.",
+];
 const COMMON_ABBREVIATIONS: &[&str] = &[
     "dr.", "mr.", "mrs.", "ms.", "prof.", "sr.", "jr.", "vs.", "etc.", "e.g.", "i.e.", "u.s.",
     "u.k.",
 ];
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeechUnit {
     Backchannel(String),
@@ -178,9 +184,21 @@ impl SpeechPlanner {
                         // here).  Flush the sentence-punctuated text with an
                         // appropriate classification rather than waiting for more
                         // tokens, so face and speech events stay in order.
-                        let unit = classify_emoji_flushed_text(&candidate);
+                        let unit = classify_text_before_emoji(&candidate);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
+                    } else if let Some(next_rel) = find_sentence_end(&self.buffer[end..]) {
+                        // The current boundary produced an unclassifiable short text.
+                        // There is a further sentence boundary in the buffer, so merge
+                        // the short prefix into the next chunk rather than blocking it.
+                        let merged_end = end + next_rel;
+                        let merged = self.buffer[..merged_end].trim().to_string();
+                        if let Some(unit) = classify_boundary_unit(&merged) {
+                            units.push(ExpressiveUnit::Speech(unit.into()));
+                            self.buffer.drain(..merged_end);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -188,8 +206,7 @@ impl SpeechPlanner {
                 Some(BoundaryResult::EmojiMarker(start, end)) => {
                     let before = self.buffer[..start].trim().to_string();
                     if !before.is_empty() {
-                        let unit = classify_completed_unit(&before)
-                            .unwrap_or(SpeechUnit::FullTurn(before));
+                        let unit = classify_text_before_emoji(&before);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                     }
                     let emoji = self.buffer[start..end].to_string();
@@ -211,14 +228,46 @@ impl SpeechPlanner {
     }
 
     fn next_boundary(&self, completed: bool) -> Option<BoundaryResult> {
+        let emoji_boundary = self
+            .buffer
+            .char_indices()
+            .find_map(|(index, ch)| is_emoji_char(ch).then_some((index, index + ch.len_utf8())));
+        let text_boundary = self.next_text_boundary(completed);
+
+        match (emoji_boundary, text_boundary) {
+            (Some((start, end)), Some(sentence_end)) if start < sentence_end => {
+                Some(BoundaryResult::EmojiMarker(start, end))
+            }
+            (Some(_), Some(sentence_end)) => Some(BoundaryResult::SentenceEnd(sentence_end)),
+            (Some((start, end)), None) => Some(BoundaryResult::EmojiMarker(start, end)),
+            (None, Some(sentence_end)) => Some(BoundaryResult::SentenceEnd(sentence_end)),
+            (None, None) => None,
+        }
+    }
+}
+
+fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
+    static DETECTOR: OnceLock<Option<SentenceDetectorDialog>> = OnceLock::new();
+    DETECTOR
+        .get_or_init(|| SentenceDetectorDialog::new().ok())
+        .as_ref()
+}
+
+impl SpeechPlanner {
+    fn next_text_boundary(&self, completed: bool) -> Option<usize> {
+        let sentence = self.next_sentence_boundary();
+        let clause = self.next_clause_boundary();
+        let discourse = self.next_discourse_marker_boundary(completed);
+        [sentence, clause, discourse].into_iter().flatten().min()
+    }
+
+    fn next_sentence_boundary(&self) -> Option<usize> {
+        find_sentence_end(&self.buffer)
+    }
+
+    fn next_clause_boundary(&self) -> Option<usize> {
         for (index, ch) in self.buffer.char_indices() {
             let end = index + ch.len_utf8();
-
-            // Emoji characters always act as an immediate boundary.
-            if is_emoji_char(ch) {
-                return Some(BoundaryResult::EmojiMarker(index, end));
-            }
-
             let is_end = end == self.buffer.len();
             let next_is_whitespace = self.buffer[end..]
                 .chars()
@@ -227,29 +276,35 @@ impl SpeechPlanner {
             if !(next_is_whitespace || is_end) {
                 continue;
             }
-            if is_end && !completed && ch == ',' {
-                continue;
-            }
-
-            match ch {
-                '.' => {
-                    let candidate = self.buffer[..end].trim();
-                    if is_common_abbreviation(candidate) {
-                        continue;
-                    }
-                    return Some(BoundaryResult::SentenceEnd(end));
-                }
-                '?' | '!' | ';' | ':' => return Some(BoundaryResult::SentenceEnd(end)),
-                ',' => {
-                    let candidate = self.buffer[..end].trim();
-                    if is_safe_discourse_marker(candidate) {
-                        return Some(BoundaryResult::SentenceEnd(end));
-                    }
-                }
-                _ => {}
+            if matches!(ch, ';' | ':') {
+                return Some(end);
             }
         }
+        None
+    }
 
+    fn next_discourse_marker_boundary(&self, completed: bool) -> Option<usize> {
+        for (index, ch) in self.buffer.char_indices() {
+            if ch != ',' {
+                continue;
+            }
+            let end = index + ch.len_utf8();
+            let is_end = end == self.buffer.len();
+            if is_end && !completed {
+                continue;
+            }
+            let next_is_whitespace = self.buffer[end..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace);
+            if !(next_is_whitespace || is_end) {
+                continue;
+            }
+            let candidate = self.buffer[..end].trim();
+            if is_safe_discourse_marker(candidate) {
+                return Some(end);
+            }
+        }
         None
     }
 }
@@ -258,7 +313,7 @@ fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
     if text.is_empty() {
         return None;
     }
-    if is_safe_backchannel(text) {
+    if is_safe_backchannel(text) || is_safe_short_sentence(text) {
         return Some(SpeechUnit::Backchannel(text.to_string()));
     }
     if is_safe_discourse_marker(text) {
@@ -285,7 +340,7 @@ fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
 /// Unlike [`classify_boundary_unit`], this bypasses the minimum-length guard so
 /// that short but grammatically complete phrases (e.g. "That works.") are
 /// emitted with the right type rather than falling back to `FullTurn`.
-fn classify_emoji_flushed_text(text: &str) -> SpeechUnit {
+fn classify_text_before_emoji(text: &str) -> SpeechUnit {
     if text.is_empty() {
         return SpeechUnit::FullTurn(text.to_string());
     }
@@ -308,6 +363,10 @@ fn is_safe_backchannel(text: &str) -> bool {
     DEFAULT_SAFE_BACKCHANNELS.iter().any(|entry| *entry == text)
 }
 
+fn is_safe_short_sentence(text: &str) -> bool {
+    SAFE_SHORT_SENTENCES.iter().any(|entry| *entry == text)
+}
+
 fn is_safe_discourse_marker(text: &str) -> bool {
     SAFE_DISCOURSE_MARKERS.iter().any(|entry| *entry == text)
 }
@@ -317,6 +376,49 @@ fn is_common_abbreviation(text: &str) -> bool {
     COMMON_ABBREVIATIONS
         .iter()
         .any(|abbreviation| lowercase.ends_with(abbreviation))
+}
+
+/// Find the byte offset just after the first complete sentence in `text`.
+///
+/// Tries the seams dialog detector first; falls back to a simple punctuation
+/// scan with abbreviation guarding when seams is unavailable.
+fn find_sentence_end(text: &str) -> Option<usize> {
+    if let Some(detector) = sentence_detector() {
+        if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
+            let mut search_from = 0;
+            for sentence in sentences {
+                if let Some(rel) = text[search_from..].find(sentence.raw_content) {
+                    let start = search_from + rel;
+                    let end = start + sentence.raw_content.len();
+                    search_from = end;
+                    if sentence.raw_content.trim().ends_with(['.', '?', '!']) {
+                        return Some(end);
+                    }
+                }
+            }
+        }
+    }
+    punctuation_sentence_end(text)
+}
+
+/// Deterministic punctuation-based sentence boundary scan used as a fallback
+/// when the seams detector is unavailable.  Uses the abbreviation guard to
+/// avoid splitting on `Dr.`, `Mr.`, etc.
+fn punctuation_sentence_end(text: &str) -> Option<usize> {
+    for (index, ch) in text.char_indices() {
+        let end = index + ch.len_utf8();
+        let is_end = end == text.len();
+        let next_is_whitespace = text[end..].chars().next().is_some_and(char::is_whitespace);
+        if !(next_is_whitespace || is_end) {
+            continue;
+        }
+        match ch {
+            '?' | '!' => return Some(end),
+            '.' if !is_common_abbreviation(text[..end].trim()) => return Some(end),
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -456,5 +558,92 @@ mod tests {
         assert_eq!(strip_emoji("Hello 🙂 world"), "Hello  world");
         assert_eq!(strip_emoji("No emoji here."), "No emoji here.");
         assert_eq!(strip_emoji("😄"), "");
+    }
+
+    #[test]
+    fn emits_complete_sentence_before_completed_event() {
+        let mut planner = SpeechPlanner::default();
+        let first = planner.ingest(&[token("I think that")]);
+        assert!(first.is_empty());
+
+        let second = planner.ingest(&[token(" works. The next")]);
+        assert_eq!(
+            second,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "I think that works.".to_string()
+            ))]
+        );
+
+        let third = planner.ingest(&[token(" thing is timing.")]);
+        assert_eq!(
+            third,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "The next thing is timing.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn emits_multiple_complete_units_from_one_batch() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("First sentence. Second sentence.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::CompleteSentence("First sentence.".to_string())),
+                speech(SpeechUnit::CompleteSentence("Second sentence.".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_event_clears_buffered_fragment() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("I think this")]).is_empty());
+        assert!(planner.ingest(&[LlmEvent::Cancelled]).is_empty());
+        assert!(planner.buffer.is_empty());
+        let units = planner.ingest(&[token(" this definitely works now.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "this definitely works now.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn short_allowlisted_sentence_emits_without_completed() {
+        let mut planner = SpeechPlanner::default();
+        assert_eq!(
+            planner.ingest(&[token("Yes. I think")]),
+            vec![speech(SpeechUnit::Backchannel("Yes.".to_string()))]
+        );
+    }
+
+    #[test]
+    fn short_sentence_does_not_block_later_sentence() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Yes. I think that works.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::Backchannel("Yes.".to_string())),
+                speech(SpeechUnit::CompleteSentence(
+                    "I think that works.".to_string()
+                )),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_short_prefix_merges_with_next_safe_sentence() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Hm. I think that works.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Hm. I think that works.".to_string()
+            ))]
+        );
     }
 }
