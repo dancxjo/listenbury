@@ -25,6 +25,7 @@ enum Command {
     DemoVad,
     VadTrace(VadTraceCommand),
     BreathTranscribe(BreathTranscribeCommand),
+    MicTranscribe(MicTranscribeCommand),
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
@@ -79,6 +80,16 @@ pub(crate) struct BreathTranscribeCommand {
     pub(crate) min_group_ms: u64,
     #[arg(long, default_value_t = 15_000)]
     pub(crate) max_group_ms: u64,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MicTranscribeCommand {
+    #[arg(long, default_value_t = 30)]
+    pub(crate) seconds: u64,
+    #[arg(long)]
+    pub(crate) until_ctrl_c: bool,
+    #[arg(long, alias = "model-path")]
+    pub(crate) whisper_model: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -155,6 +166,7 @@ pub(crate) fn run() -> Result<()> {
         Command::DemoVad => commands::run_demo_vad(),
         Command::VadTrace(cmd) => commands::run_vad_trace(cmd),
         Command::BreathTranscribe(cmd) => commands::run_breath_transcribe(cmd),
+        Command::MicTranscribe(cmd) => commands::run_mic_transcribe(cmd),
         Command::RecordWav(cmd) => commands::run_record_wav(cmd),
         Command::PlayWav(cmd) => commands::run_play_wav(cmd),
         Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
@@ -272,5 +284,39 @@ mod tests {
         assert_eq!(command.trailing_pad_ms, 120);
         assert_eq!(command.min_group_ms, 80);
         assert_eq!(command.max_group_ms, 3000);
+    }
+
+    #[test]
+    fn mic_transcribe_parses_seconds_by_default() {
+        let cli = Cli::try_parse_from(["listenbury", "mic-transcribe"])
+            .expect("mic-transcribe should parse with defaults");
+
+        let Some(Command::MicTranscribe(command)) = cli.command else {
+            panic!("expected mic-transcribe command");
+        };
+        assert_eq!(command.seconds, 30);
+        assert!(!command.until_ctrl_c);
+        assert!(command.whisper_model.is_none());
+    }
+
+    #[test]
+    fn mic_transcribe_parses_until_ctrl_c_and_model() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "mic-transcribe",
+            "--until-ctrl-c",
+            "--model-path",
+            "models/ggml-base.en.bin",
+        ])
+        .expect("mic-transcribe should parse until-ctrl-c and model path");
+
+        let Some(Command::MicTranscribe(command)) = cli.command else {
+            panic!("expected mic-transcribe command");
+        };
+        assert!(command.until_ctrl_c);
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
     }
 }

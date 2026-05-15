@@ -110,6 +110,7 @@ CLI commands:
 listenbury fake-turn "hello there"
 listenbury demo-vad
 listenbury vad-trace <input.wav> [--jsonl <out/vad-trace.jsonl>]
+listenbury mic-transcribe [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
 listenbury llama-turn [--llm-model <model.gguf>] "prompt"
 listenbury transcribe <input.wav> [--whisper-model <model.bin>]
 listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
@@ -122,6 +123,7 @@ listenbury models <fetch|status|path>
 - `fake-turn`: uses mock token streaming and speech planning
 - `demo-vad`: emits VAD/breath-grouping events from synthetic amplitudes
 - `vad-trace`: runs frame-by-frame VAD and breath-group tracing on WAV input, mixed/resampled to mono 16kHz as needed (optional JSONL export)
+- `mic-transcribe`: diagnostic live microphone path (CPAL -> AudioFrame buffer -> VAD -> breath grouping -> Whisper)
 - `llama-turn`: streams text tokens from a local llama.cpp model
 - `transcribe`: transcribes WAV input with Whisper
 - `say`: writes synthesized WAV to `out/listenbury-piper-test.wav`
@@ -153,7 +155,7 @@ Default model assets fetched by `models fetch`:
 - `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
 - `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
 
-`transcribe`, `llama-turn`, `say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
+`transcribe`, `mic-transcribe`, `llama-turn`, `say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
 ## Validation
 
