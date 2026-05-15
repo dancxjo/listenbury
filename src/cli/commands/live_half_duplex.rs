@@ -171,6 +171,7 @@ struct LiveHalfDuplexState {
     vad: EnergyVad,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    self_hearing: listenbury::SelfHearingState,
 }
 
 #[cfg(all(
@@ -361,6 +362,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         vad: EnergyVad::default(),
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
+        self_hearing: listenbury::SelfHearingState::default(),
     };
     let mut turns = 0usize;
 
@@ -399,7 +401,25 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             )?;
             tts.enqueue(plan)?;
             let audio = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+            let audio_dur = tts_audio_duration(&audio);
+            state.self_hearing.mark_output_started(transcript, audio_dur);
+            eprintln!(
+                "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
+                state
+                    .self_hearing
+                    .current_utterance_text
+                    .as_deref()
+                    .unwrap_or("")
+            );
             play_audio_frames(&audio, "live-half-duplex response")?;
+            state.self_hearing.mark_output_finished();
+            eprintln!(
+                "[self-hearing] playback finished; tail window active until unix_ns={:?}",
+                state
+                    .self_hearing
+                    .output_expected_until
+                    .map(|t| t.unix_nanos)
+            );
             capture_enabled.store(true, Ordering::SeqCst);
             turns += 1;
             println!("Listening...");
@@ -439,6 +459,13 @@ fn process_live_frame(
     frame: AudioFrame,
     state: &mut LiveHalfDuplexState,
 ) -> Result<Vec<Vec<AudioFrame>>> {
+    if state.self_hearing.suppression_decision()
+        == listenbury::SuppressionDecision::Suppress
+    {
+        // Pete is speaking or the echo-tail window is still active; drop the frame
+        // so that VAD/ASR cannot transcribe Pete's own voice.
+        return Ok(vec![]);
+    }
     let vad_result = state.vad.process_frame(&frame)?;
     let events = state.segmenter.process(vad_result);
     for event in &events {
@@ -607,6 +634,26 @@ fn drain_pending_into_ring(
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn tts_audio_duration(frames: &[AudioFrame]) -> Duration {
+    let Some(first) = frames.first() else {
+        return Duration::ZERO;
+    };
+    let channels = usize::from(first.channels).max(1);
+    let sample_rate = first.sample_rate_hz;
+    if sample_rate == 0 {
+        return Duration::ZERO;
+    }
+    let total_samples: usize = frames.iter().map(|f| f.samples.len()).sum();
+    let samples_per_channel = total_samples / channels;
+    Duration::from_secs_f64(samples_per_channel as f64 / f64::from(sample_rate))
 }
 
 #[cfg(all(
