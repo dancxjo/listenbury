@@ -8,12 +8,11 @@ Part of [Project PETE](https://dancxjo.github.io/project-pete.html): the Pseudoc
 
 Listenbury is an active prototype with working pipeline components and CLI demos:
 
-- Hearing/turn-taking demos (`demo-vad`, `vad-trace`, `fake-turn`)
-- Local LLM turn demo (`llama-turn`, feature-gated)
+- Live listening loop (`listen`, feature-gated)
+- Local LLM prompt (`ask`, feature-gated)
 - Whisper ASR WAV transcription (`transcribe`, feature-gated)
 - Piper TTS demo (`say`, feature-gated)
-- End-to-end WAV round trip (ASR -> LLM -> TTS) (`round-trip-wav`, feature-gated)
-- Live half-duplex mic conversation loop (`live-half-duplex`, feature-gated)
+- End-to-end WAV reply (ASR -> LLM -> TTS) (`reply`, feature-gated)
 - Model asset inspection/fetch utilities (`models`, feature-gated)
 
 The repository currently emphasizes local backend integration and CLI-driven validation.
@@ -158,41 +157,34 @@ just test
 Run commands with `just`:
 
 ```bash
-just run -- <command> [args...]
-just cuda -- <command> [args...]
+just run <command> [args...]
+just cuda <command> [args...]
 ```
 
 CLI commands:
 
 ```text
-listenbury fake-turn "hello there"
-listenbury demo-vad
-listenbury vad-trace <input.wav> [--jsonl <out/vad-trace.jsonl>]
-listenbury mic-transcribe [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
-listenbury llama-turn [--llm-model <model.gguf>] "prompt"
-listenbury transcribe <input.wav> [--whisper-model <model.bin>]
+listenbury transcribe [input.wav] [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
 listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--output-wav <out.wav>] "text"
-listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
-listenbury live-half-duplex [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
+listenbury listen [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
+listenbury ask [--llm-model <model.gguf>] "prompt"
+listenbury reply <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
 ```
 
 ### Command notes
 
-- `fake-turn`: uses mock token streaming and speech planning
-- `demo-vad`: emits VAD/breath-grouping events from synthetic amplitudes
-- `vad-trace`: runs frame-by-frame VAD and breath-group tracing on WAV input, mixed/resampled to mono 16kHz as needed (optional JSONL export)
-- `mic-transcribe`: diagnostic live microphone path (CPAL -> AudioFrame buffer -> VAD -> breath grouping -> Whisper)
-- `llama-turn`: streams text tokens from a local llama.cpp model
-- `transcribe`: transcribes WAV input with Whisper
+- `transcribe`: transcribes microphone audio by default; pass a WAV path to transcribe a file with Whisper
 - `say`: plays synthesized speech through the default speaker; `--output-wav` writes a WAV instead
-- `round-trip-wav`:
-  - input WAV is mixed/resampled to mono 16kHz before transcription
-  - writes output WAV to `out/listenbury-round-trip.wav`
-- `live-half-duplex`:
+- `listen`:
   - half-duplex loop: listen for a completed breath group, transcribe, generate, synthesize, play, return to listening
   - no interruption while Pete is speaking (capture pauses during playback)
   - `--no-backchannels` skips short backchannel-only planner units in spoken responses
+- `ask`: streams text tokens from a local llama.cpp model
+- `reply`:
+  - input WAV is mixed/resampled to mono 16kHz before transcription
+  - writes output WAV to `out/listenbury-round-trip.wav`
+- Diagnostics and milestone experiments are hidden under `listenbury dev ...`.
 
 ## Models and paths
 
@@ -218,7 +210,7 @@ Default model assets fetched by `models fetch`:
 - `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
 - `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
 
-`transcribe`, `mic-transcribe`, `llama-turn`, `say`, and `round-trip-wav` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
+`transcribe`, `listen`, `ask`, `say`, and `reply` model resolution order is: explicit CLI flag -> environment variable -> fetched default asset under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
 ## Validation
 

@@ -22,6 +22,33 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Transcribe microphone audio or a WAV file")]
+    Transcribe(TranscribeCommand),
+    #[command(about = "Speak text aloud")]
+    Say(SayCommand),
+    #[command(
+        alias = "live-half-duplex",
+        about = "Listen and reply in a live voice loop"
+    )]
+    Listen(LiveHalfDuplexCommand),
+    #[command(alias = "llama-turn", about = "Ask the local language model")]
+    Ask(LlamaTurnCommand),
+    #[command(alias = "round-trip-wav", about = "Reply to a WAV file with speech")]
+    Reply(RoundTripWavCommand),
+    #[command(about = "Fetch and inspect local model assets")]
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
+    #[command(hide = true)]
+    Dev {
+        #[command(subcommand)]
+        command: DevCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DevCommand {
     FakeTurn(TextCommand),
     DemoVad,
     VadTrace(VadTraceCommand),
@@ -30,15 +57,9 @@ enum Command {
     RecordWav(RecordWavCommand),
     PlayWav(PlayWavCommand),
     LlamaTurn(LlamaTurnCommand),
-    Transcribe(TranscribeCommand),
-    Say(SayCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
     DogfoodTwo(DogfoodTwoCommand),
-    Models {
-        #[command(subcommand)]
-        command: ModelsCommand,
-    },
     SpeechCache {
         #[command(subcommand)]
         command: SpeechCacheCommand,
@@ -109,9 +130,15 @@ pub(crate) struct LlamaTurnCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct TranscribeCommand {
-    pub(crate) input_wav: PathBuf,
+    pub(crate) input_wav: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, default_value_t = 30)]
+    pub(crate) seconds: u64,
+    #[arg(long)]
+    pub(crate) until_ctrl_c: bool,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
 }
 
 #[derive(Debug, Args)]
@@ -247,21 +274,30 @@ pub(crate) fn run() -> Result<()> {
     };
 
     match command {
-        Command::FakeTurn(cmd) => commands::run_fake_turn(cmd.text.join(" ")),
-        Command::DemoVad => commands::run_demo_vad(),
-        Command::VadTrace(cmd) => commands::run_vad_trace(cmd),
-        Command::BreathTranscribe(cmd) => commands::run_breath_transcribe(cmd),
-        Command::MicTranscribe(cmd) => commands::run_mic_transcribe(cmd),
-        Command::RecordWav(cmd) => commands::run_record_wav(cmd),
-        Command::PlayWav(cmd) => commands::run_play_wav(cmd),
-        Command::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
-        Command::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
-        Command::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
-        Command::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
+        Command::Listen(cmd) => commands::run_live_half_duplex(cmd),
+        Command::Ask(cmd) => commands::run_llama_turn(cmd),
+        Command::Reply(cmd) => commands::run_round_trip_wav(cmd),
         Command::Models { command } => commands::run_models(command),
-        Command::SpeechCache { command } => commands::run_speech_cache(command),
+        Command::Dev { command } => run_dev(command),
+    }
+}
+
+fn run_dev(command: DevCommand) -> Result<()> {
+    match command {
+        DevCommand::FakeTurn(cmd) => commands::run_fake_turn(cmd.text.join(" ")),
+        DevCommand::DemoVad => commands::run_demo_vad(),
+        DevCommand::VadTrace(cmd) => commands::run_vad_trace(cmd),
+        DevCommand::BreathTranscribe(cmd) => commands::run_breath_transcribe(cmd),
+        DevCommand::MicTranscribe(cmd) => commands::run_mic_transcribe(cmd),
+        DevCommand::RecordWav(cmd) => commands::run_record_wav(cmd),
+        DevCommand::PlayWav(cmd) => commands::run_play_wav(cmd),
+        DevCommand::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
+        DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
+        DevCommand::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
+        DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
+        DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
     }
 }
 
@@ -278,8 +314,54 @@ mod tests {
         let Some(Command::Transcribe(command)) = cli.command else {
             panic!("expected transcribe command");
         };
-        assert_eq!(command.input_wav, PathBuf::from("welcome.wav"));
+        assert_eq!(command.input_wav, Some(PathBuf::from("welcome.wav")));
         assert!(command.whisper_model.is_none());
+        assert_eq!(command.seconds, 30);
+        assert!(!command.until_ctrl_c);
+        assert_eq!(command.vad, VadBackendOption::Energy);
+    }
+
+    #[test]
+    fn transcribe_without_input_uses_mic_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "transcribe"])
+            .expect("transcribe should parse without input for mic capture");
+
+        let Some(Command::Transcribe(command)) = cli.command else {
+            panic!("expected transcribe command");
+        };
+        assert!(command.input_wav.is_none());
+        assert!(command.whisper_model.is_none());
+        assert_eq!(command.seconds, 30);
+        assert!(!command.until_ctrl_c);
+        assert_eq!(command.vad, VadBackendOption::Energy);
+    }
+
+    #[test]
+    fn transcribe_without_input_accepts_mic_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "transcribe",
+            "--seconds",
+            "5",
+            "--until-ctrl-c",
+            "--model-path",
+            "models/ggml-base.en.bin",
+            "--vad",
+            "webrtc",
+        ])
+        .expect("transcribe should parse mic capture options");
+
+        let Some(Command::Transcribe(command)) = cli.command else {
+            panic!("expected transcribe command");
+        };
+        assert!(command.input_wav.is_none());
+        assert_eq!(command.seconds, 5);
+        assert!(command.until_ctrl_c);
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]
@@ -317,11 +399,20 @@ mod tests {
 
     #[test]
     fn record_wav_parses_seconds_and_output_path() {
-        let cli =
-            Cli::try_parse_from(["listenbury", "record-wav", "out/mic.wav", "--seconds", "5"])
-                .expect("record-wav should parse");
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "record-wav",
+            "out/mic.wav",
+            "--seconds",
+            "5",
+        ])
+        .expect("record-wav should parse");
 
-        let Some(Command::RecordWav(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::RecordWav(command),
+        }) = cli.command
+        else {
             panic!("expected record-wav command");
         };
         assert_eq!(command.output_wav, PathBuf::from("out/mic.wav"));
@@ -330,10 +421,18 @@ mod tests {
 
     #[test]
     fn play_wav_parses_input_path() {
-        let cli = Cli::try_parse_from(["listenbury", "play-wav", "out/listenbury-round-trip.wav"])
-            .expect("play-wav should parse");
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "play-wav",
+            "out/listenbury-round-trip.wav",
+        ])
+        .expect("play-wav should parse");
 
-        let Some(Command::PlayWav(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::PlayWav(command),
+        }) = cli.command
+        else {
             panic!("expected play-wav command");
         };
         assert_eq!(
@@ -346,6 +445,7 @@ mod tests {
     fn vad_trace_parses_input_and_jsonl() {
         let cli = Cli::try_parse_from([
             "listenbury",
+            "dev",
             "vad-trace",
             "samples/silence-16k-mono.wav",
             "--jsonl",
@@ -353,7 +453,10 @@ mod tests {
         ])
         .expect("vad-trace should parse");
 
-        let Some(Command::VadTrace(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::VadTrace(command),
+        }) = cli.command
+        else {
             panic!("expected vad-trace command");
         };
         assert_eq!(
@@ -368,6 +471,7 @@ mod tests {
     fn breath_transcribe_parses_config() {
         let cli = Cli::try_parse_from([
             "listenbury",
+            "dev",
             "breath-transcribe",
             "samples/hello-16k-mono.wav",
             "--pre-roll-ms",
@@ -381,7 +485,10 @@ mod tests {
         ])
         .expect("breath-transcribe should parse");
 
-        let Some(Command::BreathTranscribe(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::BreathTranscribe(command),
+        }) = cli.command
+        else {
             panic!("expected breath-transcribe command");
         };
         assert_eq!(
@@ -396,10 +503,13 @@ mod tests {
 
     #[test]
     fn mic_transcribe_parses_seconds_by_default() {
-        let cli = Cli::try_parse_from(["listenbury", "mic-transcribe"])
+        let cli = Cli::try_parse_from(["listenbury", "dev", "mic-transcribe"])
             .expect("mic-transcribe should parse with defaults");
 
-        let Some(Command::MicTranscribe(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::MicTranscribe(command),
+        }) = cli.command
+        else {
             panic!("expected mic-transcribe command");
         };
         assert_eq!(command.seconds, 30);
@@ -412,6 +522,7 @@ mod tests {
     fn mic_transcribe_parses_until_ctrl_c_and_model() {
         let cli = Cli::try_parse_from([
             "listenbury",
+            "dev",
             "mic-transcribe",
             "--until-ctrl-c",
             "--model-path",
@@ -419,7 +530,10 @@ mod tests {
         ])
         .expect("mic-transcribe should parse until-ctrl-c and model path");
 
-        let Some(Command::MicTranscribe(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::MicTranscribe(command),
+        }) = cli.command
+        else {
             panic!("expected mic-transcribe command");
         };
         assert!(command.until_ctrl_c);
@@ -432,11 +546,11 @@ mod tests {
 
     #[test]
     fn live_half_duplex_parses_defaults() {
-        let cli = Cli::try_parse_from(["listenbury", "live-half-duplex"])
-            .expect("live-half-duplex should parse with defaults");
+        let cli = Cli::try_parse_from(["listenbury", "listen"])
+            .expect("listen should parse with defaults");
 
-        let Some(Command::LiveHalfDuplex(command)) = cli.command else {
-            panic!("expected live-half-duplex command");
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
         };
         assert_eq!(command.seconds, 30);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
@@ -448,17 +562,17 @@ mod tests {
     fn live_half_duplex_parses_optional_flags() {
         let cli = Cli::try_parse_from([
             "listenbury",
-            "live-half-duplex",
+            "listen",
             "--seconds",
             "12",
             "--model-profile",
             "tiny",
             "--no-backchannels",
         ])
-        .expect("live-half-duplex should parse optional flags");
+        .expect("listen should parse optional flags");
 
-        let Some(Command::LiveHalfDuplex(command)) = cli.command else {
-            panic!("expected live-half-duplex command");
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
         };
         assert_eq!(command.seconds, 12);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
@@ -470,38 +584,48 @@ mod tests {
     fn vad_options_parse_for_vad_trace_mic_and_live_half_duplex() {
         let trace = Cli::try_parse_from([
             "listenbury",
+            "dev",
             "vad-trace",
             "samples/hello-16k-mono.wav",
             "--vad",
             "webrtc",
         ])
         .expect("vad-trace should parse --vad webrtc");
-        let Some(Command::VadTrace(trace_command)) = trace.command else {
+        let Some(Command::Dev {
+            command: DevCommand::VadTrace(trace_command),
+        }) = trace.command
+        else {
             panic!("expected vad-trace command");
         };
         assert_eq!(trace_command.vad, VadBackendOption::WebRtc);
 
-        let mic = Cli::try_parse_from(["listenbury", "mic-transcribe", "--vad", "silero"])
+        let mic = Cli::try_parse_from(["listenbury", "dev", "mic-transcribe", "--vad", "silero"])
             .expect("mic-transcribe should parse --vad silero");
-        let Some(Command::MicTranscribe(mic_command)) = mic.command else {
+        let Some(Command::Dev {
+            command: DevCommand::MicTranscribe(mic_command),
+        }) = mic.command
+        else {
             panic!("expected mic-transcribe command");
         };
         assert_eq!(mic_command.vad, VadBackendOption::Silero);
 
-        let live = Cli::try_parse_from(["listenbury", "live-half-duplex", "--vad", "energy"])
-            .expect("live-half-duplex should parse --vad energy");
-        let Some(Command::LiveHalfDuplex(live_command)) = live.command else {
-            panic!("expected live-half-duplex command");
+        let live = Cli::try_parse_from(["listenbury", "listen", "--vad", "energy"])
+            .expect("listen should parse --vad energy");
+        let Some(Command::Listen(live_command)) = live.command else {
+            panic!("expected listen command");
         };
         assert_eq!(live_command.vad, VadBackendOption::Energy);
     }
 
     #[test]
     fn dogfood_two_parses_defaults() {
-        let cli = Cli::try_parse_from(["listenbury", "dogfood-two"])
+        let cli = Cli::try_parse_from(["listenbury", "dev", "dogfood-two"])
             .expect("dogfood-two should parse with all defaults");
 
-        let Some(Command::DogfoodTwo(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::DogfoodTwo(command),
+        }) = cli.command
+        else {
             panic!("expected dogfood-two command");
         };
         assert_eq!(command.seed, "Hello.");
@@ -520,6 +644,7 @@ mod tests {
     fn dogfood_two_parses_all_flags() {
         let cli = Cli::try_parse_from([
             "listenbury",
+            "dev",
             "dogfood-two",
             "--seed",
             "Hi there.",
@@ -544,7 +669,10 @@ mod tests {
         ])
         .expect("dogfood-two should parse all flags");
 
-        let Some(Command::DogfoodTwo(command)) = cli.command else {
+        let Some(Command::Dev {
+            command: DevCommand::DogfoodTwo(command),
+        }) = cli.command
+        else {
             panic!("expected dogfood-two command");
         };
         assert_eq!(command.seed, "Hi there.");
@@ -563,5 +691,36 @@ mod tests {
             command.save_audio_dir,
             Some(PathBuf::from("out/dogfood-two-audio"))
         );
+    }
+
+    #[test]
+    fn top_level_help_keeps_diagnostics_hidden() {
+        let mut command = Cli::command();
+        let help = command.render_help().to_string();
+
+        for visible in ["transcribe", "say", "listen", "ask", "reply", "models"] {
+            assert!(
+                help.contains(visible),
+                "missing {visible} from help:\n{help}"
+            );
+        }
+
+        for hidden in [
+            "fake-turn",
+            "demo-vad",
+            "vad-trace",
+            "breath-transcribe",
+            "mic-transcribe",
+            "record-wav",
+            "play-wav",
+            "llama-turn",
+            "round-trip-wav",
+            "live-half-duplex",
+            "dogfood-two",
+            "speech-cache",
+            "dev",
+        ] {
+            assert!(!help.contains(hidden), "leaked {hidden} into help:\n{help}");
+        }
     }
 }
