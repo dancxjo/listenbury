@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "model-download")]
+use crate::cli::download_progress::DownloadProgress;
+#[cfg(feature = "model-download")]
 use listenbury::models::{
-    bundle_assets, bundle_primary_path, find_asset,
+    FetchProgress, bundle_assets, bundle_primary_path, find_asset,
     manifest::{ModelBundle, ModelKind},
     paths::{asset_path, resolve_listenbury_home},
     selected_bundle,
@@ -145,14 +147,30 @@ fn ensure_bundle_available(bundle: &ModelBundle) -> Result<()> {
         bundle.display_name,
         missing.len()
     );
-    for asset in missing {
-        eprintln!(
-            "downloading {} -> {}",
-            asset.id,
-            asset_path(&home, asset).display()
-        );
-        listenbury::models::download::fetch_asset(&home, asset)?;
+    let mut progress = DownloadProgress::new(format!(
+        "Downloading {} model `{}`...",
+        listenbury::models::model_kind_label(bundle.kind),
+        bundle.display_name
+    ))?;
+    let asset_count = missing.len();
+    for (asset_index, asset) in missing.into_iter().enumerate() {
+        let path = asset_path(&home, asset);
+        listenbury::models::download::fetch_asset_with_progress(
+            &home,
+            asset,
+            |downloaded_bytes, total_bytes| {
+                progress.update(FetchProgress {
+                    asset_id: asset.id,
+                    asset_index,
+                    asset_count,
+                    path: path.clone(),
+                    downloaded_bytes,
+                    total_bytes,
+                });
+            },
+        )?;
     }
+    progress.finish_and_clear();
     Ok(())
 }
 

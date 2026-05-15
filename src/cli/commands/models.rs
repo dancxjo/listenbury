@@ -1,12 +1,12 @@
 use crate::cli::ModelsCommand;
 #[cfg(feature = "model-download")]
+use crate::cli::download_progress::DownloadProgress;
+#[cfg(feature = "model-download")]
 use crate::cli::{ModelsFetchCommand, ModelsUseCommand, ModelsUseKind};
 use anyhow::Result;
 
 #[cfg(feature = "model-download")]
 use anyhow::Context;
-#[cfg(feature = "model-download")]
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
 use inquire::Select;
 #[cfg(feature = "model-download")]
@@ -21,7 +21,7 @@ use listenbury::models::{
 #[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
 #[cfg(feature = "model-download")]
-use std::{collections::HashMap, fmt};
+use std::fmt;
 
 #[cfg(feature = "model-download")]
 pub(crate) fn run_models(command: Option<ModelsCommand>) -> Result<()> {
@@ -251,91 +251,21 @@ fn progress_fetch(
     bundle: Option<&ModelBundle>,
     jobs: usize,
 ) -> Result<Vec<listenbury::models::FetchResult>> {
-    let bars = MultiProgress::new();
-    let overall = bars.add(ProgressBar::new(0));
-    let overall_style = ProgressStyle::with_template(
-        "{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {pos}/{len} ETA {eta_precise}",
-    )
-    .context("failed to create overall progress style")?
-    .progress_chars("=>-");
-    overall.set_style(overall_style);
-    overall.enable_steady_tick(std::time::Duration::from_millis(100));
-    overall.set_message(message.to_string());
-
-    let download_style = ProgressStyle::with_template(
-                "{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} ETA {eta_precise}",
-            )
-            .context("failed to create download progress style")?
-            .progress_chars("=>-");
-    let mut asset_bars = HashMap::new();
+    let mut progress = DownloadProgress::new(message)?;
 
     let results = match (message.contains("every registered"), bundle) {
         (true, _) => fetch_all_assets_with_progress_and_jobs(jobs, |asset_progress| {
-            update_progress(
-                &bars,
-                &overall,
-                &download_style,
-                &mut asset_bars,
-                asset_progress,
-            );
+            progress.update(asset_progress);
         })?,
         (_, Some(bundle)) => fetch_bundle_with_progress_and_jobs(bundle, jobs, |asset_progress| {
-            update_progress(
-                &bars,
-                &overall,
-                &download_style,
-                &mut asset_bars,
-                asset_progress,
-            );
+            progress.update(asset_progress);
         })?,
         _ => fetch_selected_assets_with_progress_and_jobs(jobs, |asset_progress| {
-            update_progress(
-                &bars,
-                &overall,
-                &download_style,
-                &mut asset_bars,
-                asset_progress,
-            );
+            progress.update(asset_progress);
         })?,
     };
-    overall.set_position(overall.length().unwrap_or(0));
-    overall.finish_and_clear();
-    for progress in asset_bars.into_values() {
-        progress.finish_and_clear();
-    }
+    progress.finish_and_clear();
     Ok(results)
-}
-
-#[cfg(feature = "model-download")]
-fn update_progress(
-    bars: &MultiProgress,
-    overall: &ProgressBar,
-    download_style: &ProgressStyle,
-    asset_bars: &mut HashMap<&'static str, ProgressBar>,
-    asset_progress: listenbury::models::FetchProgress,
-) {
-    overall.set_length(asset_progress.asset_count as u64);
-    overall.set_position(overall.position().max(asset_progress.asset_index as u64));
-    overall.set_message(format!("Fetching {}...", asset_progress.asset_id));
-
-    let progress = asset_bars
-        .entry(asset_progress.asset_id)
-        .or_insert_with(|| {
-            let progress = bars.add(ProgressBar::new(0));
-            progress.set_style(download_style.clone());
-            progress.enable_steady_tick(std::time::Duration::from_millis(100));
-            progress
-        });
-    match asset_progress.total_bytes {
-        Some(total_bytes) => progress.set_length(total_bytes),
-        None => progress.unset_length(),
-    }
-    progress.set_position(asset_progress.downloaded_bytes);
-    progress.set_message(format!(
-        "{} -> {}",
-        asset_progress.asset_id,
-        asset_progress.path.display()
-    ));
 }
 
 #[cfg(feature = "model-download")]

@@ -1,4 +1,6 @@
 mod commands;
+#[cfg(feature = "model-download")]
+mod download_progress;
 #[cfg(any(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
