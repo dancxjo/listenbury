@@ -33,6 +33,8 @@ enum Command {
     Listen(LiveHalfDuplexCommand),
     #[command(alias = "llama-turn", about = "Ask the local language model")]
     Ask(LlamaTurnCommand),
+    #[command(about = "Run a raw local language model completion")]
+    Complete(LlamaTurnCommand),
     #[command(alias = "round-trip-wav", about = "Reply to a WAV file with speech")]
     Reply(RoundTripWavCommand),
     #[command(about = "Fetch and inspect local model assets")]
@@ -124,6 +126,12 @@ pub(crate) struct MicTranscribeCommand {
 pub(crate) struct LlamaTurnCommand {
     #[arg(long, alias = "model-path")]
     pub(crate) llm_model: Option<PathBuf>,
+    /// Prompt framing to apply before generation.
+    #[arg(long, value_enum, default_value_t = PromptMode::Spoken)]
+    pub(crate) mode: PromptMode,
+    /// Maximum tokens the LLM may generate.
+    #[arg(long, default_value_t = 48)]
+    pub(crate) max_tokens: u32,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
 }
@@ -195,6 +203,15 @@ pub(crate) struct DogfoodTwoCommand {
     /// Save per-turn WAV files to this directory.
     #[arg(long)]
     pub(crate) save_audio_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum PromptMode {
+    Raw,
+    #[default]
+    Spoken,
+    Chat,
+    Inner,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
@@ -280,6 +297,10 @@ pub(crate) fn run() -> Result<()> {
         Command::Say(cmd) => commands::run_say(cmd),
         Command::Listen(cmd) => commands::run_live_half_duplex(cmd),
         Command::Ask(cmd) => commands::run_llama_turn(cmd),
+        Command::Complete(mut cmd) => {
+            cmd.mode = PromptMode::Raw;
+            commands::run_llama_turn(cmd)
+        }
         Command::Reply(cmd) => commands::run_round_trip_wav(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::Dev { command } => run_dev(command),

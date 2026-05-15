@@ -16,6 +16,7 @@ pub(crate) fn run_fake_turn(user_text: String) -> Result<()> {
     let request = GenerationRequest {
         prompt: format!("User said: {user_text}"),
         max_tokens: None,
+        stop: Vec::new(),
     };
 
     let id = llm.start(request).context("failed to start generation")?;

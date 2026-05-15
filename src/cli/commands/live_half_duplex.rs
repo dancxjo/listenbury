@@ -609,6 +609,7 @@ fn stream_speech_to_tts(
         .start(GenerationRequest {
             prompt: build_prompt(transcript),
             max_tokens: Some(max_tokens(model_profile)),
+            stop: Vec::new(),
         })
         .context("failed to start llama.cpp generation")?;
 

@@ -412,6 +412,7 @@ fn generate_response(
         .start(GenerationRequest {
             prompt: build_prompt(instance_id, input),
             max_tokens: Some(max_tokens),
+            stop: Vec::new(),
         })
         .context("failed to start LLM generation")?;
 

@@ -201,6 +201,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
         .start(GenerationRequest {
             prompt: build_round_trip_prompt(transcript),
             max_tokens: Some(96),
+            stop: Vec::new(),
         })
         .context("failed to start llama.cpp generation")?;
 

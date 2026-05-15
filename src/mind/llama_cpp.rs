@@ -235,6 +235,7 @@ impl LlamaGenerationWorker {
         let mut n_cur = batch.n_tokens();
         let mut sampler = build_sampler(self.config.temperature, self.config.top_p);
         let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut stop_detector = StopDetector::new(self.request.stop);
 
         while (n_cur as usize) < max_total_tokens {
             if self.cancel.load(Ordering::Relaxed) {
@@ -251,8 +252,16 @@ impl LlamaGenerationWorker {
                 .model
                 .token_to_piece(token, &mut decoder, true, None)
                 .context("failed to decode llama.cpp token")?;
-            if !text.is_empty() && sender.send(LlmEvent::Token { text }).is_err() {
-                return Ok(GenerationOutcome::Cancelled);
+            if !text.is_empty() {
+                let outcome = stop_detector.push(&text);
+                if !outcome.text.is_empty()
+                    && sender.send(LlmEvent::Token { text: outcome.text }).is_err()
+                {
+                    return Ok(GenerationOutcome::Cancelled);
+                }
+                if outcome.stopped {
+                    return Ok(GenerationOutcome::Completed);
+                }
             }
 
             batch.clear();
@@ -264,7 +273,87 @@ impl LlamaGenerationWorker {
                 .context("failed to decode sampled token with llama.cpp")?;
         }
 
+        let trailing = stop_detector.finish();
+        if !trailing.is_empty() && sender.send(LlmEvent::Token { text: trailing }).is_err() {
+            return Ok(GenerationOutcome::Cancelled);
+        }
+
         Ok(GenerationOutcome::Completed)
+    }
+}
+
+#[derive(Debug, Default)]
+struct StopDetector {
+    stops: Vec<String>,
+    pending: String,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct StopDetection {
+    text: String,
+    stopped: bool,
+}
+
+impl StopDetector {
+    fn new(stops: Vec<String>) -> Self {
+        Self {
+            stops: stops.into_iter().filter(|stop| !stop.is_empty()).collect(),
+            pending: String::new(),
+        }
+    }
+
+    fn push(&mut self, text: &str) -> StopDetection {
+        if self.stops.is_empty() {
+            return StopDetection {
+                text: text.to_string(),
+                stopped: false,
+            };
+        }
+
+        self.pending.push_str(text);
+        if let Some(stop_index) = self.find_earliest_stop() {
+            let output = self.pending[..stop_index].to_string();
+            self.pending.clear();
+            return StopDetection {
+                text: output,
+                stopped: true,
+            };
+        }
+
+        let keep = self.longest_stop_prefix_suffix_len();
+        let emit_len = self.pending.len() - keep;
+        let output = self.pending[..emit_len].to_string();
+        self.pending = self.pending[emit_len..].to_string();
+        StopDetection {
+            text: output,
+            stopped: false,
+        }
+    }
+
+    fn finish(&mut self) -> String {
+        std::mem::take(&mut self.pending)
+    }
+
+    fn find_earliest_stop(&self) -> Option<usize> {
+        self.stops
+            .iter()
+            .filter_map(|stop| self.pending.find(stop))
+            .min()
+    }
+
+    fn longest_stop_prefix_suffix_len(&self) -> usize {
+        self.stops
+            .iter()
+            .flat_map(|stop| {
+                stop.char_indices()
+                    .skip(1)
+                    .map(|(index, _)| index)
+                    .chain(std::iter::once(stop.len()))
+                    .filter(|&len| len <= self.pending.len())
+                    .filter(|&len| self.pending.ends_with(&stop[..len]))
+            })
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -310,4 +399,76 @@ fn is_terminal_event(event: &LlmEvent) -> bool {
         event,
         LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_detector_stops_before_marker_in_single_token() {
+        let mut detector = StopDetector::new(vec!["\nUser:".to_string()]);
+
+        assert_eq!(
+            detector.push("Yes.\nUser: Again"),
+            StopDetection {
+                text: "Yes.".to_string(),
+                stopped: true,
+            }
+        );
+    }
+
+    #[test]
+    fn stop_detector_holds_split_marker_prefix() {
+        let mut detector = StopDetector::new(vec!["\nUser:".to_string()]);
+
+        assert_eq!(
+            detector.push("Yes.\nUs"),
+            StopDetection {
+                text: "Yes.".to_string(),
+                stopped: false,
+            }
+        );
+        assert_eq!(
+            detector.push("er: Again"),
+            StopDetection {
+                text: String::new(),
+                stopped: true,
+            }
+        );
+    }
+
+    #[test]
+    fn stop_detector_holds_marker_prefix_when_it_is_the_whole_token() {
+        let mut detector = StopDetector::new(vec!["\nUser:".to_string()]);
+
+        assert_eq!(
+            detector.push("\nUs"),
+            StopDetection {
+                text: String::new(),
+                stopped: false,
+            }
+        );
+        assert_eq!(
+            detector.push("er: Again"),
+            StopDetection {
+                text: String::new(),
+                stopped: true,
+            }
+        );
+    }
+
+    #[test]
+    fn stop_detector_flushes_unmatched_pending_text() {
+        let mut detector = StopDetector::new(vec!["\nUser:".to_string()]);
+
+        assert_eq!(
+            detector.push("Yes.\nUsual"),
+            StopDetection {
+                text: "Yes.\nUsual".to_string(),
+                stopped: false,
+            }
+        );
+        assert_eq!(detector.finish(), "");
+    }
 }

@@ -9,6 +9,7 @@ pub struct GenerationId(pub Uuid);
 pub struct GenerationRequest {
     pub prompt: String,
     pub max_tokens: Option<usize>,
+    pub stop: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +81,7 @@ impl Default for GenerationRequest {
         Self {
             prompt: String::new(),
             max_tokens: None,
+            stop: Vec::new(),
         }
     }
 }
@@ -101,6 +103,7 @@ mod tests {
             .start(GenerationRequest {
                 prompt: "hello".to_string(),
                 max_tokens: None,
+                stop: Vec::new(),
             })
             .expect("start should succeed");
 

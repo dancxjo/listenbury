@@ -167,7 +167,8 @@ CLI commands:
 listenbury transcribe [input.wav] [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
 listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--output-wav <out.wav>] "text"
 listenbury listen [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
-listenbury ask [--llm-model <model.gguf>] "prompt"
+listenbury ask [--llm-model <model.gguf>] [--mode <spoken|chat|inner|raw>] [--max-tokens <n>] "prompt"
+listenbury complete [--llm-model <model.gguf>] [--max-tokens <n>] "prompt"
 listenbury reply <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
 ```
@@ -180,7 +181,8 @@ listenbury models <fetch|status|path>
   - half-duplex loop: listen for a completed breath group, transcribe, generate, synthesize, play, return to listening
   - no interruption while Pete is speaking (capture pauses during playback)
   - `--no-backchannels` skips short backchannel-only planner units in spoken responses
-- `ask`: streams text tokens from a local llama.cpp model
+- `ask`: wraps your prompt as a short Pete Listenbury spoken/chat turn, with a default 48-token budget
+- `complete`: streams raw text completion from a local llama.cpp model
 - `reply`:
   - input WAV is mixed/resampled to mono 16kHz before transcription
   - writes output WAV to `out/listenbury-round-trip.wav`
