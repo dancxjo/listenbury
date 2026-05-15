@@ -158,6 +158,16 @@ use listenbury::{ConversationController, FillerContext};
     feature = "tts-piper"
 ))]
 use std::collections::{HashMap, VecDeque};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use std::path::Path;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -502,6 +512,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 &mut tts,
                 transcript,
                 command.model_profile,
+                &paths.llm_model,
                 command.no_backchannels,
                 &mut state.self_hearing,
                 &mut state.controller,
@@ -635,17 +646,19 @@ fn stream_speech_to_tts(
     tts: &mut impl TextToSpeech,
     transcript: &str,
     model_profile: ModelProfile,
+    llm_model_path: &std::path::Path,
     no_backchannels: bool,
     self_hearing: &mut listenbury::SelfHearingState,
     controller: &mut ConversationController,
     user_turn_id: u64,
 ) -> Result<()> {
+    let prompt_format = prompt_format_for_model(llm_model_path);
     controller.turn_tracker.on_pete_thinking_started();
     let generation_id = llm
         .start(GenerationRequest {
-            prompt: build_prompt(transcript),
-            max_tokens: Some(max_tokens(model_profile)),
-            stop: live_half_duplex_stops(),
+            prompt: build_prompt(transcript, prompt_format),
+            max_tokens: Some(max_tokens(model_profile, prompt_format)),
+            stop: live_half_duplex_stops(prompt_format),
         })
         .context("failed to start llama.cpp generation")?;
 
@@ -660,6 +673,8 @@ fn stream_speech_to_tts(
     let mut main_llm_has_safe_speech_unit = false;
     let mut filler_attempted = false;
     let mut played_any_audio = false;
+    let mut harmony_filter =
+        (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
@@ -714,7 +729,12 @@ fn stream_speech_to_tts(
         {
             main_llm_has_emitted_token = true;
         }
-        for unit in planner_units_from_events(controller, &events, no_backchannels) {
+        let speech_events = if let Some(filter) = &mut harmony_filter {
+            filter.filter_events(&events)
+        } else {
+            events.clone()
+        };
+        for unit in planner_units_from_events(controller, &speech_events, no_backchannels) {
             match unit {
                 ExpressiveUnit::Speech(plan) => {
                     let text = plan.text().to_string();
@@ -813,6 +833,174 @@ fn planner_units_from_events(
             _ => Some(unit),
         })
         .collect()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+struct HarmonyFinalFilter {
+    pending: String,
+    in_final: bool,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl HarmonyFinalFilter {
+    fn filter_events(&mut self, events: &[LlmEvent]) -> Vec<LlmEvent> {
+        let mut filtered = Vec::new();
+        for event in events {
+            match event {
+                LlmEvent::Token { text } => {
+                    let text = self.push(text);
+                    if !text.is_empty() {
+                        filtered.push(LlmEvent::Token { text });
+                    }
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
+                    let text = self.finish();
+                    if !text.is_empty() {
+                        filtered.push(LlmEvent::Token { text });
+                    }
+                    filtered.push(event.clone());
+                }
+            }
+        }
+        filtered
+    }
+
+    fn push(&mut self, text: &str) -> String {
+        self.pending.push_str(text);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> String {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, completed: bool) -> String {
+        let mut visible = String::new();
+        loop {
+            if self.in_final {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_ENDS) {
+                    visible.push_str(&self.pending[..start]);
+                    self.pending.drain(..start + marker.len());
+                    self.in_final = false;
+                    continue;
+                }
+                let keep_from = if completed {
+                    self.pending.len()
+                } else {
+                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_ENDS)
+                };
+                visible.push_str(&self.pending[..keep_from]);
+                self.pending.drain(..keep_from);
+                break;
+            }
+
+            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_STARTS) {
+                self.pending.drain(..start + marker.len());
+                self.in_final = true;
+                continue;
+            }
+            if completed {
+                self.pending.clear();
+            } else {
+                keep_possible_marker_prefix(&mut self.pending, HARMONY_FINAL_STARTS);
+            }
+            break;
+        }
+        visible
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const HARMONY_FINAL_STARTS: &[&str] = &[
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|start|>"];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)> {
+    markers
+        .iter()
+        .filter_map(|marker| text.find(marker).map(|index| (index, *marker)))
+        .min_by_key(|(index, _)| *index)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn keep_possible_marker_prefix(text: &mut String, markers: &[&str]) {
+    let keep_from = possible_marker_prefix_start(text, markers);
+    text.drain(..keep_from);
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
+    (0..text.len())
+        .find(|&index| {
+            text.is_char_boundary(index)
+                && markers.iter().any(|marker| {
+                    let suffix = &text[index..];
+                    !suffix.is_empty() && suffix.len() < marker.len() && marker.starts_with(suffix)
+                })
+        })
+        .unwrap_or(text.len())
 }
 
 #[cfg(any(
@@ -988,16 +1176,19 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
     u64::try_from(unix_nanos / NANOS_PER_MILLI).unwrap_or(u64::MAX)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-fn build_prompt(transcript: &str) -> String {
-    format!(
-        "<|start_header_id|>system<|end_header_id|>\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{transcript}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
     )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LivePromptFormat {
+    Llama3Instruct,
+    GptOssHarmony,
 }
 
 #[cfg(any(
@@ -1009,22 +1200,17 @@ fn build_prompt(transcript: &str) -> String {
         feature = "tts-piper"
     )
 ))]
-fn live_half_duplex_stops() -> Vec<String> {
-    vec![
-        "<|eot_id|>".to_string(),
-        "<|start_header_id|>".to_string(),
-        "<|end_header_id|>".to_string(),
-        "</s>".to_string(),
-        "\n<|user|>".to_string(),
-        "\n<|assistant|>".to_string(),
-        "\n<|system|>".to_string(),
-        "<|user|>".to_string(),
-        "<|assistant|>".to_string(),
-        "<|system|>".to_string(),
-        "\nUser:".to_string(),
-        "\nPete:".to_string(),
-        "\nAssistant:".to_string(),
-    ]
+fn prompt_format_for_model(model_path: &Path) -> LivePromptFormat {
+    let filename = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if filename.contains("gpt-oss") {
+        LivePromptFormat::GptOssHarmony
+    } else {
+        LivePromptFormat::Llama3Instruct
+    }
 }
 
 #[cfg(all(
@@ -1033,9 +1219,62 @@ fn live_half_duplex_stops() -> Vec<String> {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn max_tokens(model_profile: ModelProfile) -> usize {
-    match model_profile {
-        ModelProfile::Tiny => 96,
+fn build_prompt(transcript: &str, format: LivePromptFormat) -> String {
+    match format {
+        LivePromptFormat::Llama3Instruct => format!(
+            "<|start_header_id|>system<|end_header_id|>\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{transcript}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        ),
+        LivePromptFormat::GptOssHarmony => format!(
+            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|end|><|start|>user<|message|>{transcript}<|end|><|start|>assistant"
+        ),
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn live_half_duplex_stops(format: LivePromptFormat) -> Vec<String> {
+    match format {
+        LivePromptFormat::Llama3Instruct => vec![
+            "<|eot_id|>".to_string(),
+            "<|start_header_id|>".to_string(),
+            "<|end_header_id|>".to_string(),
+            "</s>".to_string(),
+            "\n<|user|>".to_string(),
+            "\n<|assistant|>".to_string(),
+            "\n<|system|>".to_string(),
+            "<|user|>".to_string(),
+            "<|assistant|>".to_string(),
+            "<|system|>".to_string(),
+            "\nUser:".to_string(),
+            "\nPete:".to_string(),
+            "\nAssistant:".to_string(),
+        ],
+        LivePromptFormat::GptOssHarmony => vec![
+            "<|return|>".to_string(),
+            "<|start|>user".to_string(),
+            "<|start|>system".to_string(),
+            "<|start|>developer".to_string(),
+        ],
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn max_tokens(model_profile: ModelProfile, prompt_format: LivePromptFormat) -> usize {
+    match (model_profile, prompt_format) {
+        (ModelProfile::Tiny, LivePromptFormat::GptOssHarmony) => 192,
+        (ModelProfile::Tiny, LivePromptFormat::Llama3Instruct) => 96,
     }
 }
 
@@ -1252,8 +1491,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        convert_frame_samples, live_half_duplex_stops, maybe_plan_cached_backchannel,
-        planner_units_from_events, vad_frame_format,
+        HarmonyFinalFilter, LivePromptFormat, convert_frame_samples, live_half_duplex_stops,
+        maybe_plan_cached_backchannel, planner_units_from_events, prompt_format_for_model,
+        vad_frame_format,
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
@@ -1351,6 +1591,35 @@ mod tests {
     }
 
     #[test]
+    fn harmony_filter_only_emits_final_channel() {
+        let mut filter = HarmonyFinalFilter::default();
+        let events = filter.filter_events(&[
+            token("<|channel|>analysis<|message|>User asks whether Pete can hear them."),
+            token("<|end|><|start|>assistant<|channel|>final<|message|>Yes, I hear you."),
+            LlmEvent::Completed,
+        ]);
+
+        assert!(matches!(
+            events.as_slice(),
+            [LlmEvent::Token { text }, LlmEvent::Completed] if text == "Yes, I hear you."
+        ));
+    }
+
+    #[test]
+    fn prompt_format_detects_gpt_oss_models() {
+        assert_eq!(
+            prompt_format_for_model(std::path::Path::new("models/llama/gpt-oss-20b-mxfp4.gguf")),
+            LivePromptFormat::GptOssHarmony
+        );
+        assert_eq!(
+            prompt_format_for_model(std::path::Path::new(
+                "models/llama/llama-3.2-3b-instruct-q4_k_m.gguf"
+            )),
+            LivePromptFormat::Llama3Instruct
+        );
+    }
+
+    #[test]
     fn planner_units_preserve_face_event_order() {
         let mut controller = ConversationController::default();
         let units = planner_units_from_events(&mut controller, &[token("Okay 🙂 I see.")], false);
@@ -1361,13 +1630,17 @@ mod tests {
 
     #[test]
     fn live_half_duplex_stops_at_chat_boundaries() {
-        let stops = live_half_duplex_stops();
+        let stops = live_half_duplex_stops(LivePromptFormat::Llama3Instruct);
         assert!(stops.iter().any(|stop| stop == "<|eot_id|>"));
         assert!(stops.iter().any(|stop| stop == "<|start_header_id|>"));
         assert!(stops.iter().any(|stop| stop == "</s>"));
         assert!(stops.iter().any(|stop| stop == "\n<|user|>"));
         assert!(stops.iter().any(|stop| stop == "\n<|assistant|>"));
         assert!(stops.iter().any(|stop| stop == "\nUser:"));
+
+        let harmony_stops = live_half_duplex_stops(LivePromptFormat::GptOssHarmony);
+        assert!(harmony_stops.iter().any(|stop| stop == "<|return|>"));
+        assert!(!harmony_stops.iter().any(|stop| stop == "<|end|>"));
     }
 
     #[test]
