@@ -10,14 +10,16 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
 use listenbury::models::{
     FetchOutcome, bundle_present, default_asset_paths, default_assets_status,
-    fetch_all_assets_with_progress, fetch_bundle_with_progress,
-    fetch_selected_assets_with_progress, find_bundle,
+    fetch_all_assets_with_progress_and_jobs, fetch_bundle_with_progress_and_jobs,
+    fetch_selected_assets_with_progress_and_jobs, find_bundle,
     manifest::{MODEL_BUNDLES, ModelBundle, ModelKind},
     paths::resolve_listenbury_home,
     read_model_selection, selected_bundle, write_model_selection,
 };
 #[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
+#[cfg(feature = "model-download")]
+use std::collections::HashMap;
 
 #[cfg(feature = "model-download")]
 pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
@@ -117,8 +119,9 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
 
 #[cfg(feature = "model-download")]
 fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
+    let jobs = command.jobs.max(1);
     let result = if command.all {
-        progress_fetch("Fetching every registered model asset...", None)
+        progress_fetch("Fetching every registered model asset...", None, jobs)
     } else if let Some(model) = command.model {
         let bundle = find_bundle(ModelKind::Llm, &model)
             .or_else(|| find_bundle(ModelKind::Voice, &model))
@@ -127,9 +130,10 @@ fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
         progress_fetch(
             &format!("Fetching {}...", bundle.display_name),
             Some(bundle),
+            jobs,
         )
     } else {
-        progress_fetch("Fetching selected model assets...", None)
+        progress_fetch("Fetching selected model assets...", None, jobs)
     }?;
     print_fetch_results(result)
 }
@@ -138,6 +142,7 @@ fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
 fn progress_fetch(
     message: &str,
     bundle: Option<&ModelBundle>,
+    jobs: usize,
 ) -> Result<Vec<listenbury::models::FetchResult>> {
     let bars = MultiProgress::new();
     let overall = bars.add(ProgressBar::new(0));
@@ -150,43 +155,70 @@ fn progress_fetch(
     overall.enable_steady_tick(std::time::Duration::from_millis(100));
     overall.set_message(message.to_string());
 
-    let progress = bars.add(ProgressBar::new(0));
     let download_style = ProgressStyle::with_template(
                 "{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} ETA {eta_precise}",
             )
             .context("failed to create download progress style")?
             .progress_chars("=>-");
-    progress.set_style(download_style);
-    progress.enable_steady_tick(std::time::Duration::from_millis(100));
-    progress.set_message("Waiting for first download...");
+    let mut asset_bars = HashMap::new();
 
     let results = match (message.contains("every registered"), bundle) {
-        (true, _) => fetch_all_assets_with_progress(|asset_progress| {
-            update_progress(&overall, &progress, asset_progress);
+        (true, _) => fetch_all_assets_with_progress_and_jobs(jobs, |asset_progress| {
+            update_progress(
+                &bars,
+                &overall,
+                &download_style,
+                &mut asset_bars,
+                asset_progress,
+            );
         })?,
-        (_, Some(bundle)) => fetch_bundle_with_progress(bundle, |asset_progress| {
-            update_progress(&overall, &progress, asset_progress);
+        (_, Some(bundle)) => fetch_bundle_with_progress_and_jobs(bundle, jobs, |asset_progress| {
+            update_progress(
+                &bars,
+                &overall,
+                &download_style,
+                &mut asset_bars,
+                asset_progress,
+            );
         })?,
-        _ => fetch_selected_assets_with_progress(|asset_progress| {
-            update_progress(&overall, &progress, asset_progress);
+        _ => fetch_selected_assets_with_progress_and_jobs(jobs, |asset_progress| {
+            update_progress(
+                &bars,
+                &overall,
+                &download_style,
+                &mut asset_bars,
+                asset_progress,
+            );
         })?,
     };
     overall.set_position(overall.length().unwrap_or(0));
     overall.finish_and_clear();
-    progress.finish_and_clear();
+    for progress in asset_bars.into_values() {
+        progress.finish_and_clear();
+    }
     Ok(results)
 }
 
 #[cfg(feature = "model-download")]
 fn update_progress(
+    bars: &MultiProgress,
     overall: &ProgressBar,
-    progress: &ProgressBar,
+    download_style: &ProgressStyle,
+    asset_bars: &mut HashMap<&'static str, ProgressBar>,
     asset_progress: listenbury::models::FetchProgress,
 ) {
     overall.set_length(asset_progress.asset_count as u64);
-    overall.set_position(asset_progress.asset_index as u64);
+    overall.set_position(overall.position().max(asset_progress.asset_index as u64));
     overall.set_message(format!("Fetching {}...", asset_progress.asset_id));
 
+    let progress = asset_bars
+        .entry(asset_progress.asset_id)
+        .or_insert_with(|| {
+            let progress = bars.add(ProgressBar::new(0));
+            progress.set_style(download_style.clone());
+            progress.enable_steady_tick(std::time::Duration::from_millis(100));
+            progress
+        });
     match asset_progress.total_bytes {
         Some(total_bytes) => progress.set_length(total_bytes),
         None => progress.unset_length(),

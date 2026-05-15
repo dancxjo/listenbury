@@ -276,6 +276,9 @@ pub(crate) struct ModelsFetchCommand {
     /// Fetch every registered asset.
     #[arg(long)]
     pub(crate) all: bool,
+    /// Maximum number of model assets to download at once.
+    #[arg(long, default_value_t = 2)]
+    pub(crate) jobs: usize,
 }
 
 #[derive(Debug, Args)]
@@ -770,5 +773,19 @@ mod tests {
         ] {
             assert!(!help.contains(hidden), "leaked {hidden} into help:\n{help}");
         }
+    }
+
+    #[test]
+    fn models_fetch_parses_jobs() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "fetch", "--jobs", "4"])
+            .expect("models fetch should parse jobs");
+
+        let Some(Command::Models {
+            command: ModelsCommand::Fetch(command),
+        }) = cli.command
+        else {
+            panic!("expected models fetch command");
+        };
+        assert_eq!(command.jobs, 4);
     }
 }

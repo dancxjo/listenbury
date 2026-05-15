@@ -2,7 +2,8 @@ pub mod download;
 pub mod manifest;
 pub mod paths;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 
@@ -191,14 +192,29 @@ pub fn bundle_present(bundle: &ModelBundle) -> Result<bool> {
 
 pub fn fetch_bundle_with_progress(
     bundle: &ModelBundle,
+    progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    fetch_bundle_with_progress_and_jobs(bundle, 1, progress)
+}
+
+pub fn fetch_bundle_with_progress_and_jobs(
+    bundle: &ModelBundle,
+    jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
     let assets = bundle_assets(bundle)?;
-    fetch_asset_refs_at_home(&home, &assets, &mut progress)
+    fetch_asset_refs_at_home(&home, &assets, jobs, &mut progress)
 }
 
 pub fn fetch_selected_assets_with_progress(
+    progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    fetch_selected_assets_with_progress_and_jobs(1, progress)
+}
+
+pub fn fetch_selected_assets_with_progress_and_jobs(
+    jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let bundles = [
@@ -206,23 +222,32 @@ pub fn fetch_selected_assets_with_progress(
         selected_bundle(ModelKind::Llm)?,
         selected_bundle(ModelKind::Voice)?,
     ];
-    fetch_bundles_with_progress(&bundles, &mut progress)
+    fetch_bundles_with_progress(&bundles, jobs, &mut progress)
 }
 
 pub fn fetch_bundles_with_progress(
     bundles: &[&ModelBundle],
+    jobs: usize,
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
     let assets = assets_for_bundles(bundles)?;
-    fetch_asset_refs_at_home(&home, &assets, progress)
+    fetch_asset_refs_at_home(&home, &assets, jobs, progress)
 }
 
 pub fn fetch_all_assets_with_progress(
+    progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    fetch_all_assets_with_progress_and_jobs(1, progress)
+}
+
+pub fn fetch_all_assets_with_progress_and_jobs(
+    jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
-    fetch_assets_at_home(&home, DEFAULT_MODELS, &mut progress)
+    let assets = DEFAULT_MODELS.iter().collect::<Vec<_>>();
+    fetch_asset_refs_at_home(&home, &assets, jobs, &mut progress)
 }
 
 fn assets_for_bundles(bundles: &[&ModelBundle]) -> Result<Vec<&'static ModelAsset>> {
@@ -281,82 +306,87 @@ pub fn fetch_default_assets_with_progress(
     fetch_selected_assets_with_progress(&mut progress)
 }
 
+#[cfg(test)]
 fn fetch_assets_at_home(
-    home: &std::path::Path,
+    home: &Path,
     assets: &[ModelAsset],
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
+    let assets = assets.iter().collect::<Vec<_>>();
+    fetch_asset_refs_at_home(home, &assets, 1, progress)
+}
+
+fn fetch_asset_refs_at_home(
+    home: &Path,
+    assets: &[&ModelAsset],
+    jobs: usize,
+    progress: &mut impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let jobs = jobs.max(1);
     let mut results = Vec::with_capacity(assets.len());
-    for (asset_index, asset) in assets.iter().enumerate() {
-        let path = asset_path(home, asset);
-        match fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
-            progress(FetchProgress {
-                asset_id: asset.id,
-                asset_index,
-                asset_count: assets.len(),
-                path: path.clone(),
-                downloaded_bytes,
-                total_bytes,
-            });
-        }) {
-            Ok(downloaded) => results.push(FetchResult {
-                asset_id: asset.id,
-                path,
-                outcome: if downloaded {
-                    FetchOutcome::Downloaded
-                } else {
-                    FetchOutcome::SkippedExisting
-                },
-                error: None,
-            }),
-            Err(error) => results.push(FetchResult {
-                asset_id: asset.id,
-                path,
-                outcome: FetchOutcome::Failed,
-                error: Some(error.to_string()),
-            }),
-        }
+    for chunk_start in (0..assets.len()).step_by(jobs) {
+        let chunk_end = (chunk_start + jobs).min(assets.len());
+        let chunk = &assets[chunk_start..chunk_end];
+        let (sender, receiver) = mpsc::channel();
+        std::thread::scope(|scope| {
+            for (offset, asset) in chunk.iter().enumerate() {
+                let asset = *asset;
+                let sender = sender.clone();
+                let asset_index = chunk_start + offset;
+                let path = asset_path(home, asset);
+                scope.spawn(move || {
+                    let result =
+                        fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
+                            let _ = sender.send(FetchEvent::Progress(FetchProgress {
+                                asset_id: asset.id,
+                                asset_index,
+                                asset_count: assets.len(),
+                                path: path.clone(),
+                                downloaded_bytes,
+                                total_bytes,
+                            }));
+                        });
+                    let outcome = match result {
+                        Ok(downloaded) => FetchResult {
+                            asset_id: asset.id,
+                            path,
+                            outcome: if downloaded {
+                                FetchOutcome::Downloaded
+                            } else {
+                                FetchOutcome::SkippedExisting
+                            },
+                            error: None,
+                        },
+                        Err(error) => FetchResult {
+                            asset_id: asset.id,
+                            path,
+                            outcome: FetchOutcome::Failed,
+                            error: Some(error.to_string()),
+                        },
+                    };
+                    let _ = sender.send(FetchEvent::Result(asset_index, outcome));
+                });
+            }
+            drop(sender);
+            let mut chunk_results = Vec::with_capacity(chunk.len());
+            for event in receiver {
+                match event {
+                    FetchEvent::Progress(asset_progress) => progress(asset_progress),
+                    FetchEvent::Result(asset_index, result) => {
+                        chunk_results.push((asset_index, result));
+                    }
+                }
+            }
+            chunk_results.sort_by_key(|(asset_index, _)| *asset_index);
+            results.extend(chunk_results.into_iter().map(|(_, result)| result));
+        });
     }
     Ok(results)
 }
 
-fn fetch_asset_refs_at_home(
-    home: &std::path::Path,
-    assets: &[&ModelAsset],
-    progress: &mut impl FnMut(FetchProgress),
-) -> Result<Vec<FetchResult>> {
-    let mut results = Vec::with_capacity(assets.len());
-    for (asset_index, asset) in assets.iter().enumerate() {
-        let path = asset_path(home, asset);
-        match fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
-            progress(FetchProgress {
-                asset_id: asset.id,
-                asset_index,
-                asset_count: assets.len(),
-                path: path.clone(),
-                downloaded_bytes,
-                total_bytes,
-            });
-        }) {
-            Ok(downloaded) => results.push(FetchResult {
-                asset_id: asset.id,
-                path,
-                outcome: if downloaded {
-                    FetchOutcome::Downloaded
-                } else {
-                    FetchOutcome::SkippedExisting
-                },
-                error: None,
-            }),
-            Err(error) => results.push(FetchResult {
-                asset_id: asset.id,
-                path,
-                outcome: FetchOutcome::Failed,
-                error: Some(error.to_string()),
-            }),
-        }
-    }
-    Ok(results)
+enum FetchEvent {
+    Progress(FetchProgress),
+    Result(usize, FetchResult),
 }
 
 #[cfg(test)]
