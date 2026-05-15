@@ -179,6 +179,23 @@ struct LiveHalfDuplexState {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+impl std::fmt::Debug for LiveHalfDuplexState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveHalfDuplexState")
+            .field("vad", &"dyn VoiceActivityDetector")
+            .field("segmenter", &self.segmenter)
+            .field("active_groups", &self.active_groups)
+            .field("self_hearing", &self.self_hearing)
+            .finish()
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 #[derive(Debug, Clone)]
 struct LiveHalfDuplexModelPaths {
     whisper_model: std::path::PathBuf,

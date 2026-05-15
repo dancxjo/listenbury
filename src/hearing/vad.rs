@@ -20,6 +20,12 @@ impl VadBackendKind {
     }
 }
 
+impl std::fmt::Display for VadBackendKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct VadResult {
     pub speech_prob: f32,
@@ -183,6 +189,9 @@ fn ensure_supported_frame_length(sample_rate_hz: u32, mono_samples: usize) -> an
 
 #[cfg(feature = "vad-webrtc")]
 fn to_mono_i16(frame: &AudioFrame) -> Vec<i16> {
+    if frame.channels == 0 {
+        return Vec::new();
+    }
     let channel_count = usize::from(frame.channels);
     frame
         .samples
