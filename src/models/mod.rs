@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::models::download::fetch_asset;
+use crate::models::download::fetch_asset_with_progress;
 use crate::models::manifest::{DEFAULT_MODELS, ModelAsset};
 use crate::models::paths::{asset_path, resolve_listenbury_home};
 
@@ -30,6 +30,16 @@ pub struct FetchResult {
     pub path: PathBuf,
     pub outcome: FetchOutcome,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FetchProgress {
+    pub asset_id: &'static str,
+    pub asset_index: usize,
+    pub asset_count: usize,
+    pub path: PathBuf,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
 }
 
 pub fn default_asset_paths() -> Result<Vec<(&'static ModelAsset, PathBuf)>> {
@@ -57,15 +67,34 @@ pub fn default_assets_status() -> Result<Vec<ModelStatus>> {
 }
 
 pub fn fetch_default_assets() -> Result<Vec<FetchResult>> {
-    let home = resolve_listenbury_home()?;
-    fetch_assets_at_home(&home, DEFAULT_MODELS)
+    fetch_default_assets_with_progress(|_| {})
 }
 
-fn fetch_assets_at_home(home: &std::path::Path, assets: &[ModelAsset]) -> Result<Vec<FetchResult>> {
+pub fn fetch_default_assets_with_progress(
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
+    let home = resolve_listenbury_home()?;
+    fetch_assets_at_home(&home, DEFAULT_MODELS, &mut progress)
+}
+
+fn fetch_assets_at_home(
+    home: &std::path::Path,
+    assets: &[ModelAsset],
+    progress: &mut impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
     let mut results = Vec::with_capacity(assets.len());
-    for asset in assets {
+    for (asset_index, asset) in assets.iter().enumerate() {
         let path = asset_path(home, asset);
-        match fetch_asset(home, asset) {
+        match fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
+            progress(FetchProgress {
+                asset_id: asset.id,
+                asset_index,
+                asset_count: assets.len(),
+                path: path.clone(),
+                downloaded_bytes,
+                total_bytes,
+            });
+        }) {
             Ok(downloaded) => results.push(FetchResult {
                 asset_id: asset.id,
                 path,
@@ -120,7 +149,8 @@ mod tests {
         }];
 
         let results =
-            fetch_assets_at_home(&home, &assets).expect("fetch should skip existing file");
+            fetch_assets_at_home(&home, &assets, &mut |_| {})
+                .expect("fetch should skip existing file");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].outcome, FetchOutcome::SkippedExisting);
         assert_eq!(results[0].path, asset_path);

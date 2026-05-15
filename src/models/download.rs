@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,6 +9,14 @@ use crate::models::manifest::ModelAsset;
 use crate::models::paths::asset_path;
 
 pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
+    fetch_asset_with_progress(home, asset, |_, _| {})
+}
+
+pub fn fetch_asset_with_progress(
+    home: &Path,
+    asset: &ModelAsset,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<bool> {
     let target_path = asset_path(home, asset);
     if is_non_empty_file(&target_path)? {
         return Ok(false);
@@ -34,6 +42,7 @@ pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
     let response = ureq::get(asset.url)
         .call()
         .with_context(|| format!("failed to download {}", asset.url))?;
+    let total_bytes = response.body().content_length().or(asset.expected_size_hint);
 
     let mut body = response.into_body();
     let mut reader = body.as_reader();
@@ -41,7 +50,7 @@ pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
         File::create(&temp_path)
             .with_context(|| format!("failed to create temp file {}", temp_path.display()))?,
     );
-    std::io::copy(&mut reader, &mut file).with_context(|| {
+    copy_with_progress(&mut reader, &mut file, total_bytes, &mut progress).with_context(|| {
         format!(
             "failed to write download for {} to {}",
             asset.id,
@@ -60,6 +69,27 @@ pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
         )
     })?;
     Ok(true)
+}
+
+fn copy_with_progress(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    total_bytes: Option<u64>,
+    progress: &mut impl FnMut(u64, Option<u64>),
+) -> Result<u64> {
+    let mut downloaded = 0;
+    let mut buffer = [0; 64 * 1024];
+    progress(downloaded, total_bytes);
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read])?;
+        downloaded += read as u64;
+        progress(downloaded, total_bytes);
+    }
+    Ok(downloaded)
 }
 
 fn is_non_empty_file(path: &Path) -> Result<bool> {

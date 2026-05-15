@@ -4,10 +4,10 @@ use anyhow::Result;
 #[cfg(feature = "model-download")]
 use anyhow::Context;
 #[cfg(feature = "model-download")]
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets,
+    FetchOutcome, default_asset_paths, default_assets_status, fetch_default_assets_with_progress,
     paths::resolve_listenbury_home,
 };
 #[cfg(feature = "model-download")]
@@ -43,15 +43,45 @@ pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
             Ok(())
         }
         ModelsCommand::Fetch => {
-            let spinner = ProgressBar::new_spinner();
-            let style = ProgressStyle::with_template("{spinner:.cyan} {msg}")
-                .context("failed to create spinner style")?;
-            spinner.set_style(style);
-            spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-            spinner.set_message("Fetching default model assets...");
+            let bars = MultiProgress::new();
+            let overall = bars.add(ProgressBar::new(default_asset_paths()?.len() as u64));
+            let overall_style =
+                ProgressStyle::with_template("{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {pos}/{len} ETA {eta_precise}")
+                    .context("failed to create overall progress style")?
+                    .progress_chars("=>-");
+            overall.set_style(overall_style);
+            overall.enable_steady_tick(std::time::Duration::from_millis(100));
+            overall.set_message("Fetching default model assets...");
 
-            let results = fetch_default_assets()?;
-            spinner.finish_and_clear();
+            let progress = bars.add(ProgressBar::new(0));
+            let download_style = ProgressStyle::with_template(
+                "{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {bytes_per_sec} ETA {eta_precise}",
+            )
+            .context("failed to create download progress style")?
+            .progress_chars("=>-");
+            progress.set_style(download_style);
+            progress.enable_steady_tick(std::time::Duration::from_millis(100));
+            progress.set_message("Waiting for first download...");
+
+            let results = fetch_default_assets_with_progress(|asset_progress| {
+                overall.set_length(asset_progress.asset_count as u64);
+                overall.set_position(asset_progress.asset_index as u64);
+                overall.set_message(format!("Fetching {}...", asset_progress.asset_id));
+
+                match asset_progress.total_bytes {
+                    Some(total_bytes) => progress.set_length(total_bytes),
+                    None => progress.unset_length(),
+                }
+                progress.set_position(asset_progress.downloaded_bytes);
+                progress.set_message(format!(
+                    "{} -> {}",
+                    asset_progress.asset_id,
+                    asset_progress.path.display()
+                ));
+            })?;
+            overall.set_position(overall.length().unwrap_or(0));
+            overall.finish_and_clear();
+            progress.finish_and_clear();
             let mut had_failure = false;
             for result in results {
                 match result.outcome {
