@@ -239,6 +239,9 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) whisper_model: Option<PathBuf>,
     #[arg(long)]
     pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Defaults lower for CUDA live mode so ASR and LLM fit together.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]

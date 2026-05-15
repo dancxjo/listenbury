@@ -228,9 +228,22 @@ const POST_PLAYBACK_TTS_GRACE_MS: u64 = 1_500;
     feature = "tts-piper"
 ))]
 const NANOS_PER_MILLI: u128 = 1_000_000;
-#[cfg(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda"))]
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "asr-whisper-cuda",
+    feature = "llm-llama-cpp",
+    feature = "llm-llama-cpp-cuda",
+    feature = "tts-piper"
+))]
 const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(16);
-#[cfg(not(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda")))]
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper",
+    not(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda"))
+))]
 const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = None;
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
 const MONO_CHANNELS: u16 = 1;
