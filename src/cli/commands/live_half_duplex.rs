@@ -281,7 +281,9 @@ impl LiveHalfDuplexModelPaths {
     feature = "tts-piper"
 ))]
 pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()> {
-    anyhow::ensure!(command.seconds > 0, "--seconds must be greater than zero");
+    if let Some(seconds) = command.seconds {
+        anyhow::ensure!(seconds > 0, "--seconds must be greater than zero");
+    }
 
     let paths = LiveHalfDuplexModelPaths::discover(&command)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
@@ -424,7 +426,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     );
     println!("half-duplex mode: no barge-in, no interruption during Pete's speech.");
 
-    let stop_deadline = Instant::now() + Duration::from_secs(command.seconds);
+    let stop_deadline = command
+        .seconds
+        .map(|seconds| Instant::now() + Duration::from_secs(seconds));
     let input_frame_samples =
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
@@ -439,7 +443,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     };
     let mut turns = 0usize;
 
-    while Instant::now() < stop_deadline {
+    while stop_deadline.is_none_or(|deadline| Instant::now() < deadline) {
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(sample) => pending.push_back(sample),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}

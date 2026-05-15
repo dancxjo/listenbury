@@ -180,6 +180,7 @@ listenbury models <fetch|status|path>
 - `listen`:
   - half-duplex loop: listen for a completed breath group, transcribe, generate, synthesize, play, return to listening
   - no interruption while Pete is speaking (capture pauses during playback)
+  - listens until Ctrl-C by default; pass `--seconds <n>` for a bounded run
   - `--no-backchannels` skips short backchannel-only planner units in spoken responses
 - `ask`: wraps your prompt as a short Pete Listenbury spoken/chat turn, with a default 48-token budget
 - `complete`: streams raw text completion from a local llama.cpp model

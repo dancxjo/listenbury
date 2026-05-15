@@ -222,8 +222,9 @@ pub(crate) enum ModelProfile {
 
 #[derive(Debug, Args)]
 pub(crate) struct LiveHalfDuplexCommand {
-    #[arg(long, default_value_t = 30)]
-    pub(crate) seconds: u64,
+    /// Stop listening after this many seconds. By default, listen until Ctrl-C.
+    #[arg(long)]
+    pub(crate) seconds: Option<u64>,
     #[arg(long, value_enum, default_value_t = ModelProfile::Tiny)]
     pub(crate) model_profile: ModelProfile,
     #[arg(long)]
@@ -575,7 +576,7 @@ mod tests {
         let Some(Command::Listen(command)) = cli.command else {
             panic!("expected listen command");
         };
-        assert_eq!(command.seconds, 30);
+        assert_eq!(command.seconds, None);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::Energy);
@@ -597,7 +598,7 @@ mod tests {
         let Some(Command::Listen(command)) = cli.command else {
             panic!("expected listen command");
         };
-        assert_eq!(command.seconds, 12);
+        assert_eq!(command.seconds, Some(12));
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::Energy);
