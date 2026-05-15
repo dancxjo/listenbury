@@ -1,14 +1,24 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use listenbury::models::manifest::ModelKind;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
     bundle_assets, bundle_primary_path, find_asset,
-    manifest::ModelBundle,
+    manifest::{ModelBundle, ModelKind},
     paths::{asset_path, resolve_listenbury_home},
     selected_bundle,
 };
+
+#[cfg(not(feature = "model-download"))]
+#[derive(Debug, Clone, Copy)]
+enum ModelKind {
+    #[cfg(feature = "llm-llama-cpp")]
+    Llm,
+    #[cfg(feature = "tts-piper")]
+    Voice,
+    #[cfg(feature = "asr-whisper")]
+    Whisper,
+}
 
 #[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
@@ -76,6 +86,9 @@ fn resolve_model_path(
     if let Some(path) = std::env::var_os(env_var) {
         return Ok(PathBuf::from(path));
     }
+
+    #[cfg(not(feature = "model-download"))]
+    let _ = selected_kind;
 
     #[cfg(feature = "model-download")]
     if let Some(kind) = selected_kind {

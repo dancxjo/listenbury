@@ -1,4 +1,6 @@
-use crate::cli::{ModelsCommand, ModelsFetchCommand, ModelsUseCommand, ModelsUseKind};
+use crate::cli::ModelsCommand;
+#[cfg(feature = "model-download")]
+use crate::cli::{ModelsFetchCommand, ModelsUseCommand, ModelsUseKind};
 use anyhow::Result;
 
 #[cfg(feature = "model-download")]
