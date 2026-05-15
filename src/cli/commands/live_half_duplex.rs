@@ -35,7 +35,7 @@ use crate::cli::model_paths::{resolve_llm_model, resolve_piper_voice, resolve_wh
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
+use crate::cli::piper::{piper_config_for_voice, resolve_piper_bin};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -85,20 +85,40 @@ use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
     feature = "tts-piper"
 ))]
 use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mind::llm::LlmEvent;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
+use listenbury::mind::llm::{GenerationRequest, LlmEngine};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlan, SpeechPlanner, SpeechUnit};
+use listenbury::mouth::planner::SpeechPlan;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlanner, SpeechUnit};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -393,25 +413,14 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
 
             println!("Heard: {transcript}");
             capture_enabled.store(false, Ordering::SeqCst);
-            let plan = generate_speech_plan(
+            stream_speech_to_tts(
                 &mut llm,
+                &mut tts,
                 transcript,
                 command.model_profile,
                 command.no_backchannels,
+                &mut state.self_hearing,
             )?;
-            tts.enqueue(plan)?;
-            let audio = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
-            let audio_dur = tts_audio_duration(&audio);
-            state.self_hearing.mark_output_started(transcript, audio_dur);
-            eprintln!(
-                "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
-                state
-                    .self_hearing
-                    .current_utterance_text
-                    .as_deref()
-                    .unwrap_or("")
-            );
-            play_audio_frames(&audio, "live-half-duplex response")?;
             state.self_hearing.mark_output_finished();
             eprintln!(
                 "[self-hearing] playback finished; tail window active until unix_ns={:?}",
@@ -459,9 +468,7 @@ fn process_live_frame(
     frame: AudioFrame,
     state: &mut LiveHalfDuplexState,
 ) -> Result<Vec<Vec<AudioFrame>>> {
-    if state.self_hearing.suppression_decision()
-        == listenbury::SuppressionDecision::Suppress
-    {
+    if state.self_hearing.suppression_decision() == listenbury::SuppressionDecision::Suppress {
         // Pete is speaking or the echo-tail window is still active; drop the frame
         // so that VAD/ASR cannot transcribe Pete's own voice.
         return Ok(vec![]);
@@ -511,12 +518,14 @@ fn process_ring_frames(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn generate_speech_plan(
+fn stream_speech_to_tts(
     llm: &mut LlamaCppEngine,
+    tts: &mut impl TextToSpeech,
     transcript: &str,
     model_profile: ModelProfile,
     no_backchannels: bool,
-) -> Result<SpeechPlan> {
+    self_hearing: &mut listenbury::SelfHearingState,
+) -> Result<()> {
     let generation_id = llm
         .start(GenerationRequest {
             prompt: build_prompt(transcript),
@@ -525,10 +534,12 @@ fn generate_speech_plan(
         .context("failed to start llama.cpp generation")?;
 
     let mut planner = SpeechPlanner::default();
-    let mut spoken_parts = Vec::new();
+    let mut played_any_audio = false;
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
+            played_any_audio |=
+                drain_ready_tts_audio(tts, transcript, self_hearing, "live-half-duplex response")?;
             std::thread::sleep(Duration::from_millis(5));
             continue;
         }
@@ -538,29 +549,137 @@ fn generate_speech_plan(
                 anyhow::bail!("llama.cpp generation failed: {message}");
             }
         }
-        for unit in planner.ingest(&events) {
-            let ExpressiveUnit::Speech(plan) = unit else {
-                continue;
-            };
-            if no_backchannels && matches!(plan.unit(), SpeechUnit::Backchannel(_)) {
-                continue;
+        for unit in planner_units_from_events(&mut planner, &events, no_backchannels) {
+            match unit {
+                ExpressiveUnit::Speech(plan) => {
+                    tts.enqueue(plan)?;
+                }
+                ExpressiveUnit::Face(command) => {
+                    eprintln!("[live-half-duplex] face event: {command:?}");
+                }
             }
-            spoken_parts.push(plan.text().to_string());
         }
+        played_any_audio |=
+            drain_ready_tts_audio(tts, transcript, self_hearing, "live-half-duplex response")?;
 
         if events.iter().any(is_terminal_llm_event) {
             break;
         }
     }
 
-    let text = spoken_parts.join(" ");
-    let text = text.trim();
-    let response = if text.is_empty() {
-        "I heard you, but I lost my words.".to_string()
-    } else {
-        text.to_string()
-    };
-    Ok(SpeechPlan::from(SpeechUnit::FullTurn(response)))
+    played_any_audio |= flush_tts_audio(
+        tts,
+        transcript,
+        self_hearing,
+        "live-half-duplex response",
+        Duration::from_secs(30),
+    )?;
+    if !played_any_audio {
+        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
+            "I heard you, but I lost my words.".to_string(),
+        )))?;
+        let played_fallback = flush_tts_audio(
+            tts,
+            transcript,
+            self_hearing,
+            "live-half-duplex response fallback",
+            Duration::from_secs(30),
+        )?;
+        anyhow::ensure!(
+            played_fallback,
+            "Piper produced no audio frames before timeout"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn planner_units_from_events(
+    planner: &mut SpeechPlanner,
+    events: &[LlmEvent],
+    no_backchannels: bool,
+) -> Vec<ExpressiveUnit> {
+    planner
+        .ingest(events)
+        .into_iter()
+        .filter_map(|unit| match unit {
+            ExpressiveUnit::Speech(plan)
+                if no_backchannels && matches!(plan.unit(), SpeechUnit::Backchannel(_)) =>
+            {
+                None
+            }
+            _ => Some(unit),
+        })
+        .collect()
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_ready_tts_audio(
+    tts: &mut impl TextToSpeech,
+    transcript: &str,
+    self_hearing: &mut listenbury::SelfHearingState,
+    source: &str,
+) -> Result<bool> {
+    let frames = tts.poll_audio()?;
+    if frames.is_empty() {
+        return Ok(false);
+    }
+    let audio_dur = tts_audio_duration(&frames);
+    self_hearing.mark_output_started(transcript, audio_dur);
+    eprintln!(
+        "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
+        self_hearing.current_utterance_text.as_deref().unwrap_or("")
+    );
+    play_audio_frames(&frames, source)?;
+    Ok(true)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn flush_tts_audio(
+    tts: &mut impl TextToSpeech,
+    transcript: &str,
+    self_hearing: &mut listenbury::SelfHearingState,
+    source: &str,
+    timeout: Duration,
+) -> Result<bool> {
+    let quiet_after_audio = Duration::from_millis(100);
+    let deadline = Instant::now() + timeout;
+    let mut played_any_audio = false;
+    let mut last_audio_at = None;
+
+    while Instant::now() < deadline {
+        if drain_ready_tts_audio(tts, transcript, self_hearing, source)? {
+            played_any_audio = true;
+            last_audio_at = Some(Instant::now());
+            continue;
+        }
+        if let Some(last_audio_at) = last_audio_at {
+            if Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    Ok(played_any_audio)
 }
 
 #[cfg(all(
@@ -702,4 +821,66 @@ where
             None,
         )
         .context("failed to build input stream")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::planner_units_from_events;
+    use listenbury::mind::llm::LlmEvent;
+    use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlanner, SpeechUnit};
+
+    fn token(text: &str) -> LlmEvent {
+        LlmEvent::Token {
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn planner_units_emit_speech_before_completed_event() {
+        let mut planner = SpeechPlanner::default();
+        let emitted_before_completed =
+            planner_units_from_events(&mut planner, &[token("I think that works.")], false);
+        assert!(matches!(
+            emitted_before_completed.first(),
+            Some(ExpressiveUnit::Speech(_))
+        ));
+
+        let emitted_on_completed =
+            planner_units_from_events(&mut planner, &[LlmEvent::Completed], false);
+        assert!(emitted_on_completed.is_empty());
+    }
+
+    #[test]
+    fn planner_units_still_filter_backchannels() {
+        let mut planner = SpeechPlanner::default();
+        let without_filter = planner_units_from_events(
+            &mut planner,
+            &[token("Okay. This should still be spoken.")],
+            false,
+        );
+        assert!(without_filter.iter().any(|unit| matches!(
+            unit,
+            ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
+        )));
+
+        let mut planner = SpeechPlanner::default();
+        let with_filter = planner_units_from_events(
+            &mut planner,
+            &[token("Okay. This should still be spoken.")],
+            true,
+        );
+        assert!(with_filter.iter().all(|unit| !matches!(
+            unit,
+            ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
+        )));
+    }
+
+    #[test]
+    fn planner_units_preserve_face_event_order() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner_units_from_events(&mut planner, &[token("Okay 🙂 I see.")], false);
+        assert!(matches!(units.first(), Some(ExpressiveUnit::Speech(_))));
+        assert!(matches!(units.get(1), Some(ExpressiveUnit::Face(_))));
+        assert!(matches!(units.get(2), Some(ExpressiveUnit::Speech(_))));
+    }
 }
