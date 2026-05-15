@@ -809,9 +809,50 @@ fn planner_units_from_events(
             {
                 None
             }
+            ExpressiveUnit::Speech(plan) if is_thinking_leak(plan.text()) => None,
             _ => Some(unit),
         })
         .collect()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn is_thinking_leak(text: &str) -> bool {
+    let text = text
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim_start_matches(|ch: char| ch == '-' || ch.is_whitespace())
+        .to_ascii_lowercase();
+
+    [
+        "<think>",
+        "assistant should",
+        "the assistant should",
+        "the assistant's response",
+        "the user asks",
+        "the user asked",
+        "user asks",
+        "user asked",
+        "the instructions",
+        "instructions:",
+        "we should respond",
+        "we should produce",
+        "we need to",
+        "need to answer",
+        "let's craft",
+        "short reply:",
+        "or we can do",
+    ]
+    .iter()
+    .any(|prefix| text.starts_with(prefix))
+        || text.contains(" the instructions:")
 }
 
 #[cfg(any(
@@ -947,7 +988,7 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
 ))]
 fn build_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nWrite only the words Pete should say aloud.\nDo not mention the assistant, the user, instructions, reasoning, drafting, or possible replies.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
 }
 
@@ -1252,6 +1293,26 @@ mod tests {
             unit,
             ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
         )));
+    }
+
+    #[test]
+    fn planner_units_drop_thinking_leaks() {
+        let mut controller = ConversationController::default();
+        let units = planner_units_from_events(
+            &mut controller,
+            &[
+                token("<thought>this should be a thought</thought> "),
+                token("<thinking>Or is it thinking</thinking> "),
+                token("Yes, I can hear you."),
+            ],
+            false,
+        );
+
+        assert_eq!(units.len(), 1);
+        assert!(matches!(
+            units.first(),
+            Some(ExpressiveUnit::Speech(plan)) if plan.text() == "Yes, I can hear you."
+        ));
     }
 
     #[test]

@@ -236,6 +236,7 @@ pub enum MouthCommand {
 pub struct SpeechPlanner {
     buffer: String,
     config: SpeechPlannerConfig,
+    thought_filter: ThoughtMarkupFilter,
 }
 
 impl Default for SpeechPlanner {
@@ -249,6 +250,7 @@ impl SpeechPlanner {
         Self {
             buffer: String::new(),
             config,
+            thought_filter: ThoughtMarkupFilter::default(),
         }
     }
 
@@ -260,12 +262,14 @@ impl SpeechPlanner {
         let mut completed = false;
         for event in events {
             match event {
-                LlmEvent::Token { text } => self.buffer.push_str(text),
+                LlmEvent::Token { text } => self.buffer.push_str(&self.thought_filter.push(text)),
                 LlmEvent::Completed => {
+                    self.buffer.push_str(&self.thought_filter.finish());
                     completed = true;
                 }
                 LlmEvent::Cancelled | LlmEvent::Error { .. } => {
                     self.buffer.clear();
+                    self.thought_filter.reset();
                     return Vec::new();
                 }
             }
@@ -353,6 +357,104 @@ impl SpeechPlanner {
             (None, None) => None,
         }
     }
+}
+
+#[derive(Debug, Default)]
+struct ThoughtMarkupFilter {
+    pending: String,
+    hidden_until: Option<&'static str>,
+}
+
+impl ThoughtMarkupFilter {
+    fn push(&mut self, text: &str) -> String {
+        self.pending.push_str(text);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> String {
+        self.drain(true)
+    }
+
+    fn reset(&mut self) {
+        self.pending.clear();
+        self.hidden_until = None;
+    }
+
+    fn drain(&mut self, completed: bool) -> String {
+        let mut visible = String::new();
+        loop {
+            if let Some(close_tag) = self.hidden_until {
+                if let Some(end) = find_ascii_case_insensitive(&self.pending, close_tag) {
+                    self.pending.drain(..end + close_tag.len());
+                    self.hidden_until = None;
+                    continue;
+                }
+                if completed {
+                    self.pending.clear();
+                    self.hidden_until = None;
+                } else {
+                    keep_possible_tag_prefix(&mut self.pending, &[close_tag]);
+                }
+                break;
+            }
+
+            let Some((start, open_tag, close_tag)) = first_thought_open_tag(&self.pending) else {
+                if completed {
+                    visible.push_str(&self.pending);
+                    self.pending.clear();
+                } else {
+                    let keep_from = possible_tag_prefix_start(&self.pending, THOUGHT_OPEN_TAGS);
+                    visible.push_str(&self.pending[..keep_from]);
+                    self.pending.drain(..keep_from);
+                }
+                break;
+            };
+
+            visible.push_str(&self.pending[..start]);
+            self.pending.drain(..start + open_tag.len());
+            self.hidden_until = Some(close_tag);
+        }
+        visible
+    }
+}
+
+const THOUGHT_OPEN_TAGS: &[&str] = &["<think>", "<thinking>", "<thought>"];
+const THOUGHT_TAG_PAIRS: &[(&str, &str)] = &[
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<thought>", "</thought>"),
+];
+
+fn first_thought_open_tag(text: &str) -> Option<(usize, &'static str, &'static str)> {
+    THOUGHT_TAG_PAIRS
+        .iter()
+        .filter_map(|(open, close)| {
+            find_ascii_case_insensitive(text, open).map(|index| (index, *open, *close))
+        })
+        .min_by_key(|(index, _, _)| *index)
+}
+
+fn find_ascii_case_insensitive(text: &str, needle: &str) -> Option<usize> {
+    text.to_ascii_lowercase().find(needle)
+}
+
+fn keep_possible_tag_prefix(text: &mut String, tags: &[&str]) {
+    let keep_from = possible_tag_prefix_start(text, tags);
+    text.drain(..keep_from);
+}
+
+fn possible_tag_prefix_start(text: &str, tags: &[&str]) -> usize {
+    (0..text.len())
+        .find(|&index| {
+            text.is_char_boundary(index)
+                && tags.iter().any(|tag| {
+                    let suffix = &text[index..];
+                    !suffix.is_empty()
+                        && suffix.len() < tag.len()
+                        && tag.starts_with(&suffix.to_ascii_lowercase())
+                })
+        })
+        .unwrap_or(text.len())
 }
 
 fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
@@ -585,6 +687,32 @@ mod tests {
             vec![speech(SpeechUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
+        );
+    }
+
+    #[test]
+    fn thought_tags_are_not_spoken() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token(
+            "<thought>this should be a thought</thought> <thinking>Or is it thinking</thinking> Yes, I can hear you.",
+        )]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Yes, I can hear you.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn split_thought_tags_are_not_spoken() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("<th")]).is_empty());
+        assert!(planner.ingest(&[token("inking>hidden")]).is_empty());
+        let units = planner.ingest(&[token("</thinking> Good.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::Backchannel("Good.".to_string()))]
         );
     }
 
