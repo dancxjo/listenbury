@@ -335,7 +335,7 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn transcribe_group(
+pub(super) fn transcribe_group(
     frames: &[AudioFrame],
     recognizer: &mut WhisperSpeechRecognizer,
 ) -> Result<String> {

@@ -9,7 +9,7 @@ mod model_paths;
 mod piper;
 
 use anyhow::Result;
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -32,6 +32,7 @@ enum Command {
     Transcribe(TranscribeCommand),
     Say(SayCommand),
     RoundTripWav(RoundTripWavCommand),
+    LiveHalfDuplex(LiveHalfDuplexCommand),
     Models {
         #[command(subcommand)]
         command: ModelsCommand,
@@ -130,6 +131,30 @@ pub(crate) struct RoundTripWavCommand {
     pub(crate) piper_voice: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum ModelProfile {
+    #[default]
+    Tiny,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct LiveHalfDuplexCommand {
+    #[arg(long, default_value_t = 30)]
+    pub(crate) seconds: u64,
+    #[arg(long, value_enum, default_value_t = ModelProfile::Tiny)]
+    pub(crate) model_profile: ModelProfile,
+    #[arg(long)]
+    pub(crate) no_backchannels: bool,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) llm_model: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_voice: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelsCommand {
     Fetch,
@@ -173,6 +198,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
         Command::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
+        Command::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::SpeechCache { command } => commands::run_speech_cache(command),
     }
@@ -318,5 +344,39 @@ mod tests {
             command.whisper_model,
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
+    }
+
+    #[test]
+    fn live_half_duplex_parses_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "live-half-duplex"])
+            .expect("live-half-duplex should parse with defaults");
+
+        let Some(Command::LiveHalfDuplex(command)) = cli.command else {
+            panic!("expected live-half-duplex command");
+        };
+        assert_eq!(command.seconds, 30);
+        assert_eq!(command.model_profile, ModelProfile::Tiny);
+        assert!(!command.no_backchannels);
+    }
+
+    #[test]
+    fn live_half_duplex_parses_optional_flags() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "live-half-duplex",
+            "--seconds",
+            "12",
+            "--model-profile",
+            "tiny",
+            "--no-backchannels",
+        ])
+        .expect("live-half-duplex should parse optional flags");
+
+        let Some(Command::LiveHalfDuplex(command)) = cli.command else {
+            panic!("expected live-half-duplex command");
+        };
+        assert_eq!(command.seconds, 12);
+        assert_eq!(command.model_profile, ModelProfile::Tiny);
+        assert!(command.no_backchannels);
     }
 }

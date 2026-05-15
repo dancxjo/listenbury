@@ -141,29 +141,99 @@ pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
 pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
     let frames = read_wav_frames(&command.input_wav, 2_048)
         .with_context(|| format!("failed to read WAV {}", command.input_wav.display()))?;
+    play_audio_frames(&frames, &command.input_wav.display().to_string())
+}
+
+#[cfg(not(feature = "audio-cpal"))]
+pub(crate) fn run_record_wav(_command: RecordWavCommand) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
+}
+
+#[cfg(not(feature = "audio-cpal"))]
+pub(crate) fn run_play_wav(_command: PlayWavCommand) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
+}
+
+#[cfg(feature = "audio-cpal")]
+fn build_input_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_tx: crossbeam_channel::Sender<f32>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample,
+    f32: FromSample<T>,
+{
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], _| {
+                for sample in data {
+                    let _ = sample_tx.try_send(sample.to_sample::<f32>());
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("failed to build input stream")
+}
+
+#[cfg(feature = "audio-cpal")]
+fn build_output_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    samples: Arc<Vec<f32>>,
+    playback_cursor: Arc<AtomicUsize>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample + FromSample<f32>,
+{
+    device
+        .build_output_stream(
+            config,
+            move |output: &mut [T], _| {
+                for out in output.iter_mut() {
+                    let idx = playback_cursor.fetch_add(1, Ordering::Relaxed);
+                    let sample = samples.get(idx).copied().unwrap_or(0.0);
+                    *out = T::from_sample(sample);
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("failed to build output stream")
+}
+
+#[cfg(feature = "audio-cpal")]
+pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<()> {
     let Some(first_frame) = frames.first() else {
-        anyhow::bail!(
-            "WAV {} did not contain any audio frames",
-            command.input_wav.display()
-        );
+        anyhow::bail!("no audio frames available for playback from {source}");
     };
     let sample_rate = first_frame.sample_rate_hz;
     let channels = first_frame.channels;
+    anyhow::ensure!(
+        sample_rate > 0,
+        "audio from {source} has invalid sample rate"
+    );
+    anyhow::ensure!(
+        channels > 0,
+        "audio from {source} has invalid channel count"
+    );
 
     let total_samples: usize = frames.iter().map(|frame| frame.samples.len()).sum();
     let mut audio_samples = Vec::with_capacity(total_samples);
-    for frame in &frames {
+    for frame in frames {
         anyhow::ensure!(
             frame.sample_rate_hz == sample_rate,
-            "WAV {} changed sample rate mid-stream ({} -> {})",
-            command.input_wav.display(),
+            "audio from {source} changed sample rate mid-stream ({} -> {})",
             sample_rate,
             frame.sample_rate_hz
         );
         anyhow::ensure!(
             frame.channels == channels,
-            "WAV {} changed channel count mid-stream ({} -> {})",
-            command.input_wav.display(),
+            "audio from {source} changed channel count mid-stream ({} -> {})",
             channels,
             frame.channels
         );
@@ -271,75 +341,12 @@ pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
 
     let audio_duration = playback_duration(total_samples, sample_rate, channels);
     println!(
-        "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {}",
+        "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {source}",
         sample_rate,
         audio_duration.as_secs_f64(),
-        command.input_wav.display()
     );
 
     Ok(())
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-pub(crate) fn run_record_wav(_command: RecordWavCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-pub(crate) fn run_play_wav(_command: PlayWavCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
-}
-
-#[cfg(feature = "audio-cpal")]
-fn build_input_stream<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    sample_tx: crossbeam_channel::Sender<f32>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<cpal::Stream>
-where
-    T: Sample + SizedSample,
-    f32: FromSample<T>,
-{
-    device
-        .build_input_stream(
-            config,
-            move |data: &[T], _| {
-                for sample in data {
-                    let _ = sample_tx.try_send(sample.to_sample::<f32>());
-                }
-            },
-            err_fn,
-            None,
-        )
-        .context("failed to build input stream")
-}
-
-#[cfg(feature = "audio-cpal")]
-fn build_output_stream<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    samples: Arc<Vec<f32>>,
-    playback_cursor: Arc<AtomicUsize>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<cpal::Stream>
-where
-    T: Sample + SizedSample + FromSample<f32>,
-{
-    device
-        .build_output_stream(
-            config,
-            move |output: &mut [T], _| {
-                for out in output.iter_mut() {
-                    let idx = playback_cursor.fetch_add(1, Ordering::Relaxed);
-                    let sample = samples.get(idx).copied().unwrap_or(0.0);
-                    *out = T::from_sample(sample);
-                }
-            },
-            err_fn,
-            None,
-        )
-        .context("failed to build output stream")
 }
 
 #[cfg(feature = "audio-cpal")]

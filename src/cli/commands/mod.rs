@@ -1,6 +1,7 @@
 mod breath_transcribe;
 mod cpal_diag;
 mod demos;
+mod live_half_duplex;
 mod llama;
 mod mic_transcribe;
 mod models;
@@ -12,6 +13,7 @@ mod vad_trace;
 pub(crate) use breath_transcribe::run_breath_transcribe;
 pub(crate) use cpal_diag::{run_play_wav, run_record_wav};
 pub(crate) use demos::{run_demo_vad, run_fake_turn};
+pub(crate) use live_half_duplex::run_live_half_duplex;
 pub(crate) use llama::run_llama_turn;
 pub(crate) use mic_transcribe::run_mic_transcribe;
 pub(crate) use models::run_models;

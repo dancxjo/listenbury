@@ -13,6 +13,7 @@ Listenbury is an active prototype with working pipeline components and CLI demos
 - Whisper ASR WAV transcription (`transcribe`, feature-gated)
 - Piper TTS demo (`say`, feature-gated)
 - End-to-end WAV round trip (ASR -> LLM -> TTS) (`round-trip-wav`, feature-gated)
+- Live half-duplex mic conversation loop (`live-half-duplex`, feature-gated)
 - Model asset inspection/fetch utilities (`models`, feature-gated)
 
 The repository currently emphasizes local backend integration and CLI-driven validation.
@@ -115,6 +116,7 @@ listenbury llama-turn [--llm-model <model.gguf>] "prompt"
 listenbury transcribe <input.wav> [--whisper-model <model.bin>]
 listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
 listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
+listenbury live-half-duplex [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
 ```
 
@@ -130,6 +132,10 @@ listenbury models <fetch|status|path>
 - `round-trip-wav`:
   - input WAV is mixed/resampled to mono 16kHz before transcription
   - writes output WAV to `out/listenbury-round-trip.wav`
+- `live-half-duplex`:
+  - half-duplex loop: listen for a completed breath group, transcribe, generate, synthesize, play, return to listening
+  - no interruption while Pete is speaking (capture pauses during playback)
+  - `--no-backchannels` skips short backchannel-only planner units in spoken responses
 
 ## Models and paths
 
