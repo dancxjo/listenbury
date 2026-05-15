@@ -1,8 +1,13 @@
+use crate::event::HearingEvent;
 use crate::mind::llm::LlmEvent;
 use crate::mind::turn::{TurnState, TurnTracker};
 use crate::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
+pub const DEFAULT_INTERRUPT_BLIP_MS: u64 = 80;
+pub const DEFAULT_INTERRUPT_FADE_THRESHOLD_MS: u64 = 160;
+pub const DEFAULT_INTERRUPT_STOP_THRESHOLD_MS: u64 = 450;
+pub const DEFAULT_INTERRUPT_FADEOUT_MS: u64 = 180;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackchannelId {
@@ -162,16 +167,149 @@ pub enum RuntimePacket {
     InterruptionDetected,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Copy)]
+pub struct InterruptionPolicy {
+    pub ignore_blip_ms: u64,
+    pub fade_threshold_ms: u64,
+    pub stop_threshold_ms: u64,
+    pub fade_out_ms: u64,
+}
+
+impl Default for InterruptionPolicy {
+    fn default() -> Self {
+        Self {
+            ignore_blip_ms: DEFAULT_INTERRUPT_BLIP_MS,
+            fade_threshold_ms: DEFAULT_INTERRUPT_FADE_THRESHOLD_MS,
+            stop_threshold_ms: DEFAULT_INTERRUPT_STOP_THRESHOLD_MS,
+            fade_out_ms: DEFAULT_INTERRUPT_FADEOUT_MS,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct InterruptionDecision {
+    pub mouth_command: Option<MouthCommand>,
+    pub cancel_generation: bool,
+    pub clear_tts_queue: bool,
+}
+
+impl Default for InterruptionDecision {
+    fn default() -> Self {
+        Self {
+            mouth_command: None,
+            cancel_generation: false,
+            clear_tts_queue: false,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ConversationController {
     pub turn_tracker: TurnTracker,
     pub filler_planner: FillerPlanner,
     pub speech_planner: SpeechPlanner,
+    pub interruption_policy: InterruptionPolicy,
     pending_runtime_packets: Vec<RuntimePacket>,
     runtime_context: Vec<RuntimePacket>,
+    interruption_started_at_ms: Option<u64>,
+    interruption_faded: bool,
+    interruption_recorded: bool,
+}
+
+impl Default for ConversationController {
+    fn default() -> Self {
+        Self {
+            turn_tracker: TurnTracker::default(),
+            filler_planner: FillerPlanner::default(),
+            speech_planner: SpeechPlanner::default(),
+            interruption_policy: InterruptionPolicy::default(),
+            pending_runtime_packets: Vec::new(),
+            runtime_context: Vec::new(),
+            interruption_started_at_ms: None,
+            interruption_faded: false,
+            interruption_recorded: false,
+        }
+    }
 }
 
 impl ConversationController {
+    pub fn on_pete_speech_started(&mut self) {
+        self.turn_tracker.on_pete_speech_started();
+        self.interruption_started_at_ms = None;
+        self.interruption_faded = false;
+        self.interruption_recorded = false;
+    }
+
+    pub fn on_hearing_event(&mut self, event: &HearingEvent, now_ms: u64) -> InterruptionDecision {
+        let was_pete_outputting = matches!(
+            self.turn_tracker.state(),
+            TurnState::PeteSpeaking | TurnState::PeteInterrupted
+        );
+        self.turn_tracker.on_hearing_event(event);
+
+        match event {
+            HearingEvent::SpeechStarted => {
+                if was_pete_outputting {
+                    self.interruption_started_at_ms.get_or_insert(now_ms);
+                }
+                InterruptionDecision::default()
+            }
+            HearingEvent::SpeechContinued { .. } => self.interruption_decision(now_ms),
+            HearingEvent::PauseStarted | HearingEvent::BreathGroupClosed { .. } => {
+                self.interruption_started_at_ms = None;
+                self.interruption_faded = false;
+                InterruptionDecision::default()
+            }
+            HearingEvent::BreathGroupOpened { .. } => InterruptionDecision::default(),
+        }
+    }
+
+    fn interruption_decision(&mut self, now_ms: u64) -> InterruptionDecision {
+        let Some(started_at_ms) = self.interruption_started_at_ms else {
+            return InterruptionDecision::default();
+        };
+
+        let elapsed_ms = now_ms.saturating_sub(started_at_ms);
+        if elapsed_ms <= self.interruption_policy.ignore_blip_ms {
+            return InterruptionDecision::default();
+        }
+
+        if elapsed_ms >= self.interruption_policy.stop_threshold_ms {
+            self.turn_tracker.on_pete_interrupted();
+            self.record_interruption_packet_once();
+            self.interruption_started_at_ms = None;
+            self.interruption_faded = false;
+            return InterruptionDecision {
+                mouth_command: Some(MouthCommand::StopNow),
+                cancel_generation: true,
+                clear_tts_queue: true,
+            };
+        }
+
+        if elapsed_ms >= self.interruption_policy.fade_threshold_ms && !self.interruption_faded {
+            self.turn_tracker.on_pete_interrupted();
+            self.record_interruption_packet_once();
+            self.interruption_faded = true;
+            return InterruptionDecision {
+                mouth_command: Some(MouthCommand::FadeOut {
+                    millis: self.interruption_policy.fade_out_ms,
+                }),
+                cancel_generation: true,
+                clear_tts_queue: false,
+            };
+        }
+
+        InterruptionDecision::default()
+    }
+
+    fn record_interruption_packet_once(&mut self) {
+        if self.interruption_recorded {
+            return;
+        }
+        self.record_runtime_packet(RuntimePacket::InterruptionDetected);
+        self.interruption_recorded = true;
+    }
+
     pub fn record_runtime_packet(&mut self, packet: RuntimePacket) {
         self.pending_runtime_packets.push(packet);
     }
@@ -207,6 +345,8 @@ impl ConversationController {
 
 #[cfg(test)]
 mod tests {
+    use crate::event::HearingEvent;
+
     use super::*;
 
     fn thinking_context(now_ms: u64, turn_id: u64) -> FillerContext {
@@ -294,6 +434,52 @@ mod tests {
                 RuntimePacket::UserStartedSpeaking,
                 RuntimePacket::InterruptionDetected
             ]
+        );
+    }
+
+    #[test]
+    fn interruption_policy_ignores_brief_user_blips() {
+        let mut controller = ConversationController::default();
+        controller.on_pete_speech_started();
+        let started = controller.on_hearing_event(&HearingEvent::SpeechStarted, 1_000);
+        let continued =
+            controller.on_hearing_event(&HearingEvent::SpeechContinued { speech_prob: 0.9 }, 1_060);
+
+        assert!(started.mouth_command.is_none());
+        assert!(continued.mouth_command.is_none());
+        assert_eq!(controller.turn_tracker.state(), TurnState::PeteSpeaking);
+    }
+
+    #[test]
+    fn interruption_policy_fades_then_stops_for_sustained_speech() {
+        let mut controller = ConversationController::default();
+        controller.on_pete_speech_started();
+        controller.on_hearing_event(&HearingEvent::SpeechStarted, 5_000);
+
+        let fade =
+            controller.on_hearing_event(&HearingEvent::SpeechContinued { speech_prob: 0.9 }, 5_180);
+        assert!(matches!(
+            fade.mouth_command,
+            Some(MouthCommand::FadeOut { millis: 180 })
+        ));
+        assert!(fade.cancel_generation);
+        assert!(!fade.clear_tts_queue);
+
+        let stop =
+            controller.on_hearing_event(&HearingEvent::SpeechContinued { speech_prob: 0.9 }, 5_500);
+        assert!(matches!(stop.mouth_command, Some(MouthCommand::StopNow)));
+        assert!(stop.cancel_generation);
+        assert!(stop.clear_tts_queue);
+        assert_eq!(controller.turn_tracker.state(), TurnState::PeteInterrupted);
+
+        controller.apply_safe_boundary_updates();
+        assert_eq!(
+            controller
+                .runtime_context()
+                .iter()
+                .filter(|packet| matches!(packet, RuntimePacket::InterruptionDetected))
+                .count(),
+            1
         );
     }
 }
