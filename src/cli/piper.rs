@@ -254,6 +254,7 @@ mod tests {
         let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
+            output_wav: None,
             words: vec!["hello".to_string()],
         })
         .expect("single word should be text");
@@ -268,6 +269,7 @@ mod tests {
         let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
+            output_wav: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "hello".to_string(),
@@ -288,6 +290,7 @@ mod tests {
         let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
+            output_wav: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "voice.onnx".to_string(),
