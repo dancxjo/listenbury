@@ -5,6 +5,7 @@ use crate::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechPlan
 use std::collections::VecDeque;
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
+pub const DEFAULT_FILLER_ACTIVATION_DELAY_MS: u64 = 800;
 pub const DEFAULT_INTERRUPT_BLIP_MS: u64 = 80;
 pub const DEFAULT_INTERRUPT_FADE_THRESHOLD_MS: u64 = 160;
 pub const DEFAULT_INTERRUPT_STOP_THRESHOLD_MS: u64 = 450;
@@ -197,7 +198,7 @@ pub struct FillerPlannerConfig {
 impl Default for FillerPlannerConfig {
     fn default() -> Self {
         Self {
-            min_silence_for_filler_ms: 800,
+            min_silence_for_filler_ms: DEFAULT_FILLER_ACTIVATION_DELAY_MS,
             repeat_cooldown_ms: DEFAULT_FILLER_REPEAT_COOLDOWN_MS,
             allow_multiple_fillers_per_turn: false,
         }
@@ -223,7 +224,6 @@ impl FillerPlanner {
         if ctx.turn_state != TurnState::PeteThinking
             || ctx.user_interrupted_recently
             || ctx.main_llm_has_safe_speech_unit
-            || ctx.main_llm_has_emitted_token
             || ctx.silence_duration_ms < self.config.min_silence_for_filler_ms
             || ctx.vad_confidence >= 0.5
             || ctx.main_llm_started_at_ms.is_none()
@@ -529,10 +529,21 @@ mod tests {
     }
 
     #[test]
-    fn planner_prefers_silence_when_llm_already_has_tokens() {
+    fn planner_can_fill_after_tokens_before_safe_speech() {
         let mut planner = FillerPlanner::default();
         let mut ctx = thinking_context(10_000, 1);
         ctx.main_llm_has_emitted_token = true;
+        assert!(matches!(
+            planner.decide(&ctx),
+            FillerDecision::PlayCachedBackchannel { .. }
+        ));
+    }
+
+    #[test]
+    fn planner_prefers_silence_when_safe_speech_is_ready() {
+        let mut planner = FillerPlanner::default();
+        let mut ctx = thinking_context(10_000, 1);
+        ctx.main_llm_has_safe_speech_unit = true;
         assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
     }
 

@@ -208,17 +208,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-const FILLER_SILENCE_DURATION_MS: u64 = 1_200;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const FILLER_PLANNING_ENABLED: bool = false;
+const FILLER_SILENCE_DURATION_MS: u64 = listenbury::DEFAULT_FILLER_ACTIVATION_DELAY_MS;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -717,7 +707,7 @@ fn stream_speech_to_tts(
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
             if !filler_attempted
-                && !main_llm_has_emitted_token
+                && !main_llm_has_safe_speech_unit
                 && llm_started_at.elapsed() >= Duration::from_millis(FILLER_SILENCE_DURATION_MS)
             {
                 let now_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
@@ -1113,7 +1103,7 @@ fn maybe_plan_cached_backchannel(
     main_llm_has_emitted_token: bool,
     main_llm_has_safe_speech_unit: bool,
 ) -> Option<SpeechPlan> {
-    if !FILLER_PLANNING_ENABLED || no_backchannels {
+    if no_backchannels {
         return None;
     }
     let ctx = FillerContext {
@@ -1848,29 +1838,54 @@ mod tests {
     }
 
     #[test]
-    fn filler_planning_is_disabled_for_now() {
+    fn filler_planning_can_emit_cached_backchannel_before_safe_speech() {
         let mut controller = ConversationController::default();
         controller.turn_tracker.on_pete_thinking_started();
 
-        let filler = maybe_plan_cached_backchannel(
+        let first = maybe_plan_cached_backchannel(
             &mut controller,
             "Can you explain this?",
             false,
             42,
             10_000,
-            11_200,
+            10_800,
             false,
             false,
         );
-        assert!(filler.is_none());
-        assert!(!controller
-            .runtime_context()
-            .iter()
-            .any(|packet| matches!(packet, RuntimePacket::BackchannelPlayed { .. })));
+        let safe_backchannels = SpeechPlannerConfig::default().safe_backchannels;
+        assert!(matches!(
+            first.as_ref().map(|plan| plan.unit()),
+            Some(SpeechUnit::Backchannel(text)) if safe_backchannels.contains(text)
+        ));
+
+        if let Some(plan) = first {
+            controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
+                text: plan.text().to_string(),
+            });
+            controller.apply_safe_boundary_updates();
+        }
+        assert!(
+            controller
+                .runtime_context()
+                .iter()
+                .any(|packet| matches!(packet, RuntimePacket::BackchannelPlayed { .. }))
+        );
+
+        let second = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            42,
+            10_100,
+            10_900,
+            false,
+            false,
+        );
+        assert!(second.is_none());
     }
 
     #[test]
-    fn filler_planning_stays_silent_before_delay_or_after_tokens() {
+    fn filler_planning_waits_for_floor_cede_delay() {
         let mut controller = ConversationController::default();
         controller.turn_tracker.on_pete_thinking_started();
 
@@ -1880,11 +1895,29 @@ mod tests {
             false,
             42,
             10_000,
-            10_500,
+            10_799,
             false,
             false,
         );
         assert!(too_early.is_none());
+
+        let after_delay = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            42,
+            10_000,
+            10_800,
+            false,
+            false,
+        );
+        assert!(after_delay.is_some());
+    }
+
+    #[test]
+    fn filler_planning_can_fill_after_tokens_but_not_after_safe_speech() {
+        let mut controller = ConversationController::default();
+        controller.turn_tracker.on_pete_thinking_started();
 
         let after_token = maybe_plan_cached_backchannel(
             &mut controller,
@@ -1892,10 +1925,22 @@ mod tests {
             false,
             43,
             20_000,
-            21_300,
+            20_800,
             true,
             false,
         );
-        assert!(after_token.is_none());
+        assert!(after_token.is_some());
+
+        let after_safe_speech = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            44,
+            30_000,
+            30_800,
+            false,
+            true,
+        );
+        assert!(after_safe_speech.is_none());
     }
 }
