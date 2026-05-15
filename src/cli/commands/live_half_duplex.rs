@@ -844,8 +844,10 @@ fn is_thinking_leak(text: &str) -> bool {
         "instructions:",
         "we should respond",
         "we should produce",
+        "we have to output",
         "we need to",
         "need to answer",
+        "write only the words",
         "let's craft",
         "short reply:",
         "or we can do",
@@ -988,7 +990,7 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
 ))]
 fn build_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nWrite only the words Pete should say aloud.\nDo not mention the assistant, the user, instructions, reasoning, drafting, or possible replies.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
 }
 
@@ -1303,6 +1305,26 @@ mod tests {
             &[
                 token("<thought>this should be a thought</thought> "),
                 token("<thinking>Or is it thinking</thinking> "),
+                token("Yes, I can hear you."),
+            ],
+            false,
+        );
+
+        assert_eq!(units.len(), 1);
+        assert!(matches!(
+            units.first(),
+            Some(ExpressiveUnit::Speech(plan)) if plan.text() == "Yes, I can hear you."
+        ));
+    }
+
+    #[test]
+    fn planner_units_drop_preamble_leaks() {
+        let mut controller = ConversationController::default();
+        let units = planner_units_from_events(
+            &mut controller,
+            &[
+                token("We have to output Pete's spoken response. "),
+                token("\"Write only the words Pete should say aloud.\" "),
                 token("Yes, I can hear you."),
             ],
             false,

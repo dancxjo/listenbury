@@ -638,7 +638,8 @@ fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> 
 /// avoid splitting on `Dr.`, `Mr.`, etc.
 fn punctuation_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
     for (index, ch) in text.char_indices() {
-        let end = index + ch.len_utf8();
+        let punctuation_end = index + ch.len_utf8();
+        let end = closing_quote_end(text, punctuation_end);
         let is_end = end == text.len();
         let next_is_whitespace = text[end..].chars().next().is_some_and(char::is_whitespace);
         if !(next_is_whitespace || is_end) {
@@ -646,11 +647,25 @@ fn punctuation_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<
         }
         match ch {
             '?' | '!' => return Some(end),
-            '.' if !is_common_abbreviation(text[..end].trim(), config) => return Some(end),
+            '.' if !is_common_abbreviation(text[..punctuation_end].trim(), config) => {
+                return Some(end);
+            }
             _ => {}
         }
     }
     None
+}
+
+fn closing_quote_end(text: &str, start: usize) -> usize {
+    let mut end = start;
+    for ch in text[start..].chars() {
+        if matches!(ch, '"' | '\'' | '”' | '’') {
+            end += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    end
 }
 
 #[cfg(test)]
