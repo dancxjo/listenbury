@@ -19,6 +19,9 @@ pub use event::{
 pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };
+pub use hearing::suppression::{
+    SelfHearingState, SuppressionDecision, SUPPRESSION_TAIL_MS,
+};
 pub use hearing::vad::{EnergyVad, VadResult, VoiceActivityDetector};
 pub use mind::controller::{
     BackchannelId, ConversationController, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
