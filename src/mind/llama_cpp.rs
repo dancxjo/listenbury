@@ -36,7 +36,7 @@ impl Default for LlamaCppConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::new(),
-            gpu_layers: None,
+            gpu_layers: Some(0),
             context_size: 2048,
             max_tokens: 128,
             threads: std::thread::available_parallelism()

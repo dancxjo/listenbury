@@ -214,6 +214,7 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
     // ── LLM engine ───────────────────────────────────────────────────────────
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: llm_model,
+        gpu_layers: command.llm_gpu_layers.or(Some(0)),
         ..Default::default()
     })
     .context("failed to initialise LLM engine")?;

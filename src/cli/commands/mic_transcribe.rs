@@ -39,6 +39,10 @@ const AUDIO_RING_CAPACITY: usize = 256;
 const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 const WHISPER_FRAME_SAMPLES: usize = 160;
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+const MONO_CHANNELS: u16 = 1;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct MicTranscribeState {
@@ -191,6 +195,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
     let vad_backend = command.vad.as_backend_kind();
+    let (frame_sample_rate_hz, frame_channels) =
+        vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let mut state = MicTranscribeState {
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
@@ -230,6 +236,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
             input_frame_samples,
             input_sample_rate_hz,
             input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
             &mut ring_tx,
             &dropped_in_ring,
         );
@@ -246,6 +254,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         input_frame_samples,
         input_sample_rate_hz,
         input_channels,
+        frame_sample_rate_hz,
+        frame_channels,
         &mut ring_tx,
         &dropped_in_ring,
     );
@@ -364,6 +374,8 @@ fn drain_pending_into_ring(
     input_frame_samples: usize,
     input_sample_rate_hz: u32,
     input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
     ring_tx: &mut listenbury::audio::ring::AudioRingTx,
     dropped_in_ring: &AtomicUsize,
 ) {
@@ -377,10 +389,17 @@ fn drain_pending_into_ring(
         if samples.len() < input_frame_samples {
             break;
         }
+        let samples = convert_frame_samples(
+            &samples,
+            input_sample_rate_hz,
+            input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
+        );
         let frame = AudioFrame {
             captured_at: ExactTimestamp::now(),
-            sample_rate_hz: input_sample_rate_hz,
-            channels: input_channels,
+            sample_rate_hz: frame_sample_rate_hz,
+            channels: frame_channels,
             samples,
         };
         if ring_tx.try_push(frame).is_err() {
@@ -438,6 +457,48 @@ fn prepare_whisper_frames(frames: &[AudioFrame], frame_samples: usize) -> Result
             samples: chunk.to_vec(),
         })
         .collect())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn vad_frame_format(
+    vad_backend: listenbury::hearing::vad::VadBackendKind,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+) -> (u32, u16) {
+    match vad_backend {
+        listenbury::hearing::vad::VadBackendKind::WebRtc => {
+            (WEBRTC_VAD_SAMPLE_RATE_HZ, MONO_CHANNELS)
+        }
+        listenbury::hearing::vad::VadBackendKind::Energy
+        | listenbury::hearing::vad::VadBackendKind::Silero => {
+            (input_sample_rate_hz, input_channels)
+        }
+    }
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn convert_frame_samples(
+    samples: &[f32],
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
+) -> Vec<f32> {
+    if input_sample_rate_hz == frame_sample_rate_hz && input_channels == frame_channels {
+        return samples.to_vec();
+    }
+
+    let mut converted = if input_channels != frame_channels && frame_channels == MONO_CHANNELS {
+        mix_to_mono(samples, input_channels)
+    } else {
+        samples.to_vec()
+    };
+
+    if input_sample_rate_hz != frame_sample_rate_hz {
+        converted = resample_linear(&converted, input_sample_rate_hz, frame_sample_rate_hz);
+    }
+
+    converted
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -518,4 +579,35 @@ where
             None,
         )
         .context("failed to build input stream")
+}
+
+#[cfg(all(test, feature = "asr-whisper", feature = "audio-cpal"))]
+mod tests {
+    use super::{convert_frame_samples, vad_frame_format};
+    use listenbury::hearing::vad::VadBackendKind;
+
+    #[test]
+    fn webrtc_vad_frames_use_supported_mono_rate() {
+        assert_eq!(
+            vad_frame_format(VadBackendKind::WebRtc, 44_100, 2),
+            (16_000, 1)
+        );
+        assert_eq!(
+            vad_frame_format(VadBackendKind::Energy, 44_100, 2),
+            (44_100, 2)
+        );
+    }
+
+    #[test]
+    fn webrtc_conversion_turns_44100_stereo_10ms_into_16000_mono_10ms() {
+        let input = vec![1.0; 882];
+        let converted = convert_frame_samples(&input, 44_100, 2, 16_000, 1);
+
+        assert_eq!(converted.len(), 160);
+        assert!(
+            converted
+                .iter()
+                .all(|sample| (*sample - 1.0).abs() < 0.0001)
+        );
+    }
 }

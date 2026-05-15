@@ -236,7 +236,7 @@ const NANOS_PER_MILLI: u128 = 1_000_000;
     feature = "llm-llama-cpp-cuda",
     feature = "tts-piper"
 ))]
-const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(16);
+const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(0);
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",

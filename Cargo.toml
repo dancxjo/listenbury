@@ -59,7 +59,8 @@ version = "0.16"
 optional = true
 
 [dependencies.llama-cpp-2]
-version = "0.1.146"
+git = "https://github.com/utilityai/llama-cpp-rs.git"
+rev = "6feffc60b5277b1fb9a718857736194cfdc736ac"
 optional = true
 default-features = false
 

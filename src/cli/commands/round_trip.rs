@@ -126,6 +126,7 @@ struct RoundTripModelPaths {
     input_wav: PathBuf,
     whisper_model: PathBuf,
     llm_model: PathBuf,
+    llm_gpu_layers: Option<u32>,
     piper_bin: PathBuf,
     piper_voice: PathBuf,
 }
@@ -141,6 +142,7 @@ impl RoundTripModelPaths {
             input_wav: command.input_wav,
             whisper_model: resolve_whisper_model(command.whisper_model)?,
             llm_model: resolve_llm_model(command.llm_model)?,
+            llm_gpu_layers: command.llm_gpu_layers.or(Some(0)),
             piper_bin: resolve_piper_bin(command.piper_bin)?,
             piper_voice: resolve_piper_voice(command.piper_voice)?,
         })
@@ -188,6 +190,7 @@ fn transcribe_frames(
 fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result<SpeechPlan> {
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: paths.llm_model.clone(),
+        gpu_layers: paths.llm_gpu_layers,
         ..Default::default()
     })
     .with_context(|| {

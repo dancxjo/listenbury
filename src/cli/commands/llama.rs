@@ -21,7 +21,7 @@ pub(crate) fn run_llama_turn(command: LlamaTurnCommand) -> Result<()> {
     let model_path = resolve_llm_model(args.llm_model)?;
     let config = LlamaCppConfig {
         model_path,
-        gpu_layers: args.llm_gpu_layers,
+        gpu_layers: args.llm_gpu_layers.or(Some(0)),
         ..Default::default()
     };
     let mut llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
@@ -189,6 +189,7 @@ mod tests {
     fn llama_turn_args_treats_single_argument_as_prompt() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
             llm_model: None,
+            llm_gpu_layers: None,
             mode: PromptMode::Raw,
             max_tokens: 48,
             prompt: vec!["hello".to_string()],
@@ -204,6 +205,7 @@ mod tests {
     fn llama_turn_args_accepts_legacy_model_position() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
             llm_model: None,
+            llm_gpu_layers: None,
             mode: PromptMode::Raw,
             max_tokens: 48,
             prompt: vec![
@@ -225,6 +227,7 @@ mod tests {
     fn llama_turn_args_wraps_spoken_prompt_by_default() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
             llm_model: None,
+            llm_gpu_layers: None,
             mode: PromptMode::Spoken,
             max_tokens: 32,
             prompt: vec!["Can you hear me?".to_string()],
