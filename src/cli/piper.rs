@@ -1,4 +1,6 @@
 use crate::cli::SayCommand;
+#[cfg(feature = "audio-cpal")]
+use crate::cli::commands::play_audio_frames;
 use crate::cli::model_paths::resolve_piper_voice;
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
@@ -17,17 +19,11 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
     let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
-    std::fs::create_dir_all("out").context("failed to create out directory")?;
-    let output_path = std::path::Path::new("out/listenbury-piper-test.wav");
-    write_wav(output_path, &frames)?;
-
-    let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
-    println!(
-        "Wrote {} frames / {} samples to {}",
-        frames.len(),
-        sample_count,
-        output_path.display()
-    );
+    if let Some(output_path) = piper_args.output_wav {
+        write_say_wav(&output_path, &frames)?;
+    } else {
+        play_say_audio(&frames)?;
+    }
 
     Ok(())
 }
@@ -36,6 +32,7 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
 struct SayArgs {
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
+    output_wav: Option<PathBuf>,
     text: String,
 }
 
@@ -58,9 +55,44 @@ impl SayArgs {
         Ok(Self {
             piper_bin,
             piper_voice,
+            output_wav: command.output_wav,
             text: words.join(" "),
         })
     }
+}
+
+fn write_say_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
+    if let Some(parent) = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create output directory {}", parent.display()))?;
+    }
+
+    write_wav(output_path, frames)?;
+
+    let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    println!(
+        "Wrote {} frames / {} samples to {}",
+        frames.len(),
+        sample_count,
+        output_path.display()
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
+fn play_say_audio(frames: &[AudioFrame]) -> Result<()> {
+    play_audio_frames(frames, "Piper TTS")
+}
+
+#[cfg(not(feature = "audio-cpal"))]
+fn play_say_audio(_frames: &[AudioFrame]) -> Result<()> {
+    anyhow::bail!(
+        "listenbury say needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
+    )
 }
 
 fn looks_like_piper_bin(word: &str) -> bool {

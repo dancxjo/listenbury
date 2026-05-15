@@ -120,6 +120,8 @@ pub(crate) struct SayCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) output_wav: Option<PathBuf>,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
 }
@@ -290,6 +292,26 @@ mod tests {
         };
         assert!(command.piper_bin.is_none());
         assert!(command.piper_voice.is_none());
+        assert!(command.output_wav.is_none());
+        assert_eq!(command.words, ["hello", "there"]);
+    }
+
+    #[test]
+    fn say_accepts_output_wav_override() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "say",
+            "--output-wav",
+            "out/test.wav",
+            "hello",
+            "there",
+        ])
+        .expect("say should parse an optional output WAV path");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
         assert_eq!(command.words, ["hello", "there"]);
     }
 

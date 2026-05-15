@@ -171,7 +171,7 @@ listenbury vad-trace <input.wav> [--jsonl <out/vad-trace.jsonl>]
 listenbury mic-transcribe [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
 listenbury llama-turn [--llm-model <model.gguf>] "prompt"
 listenbury transcribe <input.wav> [--whisper-model <model.bin>]
-listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] "text"
+listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--output-wav <out.wav>] "text"
 listenbury round-trip-wav <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury live-half-duplex [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
 listenbury models <fetch|status|path>
@@ -185,7 +185,7 @@ listenbury models <fetch|status|path>
 - `mic-transcribe`: diagnostic live microphone path (CPAL -> AudioFrame buffer -> VAD -> breath grouping -> Whisper)
 - `llama-turn`: streams text tokens from a local llama.cpp model
 - `transcribe`: transcribes WAV input with Whisper
-- `say`: writes synthesized WAV to `out/listenbury-piper-test.wav`
+- `say`: plays synthesized speech through the default speaker; `--output-wav` writes a WAV instead
 - `round-trip-wav`:
   - input WAV is mixed/resampled to mono 16kHz before transcription
   - writes output WAV to `out/listenbury-round-trip.wav`

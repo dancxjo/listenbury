@@ -12,6 +12,8 @@ mod transcribe;
 mod vad_trace;
 
 pub(crate) use breath_transcribe::run_breath_transcribe;
+#[cfg(feature = "audio-cpal")]
+pub(crate) use cpal_diag::play_audio_frames;
 pub(crate) use cpal_diag::{run_play_wav, run_record_wav};
 pub(crate) use demos::{run_demo_vad, run_fake_turn};
 pub(crate) use dogfood_two::run_dogfood_two;
