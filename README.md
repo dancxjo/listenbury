@@ -203,7 +203,7 @@ Default model assets fetched by `models fetch`:
 
 - `ggml-tiny.en.bin` (Whisper)
 - `llama-3.2-3b-instruct-q4_k_m.gguf` (Llama 3.2 3B Instruct via llama.cpp)
-- `en_US-lessac-medium.onnx` + `en_US-lessac-medium.onnx.json` (Piper)
+- `en_US-ryan-medium.onnx` + `en_US-ryan-medium.onnx.json` (Piper)
 
 ### Environment variables
 

@@ -44,7 +44,7 @@ pub(crate) fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> 
         "LISTENBURY_PIPER_VOICE",
         "Piper voice",
         "--piper-voice",
-        Some("piper-lessac-medium"),
+        Some("piper-ryan-medium"),
         |path| path.extension().is_some_and(|ext| ext == "onnx"),
     )
 }
