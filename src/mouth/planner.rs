@@ -1,4 +1,6 @@
 use crate::mind::llm::LlmEvent;
+use seams::sentence_detector::dialog_detector::SentenceDetectorDialog;
+use std::sync::OnceLock;
 
 /// Remove all emoji characters from a string, leaving only non-emoji text.
 pub fn strip_emoji(text: &str) -> String {
@@ -82,11 +84,6 @@ pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "That makes sense.",
 ];
 const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];
-const COMMON_ABBREVIATIONS: &[&str] = &[
-    "dr.", "mr.", "mrs.", "ms.", "prof.", "sr.", "jr.", "vs.", "etc.", "e.g.", "i.e.", "u.s.",
-    "u.k.",
-];
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeechUnit {
     Backchannel(String),
@@ -188,8 +185,7 @@ impl SpeechPlanner {
                 Some(BoundaryResult::EmojiMarker(start, end)) => {
                     let before = self.buffer[..start].trim().to_string();
                     if !before.is_empty() {
-                        let unit = classify_completed_unit(&before)
-                            .unwrap_or(SpeechUnit::FullTurn(before));
+                        let unit = classify_emoji_flushed_text(&before);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                     }
                     let emoji = self.buffer[start..end].to_string();
@@ -211,14 +207,62 @@ impl SpeechPlanner {
     }
 
     fn next_boundary(&self, completed: bool) -> Option<BoundaryResult> {
+        let emoji_boundary = self
+            .buffer
+            .char_indices()
+            .find_map(|(index, ch)| is_emoji_char(ch).then_some((index, index + ch.len_utf8())));
+        let text_boundary = self.next_text_boundary(completed);
+
+        match (emoji_boundary, text_boundary) {
+            (Some((start, end)), Some(sentence_end)) if start < sentence_end => {
+                Some(BoundaryResult::EmojiMarker(start, end))
+            }
+            (Some(_), Some(sentence_end)) => Some(BoundaryResult::SentenceEnd(sentence_end)),
+            (Some((start, end)), None) => Some(BoundaryResult::EmojiMarker(start, end)),
+            (None, Some(sentence_end)) => Some(BoundaryResult::SentenceEnd(sentence_end)),
+            (None, None) => None,
+        }
+    }
+}
+
+fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
+    static DETECTOR: OnceLock<Option<SentenceDetectorDialog>> = OnceLock::new();
+    DETECTOR
+        .get_or_init(|| SentenceDetectorDialog::new().ok())
+        .as_ref()
+}
+
+impl SpeechPlanner {
+    fn next_text_boundary(&self, completed: bool) -> Option<usize> {
+        let sentence = self.next_sentence_boundary();
+        let clause = self.next_clause_boundary();
+        let discourse = self.next_discourse_marker_boundary(completed);
+        [sentence, clause, discourse].into_iter().flatten().min()
+    }
+
+    fn next_sentence_boundary(&self) -> Option<usize> {
+        let detector = sentence_detector()?;
+        let sentences = detector.detect_sentences_borrowed(&self.buffer).ok()?;
+        let base = self.buffer.as_ptr() as usize;
+
+        for sentence in sentences {
+            let text = sentence.raw_content.trim();
+            if !text.ends_with(['.', '?', '!']) {
+                continue;
+            }
+            let start = sentence.raw_content.as_ptr() as usize - base;
+            let end = start + sentence.raw_content.len();
+            if end <= self.buffer.len() {
+                return Some(end);
+            }
+        }
+
+        None
+    }
+
+    fn next_clause_boundary(&self) -> Option<usize> {
         for (index, ch) in self.buffer.char_indices() {
             let end = index + ch.len_utf8();
-
-            // Emoji characters always act as an immediate boundary.
-            if is_emoji_char(ch) {
-                return Some(BoundaryResult::EmojiMarker(index, end));
-            }
-
             let is_end = end == self.buffer.len();
             let next_is_whitespace = self.buffer[end..]
                 .chars()
@@ -227,29 +271,35 @@ impl SpeechPlanner {
             if !(next_is_whitespace || is_end) {
                 continue;
             }
-            if is_end && !completed && ch == ',' {
-                continue;
-            }
-
-            match ch {
-                '.' => {
-                    let candidate = self.buffer[..end].trim();
-                    if is_common_abbreviation(candidate) {
-                        continue;
-                    }
-                    return Some(BoundaryResult::SentenceEnd(end));
-                }
-                '?' | '!' | ';' | ':' => return Some(BoundaryResult::SentenceEnd(end)),
-                ',' => {
-                    let candidate = self.buffer[..end].trim();
-                    if is_safe_discourse_marker(candidate) {
-                        return Some(BoundaryResult::SentenceEnd(end));
-                    }
-                }
-                _ => {}
+            if matches!(ch, ';' | ':') {
+                return Some(end);
             }
         }
+        None
+    }
 
+    fn next_discourse_marker_boundary(&self, completed: bool) -> Option<usize> {
+        for (index, ch) in self.buffer.char_indices() {
+            if ch != ',' {
+                continue;
+            }
+            let end = index + ch.len_utf8();
+            let is_end = end == self.buffer.len();
+            if is_end && !completed {
+                continue;
+            }
+            let next_is_whitespace = self.buffer[end..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace);
+            if !(next_is_whitespace || is_end) {
+                continue;
+            }
+            let candidate = self.buffer[..end].trim();
+            if is_safe_discourse_marker(candidate) {
+                return Some(end);
+            }
+        }
         None
     }
 }
@@ -310,13 +360,6 @@ fn is_safe_backchannel(text: &str) -> bool {
 
 fn is_safe_discourse_marker(text: &str) -> bool {
     SAFE_DISCOURSE_MARKERS.iter().any(|entry| *entry == text)
-}
-
-fn is_common_abbreviation(text: &str) -> bool {
-    let lowercase = text.trim().to_ascii_lowercase();
-    COMMON_ABBREVIATIONS
-        .iter()
-        .any(|abbreviation| lowercase.ends_with(abbreviation))
 }
 
 #[cfg(test)]
@@ -456,5 +499,55 @@ mod tests {
         assert_eq!(strip_emoji("Hello 🙂 world"), "Hello  world");
         assert_eq!(strip_emoji("No emoji here."), "No emoji here.");
         assert_eq!(strip_emoji("😄"), "");
+    }
+
+    #[test]
+    fn emits_complete_sentence_before_completed_event() {
+        let mut planner = SpeechPlanner::default();
+        let first = planner.ingest(&[token("I think that")]);
+        assert!(first.is_empty());
+
+        let second = planner.ingest(&[token(" works. The next")]);
+        assert_eq!(
+            second,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "I think that works.".to_string()
+            ))]
+        );
+
+        let third = planner.ingest(&[token(" thing is timing.")]);
+        assert_eq!(
+            third,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "The next thing is timing.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn emits_multiple_complete_units_from_one_batch() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("First sentence. Second sentence.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::CompleteSentence("First sentence.".to_string())),
+                speech(SpeechUnit::CompleteSentence("Second sentence.".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_event_clears_buffered_fragment() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("I think this")]).is_empty());
+        assert!(planner.ingest(&[LlmEvent::Cancelled]).is_empty());
+        let units = planner.ingest(&[token(" this definitely works now.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "this definitely works now.".to_string()
+            ))]
+        );
     }
 }
