@@ -25,8 +25,9 @@ pub use hearing::vad::{
     EnergyVad, VadBackendKind, VadResult, VoiceActivityDetector, create_vad_backend,
 };
 pub use mind::controller::{
-    BackchannelId, ConversationController, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
-    FillerDecision, FillerPlanner, FillerPlannerConfig, RuntimePacket,
+    BackchannelId, ConversationController, ConversationMessage, ConversationRole,
+    DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext, FillerDecision, FillerPlanner,
+    FillerPlannerConfig, RuntimePacket,
 };
 #[cfg(feature = "llm-llama-cpp")]
 pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};

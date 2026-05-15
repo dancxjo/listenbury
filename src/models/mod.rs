@@ -47,6 +47,7 @@ pub struct FetchProgress {
 pub struct ModelSelection {
     pub llm: Option<String>,
     pub voice: Option<String>,
+    pub whisper: Option<String>,
 }
 
 pub fn model_selection_path() -> Result<PathBuf> {
@@ -121,7 +122,9 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
         ModelKind::Voice => std::env::var("PETE_VOICE")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_VOICE").ok()),
-        ModelKind::Whisper => None,
+        ModelKind::Whisper => std::env::var("PETE_WHISPER")
+            .ok()
+            .or_else(|| std::env::var("LISTENBURY_WHISPER").ok()),
     };
     let selection = if env_value.is_none() {
         Some(read_model_selection()?)
@@ -133,7 +136,7 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
             selection.and_then(|selection| match kind {
                 ModelKind::Llm => selection.llm,
                 ModelKind::Voice => selection.voice,
-                ModelKind::Whisper => None,
+                ModelKind::Whisper => selection.whisper,
             })
         })
         .unwrap_or_else(|| default_bundle_id(kind).to_string());
@@ -395,8 +398,8 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{FetchOutcome, fetch_assets_at_home};
-    use crate::models::manifest::ModelAsset;
+    use super::{FetchOutcome, fetch_assets_at_home, find_bundle};
+    use crate::models::manifest::{ModelAsset, ModelKind};
 
     fn temp_dir(label: &str) -> PathBuf {
         let ts = SystemTime::now()
@@ -427,5 +430,30 @@ mod tests {
         assert_eq!(results[0].outcome, FetchOutcome::SkippedExisting);
         assert_eq!(results[0].path, asset_path);
         assert!(results[0].error.is_none());
+    }
+
+    #[test]
+    fn gemma_aliases_resolve_to_llm_bundles() {
+        let gemma3 = find_bundle(ModelKind::Llm, "gemma3").expect("gemma3 bundle");
+        assert_eq!(gemma3.id, "gemma-3-4b-it-q4-k-m");
+
+        let legacy_gemma3 =
+            find_bundle(ModelKind::Llm, "gemma-3-4b-it-q4-0").expect("legacy gemma3 bundle");
+        assert_eq!(legacy_gemma3.id, "gemma-3-4b-it-q4-k-m");
+
+        let gemma4 = find_bundle(ModelKind::Llm, "gemma4").expect("gemma4 bundle");
+        assert_eq!(gemma4.id, "gemma-4-e4b-it-q4-k-m");
+    }
+
+    #[test]
+    fn whisper_aliases_resolve_to_whisper_bundles() {
+        let base = find_bundle(ModelKind::Whisper, "base").expect("base bundle");
+        assert_eq!(base.id, "whisper-base");
+
+        let base_en = find_bundle(ModelKind::Whisper, "base.en").expect("base.en bundle");
+        assert_eq!(base_en.id, "whisper-base-en");
+
+        let turbo = find_bundle(ModelKind::Whisper, "turbo").expect("turbo bundle");
+        assert_eq!(turbo.id, "whisper-large-v3-turbo");
     }
 }

@@ -2,12 +2,35 @@ use crate::event::HearingEvent;
 use crate::mind::llm::LlmEvent;
 use crate::mind::turn::{TurnState, TurnTracker};
 use crate::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
+use std::collections::VecDeque;
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
 pub const DEFAULT_INTERRUPT_BLIP_MS: u64 = 80;
 pub const DEFAULT_INTERRUPT_FADE_THRESHOLD_MS: u64 = 160;
 pub const DEFAULT_INTERRUPT_STOP_THRESHOLD_MS: u64 = 450;
 pub const DEFAULT_INTERRUPT_FADEOUT_MS: u64 = 180;
+pub const DEFAULT_CONVERSATION_HISTORY_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationRole {
+    User,
+    Pete,
+}
+
+impl ConversationRole {
+    pub fn label(self) -> &'static str {
+        match self {
+            ConversationRole::User => "User",
+            ConversationRole::Pete => "Pete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationMessage {
+    pub role: ConversationRole,
+    pub text: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackchannelId {
@@ -209,6 +232,7 @@ pub struct ConversationController {
     pub filler_planner: FillerPlanner,
     pub speech_planner: SpeechPlanner,
     pub interruption_policy: InterruptionPolicy,
+    conversation_history: VecDeque<ConversationMessage>,
     pending_runtime_packets: Vec<RuntimePacket>,
     runtime_context: Vec<RuntimePacket>,
     interruption_started_at_ms: Option<u64>,
@@ -223,6 +247,7 @@ impl Default for ConversationController {
             filler_planner: FillerPlanner::default(),
             speech_planner: SpeechPlanner::default(),
             interruption_policy: InterruptionPolicy::default(),
+            conversation_history: VecDeque::new(),
             pending_runtime_packets: Vec::new(),
             runtime_context: Vec::new(),
             interruption_started_at_ms: None,
@@ -328,6 +353,34 @@ impl ConversationController {
 
     pub fn runtime_context(&self) -> &[RuntimePacket] {
         &self.runtime_context
+    }
+
+    pub fn conversation_history(&self) -> &VecDeque<ConversationMessage> {
+        &self.conversation_history
+    }
+
+    pub fn record_user_message(&mut self, text: impl Into<String>) {
+        self.record_conversation_message(ConversationRole::User, text);
+    }
+
+    pub fn record_pete_message(&mut self, text: impl Into<String>) {
+        self.record_conversation_message(ConversationRole::Pete, text);
+    }
+
+    fn record_conversation_message(&mut self, role: ConversationRole, text: impl Into<String>) {
+        let text = text.into();
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+
+        self.conversation_history.push_back(ConversationMessage {
+            role,
+            text: text.to_string(),
+        });
+        while self.conversation_history.len() > DEFAULT_CONVERSATION_HISTORY_LIMIT {
+            self.conversation_history.pop_front();
+        }
     }
 
     pub fn decide_filler_command(&mut self, ctx: &FillerContext) -> Option<MouthCommand> {
@@ -442,6 +495,36 @@ mod tests {
                 RuntimePacket::InterruptionDetected
             ]
         );
+    }
+
+    #[test]
+    fn controller_keeps_recent_labeled_conversation_messages() {
+        let mut controller = ConversationController::default();
+        controller.record_user_message("hello");
+        controller.record_pete_message("Hi.");
+
+        assert_eq!(
+            controller.conversation_history(),
+            &VecDeque::from([
+                ConversationMessage {
+                    role: ConversationRole::User,
+                    text: "hello".to_string(),
+                },
+                ConversationMessage {
+                    role: ConversationRole::Pete,
+                    text: "Hi.".to_string(),
+                },
+            ])
+        );
+
+        for index in 0..25 {
+            controller.record_user_message(format!("message {index}"));
+        }
+        assert_eq!(
+            controller.conversation_history().len(),
+            DEFAULT_CONVERSATION_HISTORY_LIMIT
+        );
+        assert_eq!(controller.conversation_history()[0].text, "message 5");
     }
 
     #[test]

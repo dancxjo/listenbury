@@ -42,11 +42,13 @@ pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
         ModelsCommand::List => {
             let llm = selected_bundle(ModelKind::Llm)?.id;
             let voice = selected_bundle(ModelKind::Voice)?.id;
+            let whisper = selected_bundle(ModelKind::Whisper)?.id;
             for kind in [ModelKind::Llm, ModelKind::Voice, ModelKind::Whisper] {
                 println!("{}", listenbury::models::model_kind_label(kind).bold());
                 for bundle in MODEL_BUNDLES.iter().filter(|bundle| bundle.kind == kind) {
                     let marker = if (kind == ModelKind::Llm && bundle.id == llm)
                         || (kind == ModelKind::Voice && bundle.id == voice)
+                        || (kind == ModelKind::Whisper && bundle.id == whisper)
                     {
                         "*"
                     } else {
@@ -94,6 +96,7 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
     let kind = match command.kind {
         ModelsUseKind::Llm => ModelKind::Llm,
         ModelsUseKind::Voice => ModelKind::Voice,
+        ModelsUseKind::Whisper => ModelKind::Whisper,
     };
     let bundle = find_bundle(kind, &command.model).with_context(|| {
         format!(
@@ -106,6 +109,7 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
     match command.kind {
         ModelsUseKind::Llm => selection.llm = Some(bundle.id.to_string()),
         ModelsUseKind::Voice => selection.voice = Some(bundle.id.to_string()),
+        ModelsUseKind::Whisper => selection.whisper = Some(bundle.id.to_string()),
     }
     write_model_selection(&selection)?;
     println!(

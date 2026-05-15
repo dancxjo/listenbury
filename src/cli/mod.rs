@@ -292,6 +292,7 @@ pub(crate) struct ModelsUseCommand {
 pub(crate) enum ModelsUseKind {
     Llm,
     Voice,
+    Whisper,
 }
 
 #[derive(Debug, Subcommand)]
