@@ -8,6 +8,10 @@ pub struct GenerationId(pub Uuid);
 #[derive(Debug, Clone)]
 pub struct GenerationRequest {
     pub prompt: String,
+    /// Maximum generated tokens, or no explicit generation cap.
+    ///
+    /// Engines may still stop on cancellation, stop markers, end-of-context, or backend-specific
+    /// terminal conditions. The llama.cpp engine treats `None` as a context-filling continuation.
     pub max_tokens: Option<usize>,
     pub stop: Vec<String>,
 }

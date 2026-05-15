@@ -245,8 +245,8 @@ impl LlamaGenerationWorker {
     fn run(self, sender: &crossbeam_channel::Sender<LlmEvent>) -> Result<GenerationOutcome> {
         let context_size = NonZeroU32::new(self.config.context_size)
             .context("llama.cpp context_size must be greater than zero")?;
-        let max_tokens = self.request.max_tokens.unwrap_or(self.config.max_tokens);
-        let max_total_tokens = checked_total_tokens(&self.request.prompt, &self.model, max_tokens)?;
+        let max_total_tokens =
+            checked_total_tokens(&self.request.prompt, &self.model, self.request.max_tokens)?;
 
         let thread_count =
             i32::try_from(self.config.threads).context("threads exceeds i32::MAX")?;
@@ -298,7 +298,9 @@ impl LlamaGenerationWorker {
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut stop_detector = StopDetector::new(self.request.stop);
 
-        while generated_tokens < max_tokens && (n_cur as usize) < n_ctx {
+        while within_generation_limit(generated_tokens, self.request.max_tokens)
+            && (n_cur as usize) < n_ctx
+        {
             if self.cancel.load(Ordering::Relaxed) {
                 return Ok(GenerationOutcome::Cancelled);
             }
@@ -320,7 +322,12 @@ impl LlamaGenerationWorker {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
             if self.model.is_eog_token(token) {
-                return Ok(GenerationOutcome::Completed);
+                if self.request.max_tokens.is_some() {
+                    return Ok(GenerationOutcome::Completed);
+                }
+                commit_sampled_token(&mut ctx, &mut batch, token, &mut n_cur)?;
+                generated_tokens += 1;
+                continue;
             }
 
             let text = self
@@ -339,14 +346,8 @@ impl LlamaGenerationWorker {
                 }
             }
 
-            batch.clear();
-            batch
-                .add(token, n_cur, &[0], true)
-                .context("failed to add sampled token to llama.cpp batch")?;
-            n_cur += 1;
+            commit_sampled_token(&mut ctx, &mut batch, token, &mut n_cur)?;
             generated_tokens += 1;
-            ctx.decode(&mut batch)
-                .context("failed to decode sampled token with llama.cpp")?;
         }
 
         let trailing = stop_detector.finish();
@@ -356,6 +357,26 @@ impl LlamaGenerationWorker {
 
         Ok(GenerationOutcome::Completed)
     }
+}
+
+fn within_generation_limit(generated_tokens: usize, max_tokens: Option<usize>) -> bool {
+    max_tokens.is_none_or(|max_tokens| generated_tokens < max_tokens)
+}
+
+fn commit_sampled_token(
+    ctx: &mut LlamaContext<'_>,
+    batch: &mut LlamaBatch<'_>,
+    token: llama_cpp_2::token::LlamaToken,
+    n_cur: &mut i32,
+) -> Result<()> {
+    batch.clear();
+    batch
+        .add(token, *n_cur, &[0], true)
+        .context("failed to add sampled token to llama.cpp batch")?;
+    *n_cur += 1;
+    ctx.decode(batch)
+        .context("failed to decode sampled token with llama.cpp")?;
+    Ok(())
 }
 
 fn drain_generation_controls(
@@ -503,17 +524,26 @@ fn llama_backend() -> Result<Arc<LlamaBackend>> {
     Ok(backend)
 }
 
-fn checked_total_tokens(prompt: &str, model: &LlamaModel, max_tokens: usize) -> Result<usize> {
-    if max_tokens == 0 {
-        bail!("max_tokens must be greater than zero");
-    }
+fn checked_total_tokens(
+    prompt: &str,
+    model: &LlamaModel,
+    max_tokens: Option<usize>,
+) -> Result<usize> {
     let prompt_tokens = model
         .str_to_token(prompt, AddBos::Always)
         .context("failed to tokenize prompt")?
         .len();
-    prompt_tokens
-        .checked_add(max_tokens)
-        .context("prompt plus max_tokens overflowed usize")
+    match max_tokens {
+        Some(max_tokens) => {
+            if max_tokens == 0 {
+                bail!("max_tokens must be greater than zero");
+            }
+            prompt_tokens
+                .checked_add(max_tokens)
+                .context("prompt plus max_tokens overflowed usize")
+        }
+        None => Ok(prompt_tokens),
+    }
 }
 
 fn build_sampler(temperature: f32, top_p: f32) -> LlamaSampler {

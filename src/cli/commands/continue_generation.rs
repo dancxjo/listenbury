@@ -18,13 +18,22 @@ use std::sync::Arc;
 #[cfg(feature = "llm-llama-cpp")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "llm-llama-cpp")]
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "llm-llama-cpp")]
+const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in artificial awareness. Please continuously generate thoughts as new input arrives from the outside world. Try to understand what's going on around you and make new friends.\n\n";
+#[cfg(feature = "llm-llama-cpp")]
+const TIME_EVENT_INTERVAL: Duration = Duration::from_secs(10);
 
 #[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
-    let max_tokens =
-        usize::try_from(command.max_tokens).context("max_tokens does not fit in usize")?;
-    anyhow::ensure!(max_tokens > 0, "max_tokens must be greater than zero");
+    let max_tokens = command
+        .max_tokens
+        .map(|max_tokens| usize::try_from(max_tokens).context("max_tokens does not fit in usize"))
+        .transpose()?;
+    if let Some(max_tokens) = max_tokens {
+        anyhow::ensure!(max_tokens > 0, "max_tokens must be greater than zero");
+    }
     anyhow::ensure!(
         command.context_size > 0,
         "context_size must be greater than zero"
@@ -41,7 +50,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     };
 
     let initial_prompt = if command.prompt.is_empty() {
-        "Continue generating while new context is appended.\n\n".to_string()
+        DEFAULT_CONTINUE_PROMPT.to_string()
     } else {
         command.prompt.join(" ")
     };
@@ -50,7 +59,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let id = llm
         .start(GenerationRequest {
             prompt,
-            max_tokens: Some(max_tokens),
+            max_tokens,
             stop,
         })
         .context("failed to start continued llama.cpp generation")?;
@@ -90,14 +99,22 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         .context("failed to spawn stdin reader")?;
 
     eprintln!(
-        "listenbury dev continue: streaming one generation; stdin lines append to the live context. Ctrl-C cancels."
+        "listenbury dev continue: streaming one generation; stdin lines and 10s time events append to the live context. Ctrl-C cancels."
     );
 
     let mut cancelled = false;
+    let mut next_time_event_at = Instant::now() + TIME_EVENT_INTERVAL;
     loop {
         if interrupted.load(Ordering::Relaxed) && !cancelled {
             llm.cancel(id)?;
             cancelled = true;
+        }
+
+        let now = Instant::now();
+        if now >= next_time_event_at {
+            llm.append_prompt(id, wrap_time_event(&current_time_message()))
+                .context("failed to append time event to live generation")?;
+            next_time_event_at = now + TIME_EVENT_INTERVAL;
         }
 
         for stdin_event in stdin_rx.try_iter() {
@@ -155,15 +172,40 @@ fn wrap_live_input(text: &str) -> String {
     )
 }
 
+#[cfg(any(feature = "llm-llama-cpp", test))]
+fn wrap_time_event(message: &str) -> String {
+    format!("\n<live_input>\nTIME: {message}\n</live_input>\n<assistant_continues>\n")
+}
+
+#[cfg(feature = "llm-llama-cpp")]
+fn current_time_message() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::ZERO);
+    format!(
+        "The current Unix time is {}.{:03} seconds.",
+        now.as_secs(),
+        now.subsec_millis()
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::wrap_live_input;
+    use super::{wrap_live_input, wrap_time_event};
 
     #[test]
     fn stdin_append_is_wrapped_as_live_input() {
         assert_eq!(
             wrap_live_input("turn toward the window\n"),
             "\n<live_input>\nUSER: turn toward the window\n</live_input>\n<assistant_continues>\n"
+        );
+    }
+
+    #[test]
+    fn time_append_is_wrapped_as_live_input() {
+        assert_eq!(
+            wrap_time_event("The current Unix time is 42.000 seconds."),
+            "\n<live_input>\nTIME: The current Unix time is 42.000 seconds.\n</live_input>\n<assistant_continues>\n"
         );
     }
 }

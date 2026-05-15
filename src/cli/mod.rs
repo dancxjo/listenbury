@@ -152,13 +152,13 @@ pub(crate) struct ContinueCommand {
     /// Prompt framing to apply to the initial prompt only. Stdin appends are inserted raw.
     #[arg(long, value_enum, default_value_t = PromptMode::Raw)]
     pub(crate) mode: PromptMode,
-    /// Maximum tokens the LLM may generate while accepting prompt appends.
-    #[arg(long, default_value_t = 512)]
-    pub(crate) max_tokens: u32,
+    /// Optional maximum generated-token cap. By default, continue until Ctrl-C or context fills.
+    #[arg(long)]
+    pub(crate) max_tokens: Option<u32>,
     /// llama.cpp context size for the live session.
     #[arg(long, default_value_t = 4096)]
     pub(crate) context_size: u32,
-    /// Initial prompt text. If omitted, generation starts from a small continued-inference seed.
+    /// Initial prompt text. If omitted, generation starts from Pete's continuous-awareness seed.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
 }
@@ -743,9 +743,23 @@ mod tests {
         };
         assert!(command.llm_model.is_none());
         assert_eq!(command.mode, PromptMode::Raw);
-        assert_eq!(command.max_tokens, 512);
+        assert_eq!(command.max_tokens, None);
         assert_eq!(command.context_size, 4096);
         assert_eq!(command.prompt, ["seed", "prompt"]);
+    }
+
+    #[test]
+    fn dev_continue_accepts_optional_token_cap() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "continue", "--max-tokens", "64"])
+            .expect("dev continue should parse an optional token cap");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert_eq!(command.max_tokens, Some(64));
     }
 
     #[test]
