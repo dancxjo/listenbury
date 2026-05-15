@@ -407,6 +407,7 @@ fn generate_response(
     input: &str,
     max_tokens: u32,
 ) -> Result<String> {
+    let max_tokens = usize::try_from(max_tokens).context("max_tokens does not fit in usize")?;
     let generation_id = llm
         .start(GenerationRequest {
             prompt: build_prompt(instance_id, input),

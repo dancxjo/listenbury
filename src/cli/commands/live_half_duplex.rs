@@ -139,13 +139,6 @@ use listenbury::mouth::tts::TextToSpeech;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
 use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(any(
     test,
