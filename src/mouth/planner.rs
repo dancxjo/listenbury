@@ -134,6 +134,7 @@ enum BoundaryResult {
 }
 
 const MIN_NON_BACKCHANNEL_CHARS: usize = 12;
+const MIN_SHORT_COMPLETE_CHARS: usize = 4;
 pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "Okay.",
     "Right.",
@@ -147,7 +148,7 @@ const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];
 /// Short sentences that are safe to emit immediately even though they fall
 /// below the `MIN_NON_BACKCHANNEL_CHARS` length guard.
 const SAFE_SHORT_SENTENCES: &[&str] = &[
-    "Yes.", "No.", "Yep.", "Nope.", "Sure.", "Okay.", "Right.", "Good.", "Great.",
+    "Yes.", "No.", "Yep.", "Nope.", "Sure.", "Okay.", "Right.", "Good.", "Great.", "Hi!",
 ];
 const COMMON_ABBREVIATIONS: &[&str] = &[
     "dr.", "mr.", "mrs.", "ms.", "prof.", "sr.", "jr.", "vs.", "etc.", "e.g.", "i.e.", "u.s.",
@@ -427,16 +428,27 @@ fn classify_boundary_unit(text: &str, config: &SpeechPlannerConfig) -> Option<Sp
     if is_safe_discourse_marker(text, config) {
         return Some(SpeechUnit::DiscourseMarker(text.to_string()));
     }
+    if text.ends_with(['.', '?', '!']) {
+        if text.len() < config.min_non_backchannel_chars
+            && meaningful_char_count(text) < MIN_SHORT_COMPLETE_CHARS
+        {
+            return None;
+        }
+        return Some(SpeechUnit::CompleteSentence(text.to_string()));
+    }
     if text.len() < config.min_non_backchannel_chars {
         return None;
-    }
-    if text.ends_with(['.', '?', '!']) {
-        return Some(SpeechUnit::CompleteSentence(text.to_string()));
     }
     if text.ends_with([';', ':']) {
         return Some(SpeechUnit::CompleteClause(text.to_string()));
     }
     None
+}
+
+fn meaningful_char_count(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '.' | '?' | '!'))
+        .count()
 }
 
 fn classify_completed_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
@@ -495,9 +507,12 @@ fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
 
 /// Find the byte offset just after the first complete sentence in `text`.
 ///
-/// Tries the seams dialog detector first; falls back to a simple punctuation
-/// scan with abbreviation guarding when seams is unavailable.
+/// Uses a simple punctuation scan first for the streaming hot path, then falls
+/// back to the seams dialog detector for cases the deterministic scan misses.
 fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
+    if let Some(end) = punctuation_sentence_end(text, config) {
+        return Some(end);
+    }
     if let Some(detector) = sentence_detector() {
         if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
             let mut search_from = 0;
@@ -513,7 +528,7 @@ fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> 
             }
         }
     }
-    punctuation_sentence_end(text, config)
+    None
 }
 
 /// Deterministic punctuation-based sentence boundary scan used as a fallback
@@ -580,6 +595,16 @@ mod tests {
         assert_eq!(
             units,
             vec![speech(SpeechUnit::Backchannel("Okay.".to_string()))]
+        );
+    }
+
+    #[test]
+    fn short_complete_name_answer_emits_early() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Pete. I can")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence("Pete.".to_string()))]
         );
     }
 
@@ -714,11 +739,13 @@ mod tests {
         let units = planner.ingest(&[token("That works. 😄")]);
         assert_eq!(
             units,
-            vec![
-                speech(SpeechUnit::CompleteSentence("That works.".to_string())),
-                face("😄"),
-            ]
+            vec![speech(SpeechUnit::CompleteSentence(
+                "That works.".to_string()
+            ))]
         );
+
+        let units = planner.ingest(&[LlmEvent::Completed]);
+        assert_eq!(units, vec![face("😄")]);
     }
 
     #[test]
@@ -855,7 +882,7 @@ mod tests {
             units,
             vec![
                 face("👋🏽"),
-                speech(SpeechUnit::CompleteSentence("Hi!".to_string())),
+                speech(SpeechUnit::Backchannel("Hi!".to_string())),
             ]
         );
     }
