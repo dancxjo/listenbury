@@ -189,14 +189,11 @@ const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
     feature = "tts-piper"
 ))]
 const AUDIO_RING_CAPACITY: usize = 256;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
 ))]
 const FILLER_SILENCE_DURATION_MS: u64 = 1_200;
 #[cfg(all(
@@ -618,34 +615,48 @@ fn stream_speech_to_tts(
         .context("failed to start llama.cpp generation")?;
 
     let llm_started_at_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
+    let llm_started_at = Instant::now();
     eprintln!(
         "[live-half-duplex] controller turn state after llm start: {:?}",
         controller.turn_tracker.state()
     );
     let mut current_spoken_text = String::new();
-    if let Some(filler_plan) = maybe_plan_cached_backchannel(
-        controller,
-        transcript,
-        no_backchannels,
-        user_turn_id,
-        llm_started_at_ms,
-        false,
-    ) {
-        eprintln!(
-            "[live-half-duplex] controller filler decision: speaking backchannel {:?}",
-            filler_plan.unit()
-        );
-        let filler_text = filler_plan.text().to_string();
-        current_spoken_text = filler_text.clone();
-        tts.enqueue(filler_plan)?;
-        controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text: filler_text });
-        controller.apply_safe_boundary_updates();
-    }
-
+    let mut main_llm_has_emitted_token = false;
+    let mut main_llm_has_safe_speech_unit = false;
+    let mut filler_attempted = false;
     let mut played_any_audio = false;
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
+            if !filler_attempted
+                && !main_llm_has_emitted_token
+                && llm_started_at.elapsed() >= Duration::from_millis(FILLER_SILENCE_DURATION_MS)
+            {
+                let now_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
+                filler_attempted = true;
+                if let Some(filler_plan) = maybe_plan_cached_backchannel(
+                    controller,
+                    transcript,
+                    no_backchannels,
+                    user_turn_id,
+                    llm_started_at_ms,
+                    now_ms,
+                    main_llm_has_emitted_token,
+                    main_llm_has_safe_speech_unit,
+                ) {
+                    eprintln!(
+                        "[live-half-duplex] controller filler decision: speaking backchannel {:?}",
+                        filler_plan.unit()
+                    );
+                    let filler_text = filler_plan.text().to_string();
+                    current_spoken_text = filler_text.clone();
+                    tts.enqueue(filler_plan)?;
+                    controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
+                        text: filler_text,
+                    });
+                    controller.apply_safe_boundary_updates();
+                }
+            }
             played_any_audio |= drain_ready_tts_audio(
                 tts,
                 &current_spoken_text,
@@ -662,11 +673,18 @@ fn stream_speech_to_tts(
                 anyhow::bail!("llama.cpp generation failed: {message}");
             }
         }
+        if events
+            .iter()
+            .any(|event| matches!(event, LlmEvent::Token { .. }))
+        {
+            main_llm_has_emitted_token = true;
+        }
         for unit in planner_units_from_events(controller, &events, no_backchannels) {
             match unit {
                 ExpressiveUnit::Speech(plan) => {
                     let text = plan.text().to_string();
                     current_spoken_text = text.clone();
+                    main_llm_has_safe_speech_unit = true;
                     tts.enqueue(plan)?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
                     controller.apply_safe_boundary_updates();
@@ -771,7 +789,9 @@ fn maybe_plan_cached_backchannel(
     transcript: &str,
     no_backchannels: bool,
     user_turn_id: u64,
+    llm_started_at_ms: u64,
     now_ms: u64,
+    main_llm_has_emitted_token: bool,
     main_llm_has_safe_speech_unit: bool,
 ) -> Option<SpeechPlan> {
     if no_backchannels {
@@ -781,9 +801,9 @@ fn maybe_plan_cached_backchannel(
         turn_state: controller.turn_tracker.state(),
         transcript_so_far: Some(transcript.to_string()),
         vad_confidence: 0.0,
-        silence_duration_ms: FILLER_SILENCE_DURATION_MS,
-        main_llm_started_at_ms: Some(now_ms),
-        main_llm_has_emitted_token: false,
+        silence_duration_ms: now_ms.saturating_sub(llm_started_at_ms),
+        main_llm_started_at_ms: Some(llm_started_at_ms),
+        main_llm_has_emitted_token,
         main_llm_has_safe_speech_unit,
         user_interrupted_recently: false,
         now_ms,
@@ -1087,6 +1107,8 @@ mod tests {
             false,
             42,
             10_000,
+            11_200,
+            false,
             false,
         );
         assert!(matches!(
@@ -1113,8 +1135,40 @@ mod tests {
             false,
             42,
             10_100,
+            11_300,
+            false,
             false,
         );
         assert!(second.is_none());
+    }
+
+    #[test]
+    fn filler_planning_stays_silent_before_delay_or_after_tokens() {
+        let mut controller = ConversationController::default();
+        controller.turn_tracker.on_pete_thinking_started();
+
+        let too_early = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            42,
+            10_000,
+            10_500,
+            false,
+            false,
+        );
+        assert!(too_early.is_none());
+
+        let after_token = maybe_plan_cached_backchannel(
+            &mut controller,
+            "Can you explain this?",
+            false,
+            43,
+            20_000,
+            21_300,
+            true,
+            false,
+        );
+        assert!(after_token.is_none());
     }
 }
