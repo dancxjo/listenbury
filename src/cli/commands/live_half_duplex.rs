@@ -196,6 +196,30 @@ const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
     feature = "tts-piper"
 ))]
 const AUDIO_RING_CAPACITY: usize = 256;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const FILLER_SILENCE_DURATION_MS: u64 = 1_200;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const AUDIO_DRAIN_QUIET_THRESHOLD_MS: u64 = 100;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const NANOS_PER_MILLI: u128 = 1_000_000;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -755,7 +779,7 @@ fn maybe_plan_cached_backchannel(
         turn_state: controller.turn_tracker.state(),
         transcript_so_far: Some(transcript.to_string()),
         vad_confidence: 0.0,
-        silence_duration_ms: 1_200,
+        silence_duration_ms: FILLER_SILENCE_DURATION_MS,
         main_llm_started_at_ms: Some(now_ms),
         main_llm_has_emitted_token: false,
         main_llm_has_safe_speech_unit,
@@ -815,7 +839,7 @@ fn flush_tts_audio(
     timeout: Duration,
     controller: &mut ConversationController,
 ) -> Result<bool> {
-    let quiet_after_audio = Duration::from_millis(100);
+    let quiet_after_audio = Duration::from_millis(AUDIO_DRAIN_QUIET_THRESHOLD_MS);
     let deadline = Instant::now() + timeout;
     let mut played_any_audio = false;
     let mut last_audio_at = None;
@@ -844,7 +868,7 @@ fn flush_tts_audio(
     feature = "tts-piper"
 ))]
 fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
-    u64::try_from(unix_nanos / 1_000_000).unwrap_or(u64::MAX)
+    u64::try_from(unix_nanos / NANOS_PER_MILLI).unwrap_or(u64::MAX)
 }
 
 #[cfg(all(
