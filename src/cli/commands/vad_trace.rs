@@ -4,7 +4,7 @@ use listenbury::AudioFrame;
 use listenbury::audio::read_wav_as_audio_frames;
 use listenbury::event::HearingEvent;
 use listenbury::hearing::breath::BreathGroupSegmenter;
-use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+use listenbury::hearing::vad::{VadBackendKind, create_vad_backend};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Write;
@@ -15,8 +15,10 @@ const VAD_TRACE_FRAME_SAMPLES: usize = 160;
 #[derive(Debug, Clone, PartialEq)]
 enum VadTraceEvent {
     VadFrame {
+        backend: VadBackendKind,
         t_ms: u64,
         speech: bool,
+        speech_prob: f32,
         rms: f32,
     },
     BreathGroupStart {
@@ -32,12 +34,22 @@ enum VadTraceEvent {
 pub(crate) fn run_vad_trace(command: VadTraceCommand) -> Result<()> {
     let frames = read_wav_as_audio_frames(&command.input_wav, VAD_TRACE_FRAME_SAMPLES)
         .with_context(|| format!("failed to read WAV {}", command.input_wav.display()))?;
-    let events = collect_vad_trace_events(&frames)?;
+    let backend = command.vad.as_backend_kind();
+    let events = collect_vad_trace_events(&frames, backend)?;
 
     for event in &events {
         match event {
-            VadTraceEvent::VadFrame { t_ms, speech, rms } => {
-                println!("{t_ms:04}ms speech={speech:<5} rms={rms:.3}");
+            VadTraceEvent::VadFrame {
+                backend,
+                t_ms,
+                speech,
+                speech_prob,
+                rms,
+            } => {
+                println!(
+                    "{t_ms:04}ms backend={} speech={speech:<5} prob={speech_prob:.3} rms={rms:.3}",
+                    backend.as_str()
+                );
             }
             VadTraceEvent::BreathGroupStart { t_ms } => {
                 println!("breath-group start={t_ms}ms");
@@ -59,8 +71,11 @@ pub(crate) fn run_vad_trace(command: VadTraceCommand) -> Result<()> {
     Ok(())
 }
 
-fn collect_vad_trace_events(frames: &[AudioFrame]) -> Result<Vec<VadTraceEvent>> {
-    let mut vad = EnergyVad::default();
+fn collect_vad_trace_events(
+    frames: &[AudioFrame],
+    backend: VadBackendKind,
+) -> Result<Vec<VadTraceEvent>> {
+    let mut vad = create_vad_backend(backend)?;
     let mut segmenter = BreathGroupSegmenter::default();
     let mut events = Vec::new();
     let mut t_ms: u64 = 0;
@@ -70,8 +85,10 @@ fn collect_vad_trace_events(frames: &[AudioFrame]) -> Result<Vec<VadTraceEvent>>
         let rms = rms(&frame.samples);
         let vad_result = vad.process_frame(frame)?;
         events.push(VadTraceEvent::VadFrame {
+            backend,
             t_ms,
             speech: vad_result.is_speech,
+            speech_prob: vad_result.speech_prob,
             rms,
         });
 
@@ -120,13 +137,21 @@ fn write_events_jsonl(path: &Path, events: &[VadTraceEvent]) -> Result<()> {
 
     for event in events {
         match event {
-            VadTraceEvent::VadFrame { t_ms, speech, rms } => {
+            VadTraceEvent::VadFrame {
+                backend,
+                t_ms,
+                speech,
+                speech_prob,
+                rms,
+            } => {
                 serde_json::to_writer(
                     &mut writer,
                     &VadFrameJson {
                         kind: "vad_frame",
+                        backend: backend.as_str(),
                         t_ms: *t_ms,
                         speech: *speech,
+                        speech_prob: *speech_prob,
                         rms: *rms,
                     },
                 )?;
@@ -179,8 +204,10 @@ fn rms(samples: &[f32]) -> f32 {
 #[derive(Serialize)]
 struct VadFrameJson {
     kind: &'static str,
+    backend: &'static str,
     t_ms: u64,
     speech: bool,
+    speech_prob: f32,
     rms: f32,
 }
 
@@ -208,7 +235,7 @@ mod tests {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let frames =
             read_wav_as_audio_frames(&repo_root.join("samples/silence-16k-mono.wav"), 160).unwrap();
-        let events = collect_vad_trace_events(&frames).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
 
         assert!(
             !events
@@ -222,7 +249,7 @@ mod tests {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let frames =
             read_wav_as_audio_frames(&repo_root.join("samples/hello-16k-mono.wav"), 160).unwrap();
-        let events = collect_vad_trace_events(&frames).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
 
         assert!(
             events
@@ -242,8 +269,10 @@ mod tests {
             std::env::temp_dir().join(format!("listenbury-vad-trace-{}.jsonl", std::process::id()));
         let events = vec![
             VadTraceEvent::VadFrame {
+                backend: VadBackendKind::Energy,
                 t_ms: 20,
                 speech: true,
+                speech_prob: 0.81,
                 rms: 0.081,
             },
             VadTraceEvent::BreathGroupStart { t_ms: 430 },
@@ -263,6 +292,8 @@ mod tests {
 
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0]["kind"], "vad_frame");
+        assert_eq!(lines[0]["backend"], "energy");
+        assert_eq!(lines[0]["speech_prob"], 0.81);
         assert_eq!(lines[1]["kind"], "breath_group_start");
         assert_eq!(lines[2]["kind"], "breath_group_end");
 
@@ -334,7 +365,7 @@ mod tests {
                 samples: vec![0.3; 160],
             },
         ];
-        let events = collect_vad_trace_events(&frames).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
         let frame_events = events
             .iter()
             .filter_map(|event| match event {

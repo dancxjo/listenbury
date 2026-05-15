@@ -16,7 +16,7 @@ use listenbury::event::HearingEvent;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -42,7 +42,7 @@ const WHISPER_FRAME_SAMPLES: usize = 160;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct MicTranscribeState {
-    vad: EnergyVad,
+    vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     frame_time_ms: u64,
@@ -175,8 +175,10 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         .with_context(|| format!("failed to start capture from {device_name}"))?;
 
     println!(
-        "mic-transcribe listening on {device_name}: {} Hz, {} channel(s). Press Ctrl-C to stop.",
-        input_sample_rate_hz, input_channels
+        "mic-transcribe listening on {device_name}: {} Hz, {} channel(s), vad={}. Press Ctrl-C to stop.",
+        input_sample_rate_hz,
+        input_channels,
+        command.vad.as_backend_kind().as_str()
     );
 
     let stop_deadline = if command.until_ctrl_c {
@@ -188,8 +190,9 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
+    let vad_backend = command.vad.as_backend_kind();
     let mut state = MicTranscribeState {
-        vad: EnergyVad::default(),
+        vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
         frame_time_ms: 0,
