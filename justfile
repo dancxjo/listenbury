@@ -11,6 +11,10 @@ default:
 run *args:
     cargo run -- "$@"
 
+# Download the default model assets into LISTENBURY_HOME.
+fetch:
+    cargo run -- models fetch
+
 # Run the CLI with both local CUDA backend feature flags enabled.
 cuda *args:
     CUDA_LIBRARY_PATH="{{cuda-library-path}}" RUSTFLAGS="{{cuda-rustflags}}" cargo run --features "asr-whisper-cuda llm-llama-cpp-cuda" -- "$@"
