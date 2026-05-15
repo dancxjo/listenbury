@@ -14,7 +14,7 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
         "LISTENBURY_LLM_MODEL",
         "llama.cpp model",
         "--llm-model",
-        Some("tinyllama-q4-k-m"),
+        Some("llama-3-2-3b-instruct-q4-k-m"),
         |path| path.extension().is_some_and(|ext| ext == "gguf"),
     )
 }

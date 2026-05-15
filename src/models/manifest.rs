@@ -15,10 +15,10 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         expected_size_hint: None,
     },
     ModelAsset {
-        id: "tinyllama-q4-k-m",
-        filename: "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-        relative_path: "models/llama/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
-        url: "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+        id: "llama-3-2-3b-instruct-q4-k-m",
+        filename: "llama-3.2-3b-instruct-q4_k_m.gguf",
+        relative_path: "models/llama/llama-3.2-3b-instruct-q4_k_m.gguf",
+        url: "https://huggingface.co/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF/resolve/main/llama-3.2-3b-instruct-q4_k_m.gguf",
         expected_size_hint: None,
     },
     ModelAsset {

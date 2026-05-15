@@ -120,11 +120,17 @@ mod tests {
     fn llama_turn_args_accepts_legacy_model_position() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
             llm_model: None,
-            prompt: vec!["tinyllama.gguf".to_string(), "hello".to_string()],
+            prompt: vec![
+                "llama-3.2-3b-instruct.gguf".to_string(),
+                "hello".to_string(),
+            ],
         })
         .expect("legacy model path should be accepted");
 
-        assert_eq!(args.llm_model, Some(PathBuf::from("tinyllama.gguf")));
+        assert_eq!(
+            args.llm_model,
+            Some(PathBuf::from("llama-3.2-3b-instruct.gguf"))
+        );
         assert_eq!(args.prompt, "hello");
     }
 }
