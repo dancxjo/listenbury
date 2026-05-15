@@ -248,6 +248,23 @@ mod tests {
         assert!(!result.is_speech);
     }
 
+    #[cfg(feature = "vad-webrtc")]
+    #[test]
+    fn webrtc_backend_keeps_energy_fallback_for_loud_frames() {
+        let mut vad = create_vad_backend(VadBackendKind::WebRtc).unwrap();
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.08; 160],
+        };
+
+        let result = vad.process_frame(&frame).unwrap();
+
+        assert!(result.is_speech);
+        assert!(result.speech_prob > 0.0);
+    }
+
     #[cfg(not(feature = "vad-webrtc"))]
     #[test]
     fn webrtc_backend_requires_feature() {
