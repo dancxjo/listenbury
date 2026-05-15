@@ -21,6 +21,7 @@ pub(crate) fn run_llama_turn(command: LlamaTurnCommand) -> Result<()> {
     let model_path = resolve_llm_model(args.llm_model)?;
     let config = LlamaCppConfig {
         model_path,
+        gpu_layers: args.llm_gpu_layers,
         ..Default::default()
     };
     let mut llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
@@ -75,6 +76,7 @@ pub(crate) fn run_llama_turn(_command: LlamaTurnCommand) -> Result<()> {
 #[derive(Debug)]
 struct LlamaTurnArgs {
     llm_model: Option<PathBuf>,
+    llm_gpu_layers: Option<u32>,
     prompt: String,
     max_tokens: usize,
     stop: Vec<String>,
@@ -103,6 +105,7 @@ impl LlamaTurnArgs {
 
         Ok(Self {
             llm_model,
+            llm_gpu_layers: command.llm_gpu_layers,
             prompt,
             max_tokens,
             stop,

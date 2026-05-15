@@ -126,6 +126,9 @@ pub(crate) struct MicTranscribeCommand {
 pub(crate) struct LlamaTurnCommand {
     #[arg(long, alias = "model-path")]
     pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
     /// Prompt framing to apply before generation.
     #[arg(long, value_enum, default_value_t = PromptMode::Spoken)]
     pub(crate) mode: PromptMode,
@@ -189,6 +192,9 @@ pub(crate) struct DogfoodTwoCommand {
     pub(crate) whisper_model: Option<PathBuf>,
     #[arg(long)]
     pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Defaults lower for CUDA live mode so ASR and LLM fit together.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     /// Piper voice used by instance A.

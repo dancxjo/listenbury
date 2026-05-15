@@ -228,6 +228,10 @@ const POST_PLAYBACK_TTS_GRACE_MS: u64 = 1_500;
     feature = "tts-piper"
 ))]
 const NANOS_PER_MILLI: u128 = 1_000_000;
+#[cfg(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda"))]
+const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(16);
+#[cfg(not(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda")))]
+const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = None;
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
 const MONO_CHANNELS: u16 = 1;
 
@@ -319,6 +323,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         })?;
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: paths.llm_model.clone(),
+        gpu_layers: command.llm_gpu_layers.or(DEFAULT_LIVE_LLAMA_GPU_LAYERS),
         ..Default::default()
     })
     .with_context(|| {

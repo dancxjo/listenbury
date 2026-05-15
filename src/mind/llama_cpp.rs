@@ -24,6 +24,7 @@ static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
     pub model_path: PathBuf,
+    pub gpu_layers: Option<u32>,
     pub context_size: u32,
     pub max_tokens: usize,
     pub threads: usize,
@@ -35,6 +36,7 @@ impl Default for LlamaCppConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::new(),
+            gpu_layers: None,
             context_size: 2048,
             max_tokens: 128,
             threads: std::thread::available_parallelism()
@@ -77,14 +79,17 @@ impl LlamaCppEngine {
         }
 
         let backend = llama_backend()?;
-        let model =
-            LlamaModel::load_from_file(&backend, &config.model_path, &LlamaModelParams::default())
-                .with_context(|| {
-                    format!(
-                        "failed to load llama.cpp model at {}",
-                        config.model_path.display()
-                    )
-                })?;
+        let mut model_params = LlamaModelParams::default();
+        if let Some(gpu_layers) = config.gpu_layers {
+            model_params = model_params.with_n_gpu_layers(gpu_layers);
+        }
+        let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
+            .with_context(|| {
+                format!(
+                    "failed to load llama.cpp model at {}",
+                    config.model_path.display()
+                )
+            })?;
 
         Ok(Self {
             backend,
