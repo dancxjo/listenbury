@@ -84,6 +84,15 @@ pub const DEFAULT_SAFE_BACKCHANNELS: &[&str] = &[
     "That makes sense.",
 ];
 const SAFE_DISCOURSE_MARKERS: &[&str] = &["Well,", "Okay,", "Right,", "So,"];
+/// Short sentences that are safe to emit immediately even though they fall
+/// below the `MIN_NON_BACKCHANNEL_CHARS` length guard.
+const SAFE_SHORT_SENTENCES: &[&str] = &[
+    "Yes.", "No.", "Yep.", "Nope.", "Sure.", "Okay.", "Right.", "Good.", "Great.",
+];
+const COMMON_ABBREVIATIONS: &[&str] = &[
+    "dr.", "mr.", "mrs.", "ms.", "prof.", "sr.", "jr.", "vs.", "etc.", "e.g.", "i.e.", "u.s.",
+    "u.k.",
+];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpeechUnit {
     Backchannel(String),
@@ -178,6 +187,18 @@ impl SpeechPlanner {
                         let unit = classify_text_before_emoji(&candidate);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
+                    } else if let Some(next_rel) = find_sentence_end(&self.buffer[end..]) {
+                        // The current boundary produced an unclassifiable short text.
+                        // There is a further sentence boundary in the buffer, so merge
+                        // the short prefix into the next chunk rather than blocking it.
+                        let merged_end = end + next_rel;
+                        let merged = self.buffer[..merged_end].trim().to_string();
+                        if let Some(unit) = classify_boundary_unit(&merged) {
+                            units.push(ExpressiveUnit::Speech(unit.into()));
+                            self.buffer.drain(..merged_end);
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -241,24 +262,7 @@ impl SpeechPlanner {
     }
 
     fn next_sentence_boundary(&self) -> Option<usize> {
-        let detector = sentence_detector()?;
-        let sentences = detector.detect_sentences_borrowed(&self.buffer).ok()?;
-        let mut search_from = 0;
-
-        for sentence in sentences {
-            let relative = self.buffer[search_from..].find(sentence.raw_content)?;
-            let start = search_from + relative;
-            let end = start + sentence.raw_content.len();
-            search_from = end;
-
-            let text = sentence.raw_content.trim();
-            if !text.ends_with(['.', '?', '!']) {
-                continue;
-            }
-            return Some(end);
-        }
-
-        None
+        find_sentence_end(&self.buffer)
     }
 
     fn next_clause_boundary(&self) -> Option<usize> {
@@ -309,7 +313,7 @@ fn classify_boundary_unit(text: &str) -> Option<SpeechUnit> {
     if text.is_empty() {
         return None;
     }
-    if is_safe_backchannel(text) {
+    if is_safe_backchannel(text) || is_safe_short_sentence(text) {
         return Some(SpeechUnit::Backchannel(text.to_string()));
     }
     if is_safe_discourse_marker(text) {
@@ -359,8 +363,62 @@ fn is_safe_backchannel(text: &str) -> bool {
     DEFAULT_SAFE_BACKCHANNELS.iter().any(|entry| *entry == text)
 }
 
+fn is_safe_short_sentence(text: &str) -> bool {
+    SAFE_SHORT_SENTENCES.iter().any(|entry| *entry == text)
+}
+
 fn is_safe_discourse_marker(text: &str) -> bool {
     SAFE_DISCOURSE_MARKERS.iter().any(|entry| *entry == text)
+}
+
+fn is_common_abbreviation(text: &str) -> bool {
+    let lowercase = text.trim().to_ascii_lowercase();
+    COMMON_ABBREVIATIONS
+        .iter()
+        .any(|abbreviation| lowercase.ends_with(abbreviation))
+}
+
+/// Find the byte offset just after the first complete sentence in `text`.
+///
+/// Tries the seams dialog detector first; falls back to a simple punctuation
+/// scan with abbreviation guarding when seams is unavailable.
+fn find_sentence_end(text: &str) -> Option<usize> {
+    if let Some(detector) = sentence_detector() {
+        if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
+            let mut search_from = 0;
+            for sentence in sentences {
+                if let Some(rel) = text[search_from..].find(sentence.raw_content) {
+                    let start = search_from + rel;
+                    let end = start + sentence.raw_content.len();
+                    search_from = end;
+                    if sentence.raw_content.trim().ends_with(['.', '?', '!']) {
+                        return Some(end);
+                    }
+                }
+            }
+        }
+    }
+    punctuation_sentence_end(text)
+}
+
+/// Deterministic punctuation-based sentence boundary scan used as a fallback
+/// when the seams detector is unavailable.  Uses the abbreviation guard to
+/// avoid splitting on `Dr.`, `Mr.`, etc.
+fn punctuation_sentence_end(text: &str) -> Option<usize> {
+    for (index, ch) in text.char_indices() {
+        let end = index + ch.len_utf8();
+        let is_end = end == text.len();
+        let next_is_whitespace = text[end..].chars().next().is_some_and(char::is_whitespace);
+        if !(next_is_whitespace || is_end) {
+            continue;
+        }
+        match ch {
+            '?' | '!' => return Some(end),
+            '.' if !is_common_abbreviation(text[..end].trim()) => return Some(end),
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -549,6 +607,42 @@ mod tests {
             units,
             vec![speech(SpeechUnit::CompleteSentence(
                 "this definitely works now.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn short_allowlisted_sentence_emits_without_completed() {
+        let mut planner = SpeechPlanner::default();
+        assert_eq!(
+            planner.ingest(&[token("Yes. I think")]),
+            vec![speech(SpeechUnit::Backchannel("Yes.".to_string()))]
+        );
+    }
+
+    #[test]
+    fn short_sentence_does_not_block_later_sentence() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Yes. I think that works.")]);
+        assert_eq!(
+            units,
+            vec![
+                speech(SpeechUnit::Backchannel("Yes.".to_string())),
+                speech(SpeechUnit::CompleteSentence(
+                    "I think that works.".to_string()
+                )),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_short_prefix_merges_with_next_safe_sentence() {
+        let mut planner = SpeechPlanner::default();
+        let units = planner.ingest(&[token("Hm. I think that works.")]);
+        assert_eq!(
+            units,
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Hm. I think that works.".to_string()
             ))]
         );
     }
