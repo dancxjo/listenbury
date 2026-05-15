@@ -25,7 +25,6 @@ seams = "0.1.1"
 default = [
     "audio-cpal",
     "resample-rubato",
-    "vad-silero",
     "vad-webrtc",
     "llm-llama-cpp",
     "asr-whisper",
@@ -36,7 +35,7 @@ default = [
 audio-cpal = ["dep:cpal"]
 resample-rubato = ["dep:rubato"]
 vad-silero = []
-vad-webrtc = []
+vad-webrtc = ["dep:webrtc-vad"]
 llm-llama-cpp = ["dep:encoding_rs", "dep:llama-cpp-2", "llama-cpp-2/sampler"]
 llm-llama-cpp-cuda = ["llm-llama-cpp", "llama-cpp-2/cuda"]
 asr-whisper = ["dep:whisper-cpp-plus"]
@@ -65,6 +64,10 @@ default-features = false
 version = "0.1.4"
 optional = true
 default-features = false
+
+[dependencies.webrtc-vad]
+version = "0.4"
+optional = true
 
 [dependencies.ureq]
 version = "3"

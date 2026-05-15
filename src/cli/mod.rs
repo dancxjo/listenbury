@@ -10,6 +10,7 @@ mod piper;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use listenbury::VadBackendKind;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -67,6 +68,8 @@ pub(crate) struct VadTraceCommand {
     pub(crate) input_wav: PathBuf,
     #[arg(long)]
     pub(crate) jsonl: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
 }
 
 #[derive(Debug, Args)]
@@ -92,6 +95,8 @@ pub(crate) struct MicTranscribeCommand {
     pub(crate) until_ctrl_c: bool,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
 }
 
 #[derive(Debug, Args)]
@@ -185,6 +190,27 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
     pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum VadBackendOption {
+    #[default]
+    Energy,
+    #[value(name = "webrtc")]
+    WebRtc,
+    Silero,
+}
+
+impl VadBackendOption {
+    pub(crate) fn as_backend_kind(self) -> VadBackendKind {
+        match self {
+            Self::Energy => VadBackendKind::Energy,
+            Self::WebRtc => VadBackendKind::WebRtc,
+            Self::Silero => VadBackendKind::Silero,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -313,6 +339,7 @@ mod tests {
             PathBuf::from("samples/silence-16k-mono.wav")
         );
         assert_eq!(command.jsonl, Some(PathBuf::from("out/vad-trace.jsonl")));
+        assert_eq!(command.vad, VadBackendOption::Energy);
     }
 
     #[test]
@@ -356,6 +383,7 @@ mod tests {
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
         assert!(command.whisper_model.is_none());
+        assert_eq!(command.vad, VadBackendOption::Energy);
     }
 
     #[test]
@@ -377,6 +405,7 @@ mod tests {
             command.whisper_model,
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
+        assert_eq!(command.vad, VadBackendOption::Energy);
     }
 
     #[test]
@@ -390,6 +419,7 @@ mod tests {
         assert_eq!(command.seconds, 30);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
+        assert_eq!(command.vad, VadBackendOption::Energy);
     }
 
     #[test]
@@ -411,6 +441,37 @@ mod tests {
         assert_eq!(command.seconds, 12);
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
+        assert_eq!(command.vad, VadBackendOption::Energy);
+    }
+
+    #[test]
+    fn vad_options_parse_for_vad_trace_mic_and_live_half_duplex() {
+        let trace = Cli::try_parse_from([
+            "listenbury",
+            "vad-trace",
+            "samples/hello-16k-mono.wav",
+            "--vad",
+            "webrtc",
+        ])
+        .expect("vad-trace should parse --vad webrtc");
+        let Some(Command::VadTrace(trace_command)) = trace.command else {
+            panic!("expected vad-trace command");
+        };
+        assert_eq!(trace_command.vad, VadBackendOption::WebRtc);
+
+        let mic = Cli::try_parse_from(["listenbury", "mic-transcribe", "--vad", "silero"])
+            .expect("mic-transcribe should parse --vad silero");
+        let Some(Command::MicTranscribe(mic_command)) = mic.command else {
+            panic!("expected mic-transcribe command");
+        };
+        assert_eq!(mic_command.vad, VadBackendOption::Silero);
+
+        let live = Cli::try_parse_from(["listenbury", "live-half-duplex", "--vad", "energy"])
+            .expect("live-half-duplex should parse --vad energy");
+        let Some(Command::LiveHalfDuplex(live_command)) = live.command else {
+            panic!("expected live-half-duplex command");
+        };
+        assert_eq!(live_command.vad, VadBackendOption::Energy);
     }
 
     #[test]
@@ -471,26 +532,11 @@ mod tests {
             command.whisper_model,
             Some(PathBuf::from("models/ggml-tiny.bin"))
         );
-        assert_eq!(
-            command.llm_model,
-            Some(PathBuf::from("models/tiny.gguf"))
-        );
-        assert_eq!(
-            command.piper_bin,
-            Some(PathBuf::from("/usr/bin/piper"))
-        );
-        assert_eq!(
-            command.piper_voice_a,
-            Some(PathBuf::from("voices/a.onnx"))
-        );
-        assert_eq!(
-            command.piper_voice_b,
-            Some(PathBuf::from("voices/b.onnx"))
-        );
-        assert_eq!(
-            command.jsonl,
-            Some(PathBuf::from("out/dogfood-two.jsonl"))
-        );
+        assert_eq!(command.llm_model, Some(PathBuf::from("models/tiny.gguf")));
+        assert_eq!(command.piper_bin, Some(PathBuf::from("/usr/bin/piper")));
+        assert_eq!(command.piper_voice_a, Some(PathBuf::from("voices/a.onnx")));
+        assert_eq!(command.piper_voice_b, Some(PathBuf::from("voices/b.onnx")));
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/dogfood-two.jsonl")));
         assert_eq!(
             command.save_audio_dir,
             Some(PathBuf::from("out/dogfood-two-audio"))

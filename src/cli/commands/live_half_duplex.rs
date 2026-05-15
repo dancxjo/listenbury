@@ -84,7 +84,7 @@ use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -166,9 +166,8 @@ const AUDIO_RING_CAPACITY: usize = 256;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-#[derive(Debug)]
 struct LiveHalfDuplexState {
-    vad: EnergyVad,
+    vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     self_hearing: listenbury::SelfHearingState,
@@ -348,8 +347,10 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         .with_context(|| format!("failed to start capture from {input_name}"))?;
 
     println!(
-        "live-half-duplex listening on {input_name}: {} Hz, {} channel(s).",
-        input_sample_rate_hz, input_channels
+        "live-half-duplex listening on {input_name}: {} Hz, {} channel(s), vad={}.",
+        input_sample_rate_hz,
+        input_channels,
+        command.vad.as_backend_kind().as_str()
     );
     println!("half-duplex mode: no barge-in, no interruption during Pete's speech.");
 
@@ -358,8 +359,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
+    let vad_backend = command.vad.as_backend_kind();
     let mut state = LiveHalfDuplexState {
-        vad: EnergyVad::default(),
+        vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
         self_hearing: listenbury::SelfHearingState::default(),
@@ -402,7 +404,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             tts.enqueue(plan)?;
             let audio = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
             let audio_dur = tts_audio_duration(&audio);
-            state.self_hearing.mark_output_started(transcript, audio_dur);
+            state
+                .self_hearing
+                .mark_output_started(transcript, audio_dur);
             eprintln!(
                 "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
                 state
@@ -459,9 +463,7 @@ fn process_live_frame(
     frame: AudioFrame,
     state: &mut LiveHalfDuplexState,
 ) -> Result<Vec<Vec<AudioFrame>>> {
-    if state.self_hearing.suppression_decision()
-        == listenbury::SuppressionDecision::Suppress
-    {
+    if state.self_hearing.suppression_decision() == listenbury::SuppressionDecision::Suppress {
         // Pete is speaking or the echo-tail window is still active; drop the frame
         // so that VAD/ASR cannot transcribe Pete's own voice.
         return Ok(vec![]);
