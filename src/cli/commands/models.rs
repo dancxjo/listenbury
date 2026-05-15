@@ -8,6 +8,8 @@ use anyhow::Context;
 #[cfg(feature = "model-download")]
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 #[cfg(feature = "model-download")]
+use inquire::Select;
+#[cfg(feature = "model-download")]
 use listenbury::models::{
     FetchOutcome, bundle_present, default_asset_paths, default_assets_status,
     fetch_all_assets_with_progress_and_jobs, fetch_bundle_with_progress_and_jobs,
@@ -19,12 +21,13 @@ use listenbury::models::{
 #[cfg(feature = "model-download")]
 use owo_colors::OwoColorize;
 #[cfg(feature = "model-download")]
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 #[cfg(feature = "model-download")]
-pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
+pub(crate) fn run_models(command: Option<ModelsCommand>) -> Result<()> {
     match command {
-        ModelsCommand::Path => {
+        None | Some(ModelsCommand::Menu) => model_menu(),
+        Some(ModelsCommand::Path) => {
             let home = resolve_listenbury_home()?;
             println!("{}={}", "listenbury_home".cyan(), home.display());
             println!("{}={}", "models_dir".cyan(), home.join("models").display());
@@ -39,38 +42,8 @@ pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
             }
             Ok(())
         }
-        ModelsCommand::List => {
-            let llm = selected_bundle(ModelKind::Llm)?.id;
-            let voice = selected_bundle(ModelKind::Voice)?.id;
-            let whisper = selected_bundle(ModelKind::Whisper)?.id;
-            for kind in [ModelKind::Llm, ModelKind::Voice, ModelKind::Whisper] {
-                println!("{}", listenbury::models::model_kind_label(kind).bold());
-                for bundle in MODEL_BUNDLES.iter().filter(|bundle| bundle.kind == kind) {
-                    let marker = if (kind == ModelKind::Llm && bundle.id == llm)
-                        || (kind == ModelKind::Voice && bundle.id == voice)
-                        || (kind == ModelKind::Whisper && bundle.id == whisper)
-                    {
-                        "*"
-                    } else {
-                        " "
-                    };
-                    let state = if bundle_present(bundle)? {
-                        "present".green().to_string()
-                    } else {
-                        "missing".red().to_string()
-                    };
-                    println!(
-                        "{} {} {:<28} {}",
-                        marker,
-                        bundle.id.bold(),
-                        bundle.display_name,
-                        state
-                    );
-                }
-            }
-            Ok(())
-        }
-        ModelsCommand::Status => {
+        Some(ModelsCommand::List) => print_models_list(),
+        Some(ModelsCommand::Status) => {
             for status in default_assets_status()? {
                 let state = if status.present {
                     "present".green().to_string()
@@ -86,9 +59,73 @@ pub(crate) fn run_models(command: ModelsCommand) -> Result<()> {
             }
             Ok(())
         }
-        ModelsCommand::Use(command) => use_model(command),
-        ModelsCommand::Fetch(command) => fetch_models(command),
+        Some(ModelsCommand::Use(command)) => use_model(command),
+        Some(ModelsCommand::Fetch(command)) => fetch_models(command),
     }
+}
+
+#[cfg(feature = "model-download")]
+fn model_menu() -> Result<()> {
+    let category = Select::new(
+        "Model category",
+        vec![
+            CategoryChoice::new(ModelKind::Llm)?,
+            CategoryChoice::new(ModelKind::Voice)?,
+            CategoryChoice::new(ModelKind::Whisper)?,
+        ],
+    )
+    .prompt()
+    .context("model menu was cancelled")?;
+
+    let bundles = MODEL_BUNDLES
+        .iter()
+        .filter(|bundle| bundle.kind == category.kind)
+        .map(BundleChoice::new)
+        .collect::<Result<Vec<_>>>()?;
+    let current = selected_bundle(category.kind)?.id;
+    let starting_cursor = bundles
+        .iter()
+        .position(|choice| choice.bundle.id == current)
+        .unwrap_or(0);
+    let selected = Select::new(&format!("{} model", category.name), bundles)
+        .with_starting_cursor(starting_cursor)
+        .prompt()
+        .context("model selection was cancelled")?;
+
+    select_bundle(category.kind, selected.bundle)
+}
+
+#[cfg(feature = "model-download")]
+fn print_models_list() -> Result<()> {
+    let llm = selected_bundle(ModelKind::Llm)?.id;
+    let voice = selected_bundle(ModelKind::Voice)?.id;
+    let whisper = selected_bundle(ModelKind::Whisper)?.id;
+    for kind in [ModelKind::Llm, ModelKind::Voice, ModelKind::Whisper] {
+        println!("{}", listenbury::models::model_kind_label(kind).bold());
+        for bundle in MODEL_BUNDLES.iter().filter(|bundle| bundle.kind == kind) {
+            let marker = if (kind == ModelKind::Llm && bundle.id == llm)
+                || (kind == ModelKind::Voice && bundle.id == voice)
+                || (kind == ModelKind::Whisper && bundle.id == whisper)
+            {
+                "*"
+            } else {
+                " "
+            };
+            let state = if bundle_present(bundle)? {
+                "present".green().to_string()
+            } else {
+                "missing".red().to_string()
+            };
+            println!(
+                "{} {} {:<28} {}",
+                marker,
+                bundle.id.bold(),
+                bundle.display_name,
+                state
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "model-download")]
@@ -105,11 +142,16 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
             command.model
         )
     })?;
+    select_bundle(kind, bundle)
+}
+
+#[cfg(feature = "model-download")]
+fn select_bundle(kind: ModelKind, bundle: &ModelBundle) -> Result<()> {
     let mut selection = read_model_selection()?;
-    match command.kind {
-        ModelsUseKind::Llm => selection.llm = Some(bundle.id.to_string()),
-        ModelsUseKind::Voice => selection.voice = Some(bundle.id.to_string()),
-        ModelsUseKind::Whisper => selection.whisper = Some(bundle.id.to_string()),
+    match kind {
+        ModelKind::Llm => selection.llm = Some(bundle.id.to_string()),
+        ModelKind::Voice => selection.voice = Some(bundle.id.to_string()),
+        ModelKind::Whisper => selection.whisper = Some(bundle.id.to_string()),
     }
     write_model_selection(&selection)?;
     println!(
@@ -119,6 +161,67 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
         bundle.display_name.bold()
     );
     Ok(())
+}
+
+#[cfg(feature = "model-download")]
+#[derive(Clone)]
+struct CategoryChoice {
+    kind: ModelKind,
+    name: &'static str,
+    label: String,
+}
+
+#[cfg(feature = "model-download")]
+impl CategoryChoice {
+    fn new(kind: ModelKind) -> Result<Self> {
+        let name = match kind {
+            ModelKind::Llm => "LLM",
+            ModelKind::Voice => "Voice",
+            ModelKind::Whisper => "Whisper",
+        };
+        let selected = selected_bundle(kind)?;
+        let label = format!(
+            "{name:<7} {}",
+            format!("current: {}", selected.display_name).dimmed()
+        );
+        Ok(Self { kind, name, label })
+    }
+}
+
+#[cfg(feature = "model-download")]
+impl fmt::Display for CategoryChoice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+#[cfg(feature = "model-download")]
+#[derive(Clone)]
+struct BundleChoice {
+    bundle: &'static ModelBundle,
+    label: String,
+}
+
+#[cfg(feature = "model-download")]
+impl BundleChoice {
+    fn new(bundle: &'static ModelBundle) -> Result<Self> {
+        let state = if bundle_present(bundle)? {
+            "present".green().to_string()
+        } else {
+            "missing".red().to_string()
+        };
+        Ok(Self {
+            bundle,
+            label: format!("{:<36} {}", bundle.display_name, state),
+        })
+    }
+}
+
+#[cfg(feature = "model-download")]
+impl fmt::Display for BundleChoice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.label)
+    }
 }
 
 #[cfg(feature = "model-download")]
@@ -275,6 +378,6 @@ fn print_fetch_results(results: Vec<listenbury::models::FetchResult>) -> Result<
 }
 
 #[cfg(not(feature = "model-download"))]
-pub(crate) fn run_models(_command: ModelsCommand) -> Result<()> {
+pub(crate) fn run_models(_command: Option<ModelsCommand>) -> Result<()> {
     anyhow::bail!("listenbury was built without the `model-download` feature")
 }

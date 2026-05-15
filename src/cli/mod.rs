@@ -40,7 +40,7 @@ enum Command {
     #[command(about = "Fetch and inspect local model assets")]
     Models {
         #[command(subcommand)]
-        command: ModelsCommand,
+        command: Option<ModelsCommand>,
     },
     #[command(hide = true)]
     Dev {
@@ -262,6 +262,7 @@ impl VadBackendOption {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ModelsCommand {
+    Menu,
     Fetch(ModelsFetchCommand),
     List,
     Use(ModelsUseCommand),
@@ -782,11 +783,34 @@ mod tests {
             .expect("models fetch should parse jobs");
 
         let Some(Command::Models {
-            command: ModelsCommand::Fetch(command),
+            command: Some(ModelsCommand::Fetch(command)),
         }) = cli.command
         else {
             panic!("expected models fetch command");
         };
         assert_eq!(command.jobs, 4);
+    }
+
+    #[test]
+    fn models_accepts_bare_menu() {
+        let cli = Cli::try_parse_from(["listenbury", "models"])
+            .expect("bare models should parse as the interactive menu");
+
+        let Some(Command::Models { command: None }) = cli.command else {
+            panic!("expected bare models command");
+        };
+    }
+
+    #[test]
+    fn models_menu_parses_explicitly() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "menu"])
+            .expect("models menu should parse");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Menu),
+        }) = cli.command
+        else {
+            panic!("expected models menu command");
+        };
     }
 }

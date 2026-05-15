@@ -10,6 +10,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 indicatif = "0.18"
+inquire = { version = "0.9.4", optional = true }
 owo-colors = "4"
 crossbeam-channel = "0.5"
 rtrb = "0.3"
@@ -47,7 +48,7 @@ asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = []
 vision-webcam = []
-model-download = ["dep:ureq", "dep:dirs"]
+model-download = ["dep:ureq", "dep:dirs", "dep:inquire"]
 
 [dependencies.cpal]
 version = "0.15"
