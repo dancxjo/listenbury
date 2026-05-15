@@ -28,6 +28,8 @@ default = [
     "vad-webrtc",
     "llm-llama-cpp",
     "asr-whisper",
+    "asr-whisper-async",
+    "asr-whisper-quantization",
     "tts-piper",
     "vision-webcam",
     "model-download",

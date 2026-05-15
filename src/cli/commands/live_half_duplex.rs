@@ -85,6 +85,7 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+use listenbury::hearing::vad::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -217,6 +218,8 @@ const POST_PLAYBACK_TTS_GRACE_MS: u64 = 1_500;
     feature = "tts-piper"
 ))]
 const NANOS_PER_MILLI: u128 = 1_000_000;
+const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 48_000;
+const MONO_CHANNELS: u16 = 1;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -436,11 +439,13 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let stop_deadline = command
         .seconds
         .map(|seconds| Instant::now() + Duration::from_secs(seconds));
+    let vad_backend = command.vad.as_backend_kind();
+    let (frame_sample_rate_hz, frame_channels) =
+        vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let input_frame_samples =
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
-    let vad_backend = command.vad.as_backend_kind();
     let mut state = LiveHalfDuplexState {
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
@@ -464,6 +469,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             input_frame_samples,
             input_sample_rate_hz,
             input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
             &mut ring_tx,
             &dropped_in_ring,
         );
@@ -987,6 +994,8 @@ fn drain_pending_into_ring(
     input_frame_samples: usize,
     input_sample_rate_hz: u32,
     input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
     ring_tx: &mut listenbury::audio::ring::AudioRingTx,
     dropped_in_ring: &AtomicUsize,
 ) {
@@ -1000,16 +1009,93 @@ fn drain_pending_into_ring(
         if samples.len() < input_frame_samples {
             break;
         }
+        let samples = convert_frame_samples(
+            &samples,
+            input_sample_rate_hz,
+            input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
+        );
         let frame = AudioFrame {
             captured_at: ExactTimestamp::now(),
-            sample_rate_hz: input_sample_rate_hz,
-            channels: input_channels,
+            sample_rate_hz: frame_sample_rate_hz,
+            channels: frame_channels,
             samples,
         };
         if ring_tx.try_push(frame).is_err() {
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+fn vad_frame_format(
+    vad_backend: VadBackendKind,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+) -> (u32, u16) {
+    match vad_backend {
+        VadBackendKind::WebRtc => (WEBRTC_VAD_SAMPLE_RATE_HZ, MONO_CHANNELS),
+        VadBackendKind::Energy | VadBackendKind::Silero => (input_sample_rate_hz, input_channels),
+    }
+}
+
+fn convert_frame_samples(
+    samples: &[f32],
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
+) -> Vec<f32> {
+    if input_sample_rate_hz == frame_sample_rate_hz && input_channels == frame_channels {
+        return samples.to_vec();
+    }
+
+    let mut converted = if input_channels != frame_channels && frame_channels == MONO_CHANNELS {
+        mix_to_mono(samples, input_channels)
+    } else {
+        samples.to_vec()
+    };
+
+    if input_sample_rate_hz != frame_sample_rate_hz {
+        converted = resample_linear(&converted, input_sample_rate_hz, frame_sample_rate_hz);
+    }
+
+    converted
+}
+
+fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let channel_count = usize::from(channels).max(1);
+    if channel_count == 1 {
+        return samples.to_vec();
+    }
+    samples
+        .chunks_exact(channel_count)
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
+        .collect()
+}
+
+fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
+    if samples.is_empty() || source_rate_hz == target_rate_hz {
+        return samples.to_vec();
+    }
+
+    let output_len = ((samples.len() as f64 * f64::from(target_rate_hz))
+        / f64::from(source_rate_hz))
+    .round() as usize;
+    let mut output = Vec::with_capacity(output_len);
+    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
+
+    for output_idx in 0..output_len {
+        let source_pos = output_idx as f64 * source_step;
+        let left_idx = source_pos.floor() as usize;
+        let right_idx = (left_idx + 1).min(samples.len() - 1);
+        let fraction = (source_pos - left_idx as f64) as f32;
+        let left = samples[left_idx];
+        let right = samples[right_idx];
+        output.push(left + (right - left) * fraction);
+    }
+
+    output
 }
 
 #[cfg(all(
@@ -1082,7 +1168,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{live_half_duplex_stops, maybe_plan_cached_backchannel, planner_units_from_events};
+    use super::{
+        convert_frame_samples, live_half_duplex_stops, maybe_plan_cached_backchannel,
+        planner_units_from_events, vad_frame_format,
+    };
+    use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
     use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
     use listenbury::{ConversationController, RuntimePacket};
@@ -1149,6 +1239,31 @@ mod tests {
         assert!(stops.iter().any(|stop| stop == "\n<|user|>"));
         assert!(stops.iter().any(|stop| stop == "\n<|assistant|>"));
         assert!(stops.iter().any(|stop| stop == "\nUser:"));
+    }
+
+    #[test]
+    fn webrtc_vad_frames_use_supported_mono_rate() {
+        assert_eq!(
+            vad_frame_format(VadBackendKind::WebRtc, 44_100, 2),
+            (48_000, 1)
+        );
+        assert_eq!(
+            vad_frame_format(VadBackendKind::Energy, 44_100, 2),
+            (44_100, 2)
+        );
+    }
+
+    #[test]
+    fn webrtc_conversion_turns_44100_stereo_10ms_into_48000_mono_10ms() {
+        let input = vec![1.0; 882];
+        let converted = convert_frame_samples(&input, 44_100, 2, 48_000, 1);
+
+        assert_eq!(converted.len(), 480);
+        assert!(
+            converted
+                .iter()
+                .all(|sample| (*sample - 1.0).abs() < 0.0001)
+        );
     }
 
     #[test]

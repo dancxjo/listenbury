@@ -6,6 +6,22 @@ pub struct ModelAsset {
     pub expected_size_hint: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelKind {
+    Llm,
+    Voice,
+    Whisper,
+}
+
+pub struct ModelBundle {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub kind: ModelKind,
+    pub asset_ids: &'static [&'static str],
+    pub primary_asset_id: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
 pub const DEFAULT_MODELS: &[ModelAsset] = &[
     ModelAsset {
         id: "whisper-tiny-en",
@@ -22,6 +38,13 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         expected_size_hint: None,
     },
     ModelAsset {
+        id: "gpt-oss-20b-mxfp4",
+        filename: "gpt-oss-20b-mxfp4.gguf",
+        relative_path: "models/llama/gpt-oss-20b-mxfp4.gguf",
+        url: "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-mxfp4.gguf",
+        expected_size_hint: None,
+    },
+    ModelAsset {
         id: "piper-ryan-medium",
         filename: "en_US-ryan-medium.onnx",
         relative_path: "models/piper/en_US-ryan-medium.onnx",
@@ -34,5 +57,172 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         relative_path: "models/piper/en_US-ryan-medium.onnx.json",
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
         expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-amy-medium",
+        filename: "en_US-amy-medium.onnx",
+        relative_path: "models/piper/en_US-amy-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-amy-medium-config",
+        filename: "en_US-amy-medium.onnx.json",
+        relative_path: "models/piper/en_US-amy-medium.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-hfc-male-medium",
+        filename: "en_US-hfc_male-medium.onnx",
+        relative_path: "models/piper/en_US-hfc_male-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-hfc-male-medium-config",
+        filename: "en_US-hfc_male-medium.onnx.json",
+        relative_path: "models/piper/en_US-hfc_male-medium.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx.json",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-hfc-female-medium",
+        filename: "en_US-hfc_female-medium.onnx",
+        relative_path: "models/piper/en_US-hfc_female-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-hfc-female-medium-config",
+        filename: "en_US-hfc_female-medium.onnx.json",
+        relative_path: "models/piper/en_US-hfc_female-medium.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx.json",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-john-medium",
+        filename: "en_US-john-medium.onnx",
+        relative_path: "models/piper/en_US-john-medium.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-john-medium-config",
+        filename: "en_US-john-medium.onnx.json",
+        relative_path: "models/piper/en_US-john-medium.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx.json",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-ljspeech-high",
+        filename: "en_US-ljspeech-high.onnx",
+        relative_path: "models/piper/en_US-ljspeech-high.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-ljspeech-high-config",
+        filename: "en_US-ljspeech-high.onnx.json",
+        relative_path: "models/piper/en_US-ljspeech-high.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-libritts-high",
+        filename: "en_US-libritts-high.onnx",
+        relative_path: "models/piper/en_US-libritts-high.onnx",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx",
+        expected_size_hint: None,
+    },
+    ModelAsset {
+        id: "piper-libritts-high-config",
+        filename: "en_US-libritts-high.onnx.json",
+        relative_path: "models/piper/en_US-libritts-high.onnx.json",
+        url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json",
+        expected_size_hint: None,
+    },
+];
+
+pub const MODEL_BUNDLES: &[ModelBundle] = &[
+    ModelBundle {
+        id: "whisper-tiny-en",
+        display_name: "Whisper tiny.en",
+        kind: ModelKind::Whisper,
+        asset_ids: &["whisper-tiny-en"],
+        primary_asset_id: "whisper-tiny-en",
+        aliases: &["tiny", "tiny.en", "whisper"],
+    },
+    ModelBundle {
+        id: "llama-3-2-3b-instruct-q4-k-m",
+        display_name: "Llama 3.2 3B Instruct Q4_K_M",
+        kind: ModelKind::Llm,
+        asset_ids: &["llama-3-2-3b-instruct-q4-k-m"],
+        primary_asset_id: "llama-3-2-3b-instruct-q4-k-m",
+        aliases: &["llama", "llama-3.2", "llama3.2", "current"],
+    },
+    ModelBundle {
+        id: "gpt-oss-20b-mxfp4",
+        display_name: "gpt-oss 20B MXFP4",
+        kind: ModelKind::Llm,
+        asset_ids: &["gpt-oss-20b-mxfp4"],
+        primary_asset_id: "gpt-oss-20b-mxfp4",
+        aliases: &["gpt-oss", "gpt-oss-20b", "oss"],
+    },
+    ModelBundle {
+        id: "ryan",
+        display_name: "Ryan",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-ryan-medium", "piper-ryan-medium-config"],
+        primary_asset_id: "piper-ryan-medium",
+        aliases: &["piper-ryan-medium"],
+    },
+    ModelBundle {
+        id: "amy",
+        display_name: "Amy",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-amy-medium", "piper-amy-medium-config"],
+        primary_asset_id: "piper-amy-medium",
+        aliases: &["piper-amy-medium"],
+    },
+    ModelBundle {
+        id: "hfc-male",
+        display_name: "HFC Male",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-hfc-male-medium", "piper-hfc-male-medium-config"],
+        primary_asset_id: "piper-hfc-male-medium",
+        aliases: &["hfc_male", "male", "piper-hfc-male-medium"],
+    },
+    ModelBundle {
+        id: "hfc-female",
+        display_name: "HFC Female",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-hfc-female-medium", "piper-hfc-female-medium-config"],
+        primary_asset_id: "piper-hfc-female-medium",
+        aliases: &["hfc_female", "female", "piper-hfc-female-medium"],
+    },
+    ModelBundle {
+        id: "john",
+        display_name: "John",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-john-medium", "piper-john-medium-config"],
+        primary_asset_id: "piper-john-medium",
+        aliases: &["piper-john-medium"],
+    },
+    ModelBundle {
+        id: "ljspeech",
+        display_name: "LJSpeech",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-ljspeech-high", "piper-ljspeech-high-config"],
+        primary_asset_id: "piper-ljspeech-high",
+        aliases: &["lj", "piper-ljspeech-high"],
+    },
+    ModelBundle {
+        id: "libritts",
+        display_name: "LibriTTS",
+        kind: ModelKind::Voice,
+        asset_ids: &["piper-libritts-high", "piper-libritts-high-config"],
+        primary_asset_id: "piper-libritts-high",
+        aliases: &["piper-libritts-high"],
     },
 ];
