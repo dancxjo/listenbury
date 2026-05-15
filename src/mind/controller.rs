@@ -239,6 +239,11 @@ impl ConversationController {
         self.interruption_recorded = false;
     }
 
+    pub fn on_pete_speech_finished(&mut self) {
+        self.turn_tracker.on_pete_speech_finished();
+        self.reset_interruption_state();
+    }
+
     pub fn on_hearing_event(&mut self, event: &HearingEvent, now_ms: u64) -> InterruptionDecision {
         let was_pete_outputting = matches!(
             self.turn_tracker.state(),

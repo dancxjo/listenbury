@@ -209,6 +209,13 @@ const AUDIO_DRAIN_QUIET_THRESHOLD_MS: u64 = 100;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+const POST_PLAYBACK_TTS_GRACE_MS: u64 = 1_500;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 const NANOS_PER_MILLI: u128 = 1_000_000;
 
 #[cfg(all(
@@ -717,14 +724,16 @@ fn stream_speech_to_tts(
         }
     }
 
-    played_any_audio |= flush_tts_audio(
+    let flushed_audio = flush_tts_audio(
         tts,
         &current_spoken_text,
         self_hearing,
         "live-half-duplex response",
         Duration::from_secs(30),
+        played_any_audio,
         controller,
     )?;
+    played_any_audio |= flushed_audio;
     if !played_any_audio {
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
@@ -736,6 +745,7 @@ fn stream_speech_to_tts(
             self_hearing,
             "live-half-duplex response fallback",
             Duration::from_secs(30),
+            false,
             controller,
         )?;
         anyhow::ensure!(
@@ -744,6 +754,7 @@ fn stream_speech_to_tts(
         );
     }
     self_hearing.mark_output_finished();
+    controller.on_pete_speech_finished();
     eprintln!(
         "[self-hearing] playback finished; tail window active until unix_ns={:?}",
         self_hearing.output_expected_until.map(|t| t.unix_nanos)
@@ -863,12 +874,14 @@ fn flush_tts_audio(
     self_hearing: &mut listenbury::SelfHearingState,
     source: &str,
     timeout: Duration,
+    prior_audio_played: bool,
     controller: &mut ConversationController,
 ) -> Result<bool> {
     let quiet_after_audio = Duration::from_millis(AUDIO_DRAIN_QUIET_THRESHOLD_MS);
+    let post_playback_grace = Duration::from_millis(POST_PLAYBACK_TTS_GRACE_MS);
     let deadline = Instant::now() + timeout;
     let mut played_any_audio = false;
-    let mut last_audio_at = None;
+    let mut last_audio_at = prior_audio_played.then(Instant::now);
 
     while Instant::now() < deadline {
         if drain_ready_tts_audio(tts, spoken_text, self_hearing, source, controller)? {
@@ -877,7 +890,12 @@ fn flush_tts_audio(
             continue;
         }
         if let Some(last_audio_at) = last_audio_at {
-            if Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
+            let quiet_threshold = if played_any_audio {
+                quiet_after_audio
+            } else {
+                post_playback_grace
+            };
+            if Instant::now().duration_since(last_audio_at) >= quiet_threshold {
                 break;
             }
         }

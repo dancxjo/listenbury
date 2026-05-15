@@ -70,7 +70,7 @@ impl TtsBackend for ProcessPiperBackend {
 
 pub struct PiperTextToSpeech {
     tx: Sender<PiperCommand>,
-    rx_audio: Receiver<AudioFrame>,
+    rx_audio: Receiver<Vec<AudioFrame>>,
     rx_error: Receiver<anyhow::Error>,
     worker: Option<JoinHandle<()>>,
 }
@@ -119,7 +119,7 @@ impl TextToSpeech for PiperTextToSpeech {
             return Err(error);
         }
 
-        Ok(self.rx_audio.try_iter().collect())
+        Ok(self.rx_audio.try_iter().flatten().collect())
     }
 
     fn stop(&mut self) -> Result<()> {
@@ -148,17 +148,15 @@ enum PiperCommand {
 fn run_piper_worker(
     mut backend: impl TtsBackend,
     rx: Receiver<PiperCommand>,
-    tx_audio: Sender<AudioFrame>,
+    tx_audio: Sender<Vec<AudioFrame>>,
     tx_error: Sender<anyhow::Error>,
 ) {
     while let Ok(command) = rx.recv() {
         match command {
             PiperCommand::Synthesize(text) => match backend.synthesize(&text) {
                 Ok(frames) => {
-                    for frame in frames {
-                        if tx_audio.send(frame).is_err() {
-                            return;
-                        }
+                    if tx_audio.send(frames).is_err() {
+                        return;
                     }
                 }
                 Err(error) => {

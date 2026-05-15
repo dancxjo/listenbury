@@ -68,6 +68,15 @@ impl TurnTracker {
         self.state = TurnState::PeteSpeaking;
     }
 
+    pub fn on_pete_speech_finished(&mut self) {
+        if matches!(
+            self.state,
+            TurnState::PeteSpeaking | TurnState::PeteThinking
+        ) {
+            self.state = TurnState::Idle;
+        }
+    }
+
     pub fn on_pete_interrupted(&mut self) {
         self.state = TurnState::PeteInterrupted;
     }
@@ -102,6 +111,14 @@ mod tests {
         tracker.on_pete_speech_started();
         tracker.on_pete_interrupted();
         assert_eq!(tracker.state(), TurnState::PeteInterrupted);
+    }
+
+    #[test]
+    fn turn_tracker_returns_to_idle_when_pete_finishes_speaking() {
+        let mut tracker = TurnTracker::default();
+        tracker.on_pete_speech_started();
+        tracker.on_pete_speech_finished();
+        assert_eq!(tracker.state(), TurnState::Idle);
     }
 
     #[test]
