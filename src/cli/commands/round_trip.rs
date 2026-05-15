@@ -109,7 +109,7 @@ pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
-)))]
+))))]
 pub(crate) fn run_round_trip_wav(_command: RoundTripWavCommand) -> Result<()> {
     anyhow::bail!(
         "listenbury was built without the `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
@@ -205,7 +205,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
         .context("failed to start llama.cpp generation")?;
 
     let mut planner = SpeechPlanner::default();
-    let mut last_plan = None;
+    let mut spoken_parts = Vec::new();
     loop {
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
@@ -215,12 +215,11 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
 
         print_llm_events(&events)?;
 
-        let emitted = planner.ingest(&events);
-        if let Some(plan) = emitted.into_iter().rev().find_map(|unit| match unit {
-            ExpressiveUnit::Speech(plan) => Some(plan),
-            ExpressiveUnit::Face(_) => None,
-        }) {
-            last_plan = Some(plan);
+        for unit in planner.ingest(&events) {
+            let ExpressiveUnit::Speech(plan) = unit else {
+                continue;
+            };
+            spoken_parts.push(plan.text().to_string());
         }
 
         if events.iter().any(is_terminal_llm_event) {
@@ -229,11 +228,14 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
         }
     }
 
-    Ok(last_plan.unwrap_or_else(|| {
-        SpeechPlan::from(SpeechUnit::FullTurn(
-            "I heard you, but I lost my words.".to_string(),
-        ))
-    }))
+    let text = spoken_parts.join(" ");
+    let text = text.trim();
+    let response = if text.is_empty() {
+        "I heard you, but I lost my words.".to_string()
+    } else {
+        text.to_string()
+    };
+    Ok(SpeechPlan::from(SpeechUnit::FullTurn(response)))
 }
 
 #[cfg(all(
