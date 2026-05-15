@@ -838,6 +838,11 @@ fn is_thinking_leak(text: &str) -> bool {
         "the assistant's response",
         "the user asks",
         "the user asked",
+        "the assistant must",
+        "they might",
+        "that seems",
+        "there's no context",
+        "there is no context",
         "user asks",
         "user asked",
         "the instructions",
@@ -990,7 +995,7 @@ fn unix_nanos_to_millis(unix_nanos: u128) -> u64 {
 ))]
 fn build_prompt(transcript: &str) -> String {
     format!(
-        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
+        "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"
     )
 }
 
@@ -1325,6 +1330,10 @@ mod tests {
             &[
                 token("We have to output Pete's spoken response. "),
                 token("\"Write only the words Pete should say aloud.\" "),
+                token("They might be responding to something. "),
+                token("That seems irrelevant? "),
+                token("The assistant must produce the next assistant turn. "),
+                token("There's no context.\" "),
                 token("Yes, I can hear you."),
             ],
             false,
