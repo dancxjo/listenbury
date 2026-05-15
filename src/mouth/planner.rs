@@ -175,7 +175,7 @@ impl SpeechPlanner {
                         // here).  Flush the sentence-punctuated text with an
                         // appropriate classification rather than waiting for more
                         // tokens, so face and speech events stay in order.
-                        let unit = classify_emoji_flushed_text(&candidate);
+                        let unit = classify_text_before_emoji(&candidate);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                         self.buffer.drain(..end);
                     } else {
@@ -185,7 +185,7 @@ impl SpeechPlanner {
                 Some(BoundaryResult::EmojiMarker(start, end)) => {
                     let before = self.buffer[..start].trim().to_string();
                     if !before.is_empty() {
-                        let unit = classify_emoji_flushed_text(&before);
+                        let unit = classify_text_before_emoji(&before);
                         units.push(ExpressiveUnit::Speech(unit.into()));
                     }
                     let emoji = self.buffer[start..end].to_string();
@@ -243,18 +243,19 @@ impl SpeechPlanner {
     fn next_sentence_boundary(&self) -> Option<usize> {
         let detector = sentence_detector()?;
         let sentences = detector.detect_sentences_borrowed(&self.buffer).ok()?;
-        let base = self.buffer.as_ptr() as usize;
+        let mut search_from = 0;
 
         for sentence in sentences {
+            let relative = self.buffer[search_from..].find(sentence.raw_content)?;
+            let start = search_from + relative;
+            let end = start + sentence.raw_content.len();
+            search_from = end;
+
             let text = sentence.raw_content.trim();
             if !text.ends_with(['.', '?', '!']) {
                 continue;
             }
-            let start = sentence.raw_content.as_ptr() as usize - base;
-            let end = start + sentence.raw_content.len();
-            if end <= self.buffer.len() {
-                return Some(end);
-            }
+            return Some(end);
         }
 
         None
@@ -335,7 +336,7 @@ fn classify_completed_unit(text: &str) -> Option<SpeechUnit> {
 /// Unlike [`classify_boundary_unit`], this bypasses the minimum-length guard so
 /// that short but grammatically complete phrases (e.g. "That works.") are
 /// emitted with the right type rather than falling back to `FullTurn`.
-fn classify_emoji_flushed_text(text: &str) -> SpeechUnit {
+fn classify_text_before_emoji(text: &str) -> SpeechUnit {
     if text.is_empty() {
         return SpeechUnit::FullTurn(text.to_string());
     }
@@ -542,6 +543,7 @@ mod tests {
         let mut planner = SpeechPlanner::default();
         assert!(planner.ingest(&[token("I think this")]).is_empty());
         assert!(planner.ingest(&[LlmEvent::Cancelled]).is_empty());
+        assert!(planner.buffer.is_empty());
         let units = planner.ingest(&[token(" this definitely works now.")]);
         assert_eq!(
             units,
