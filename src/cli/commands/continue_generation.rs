@@ -3671,20 +3671,24 @@ fn process_continue_ear_frame(
             state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
             return Ok(());
         }
-        AuditoryRouting::MixedSpeech => {
+        AuditoryRouting::MixedSelfAndExternal => {
             send_overlap_event_if_due(state, event_tx, &analysis, frame_duration_ms);
-            process_continue_vad_and_asr_frame(
-                analysis.external_residual_frame().clone(),
-                state,
-                asr_tx,
-                event_tx,
-            )?;
+            if let Some(residual) = analysis.external_residual_frame().cloned() {
+                process_continue_vad_and_asr_frame(residual, state, asr_tx, event_tx)?;
+            }
         }
-        AuditoryRouting::ExternalOnly => {
+        AuditoryRouting::ExternalSpeechCandidate => {
             process_continue_vad_and_asr_frame(analysis.frame, state, asr_tx, event_tx)?;
+        }
+        AuditoryRouting::EnvironmentalSoundCandidate => {
+            if let Some(sound) = state.environment.observe_frame(&analysis.frame, false) {
+                let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+            }
+            send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
         AuditoryRouting::SilenceOrNoise => {
-            process_continue_vad_and_asr_frame(analysis.frame, state, asr_tx, event_tx)?;
+            let _ = state.environment.observe_frame(&analysis.frame, false);
+            send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
     }
 
@@ -3791,7 +3795,7 @@ fn send_overlap_event_if_due(
     state.last_overlap_observation_ms = Some(state.frame_time_ms);
     let _ = event_tx.send(ContinueEarEvent::OverlapDetected {
         self_confidence: analysis.self_voice.confidence,
-        external_confidence: analysis.external_voice.confidence,
+        external_confidence: analysis.external.confidence,
         duration_ms,
     });
 }

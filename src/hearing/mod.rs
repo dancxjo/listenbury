@@ -7,8 +7,8 @@ pub mod suppression;
 pub mod vad;
 
 pub use audition::{
-    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, ExternalVoiceEstimate,
-    NoiseEstimate, SelfVoiceEstimate,
+    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, ExternalEstimate,
+    ExternalVoiceEstimate, NoiseEstimate, SelfVoiceEstimate,
 };
 pub use breath::{BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter};
 pub use suppression::{
