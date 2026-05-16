@@ -3560,8 +3560,7 @@ fn convert_channels(samples: &[f32], source_channels: u16, target_channels: u16)
     let source_channel_count = usize::from(source_channels).max(1);
     let target_channel_count = usize::from(target_channels).max(1);
     if source_channel_count == 1 {
-        let mut converted =
-            Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
+        let mut converted = Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
         for sample in samples {
             converted.extend(std::iter::repeat_n(*sample, target_channel_count));
         }

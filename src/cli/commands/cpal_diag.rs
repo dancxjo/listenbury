@@ -464,13 +464,13 @@ fn select_output_config(
         })
         .or_else(|| candidates.first())
         .ok_or_else(|| anyhow::anyhow!("no output stream configs available"))?;
-    let selected_rate =
-        if selected.min_sample_rate() <= desired_rate && desired_rate <= selected.max_sample_rate()
-        {
-            desired_rate
-        } else {
-            selected.max_sample_rate()
-        };
+    let selected_rate = if selected.min_sample_rate() <= desired_rate
+        && desired_rate <= selected.max_sample_rate()
+    {
+        desired_rate
+    } else {
+        selected.max_sample_rate()
+    };
     Ok(output_config_from_supported(
         selected.clone().with_sample_rate(selected_rate),
     ))
@@ -523,8 +523,7 @@ fn convert_channels(samples: &[f32], source_channels: u16, target_channels: u16)
     let source_channel_count = usize::from(source_channels).max(1);
     let target_channel_count = usize::from(target_channels).max(1);
     if source_channel_count == 1 {
-        let mut converted =
-            Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
+        let mut converted = Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
         for sample in samples {
             for _ in 0..target_channel_count {
                 converted.push(*sample);
