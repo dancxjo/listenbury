@@ -3664,18 +3664,10 @@ fn process_continue_ear_frame(
 ) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
     let analysis = state.auditory_scene.analyze(frame)?;
+    log_auditory_frame_if_enabled(&analysis);
     match analysis.routing {
         AuditoryRouting::EchoOnly => {
             send_self_hearing_event_if_due(state, event_tx, &analysis);
-            if listenbury::developer_diagnostics_enabled() {
-                eprintln!(
-                    "[dev continue ear] echo_only t_ms={} corr={:.3} residual={:.3} delay_ms={}",
-                    state.frame_time_ms,
-                    analysis.self_voice.correlation,
-                    analysis.self_voice.residual_ratio,
-                    analysis.self_voice.delay_ms
-                );
-            }
             state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
             return Ok(());
         }
@@ -3702,6 +3694,25 @@ fn process_continue_ear_frame(
 
     state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn log_auditory_frame_if_enabled(analysis: &listenbury::AuditoryFrameAnalysis) {
+    if !listenbury::developer_diagnostics_enabled() {
+        return;
+    }
+    eprintln!(
+        "[ear] routing={:?} corr={:.3} residual={:.3} delay_ms={}",
+        analysis.routing,
+        analysis.self_voice.correlation,
+        analysis.self_voice.residual_ratio,
+        analysis.self_voice.delay_ms
+    );
 }
 
 #[cfg(all(

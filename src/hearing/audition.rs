@@ -217,7 +217,7 @@ mod tests {
         let user = test_noise(160).into_iter().rev().collect::<Vec<_>>();
         let mic = reference[800..960]
             .iter()
-            .zip(user)
+            .zip(user.clone())
             .map(|(echo, user)| echo * 0.25 + user * 0.8)
             .collect::<Vec<_>>();
 
@@ -231,6 +231,10 @@ mod tests {
             .expect("mixed frame should provide residual");
         assert_ne!(residual.samples, mic);
         assert!(analysis.external.vad_candidate);
+        assert!(
+            mean_square_error(&residual.samples, &user) < mean_square_error(&mic, &user),
+            "residual should preserve external speech better than the raw mixed frame"
+        );
     }
 
     #[test]
@@ -277,6 +281,31 @@ mod tests {
         assert!(!analysis.external.vad_candidate);
     }
 
+    #[test]
+    fn delayed_room_echo_in_tail_window_remains_echo_only() {
+        let (analyzer, reference, started_at) = analyzer_with_reference();
+        let delayed_echo_delay_ms = 90u128;
+        let delayed_echo_capture_offset_ms = 260u128;
+        let delayed_echo_start =
+            ((delayed_echo_capture_offset_ms - delayed_echo_delay_ms) * 16_000 / 1_000) as usize;
+        let delayed_echo_end = delayed_echo_start + 160;
+        let delayed_echo = reference[delayed_echo_start..delayed_echo_end]
+            .iter()
+            .map(|sample| sample * 0.35)
+            .collect::<Vec<_>>();
+
+        let analysis = analyzer
+            .analyze(frame_at(
+                started_at.unix_nanos + delayed_echo_capture_offset_ms * 1_000_000,
+                delayed_echo,
+            ))
+            .expect("analysis should succeed");
+
+        assert_eq!(analysis.routing, AuditoryRouting::EchoOnly);
+        assert_eq!(analysis.self_voice.delay_ms, delayed_echo_delay_ms as i64);
+        assert!(analysis.self_voice.correlation > 0.99);
+    }
+
     fn analyzer_with_reference() -> (AuditorySceneAnalyzer, Vec<f32>, ExactTimestamp) {
         let sample_rate_hz = 16_000;
         let started_at = ExactTimestamp {
@@ -314,5 +343,17 @@ mod tests {
                 value * 0.5
             })
             .collect()
+    }
+
+    fn mean_square_error(actual: &[f32], expected: &[f32]) -> f32 {
+        actual
+            .iter()
+            .zip(expected)
+            .map(|(actual, expected)| {
+                let delta = actual - expected;
+                delta * delta
+            })
+            .sum::<f32>()
+            / actual.len().max(1) as f32
     }
 }
