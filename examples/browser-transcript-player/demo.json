@@ -175,31 +175,65 @@
           }
         ]
       }
+    }
+  ],
+  "events": [
+    {
+      "id": "evt-overlap-1",
+      "lane": "Overlap",
+      "kind": "overlap_started",
+      "start_ms": 1240,
+      "end_ms": 1510,
+      "label": "User overlapped Pete",
+      "metadata": {
+        "routing": "MixedSelfAndExternal"
+      }
     },
     {
-      "label": "Auditory scene",
-      "kind": "provisional-event-like-lane",
+      "id": "evt-interrupt-1",
+      "lane": "Interruption",
+      "kind": "interruption_decision",
+      "start_ms": 1520,
+      "end_ms": 1780,
+      "label": "Fade then stop playback",
       "metadata": {
-        "note": "Scene observations are shown as TimedWordStream words for this static debug milestone; future event/span lanes should use a dedicated schema."
-      },
-      "stream": {
-        "id": 4,
-        "source": "LiveAsr",
-        "words": [
-          {
-            "id": 1,
-            "text": "speech",
-            "lexical_span": null,
-            "timing": {
-              "start_ms": 0,
-              "end_ms": 2081
-            },
-            "timing_confidence": 0.8,
-            "commitment": "Hypothetical",
-            "boundary_source": "Manual",
-            "audio_ref": null
-          }
-        ]
+        "policy": "SustainedExternalSpeech",
+        "action": "fade_then_stop"
+      }
+    },
+    {
+      "id": "evt-environment-1",
+      "lane": "Environmental",
+      "kind": "environment_observation",
+      "start_ms": 1760,
+      "end_ms": 2081,
+      "label": "Keyboard ticks",
+      "metadata": {
+        "class": "keyboard_ticks",
+        "confidence": 0.82
+      }
+    },
+    {
+      "id": "evt-latency-1",
+      "lane": "Latency",
+      "kind": "latency_marker",
+      "start_ms": 980,
+      "label": "LLM first token",
+      "metadata": {
+        "phase": "llm_first_token",
+        "latency_ms": 980
+      }
+    }
+  ],
+  "markers": [
+    {
+      "id": "marker-playback-1",
+      "lane": "Latency",
+      "kind": "playback_started",
+      "at_ms": 1035,
+      "label": "Playback started",
+      "metadata": {
+        "stream_id": 3
       }
     }
   ]
