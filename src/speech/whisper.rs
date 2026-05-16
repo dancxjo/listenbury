@@ -1,7 +1,9 @@
 use crate::audio::frame::AudioFrame;
 use crate::developer_diagnostics_enabled;
 use crate::speech::recognizer::SpeechRecognizer;
-use crate::speech::transcript::TranscriptChunk;
+use crate::speech::transcript::{
+    TranscriptCandidateEvent, TranscriptCandidateTracker, TranscriptChunk,
+};
 use std::sync::OnceLock;
 use whisper_cpp_plus::whisper_cpp_plus_sys as whisper_ffi;
 
@@ -9,6 +11,7 @@ pub struct WhisperSpeechRecognizer {
     ctx: whisper_cpp_plus::WhisperContext,
     pending: Vec<f32>,
     sample_rate_hz: u32,
+    candidate_tracker: TranscriptCandidateTracker,
 }
 
 impl WhisperSpeechRecognizer {
@@ -31,6 +34,7 @@ impl WhisperSpeechRecognizer {
             ctx,
             pending: Vec::new(),
             sample_rate_hz: 16_000,
+            candidate_tracker: TranscriptCandidateTracker::new(),
         })
     }
 
@@ -50,6 +54,39 @@ impl WhisperSpeechRecognizer {
 
         self.pending.extend_from_slice(&frame.samples);
         Ok(())
+    }
+
+    fn poll_transcript_text(&mut self) -> anyhow::Result<Option<String>> {
+        if self.pending.is_empty() {
+            return Ok(None);
+        }
+
+        let audio = std::mem::take(&mut self.pending);
+        let text = self.ctx.transcribe(&audio)?;
+        let text = text.trim();
+
+        if text.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(text.to_owned()))
+    }
+
+    /// Emits candidate lifecycle events for recognized audio.
+    ///
+    /// The current Whisper integration is final-only, so each recognition result maps to
+    /// `CandidateStarted -> CandidateFinalized`. This method is the seam for future
+    /// partial/streaming ASR to emit updates and replacements.
+    ///
+    /// ⚠️ This method and `poll_chunks` consume the same pending audio.
+    /// Callers must treat them as alternative polling APIs and should not call both expecting
+    /// duplicated output for the same buffered frames.
+    pub fn poll_candidate_events(&mut self) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
+        let Some(text) = self.poll_transcript_text()? else {
+            return Ok(Vec::new());
+        };
+
+        Ok(self.candidate_tracker.ingest_candidate(text, None, true))
     }
 }
 
@@ -74,21 +111,20 @@ impl SpeechRecognizer for WhisperSpeechRecognizer {
         self.accept_frame(frame)
     }
 
+    /// Returns final transcript chunks for all currently buffered audio.
+    ///
+    /// ⚠️ This method and [`WhisperSpeechRecognizer::poll_candidate_events`] are alternative
+    /// consumers over the same pending buffer. Calling one drains the audio for both paths.
+    ///
+    /// Prefer `poll_candidate_events` for new integrations and use this method as
+    /// compatibility sugar until a unified transcript event stream fully replaces chunk polling.
     fn poll_chunks(&mut self) -> anyhow::Result<Vec<TranscriptChunk>> {
-        if self.pending.is_empty() {
+        let Some(text) = self.poll_transcript_text()? else {
             return Ok(Vec::new());
-        }
-
-        let audio = std::mem::take(&mut self.pending);
-        let text = self.ctx.transcribe(&audio)?;
-        let text = text.trim();
-
-        if text.is_empty() {
-            return Ok(Vec::new());
-        }
+        };
 
         Ok(vec![TranscriptChunk {
-            text: text.to_owned(),
+            text,
             is_final: true,
         }])
     }
