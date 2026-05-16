@@ -95,6 +95,13 @@ use listenbury::hearing::vad::VadBackendKind;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceEvent, LiveTraceRecorder};
 #[cfg(any(
     test,
     all(
@@ -112,13 +119,6 @@ use listenbury::mind::llm::LlmEvent;
     feature = "tts-piper"
 ))]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceEvent, LiveTraceRecorder};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -591,7 +591,10 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 state.trace.discard_turn(turn_id);
                 continue;
             }
-            let mut transcript_event = state.trace.event(turn_id, "transcript", ExactTimestamp::now());
+            let mut transcript_event =
+                state
+                    .trace
+                    .event(turn_id, "transcript", ExactTimestamp::now());
             transcript_event.text = Some(transcript.to_string());
             state.trace.buffer(transcript_event);
             state.trace.commit_turn(turn_id)?;
@@ -695,7 +698,9 @@ fn process_live_frame(
             }
             HearingEvent::BreathGroupClosed { id, reason } => {
                 let mut trace_event =
-                    state.trace.event(turn_id, "breath_group_closed", frame.captured_at);
+                    state
+                        .trace
+                        .event(turn_id, "breath_group_closed", frame.captured_at);
                 trace_event.group_id = Some(format!("{id:?}"));
                 trace_event.reason = Some(format!("{reason:?}").to_ascii_lowercase());
                 state.trace.buffer(trace_event);
@@ -707,7 +712,9 @@ fn process_live_frame(
             HearingEvent::SpeechContinued { .. } | HearingEvent::PauseStarted => {}
             HearingEvent::BreathGroupOpened { id } => {
                 let mut trace_event =
-                    state.trace.event(turn_id, "breath_group_opened", frame.captured_at);
+                    state
+                        .trace
+                        .event(turn_id, "breath_group_opened", frame.captured_at);
                 trace_event.group_id = Some(format!("{id:?}"));
                 state.trace.buffer(trace_event);
             }
@@ -778,7 +785,11 @@ fn stream_speech_to_tts(
             stop: live_half_duplex_stops(prompt_format),
         })
         .context("failed to start llama.cpp generation")?;
-    trace.emit_now(user_turn_id, "llm_generation_started", ExactTimestamp::now())?;
+    trace.emit_now(
+        user_turn_id,
+        "llm_generation_started",
+        ExactTimestamp::now(),
+    )?;
 
     let llm_started_at_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
     let llm_started_at = Instant::now();
@@ -821,7 +832,12 @@ fn stream_speech_to_tts(
                     let filler_text = filler_plan.text().to_string();
                     current_spoken_text = filler_text.clone();
                     response_fragments.push(filler_text.clone());
-                    emit_speech_plan_trace(trace, user_turn_id, &filler_plan, ExactTimestamp::now())?;
+                    emit_speech_plan_trace(
+                        trace,
+                        user_turn_id,
+                        &filler_plan,
+                        ExactTimestamp::now(),
+                    )?;
                     tts.enqueue(filler_plan)?;
                     trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
@@ -1323,9 +1339,10 @@ fn drain_ready_tts_audio(
     });
     controller.apply_safe_boundary_updates();
     self_hearing.mark_output_started(spoken_text, audio_dur);
-    if let (Some(started_at), Some(expected_until)) =
-        (self_hearing.output_started_at, self_hearing.output_expected_until)
-    {
+    if let (Some(started_at), Some(expected_until)) = (
+        self_hearing.output_started_at,
+        self_hearing.output_expected_until,
+    ) {
         trace.begin_suppression(trace_state.turn, started_at, expected_until)?;
     }
     eprintln!(

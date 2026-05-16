@@ -88,7 +88,10 @@ pub struct JsonlTraceWriter {
 impl JsonlTraceWriter {
     pub fn create(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create trace directory {}", parent.display()))?;
         }
@@ -164,7 +167,12 @@ where
         self.sink.emit(event)
     }
 
-    pub fn emit_now(&mut self, turn: u64, kind: impl Into<String>, at: ExactTimestamp) -> anyhow::Result<()> {
+    pub fn emit_now(
+        &mut self,
+        turn: u64,
+        kind: impl Into<String>,
+        at: ExactTimestamp,
+    ) -> anyhow::Result<()> {
         self.emit(self.event(turn, kind, at))
     }
 
@@ -174,6 +182,15 @@ where
             events: Vec::new(),
         });
         if pending.turn != event.turn {
+            tracing::warn!(
+                pending_turn = pending.turn,
+                new_turn = event.turn,
+                "discarding uncommitted live trace turn"
+            );
+            debug_assert_eq!(
+                pending.turn, event.turn,
+                "unexpected live trace turn rollover without commit/discard"
+            );
             self.pending_turn = Some(PendingTurn {
                 turn: event.turn,
                 events: vec![event],
@@ -202,7 +219,11 @@ where
     }
 
     pub fn discard_turn(&mut self, turn: u64) {
-        if self.pending_turn.as_ref().is_some_and(|pending| pending.turn == turn) {
+        if self
+            .pending_turn
+            .as_ref()
+            .is_some_and(|pending| pending.turn == turn)
+        {
             self.pending_turn = None;
         }
     }
@@ -240,7 +261,17 @@ where
 }
 
 fn unix_nanos_u64(timestamp: ExactTimestamp) -> u64 {
-    u64::try_from(timestamp.unix_nanos).unwrap_or(u64::MAX)
+    match u64::try_from(timestamp.unix_nanos) {
+        Ok(value) => value,
+        Err(_) => {
+            tracing::warn!(
+                unix_nanos = timestamp.unix_nanos.to_string(),
+                "live trace timestamp exceeded u64 range"
+            );
+            debug_assert!(false, "live trace timestamp exceeded u64 range");
+            u64::MAX
+        }
+    }
 }
 
 #[cfg(test)]
@@ -295,13 +326,16 @@ mod tests {
         transcript.text = Some("hello there".to_string());
         trace.buffer(transcript);
         trace.commit_turn(1).unwrap();
-        trace.emit_now(1, "llm_generation_started", ts(1_500)).unwrap();
+        trace
+            .emit_now(1, "llm_generation_started", ts(1_500))
+            .unwrap();
         trace.emit_now(1, "first_llm_token", ts(1_560)).unwrap();
         let mut speech_unit = trace.event(1, "first_safe_speech_unit_emitted", ts(1_610));
         speech_unit.text = Some("Hi.".to_string());
         speech_unit.unit_kind = Some("complete_sentence".to_string());
         trace.emit(speech_unit).unwrap();
-        trace.emit_now(1, "first_tts_audio_frame_available", ts(1_690))
+        trace
+            .emit_now(1, "first_tts_audio_frame_available", ts(1_690))
             .unwrap();
         trace.emit_now(1, "playback_started", ts(1_700)).unwrap();
         trace.begin_suppression(1, ts(1_690), ts(2_050)).unwrap();
