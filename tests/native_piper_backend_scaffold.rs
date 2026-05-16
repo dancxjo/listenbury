@@ -2,11 +2,11 @@
 
 use std::{env, fs, path::PathBuf};
 
-use listenbury::mouth::piper_native::{NativePiperBackend, PiperVoiceConfig};
+use listenbury::mouth::piper_native::{NativePiperBackend, PiperIdSequence, PiperVoiceConfig};
 
 #[test]
-#[ignore = "set LISTENBURY_TEST_PIPER_MODEL and LISTENBURY_TEST_PIPER_CONFIG to a local Piper model/config, and ensure an ONNX Runtime shared library is available"]
-fn loads_real_local_piper_model_when_configured() {
+#[ignore = "set LISTENBURY_TEST_PIPER_MODEL, LISTENBURY_TEST_PIPER_CONFIG, and LISTENBURY_TEST_PIPER_IDS for a local Piper model/config; ensure ONNX Runtime shared library is available"]
+fn synthesizes_real_local_piper_model_ids_when_configured() {
     let model_path = PathBuf::from(
         env::var("LISTENBURY_TEST_PIPER_MODEL").expect("LISTENBURY_TEST_PIPER_MODEL"),
     );
@@ -19,11 +19,28 @@ fn loads_real_local_piper_model_when_configured() {
     )
     .expect("parse Piper config JSON");
 
-    let backend = NativePiperBackend::load(&model_path, config).expect("load local Piper model");
+    let ids = PiperIdSequence {
+        ids: env::var("LISTENBURY_TEST_PIPER_IDS")
+            .expect("LISTENBURY_TEST_PIPER_IDS")
+            .split(',')
+            .map(|value| value.trim().parse::<i64>().expect("parse Piper ID"))
+            .collect(),
+    };
+
+    let mut backend =
+        NativePiperBackend::load(&model_path, config).expect("load local Piper model");
     let contract = backend
         .validate_model_contract()
         .expect("validate ONNX model contract");
+    let pcm = backend
+        .synthesize_ids(&ids)
+        .expect("synthesize from explicit Piper IDs");
 
     assert!(!contract.input_names.is_empty(), "expected model inputs");
     assert!(!contract.output_names.is_empty(), "expected model outputs");
+    assert_eq!(pcm.sample_rate_hz, backend.config().sample_rate_hz);
+    assert!(
+        !pcm.samples.is_empty(),
+        "expected non-empty waveform samples"
+    );
 }
