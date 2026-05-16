@@ -224,18 +224,14 @@ mod tests {
         assert_eq!(stream.words[1].timing_confidence, Some(0.88));
 
         // All words are Final with Whisper boundary source
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Final)
-        );
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.boundary_source == BoundarySource::Whisper)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::Final));
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.boundary_source == BoundarySource::Whisper));
     }
 
     /// Timing is correctly preserved from the TranscriptWord fields.
@@ -290,12 +286,10 @@ mod tests {
 
         assert_eq!(stream.words.len(), 2);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.boundary_source == BoundarySource::Predicted)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.boundary_source == BoundarySource::Predicted));
 
         // Confidence forwarded even when timing is absent
         assert_eq!(stream.words[0].timing_confidence, Some(0.7));
@@ -315,7 +309,10 @@ mod tests {
         let stream = transcript_to_word_stream(WordStreamId(5), &words);
 
         assert!(stream.words[0].timing.is_none());
-        assert_eq!(stream.words[0].boundary_source, BoundarySource::Predicted);
+        assert_eq!(
+            stream.words[0].boundary_source,
+            BoundarySource::Predicted
+        );
     }
 
     /// Inverted timestamps (end < start) produce no timing entry and fall
@@ -332,7 +329,10 @@ mod tests {
         let stream = transcript_to_word_stream(WordStreamId(6), &words);
 
         assert!(stream.words[0].timing.is_none());
-        assert_eq!(stream.words[0].boundary_source, BoundarySource::Predicted);
+        assert_eq!(
+            stream.words[0].boundary_source,
+            BoundarySource::Predicted
+        );
     }
 
     /// Lexical spans are byte-level offsets matching each word's position in

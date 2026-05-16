@@ -39,11 +39,11 @@ pub mod worker;
 pub use embed::EmbeddingProvider;
 pub use journal::{JournalEntry, JournalMemorySink, MemoryJournal};
 pub use neo4j::{
-    Neo4jNode, Neo4jRelationship, Neo4jStore, Neo4jTraceWrite, Neo4jWriteResult, trace_write_for,
+    trace_write_for, Neo4jNode, Neo4jRelationship, Neo4jStore, Neo4jTraceWrite, Neo4jWriteResult,
 };
 pub use qdrant::{
-    DEFAULT_QDRANT_COLLECTION, QdrantPoint, QdrantSearchHit, QdrantStore, VectorDocument,
-    vector_documents_for_trace,
+    vector_documents_for_trace, QdrantPoint, QdrantSearchHit, QdrantStore, VectorDocument,
+    DEFAULT_QDRANT_COLLECTION,
 };
 pub use sink::{ChannelMemorySink, MemorySink, NoopMemorySink};
 pub use trace::{MemoryTrace, SpeakerRole};

@@ -1,9 +1,9 @@
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::thread::{self, JoinHandle};
 
 use crate::memory::embed::EmbeddingProvider;
-use crate::memory::neo4j::{Neo4jStore, Neo4jWriteResult, trace_write_for};
-use crate::memory::qdrant::{DEFAULT_QDRANT_COLLECTION, QdrantStore, vector_documents_for_trace};
+use crate::memory::neo4j::{trace_write_for, Neo4jStore, Neo4jWriteResult};
+use crate::memory::qdrant::{vector_documents_for_trace, QdrantStore, DEFAULT_QDRANT_COLLECTION};
 use crate::memory::sink::ChannelMemorySink;
 use crate::memory::trace::MemoryTrace;
 
@@ -316,13 +316,11 @@ mod tests {
         assert_eq!(report.vector_upserts_ok, 0);
 
         assert_eq!(graph.writes.lock().expect("graph mutex poisoned").len(), 1);
-        assert!(
-            qdrant
-                .upserts
-                .lock()
-                .expect("qdrant mutex poisoned")
-                .is_empty()
-        );
+        assert!(qdrant
+            .upserts
+            .lock()
+            .expect("qdrant mutex poisoned")
+            .is_empty());
     }
 
     #[test]

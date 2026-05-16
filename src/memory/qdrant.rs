@@ -1,4 +1,4 @@
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::memory::neo4j::Neo4jWriteResult;
 use crate::memory::trace::MemoryTrace;

@@ -89,7 +89,10 @@ pub fn generated_text_to_word_stream(id: WordStreamId, text: &str) -> TimedWordS
 /// Words are delimited by ASCII whitespace.  The byte spans are relative to
 /// the beginning of `text`.
 fn split_words(text: &str) -> impl Iterator<Item = (&str, usize, usize)> {
-    SplitWordsIter { text, byte_pos: 0 }
+    SplitWordsIter {
+        text,
+        byte_pos: 0,
+    }
 }
 
 struct SplitWordsIter<'a> {
@@ -166,11 +169,7 @@ pub fn attach_heuristic_timing(stream: &mut TimedWordStream, total_duration_ms: 
 
     // Total character count across all words (floor at MIN_WORD_CHARS to avoid
     // division by zero for empty-text words).
-    let total_chars: usize = stream
-        .words
-        .iter()
-        .map(|w| w.text.len().max(MIN_WORD_CHARS))
-        .sum();
+    let total_chars: usize = stream.words.iter().map(|w| w.text.len().max(MIN_WORD_CHARS)).sum();
 
     let mut cursor_ms: u64 = 0;
     let n = stream.words.len();
@@ -369,19 +368,9 @@ mod tests {
     #[test]
     fn initial_commitment_is_stable_text() {
         let stream = generated_text_to_word_stream(WordStreamId(2), "one two three");
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::StableText)
-        );
+        assert!(stream.words.iter().all(|w| w.commitment == WordCommitment::StableText));
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.boundary_source == BoundarySource::Predicted)
-        );
+        assert!(stream.words.iter().all(|w| w.boundary_source == BoundarySource::Predicted));
     }
 
     /// Empty text produces an empty stream without panicking.
@@ -458,12 +447,7 @@ mod tests {
         assert_eq!(combined.words.len(), 3);
         assert_eq!(combined.words[0].text, "sure");
         assert_eq!(combined.words[2].text, "can");
-        assert!(
-            combined
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::StableText)
-        );
+        assert!(combined.words.iter().all(|w| w.commitment == WordCommitment::StableText));
     }
 
     // -----------------------------------------------------------------------
@@ -582,12 +566,7 @@ mod tests {
         let mut cursor = PlaybackCursor::new();
         cursor.advance(&mut stream, 500);
 
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Final)
-        );
+        assert!(stream.words.iter().all(|w| w.commitment == WordCommitment::Final));
         assert_eq!(cursor.current_word(), None);
     }
 
@@ -650,12 +629,7 @@ mod tests {
         let mut cursor = PlaybackCursor::new();
         cursor.interrupt(&mut stream);
 
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Cancelled)
-        );
+        assert!(stream.words.iter().all(|w| w.commitment == WordCommitment::Cancelled));
     }
 
     // -----------------------------------------------------------------------
@@ -680,25 +654,9 @@ mod tests {
         // Interrupt: "a" is Final, "b" is currently Played, "c"/"d" are Playable.
         cursor.interrupt(&mut stream);
 
-        assert_eq!(
-            stream.words[0].commitment,
-            WordCommitment::Final,
-            "a should be Final"
-        );
-        assert_eq!(
-            stream.words[1].commitment,
-            WordCommitment::Cancelled,
-            "b should be Cancelled"
-        );
-        assert_eq!(
-            stream.words[2].commitment,
-            WordCommitment::Cancelled,
-            "c should be Cancelled"
-        );
-        assert_eq!(
-            stream.words[3].commitment,
-            WordCommitment::Cancelled,
-            "d should be Cancelled"
-        );
+        assert_eq!(stream.words[0].commitment, WordCommitment::Final,  "a should be Final");
+        assert_eq!(stream.words[1].commitment, WordCommitment::Cancelled, "b should be Cancelled");
+        assert_eq!(stream.words[2].commitment, WordCommitment::Cancelled, "c should be Cancelled");
+        assert_eq!(stream.words[3].commitment, WordCommitment::Cancelled, "d should be Cancelled");
     }
 }

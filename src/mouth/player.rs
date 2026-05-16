@@ -152,9 +152,8 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
                 self.synthesis = None;
                 self.audio_buffer.clear();
                 self.tts.stop()?;
-                self.command_events.push(PlaybackEvent::PlaybackStopped {
-                    at: ExactTimestamp::now(),
-                });
+                self.command_events
+                    .push(PlaybackEvent::PlaybackStopped { at: ExactTimestamp::now() });
             }
             MouthCommand::FadeOut { millis } => {
                 // First-pass fallback: the CPAL backend does not support gradual
@@ -516,7 +515,9 @@ mod tests {
     fn speak_command_enqueues_speech() {
         let mut player = SequentialPlayer::new(MockTts::new());
         let plan = SpeechPlan::new(SpeechUnit::CompleteSentence("Via command.".to_string()));
-        player.handle_command(MouthCommand::Speak(plan)).unwrap();
+        player
+            .handle_command(MouthCommand::Speak(plan))
+            .unwrap();
 
         let ev = player.poll().unwrap();
         assert!(

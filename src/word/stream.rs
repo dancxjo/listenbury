@@ -253,12 +253,10 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::RecordedAudio);
         assert_eq!(stream.words.len(), 3);
         assert!(stream.words.iter().all(|w| w.timing.is_some()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Final)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::Final));
     }
 
     /// Verify that a generated-text stream can be constructed *without* timing
@@ -303,12 +301,10 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::GeneratedText);
         assert_eq!(stream.words.len(), 4);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::StableText)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::StableText));
     }
 
     /// Verify that a synthetic-speech stream can be constructed with playback
@@ -324,22 +320,20 @@ mod tests {
         ]
         .iter()
         .enumerate()
-        .map(
-            |(i, &(word, start_ms, end_ms, byte_offset, byte_len))| WordNode {
-                id: WordId(i as u64 + 1),
-                text: word.to_string(),
-                lexical_span: None,
-                timing: Some(WordTiming { start_ms, end_ms }),
-                timing_confidence: Some(1.0),
-                commitment: WordCommitment::Playable,
-                boundary_source: BoundarySource::PlaybackCursor,
-                audio_ref: Some(AudioRef {
-                    buffer_id: buffer_id.clone(),
-                    byte_offset,
-                    byte_len,
-                }),
-            },
-        )
+        .map(|(i, &(word, start_ms, end_ms, byte_offset, byte_len))| WordNode {
+            id: WordId(i as u64 + 1),
+            text: word.to_string(),
+            lexical_span: None,
+            timing: Some(WordTiming { start_ms, end_ms }),
+            timing_confidence: Some(1.0),
+            commitment: WordCommitment::Playable,
+            boundary_source: BoundarySource::PlaybackCursor,
+            audio_ref: Some(AudioRef {
+                buffer_id: buffer_id.clone(),
+                byte_offset,
+                byte_len,
+            }),
+        })
         .collect();
 
         let stream = TimedWordStream {
