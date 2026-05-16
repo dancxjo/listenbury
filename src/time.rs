@@ -23,11 +23,10 @@ impl Serialize for ExactTimestamp {
 impl<'de> Deserialize<'de> for ExactTimestamp {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let dt = DateTime::parse_from_rfc3339(&s)
-            .map_err(|e| serde::de::Error::custom(e))?;
+        let dt = DateTime::parse_from_rfc3339(&s).map_err(|e| serde::de::Error::custom(e))?;
         let utc: DateTime<Utc> = dt.into();
-        let nanos = (utc.timestamp() as i128) * 1_000_000_000
-            + utc.timestamp_subsec_nanos() as i128;
+        let nanos =
+            (utc.timestamp() as i128) * 1_000_000_000 + utc.timestamp_subsec_nanos() as i128;
         if nanos < 0 {
             return Err(serde::de::Error::custom(
                 "timestamp is before the Unix epoch (1970-01-01)",
@@ -48,7 +47,6 @@ impl ExactTimestamp {
         Self { unix_nanos: nanos }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Timed<T> {
