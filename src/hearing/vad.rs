@@ -2,6 +2,11 @@ use crate::audio::frame::AudioFrame;
 #[cfg(feature = "vad-webrtc")]
 use anyhow::Context;
 
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_ENERGY_FALLBACK_THRESHOLD_RMS: f32 = 0.08;
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_MIN_SPEECH_RMS: f32 = 0.015;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VadBackendKind {
     #[default]
@@ -118,9 +123,9 @@ pub struct WebRtcVad {
 impl Default for WebRtcVad {
     fn default() -> Self {
         Self {
-            engine: webrtc_vad::Vad::new_with_mode(webrtc_vad::VadMode::Quality),
+            engine: webrtc_vad::Vad::new_with_mode(webrtc_vad::VadMode::VeryAggressive),
             sample_rate_hz: None,
-            energy_fallback: EnergyVad::default(),
+            energy_fallback: EnergyVad::new(WEBRTC_ENERGY_FALLBACK_THRESHOLD_RMS),
         }
     }
 }
@@ -154,16 +159,24 @@ impl VoiceActivityDetector for WebRtcVad {
             self.sample_rate_hz = Some(frame.sample_rate_hz);
         }
 
+        let centered_frame = mean_centered_frame(frame);
+        let centered_rms = EnergyVad::rms(&centered_frame.samples);
         let mono_i16 = to_mono_i16(frame);
         ensure_supported_frame_length(frame.sample_rate_hz, mono_i16.len())?;
-        let is_speech = self
+        let is_webrtc_speech = self
             .engine
             .is_voice_segment(&mono_i16)
             .map_err(|_| anyhow::anyhow!("invalid WebRTC VAD frame length"))?;
-        let fallback = self.energy_fallback.process_frame(frame)?;
+        let fallback = self.energy_fallback.process_frame(&centered_frame)?;
+        let is_speech =
+            (is_webrtc_speech && centered_rms >= WEBRTC_MIN_SPEECH_RMS) || fallback.is_speech;
         Ok(VadResult {
-            speech_prob: if is_speech { 1.0 } else { fallback.speech_prob },
-            is_speech: is_speech || fallback.is_speech,
+            speech_prob: if is_webrtc_speech {
+                (centered_rms / WEBRTC_MIN_SPEECH_RMS).clamp(0.0, 1.0)
+            } else {
+                fallback.speech_prob
+            },
+            is_speech,
         })
     }
 }
@@ -196,14 +209,42 @@ fn to_mono_i16(frame: &AudioFrame) -> Vec<i16> {
         return Vec::new();
     }
     let channel_count = usize::from(frame.channels);
-    frame
+    let mono_samples = frame
         .samples
         .chunks_exact(channel_count)
-        .map(|chunk| {
-            let mono = chunk.iter().sum::<f32>() / f32::from(frame.channels);
-            (mono.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
+        .map(|chunk| chunk.iter().sum::<f32>() / f32::from(frame.channels))
+        .collect::<Vec<_>>();
+    if mono_samples.is_empty() {
+        return Vec::new();
+    }
+    let mean = mono_samples.iter().sum::<f32>() / mono_samples.len() as f32;
+    mono_samples
+        .into_iter()
+        .map(|mono| {
+            let centered = mono - mean;
+            (centered.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
         })
         .collect()
+}
+
+#[cfg(feature = "vad-webrtc")]
+fn mean_centered_frame(frame: &AudioFrame) -> AudioFrame {
+    if frame.samples.is_empty() {
+        return AudioFrame {
+            captured_at: frame.captured_at,
+            sample_rate_hz: frame.sample_rate_hz,
+            channels: frame.channels,
+            samples: Vec::new(),
+        };
+    }
+
+    let mean = frame.samples.iter().sum::<f32>() / frame.samples.len() as f32;
+    AudioFrame {
+        captured_at: frame.captured_at,
+        sample_rate_hz: frame.sample_rate_hz,
+        channels: frame.channels,
+        samples: frame.samples.iter().map(|sample| sample - mean).collect(),
+    }
 }
 
 #[cfg(test)]
@@ -256,13 +297,50 @@ mod tests {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: 16_000,
             channels: 1,
-            samples: vec![0.08; 160],
+            samples: (0..160)
+                .map(|index| if index % 2 == 0 { 0.10 } else { -0.10 })
+                .collect(),
         };
 
         let result = vad.process_frame(&frame).unwrap();
 
         assert!(result.is_speech);
         assert!(result.speech_prob > 0.0);
+    }
+
+    #[cfg(feature = "vad-webrtc")]
+    #[test]
+    fn webrtc_backend_ignores_dc_offset_frames() {
+        let mut vad = create_vad_backend(VadBackendKind::WebRtc).unwrap();
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.04; 160],
+        };
+
+        let result = vad.process_frame(&frame).unwrap();
+
+        assert!(!result.is_speech);
+        assert!(result.speech_prob > 0.0);
+    }
+
+    #[cfg(feature = "vad-webrtc")]
+    #[test]
+    fn webrtc_backend_ignores_low_energy_non_voice_frames() {
+        let mut vad = create_vad_backend(VadBackendKind::WebRtc).unwrap();
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: (0..160)
+                .map(|index| if index % 2 == 0 { 0.005 } else { -0.005 })
+                .collect(),
+        };
+
+        let result = vad.process_frame(&frame).unwrap();
+
+        assert!(!result.is_speech);
     }
 
     #[cfg(not(feature = "vad-webrtc"))]

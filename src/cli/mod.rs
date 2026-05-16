@@ -170,7 +170,7 @@ pub(crate) struct ContinueCommand {
     #[arg(long, default_value_t = 8)]
     pub(crate) verbatim_turns: usize,
     /// Continuous VAD speech duration before TTS auto-pauses while Pete is speaking.
-    #[arg(long, default_value_t = 120)]
+    #[arg(long, default_value_t = 250)]
     pub(crate) tts_vad_pause_ms: u64,
     /// Time to listen after an auto-pause before clearing or resuming TTS.
     #[arg(long, default_value_t = 700)]
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(command.max_tokens, None);
         assert_eq!(command.context_size, 8192);
         assert_eq!(command.verbatim_turns, 8);
-        assert_eq!(command.tts_vad_pause_ms, 120);
+        assert_eq!(command.tts_vad_pause_ms, 250);
         assert_eq!(command.tts_vad_listen_ms, 700);
         assert_eq!(command.prompt, ["seed", "prompt"]);
     }

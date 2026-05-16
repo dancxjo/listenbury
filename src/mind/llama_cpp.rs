@@ -296,16 +296,15 @@ impl LlamaGenerationWorker {
         }
 
         let mut batch = LlamaBatch::new(n_ctx, 1);
-        let last_index = prompt_tokens.len() - 1;
-        for (index, token) in prompt_tokens.into_iter().enumerate() {
-            let position =
-                i32::try_from(index).context("prompt token position exceeds i32::MAX")?;
-            batch.add(token, position, &[0], index == last_index)?;
-        }
-        ctx.decode(&mut batch)
-            .context("failed to decode prompt with llama.cpp")?;
-
-        let mut n_cur = batch.n_tokens();
+        let mut n_cur = 0;
+        decode_prompt_tokens(
+            &mut ctx,
+            &mut batch,
+            &prompt_tokens,
+            &mut n_cur,
+            n_ctx,
+            "prompt",
+        )?;
         let mut generated_tokens = 0usize;
         let mut sampler = build_sampler(self.config.temperature, self.config.top_p);
         let mut decoder = encoding_rs::UTF_8.new_decoder();
@@ -482,18 +481,58 @@ fn decode_appended_prompt(
         );
     }
 
-    batch.clear();
-    let last_index = tokens.len() - 1;
-    for (index, token) in tokens.into_iter().enumerate() {
-        let offset = i32::try_from(index).context("appended prompt position exceeds i32::MAX")?;
-        batch
-            .add(token, *n_cur + offset, &[0], index == last_index)
-            .context("failed to add appended prompt token to llama.cpp batch")?;
+    decode_prompt_tokens(ctx, batch, &tokens, n_cur, n_ctx, "appended prompt")?;
+
+    Ok(())
+}
+
+fn decode_prompt_tokens(
+    ctx: &mut LlamaContext<'_>,
+    batch: &mut LlamaBatch<'_>,
+    tokens: &[llama_cpp_2::token::LlamaToken],
+    n_cur: &mut i32,
+    n_ctx: usize,
+    label: &str,
+) -> Result<()> {
+    if tokens.is_empty() {
+        return Ok(());
     }
 
-    ctx.decode(batch)
-        .context("failed to decode appended prompt with llama.cpp")?;
-    *n_cur += batch.n_tokens();
+    let max_decode_tokens =
+        usize::try_from(ctx.n_batch()).context("llama.cpp n_batch does not fit usize")?;
+    anyhow::ensure!(
+        max_decode_tokens > 0,
+        "llama.cpp n_batch must be greater than zero"
+    );
+
+    batch.clear();
+    let last_index = tokens.len() - 1;
+    for chunk_start in (0..tokens.len()).step_by(max_decode_tokens) {
+        batch.clear();
+        let chunk_end = chunk_start
+            .saturating_add(max_decode_tokens)
+            .min(tokens.len());
+        for (index, token) in tokens[chunk_start..chunk_end].iter().copied().enumerate() {
+            let global_index = chunk_start + index;
+            let position = (*n_cur)
+                .checked_add(
+                    i32::try_from(index).context("prompt chunk position exceeds i32::MAX")?,
+                )
+                .context("prompt token position exceeds i32::MAX")?;
+            batch
+                .add(token, position, &[0], global_index == last_index)
+                .with_context(|| format!("failed to add {label} token to llama.cpp batch"))?;
+        }
+
+        ctx.decode(batch)
+            .with_context(|| format!("failed to decode {label} with llama.cpp"))?;
+        *n_cur = (*n_cur)
+            .checked_add(batch.n_tokens())
+            .context("prompt token count exceeds i32::MAX")?;
+        if (*n_cur as usize) > n_ctx {
+            bail!("{label} exceeded context_size {n_ctx} while decoding");
+        }
+    }
 
     Ok(())
 }
