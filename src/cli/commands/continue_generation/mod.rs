@@ -2537,7 +2537,20 @@ impl DuplexTurnController {
             deferred_live_events,
             SpeechControlCommand::Shutup,
             message,
-        )
+        )?;
+        append_or_defer_live_event(
+            llm_session,
+            PromptPacket::source(
+                "Live generation was restarted because sustained overlap forced a yield."
+                    .to_string(),
+            ),
+            defer_live_events,
+            deferred_live_events,
+            "failed to append duplex generation restart event to live generation",
+        )?;
+        llm_session
+            .restart_with_compact_prompt()
+            .context("failed to restart continued llama.cpp generation after duplex queue clear")
     }
 }
 
@@ -2594,13 +2607,34 @@ fn send_duplex_turn_control(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn append_mouth_runtime_trace(
+    llm_session: &mut ContinueLlmSession,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
+    message: String,
+) -> Result<()> {
+    append_or_defer_live_event(
+        llm_session,
+        PromptPacket::source(message),
+        defer_live_events,
+        deferred_live_events,
+        "failed to append mouth runtime event to live generation",
+    )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn drain_mouth_events_into_llm(
-    _llm_session: &mut ContinueLlmSession,
+    llm_session: &mut ContinueLlmSession,
     mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
     pending_mouth_utterances: &mut usize,
     mouth_playback_paused: &mut bool,
-    _defer_live_events: bool,
-    _deferred_live_events: &mut VecDeque<PromptPacket>,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
 ) -> Result<()> {
     loop {
         match mouth_rx.try_recv() {
@@ -2613,16 +2647,51 @@ fn drain_mouth_events_into_llm(
                     ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
                         eprintln!("[dev continue] speaking: {text}");
                     }
+                    ContinueMouthEvent::SpeechInterrupted { id, text } => {
+                        append_mouth_runtime_trace(
+                            llm_session,
+                            defer_live_events,
+                            deferred_live_events,
+                            format!(
+                                "Duplex runtime: speech interrupted while speaking (id={id}, text={:?}).",
+                                compact_prompt_line(&text, MAX_VERBATIM_TURN_CHARS)
+                            ),
+                        )?;
+                    }
+                    ContinueMouthEvent::SpeechQueueCleared { count } => {
+                        append_mouth_runtime_trace(
+                            llm_session,
+                            defer_live_events,
+                            deferred_live_events,
+                            format!(
+                                "Duplex runtime: cleared {count} queued speech unit(s) after sustained overlap."
+                            ),
+                        )?;
+                    }
+                    ContinueMouthEvent::SpeechPaused => {
+                        append_mouth_runtime_trace(
+                            llm_session,
+                            defer_live_events,
+                            deferred_live_events,
+                            "Duplex runtime: speech playback paused to yield the floor."
+                                .to_string(),
+                        )?;
+                    }
+                    ContinueMouthEvent::SpeechResumed => {
+                        append_mouth_runtime_trace(
+                            llm_session,
+                            defer_live_events,
+                            deferred_live_events,
+                            "Duplex runtime: speech playback resumed.".to_string(),
+                        )?;
+                    }
                     ContinueMouthEvent::SpeechError { message, .. } => {
                         anyhow::bail!("dev continue mouth failed: {message}");
                     }
                     ContinueMouthEvent::SpeechQueued { .. }
                     | ContinueMouthEvent::SpeechSynthesisStarted { .. }
                     | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
-                    | ContinueMouthEvent::SpeechInterrupted { .. }
-                    | ContinueMouthEvent::SpeechQueueCleared { .. }
-                    | ContinueMouthEvent::SpeechPaused
-                    | ContinueMouthEvent::SpeechResumed => {}
+                    => {}
                 }
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
@@ -5326,6 +5395,34 @@ grepSource("build_initial_prompt", 1)"#,
         );
         assert_eq!(
             controller.next_action(started_at + std::time::Duration::from_millis(500), 1),
+            None
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_ignores_brief_high_confidence_overlap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.3,
+                external_confidence: 0.9,
+                duration_ms: 30,
+            },
+            started_at,
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(149), 1),
             None
         );
     }
