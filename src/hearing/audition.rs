@@ -9,12 +9,15 @@ use crate::time::ExactTimestamp;
 const AUDITION_MIN_VOICE_ENERGY: f32 = 0.0004;
 const AUDITION_MIN_MIXED_CORRELATION: f32 = 0.10;
 const AUDITION_MIN_SELF_GAIN: f32 = 0.05;
+const AUDITION_MIN_SPEECH_ZERO_CROSSING_RATE: f32 = 0.08;
+const AUDITION_MIN_ENVIRONMENTAL_ENERGY: f32 = 0.00008;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditoryRouting {
     EchoOnly,
-    MixedSpeech,
-    ExternalOnly,
+    MixedSelfAndExternal,
+    ExternalSpeechCandidate,
+    EnvironmentalSoundCandidate,
     SilenceOrNoise,
 }
 
@@ -28,11 +31,13 @@ pub struct SelfVoiceEstimate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ExternalVoiceEstimate {
+pub struct ExternalEstimate {
     pub residual_energy: f32,
     pub vad_candidate: bool,
     pub confidence: f32,
 }
+
+pub type ExternalVoiceEstimate = ExternalEstimate;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NoiseEstimate {
@@ -44,16 +49,16 @@ pub struct AuditoryFrameAnalysis {
     pub captured_at: ExactTimestamp,
     pub frame: AudioFrame,
     pub self_voice: SelfVoiceEstimate,
-    pub external_voice: ExternalVoiceEstimate,
+    pub external: ExternalEstimate,
     pub noise: NoiseEstimate,
     pub routing: AuditoryRouting,
-    pub residual_frame: AudioFrame,
+    pub residual_frame: Option<AudioFrame>,
     pub self_frame: AudioFrame,
 }
 
 impl AuditoryFrameAnalysis {
-    pub fn external_residual_frame(&self) -> &AudioFrame {
-        &self.residual_frame
+    pub fn external_residual_frame(&self) -> Option<&AudioFrame> {
+        self.residual_frame.as_ref()
     }
 }
 
@@ -86,6 +91,7 @@ pub fn analyze_speaker_reference(
     let frame_energy = mean_square_energy(&frame.samples);
     let residual_energy = mean_square_energy(&speaker.residual_frame.samples);
     let residual_is_voice = residual_energy >= AUDITION_MIN_VOICE_ENERGY;
+    let speech_like = is_speech_candidate(&frame.samples, frame_energy);
     let self_confidence = self_voice_confidence(&speaker);
     let external_confidence = external_voice_confidence(residual_energy, speaker.residual_ratio);
     let routing = if speaker.decision == SuppressionDecision::Suppress {
@@ -94,11 +100,20 @@ pub fn analyze_speaker_reference(
         && speaker.correlation >= AUDITION_MIN_MIXED_CORRELATION
         && speaker.gain.abs() >= AUDITION_MIN_SELF_GAIN
     {
-        AuditoryRouting::MixedSpeech
-    } else if frame_energy >= AUDITION_MIN_VOICE_ENERGY {
-        AuditoryRouting::ExternalOnly
+        AuditoryRouting::MixedSelfAndExternal
+    } else if speech_like {
+        AuditoryRouting::ExternalSpeechCandidate
+    } else if frame_energy >= AUDITION_MIN_ENVIRONMENTAL_ENERGY {
+        AuditoryRouting::EnvironmentalSoundCandidate
     } else {
         AuditoryRouting::SilenceOrNoise
+    };
+    let residual_frame = match routing {
+        AuditoryRouting::MixedSelfAndExternal => Some(speaker.residual_frame.clone()),
+        AuditoryRouting::ExternalSpeechCandidate => Some(frame.clone()),
+        AuditoryRouting::EchoOnly
+        | AuditoryRouting::EnvironmentalSoundCandidate
+        | AuditoryRouting::SilenceOrNoise => None,
     };
 
     AuditoryFrameAnalysis {
@@ -111,9 +126,12 @@ pub fn analyze_speaker_reference(
             gain: speaker.gain,
             confidence: self_confidence,
         },
-        external_voice: ExternalVoiceEstimate {
+        external: ExternalEstimate {
             residual_energy,
-            vad_candidate: residual_is_voice,
+            vad_candidate: matches!(
+                routing,
+                AuditoryRouting::MixedSelfAndExternal | AuditoryRouting::ExternalSpeechCandidate
+            ),
             confidence: external_confidence,
         },
         noise: NoiseEstimate {
@@ -124,7 +142,7 @@ pub fn analyze_speaker_reference(
             },
         },
         routing,
-        residual_frame: speaker.residual_frame,
+        residual_frame,
         self_frame: speaker.self_frame,
     }
 }
@@ -146,6 +164,26 @@ fn mean_square_energy(samples: &[f32]) -> f32 {
         return 0.0;
     }
     samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32
+}
+
+fn is_speech_candidate(samples: &[f32], energy: f32) -> bool {
+    energy >= AUDITION_MIN_VOICE_ENERGY
+        && zero_crossing_rate(samples) >= AUDITION_MIN_SPEECH_ZERO_CROSSING_RATE
+}
+
+fn zero_crossing_rate(samples: &[f32]) -> f32 {
+    if samples.len() < 2 {
+        return 0.0;
+    }
+    let crossings = samples
+        .windows(2)
+        .filter(|pair| {
+            let a = pair[0];
+            let b = pair[1];
+            (a >= 0.0 && b < 0.0) || (a < 0.0 && b >= 0.0)
+        })
+        .count();
+    crossings as f32 / (samples.len() - 1) as f32
 }
 
 #[cfg(test)]
@@ -187,20 +225,44 @@ mod tests {
             .analyze(frame_at(started_at.unix_nanos + 50_000_000, mic.clone()))
             .expect("analysis should succeed");
 
-        assert_eq!(analysis.routing, AuditoryRouting::MixedSpeech);
-        assert_ne!(analysis.external_residual_frame().samples, mic);
-        assert!(analysis.external_voice.vad_candidate);
+        assert_eq!(analysis.routing, AuditoryRouting::MixedSelfAndExternal);
+        let residual = analysis
+            .external_residual_frame()
+            .expect("mixed frame should provide residual");
+        assert_ne!(residual.samples, mic);
+        assert!(analysis.external.vad_candidate);
     }
 
     #[test]
-    fn external_only_speech_remains_external_only() {
+    fn external_only_speech_remains_external_speech_candidate() {
         let analyzer =
             AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
         let analysis = analyzer
             .analyze(frame_at(1_000_000_000, test_noise(160)))
             .expect("analysis should succeed");
 
-        assert_eq!(analysis.routing, AuditoryRouting::ExternalOnly);
+        assert_eq!(analysis.routing, AuditoryRouting::ExternalSpeechCandidate);
+    }
+
+    #[test]
+    fn salient_non_speech_event_becomes_environmental_candidate() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        let tone = (0..160)
+            .map(|idx| {
+                let phase = idx as f32 * std::f32::consts::TAU * 300.0 / 16_000.0;
+                phase.sin() * 0.06
+            })
+            .collect::<Vec<_>>();
+        let analysis = analyzer
+            .analyze(frame_at(1_000_000_000, tone))
+            .expect("analysis should succeed");
+
+        assert_eq!(
+            analysis.routing,
+            AuditoryRouting::EnvironmentalSoundCandidate
+        );
+        assert!(!analysis.external.vad_candidate);
     }
 
     #[test]
@@ -212,7 +274,7 @@ mod tests {
             .expect("analysis should succeed");
 
         assert_eq!(analysis.routing, AuditoryRouting::SilenceOrNoise);
-        assert!(!analysis.external_voice.vad_candidate);
+        assert!(!analysis.external.vad_candidate);
     }
 
     fn analyzer_with_reference() -> (AuditorySceneAnalyzer, Vec<f32>, ExactTimestamp) {
