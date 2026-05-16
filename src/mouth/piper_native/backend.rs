@@ -336,9 +336,15 @@ fn resolve_inference_contract(
         TensorElementType::Int64,
     )?;
 
-    let speaker_count = config
-        .num_speakers
-        .unwrap_or_else(|| u32::try_from(config.speaker_id_map.len()).unwrap_or(0));
+    let speaker_count = match config.num_speakers {
+        Some(num_speakers) => num_speakers,
+        None => u32::try_from(config.speaker_id_map.len()).with_context(|| {
+            format!(
+                "invalid Piper voice config for `{}`: `speaker_id_map` size exceeds u32",
+                model_path.display()
+            )
+        })?,
+    };
     if speaker_count > 1 {
         bail!(
             "Piper ONNX multi-speaker inference is not supported yet for `{}`: config reports {} speakers; available inputs: {}",
