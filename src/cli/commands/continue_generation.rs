@@ -7,13 +7,6 @@ use anyhow::Result;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::commands::cpal_diag::play_audio_frames;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
 use crate::cli::commands::llama::build_prompt;
 #[cfg(all(
     feature = "audio-cpal",
@@ -58,7 +51,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use cpal::{FromSample, Sample, SizedSample};
+use cpal::{FromSample, Sample, SizedSample, SupportedStreamConfigRange};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -204,7 +197,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nYou may emit speech at any time by surrounding it with inline speech tags:\n<sp>words to say aloud :)</sp>\nEmoji inside speech tags are instructions to your countenance, not words to speak.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nYou may emit speech at any time by surrounding it with inline speech tags:\n<sp>words to say aloud :)</sp>\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.";
 #[cfg(any(
     test,
     all(
@@ -225,6 +218,36 @@ const INLINE_SPEECH_START_MARKER: &str = "<sp>";
     )
 ))]
 const INLINE_SPEECH_END_MARKER: &str = "</sp>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SPEECH_SHUTUP_MARKER: &str = "<shutup/>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SPEECH_PAUSE_MARKER: &str = "<pause/>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SPEECH_RESUME_MARKER: &str = "<resume/>";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -318,10 +341,10 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let whisper_model = resolve_whisper_model(command.whisper_model)?;
     let vad_backend = command.vad.as_backend_kind();
     let capture_enabled = Arc::new(AtomicBool::new(true));
-    let mut mouth = ContinueMouth::new(
+    let (mut mouth, mouth_rx) = ContinueMouth::start(
         PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?),
         Arc::clone(&capture_enabled),
-    );
+    )?;
     let (_ear, ear_rx) = ContinueEar::start(ContinueEarConfig {
         whisper_model,
         vad_backend,
@@ -369,23 +392,59 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut cancelled = false;
     let mut next_time_event_at = Instant::now() + TIME_EVENT_INTERVAL;
     let mut speech_events = SpeechEventDetector::default();
+    let mut pending_mouth_utterances = 0usize;
+    let mut llm_paused_for_mouth = false;
+    let mut mouth_playback_paused = false;
+    let mut deferred_live_events = VecDeque::<String>::new();
     loop {
         if interrupted.load(Ordering::Relaxed) && !cancelled {
             llm.cancel(id)?;
             cancelled = true;
         }
 
-        append_pending_live_events(&mut llm, id, &stdin_rx, &ear_rx, &mut next_time_event_at)?;
+        append_pending_live_events(
+            &mut llm,
+            id,
+            &stdin_rx,
+            &ear_rx,
+            &mouth_rx,
+            &mut pending_mouth_utterances,
+            &mut mouth_playback_paused,
+            &mut next_time_event_at,
+            speech_events.defers_live_events(),
+            &mut deferred_live_events,
+        )?;
 
-        if mouth.is_throttling_llm() {
-            if mouth.drain_ready_audio("listenbury dev continue speech")? {
-                if !mouth.is_throttling_llm() {
-                    llm.set_paused(id, false)
-                        .context("failed to resume continued llama.cpp generation")?;
-                }
-            } else {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+        if llm_paused_for_mouth && (pending_mouth_utterances == 0 || mouth_playback_paused) {
+            append_or_defer_live_event(
+                &mut llm,
+                id,
+                wrap_runtime_event("speech_throttle_stopped"),
+                speech_events.defers_live_events(),
+                &mut deferred_live_events,
+                "failed to append speech throttle stop event to live generation",
+            )?;
+            llm.set_paused(id, false)
+                .context("failed to resume continued llama.cpp generation")?;
+            llm_paused_for_mouth = false;
+        }
+
+        if !llm_paused_for_mouth && pending_mouth_utterances > 0 && !mouth_playback_paused {
+            append_or_defer_live_event(
+                &mut llm,
+                id,
+                wrap_runtime_event("speech_throttle_started"),
+                speech_events.defers_live_events(),
+                &mut deferred_live_events,
+                "failed to append speech throttle start event to live generation",
+            )?;
+            llm.set_paused(id, true)
+                .context("failed to throttle continued llama.cpp generation")?;
+            llm_paused_for_mouth = true;
+        }
+
+        if llm_paused_for_mouth {
+            std::thread::sleep(Duration::from_millis(5));
             continue;
         }
 
@@ -409,16 +468,17 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                     std::io::stdout().flush()?;
                     for speech_event in speech_events.ingest(text) {
                         if !generation_terminal {
-                            llm.append_prompt(id, wrap_runtime_event(&speech_event.to_message()))
-                                .context(
-                                    "failed to append runtime speech event to live generation",
-                                )?;
+                            append_or_defer_live_event(
+                                &mut llm,
+                                id,
+                                wrap_runtime_event(&speech_event.to_message()),
+                                speech_events.defers_live_events(),
+                                &mut deferred_live_events,
+                                "failed to append runtime speech event to live generation",
+                            )?;
                         }
                         if mouth.enqueue_runtime_event(&speech_event)? {
-                            if !generation_terminal {
-                                llm.set_paused(id, true)
-                                    .context("failed to throttle continued llama.cpp generation")?;
-                            }
+                            pending_mouth_utterances += 1;
                         }
                     }
                 }
@@ -431,10 +491,9 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
 
         if generation_terminal {
             println!();
-            while mouth.is_throttling_llm() {
-                if !mouth.drain_ready_audio("listenbury dev continue speech")? {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+            while pending_mouth_utterances > 0 {
+                drain_mouth_events_without_llm(&mouth_rx, &mut pending_mouth_utterances)?;
+                std::thread::sleep(Duration::from_millis(5));
             }
             break;
         }
@@ -493,11 +552,21 @@ fn wrap_time_event(message: &str) -> String {
         feature = "tts-piper"
     )
 ))]
-fn wrap_heard_input(text: &str) -> String {
-    format!(
-        "\n\n--- LIVE EVENT: ear ---\nHeard: {}\n--- END LIVE EVENT ---\n\n",
-        text.trim()
+fn wrap_ear_event(message: &str) -> String {
+    format!("\n\n--- LIVE EVENT: ear ---\n{message}\n--- END LIVE EVENT ---\n\n")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
     )
+))]
+fn wrap_mouth_event(message: &str) -> String {
+    format!("\n\n--- LIVE EVENT: mouth ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
 #[cfg(any(
@@ -541,38 +610,217 @@ fn append_pending_live_events(
     id: GenerationId,
     stdin_rx: &crossbeam_channel::Receiver<std::result::Result<String, String>>,
     ear_rx: &crossbeam_channel::Receiver<ContinueEarEvent>,
+    mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
+    pending_mouth_utterances: &mut usize,
+    mouth_playback_paused: &mut bool,
     next_time_event_at: &mut Instant,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<String>,
 ) -> Result<()> {
+    if !defer_live_events {
+        flush_deferred_live_events(llm, id, deferred_live_events)?;
+    }
+
     let now = Instant::now();
     if now >= *next_time_event_at {
-        llm.append_prompt(id, wrap_time_event(&current_time_message()))
-            .context("failed to append time event to live generation")?;
+        append_or_defer_live_event(
+            llm,
+            id,
+            wrap_time_event(&current_time_message()),
+            defer_live_events,
+            deferred_live_events,
+            "failed to append time event to live generation",
+        )?;
         *next_time_event_at = now + TIME_EVENT_INTERVAL;
     }
 
     for stdin_event in stdin_rx.try_iter() {
         match stdin_event {
-            Ok(text) => llm
-                .append_prompt(id, wrap_live_input(&text))
-                .context("failed to append stdin text to live generation")?,
+            Ok(text) => append_or_defer_live_event(
+                llm,
+                id,
+                wrap_live_input(&text),
+                defer_live_events,
+                deferred_live_events,
+                "failed to append stdin text to live generation",
+            )?,
             Err(message) => anyhow::bail!("failed to read stdin: {message}"),
         }
     }
 
     for ear_event in ear_rx.try_iter() {
         match ear_event {
-            ContinueEarEvent::Transcript(text) => {
-                eprintln!("[dev continue] heard: {text}");
-                llm.append_prompt(id, wrap_heard_input(&text))
-                    .context("failed to append heard speech to live generation")?;
-            }
-            ContinueEarEvent::Error(message) => {
-                anyhow::bail!("dev continue ear failed: {message}");
-            }
+            ContinueEarEvent::Transcript { ref text } => eprintln!("[dev continue] heard: {text}"),
+            ContinueEarEvent::ListeningStarted { .. }
+            | ContinueEarEvent::SpeechStarted
+            | ContinueEarEvent::SpeechStopped
+            | ContinueEarEvent::Error { .. } => {}
+        }
+        append_or_defer_live_event(
+            llm,
+            id,
+            wrap_ear_event(&ear_event.to_message()),
+            defer_live_events,
+            deferred_live_events,
+            "failed to append ear event to live generation",
+        )?;
+        if let ContinueEarEvent::Error { message } = ear_event {
+            anyhow::bail!("dev continue ear failed: {message}");
         }
     }
 
+    drain_mouth_events_into_llm(
+        llm,
+        id,
+        mouth_rx,
+        pending_mouth_utterances,
+        mouth_playback_paused,
+        defer_live_events,
+        deferred_live_events,
+    )?;
+
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn append_or_defer_live_event(
+    llm: &mut LlamaCppEngine,
+    id: GenerationId,
+    packet: String,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<String>,
+    context: &'static str,
+) -> Result<()> {
+    if defer_live_events {
+        deferred_live_events.push_back(packet);
+        return Ok(());
+    }
+
+    flush_deferred_live_events(llm, id, deferred_live_events)?;
+    llm.append_prompt(id, packet).context(context)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn flush_deferred_live_events(
+    llm: &mut LlamaCppEngine,
+    id: GenerationId,
+    deferred_live_events: &mut VecDeque<String>,
+) -> Result<()> {
+    while let Some(packet) = deferred_live_events.pop_front() {
+        llm.append_prompt(id, packet)
+            .context("failed to append deferred live event to live generation")?;
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_mouth_events_into_llm(
+    llm: &mut LlamaCppEngine,
+    id: GenerationId,
+    mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
+    pending_mouth_utterances: &mut usize,
+    mouth_playback_paused: &mut bool,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<String>,
+) -> Result<()> {
+    loop {
+        match mouth_rx.try_recv() {
+            Ok(mouth_event) => {
+                *pending_mouth_utterances = pending_mouth_utterances
+                    .saturating_sub(mouth_event.completed_pending_speech_count());
+                mouth_event.apply_playback_state(mouth_playback_paused);
+                append_or_defer_live_event(
+                    llm,
+                    id,
+                    wrap_mouth_event(&mouth_event.to_message()),
+                    defer_live_events,
+                    deferred_live_events,
+                    "failed to append mouth event to live generation",
+                )?;
+                match mouth_event {
+                    ContinueMouthEvent::WorkerStarted => {}
+                    ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
+                        eprintln!("[dev continue] speaking: {text}");
+                    }
+                    ContinueMouthEvent::SpeechError { message, .. } => {
+                        anyhow::bail!("dev continue mouth failed: {message}");
+                    }
+                    ContinueMouthEvent::SpeechQueued { .. }
+                    | ContinueMouthEvent::SpeechSynthesisStarted { .. }
+                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
+                    | ContinueMouthEvent::SpeechInterrupted { .. }
+                    | ContinueMouthEvent::SpeechQueueCleared { .. }
+                    | ContinueMouthEvent::SpeechPaused
+                    | ContinueMouthEvent::SpeechResumed => {}
+                }
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                if *pending_mouth_utterances > 0 {
+                    anyhow::bail!("dev continue mouth worker disconnected with pending speech");
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_mouth_events_without_llm(
+    mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
+    pending_mouth_utterances: &mut usize,
+) -> Result<()> {
+    loop {
+        match mouth_rx.try_recv() {
+            Ok(mouth_event) => {
+                *pending_mouth_utterances = pending_mouth_utterances
+                    .saturating_sub(mouth_event.completed_pending_speech_count());
+                match mouth_event {
+                    ContinueMouthEvent::WorkerStarted => {}
+                    ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
+                        eprintln!("[dev continue] speaking: {text}");
+                    }
+                    ContinueMouthEvent::SpeechError { message, .. } => {
+                        anyhow::bail!("dev continue mouth failed: {message}");
+                    }
+                    ContinueMouthEvent::SpeechQueued { .. }
+                    | ContinueMouthEvent::SpeechSynthesisStarted { .. }
+                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
+                    | ContinueMouthEvent::SpeechInterrupted { .. }
+                    | ContinueMouthEvent::SpeechQueueCleared { .. }
+                    | ContinueMouthEvent::SpeechPaused
+                    | ContinueMouthEvent::SpeechResumed => {}
+                }
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                if *pending_mouth_utterances > 0 {
+                    anyhow::bail!("dev continue mouth worker disconnected with pending speech");
+                }
+                return Ok(());
+            }
+        }
+    }
 }
 
 #[cfg(all(
@@ -594,8 +842,46 @@ struct ContinueEarConfig {
     feature = "tts-piper"
 ))]
 enum ContinueEarEvent {
-    Transcript(String),
-    Error(String),
+    ListeningStarted {
+        device: String,
+        sample_rate_hz: u32,
+        channels: u16,
+        vad: VadBackendKind,
+    },
+    SpeechStarted,
+    SpeechStopped,
+    Transcript {
+        text: String,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl ContinueEarEvent {
+    fn to_message(&self) -> String {
+        match self {
+            Self::ListeningStarted {
+                device,
+                sample_rate_hz,
+                channels,
+                vad,
+            } => format!(
+                "listening_started: device={device:?} sample_rate_hz={sample_rate_hz} channels={channels} vad={}",
+                vad.as_str()
+            ),
+            Self::SpeechStarted => "speech_started".to_string(),
+            Self::SpeechStopped => "speech_stopped".to_string(),
+            Self::Transcript { text } => format!("Heard: {}", text.trim()),
+            Self::Error { message } => format!("error: {message}"),
+        }
+    }
 }
 
 #[cfg(all(
@@ -745,6 +1031,12 @@ impl ContinueEar {
             input_channels,
             config.vad_backend.as_str()
         );
+        let _ = event_tx.send(ContinueEarEvent::ListeningStarted {
+            device: device_name,
+            sample_rate_hz: input_sample_rate_hz,
+            channels: input_channels,
+            vad: config.vad_backend,
+        });
 
         let stop_for_asr = Arc::clone(&stop);
         let event_tx_for_asr = event_tx.clone();
@@ -756,7 +1048,7 @@ impl ContinueEar {
                         Ok(frames) => match transcribe_group(&frames, &mut recognizer) {
                             Ok(text) if !text.is_empty() => {
                                 if event_tx_for_asr
-                                    .send(ContinueEarEvent::Transcript(text))
+                                    .send(ContinueEarEvent::Transcript { text })
                                     .is_err()
                                 {
                                     return;
@@ -764,8 +1056,9 @@ impl ContinueEar {
                             }
                             Ok(_) => {}
                             Err(error) => {
-                                let _ = event_tx_for_asr
-                                    .send(ContinueEarEvent::Error(error.to_string()));
+                                let _ = event_tx_for_asr.send(ContinueEarEvent::Error {
+                                    message: error.to_string(),
+                                });
                             }
                         },
                         Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -782,12 +1075,15 @@ impl ContinueEar {
                 if let Err(error) = run_continue_ear_processor(
                     sample_rx,
                     asr_tx,
+                    event_tx.clone(),
                     stop_for_processor,
                     config.vad_backend,
                     input_sample_rate_hz,
                     input_channels,
                 ) {
-                    let _ = event_tx.send(ContinueEarEvent::Error(error.to_string()));
+                    let _ = event_tx.send(ContinueEarEvent::Error {
+                        message: error.to_string(),
+                    });
                 }
             })
             .context("failed to spawn dev continue ear worker")?;
@@ -845,6 +1141,7 @@ struct ContinueEarState {
 fn run_continue_ear_processor(
     sample_rx: crossbeam_channel::Receiver<f32>,
     asr_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: crossbeam_channel::Sender<ContinueEarEvent>,
     stop: Arc<AtomicBool>,
     vad_backend: VadBackendKind,
     input_sample_rate_hz: u32,
@@ -881,6 +1178,7 @@ fn run_continue_ear_processor(
             frame_channels,
             &mut state,
             &asr_tx,
+            &event_tx,
         )?;
     }
 
@@ -896,6 +1194,7 @@ fn run_continue_ear_processor(
         frame_channels,
         &mut state,
         &asr_tx,
+        &event_tx,
     )?;
     for (_, frames) in state.active_groups.drain() {
         if !frames.is_empty() && asr_tx.send(frames).is_err() {
@@ -921,6 +1220,7 @@ fn drain_pending_continue_ear_frames(
     frame_channels: u16,
     state: &mut ContinueEarState,
     asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     while pending.len() >= input_frame_samples {
         let mut samples = Vec::with_capacity(input_frame_samples);
@@ -945,7 +1245,7 @@ fn drain_pending_continue_ear_frames(
             channels: frame_channels,
             samples,
         };
-        process_continue_ear_frame(frame, state, asr_tx)?;
+        process_continue_ear_frame(frame, state, asr_tx, event_tx)?;
     }
     Ok(())
 }
@@ -960,6 +1260,7 @@ fn process_continue_ear_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
     asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
     let vad_result = state.vad.process_frame(&frame)?;
@@ -975,8 +1276,17 @@ fn process_continue_ear_frame(
 
     let events = state.segmenter.process(vad_result);
     for event in &events {
-        if let HearingEvent::BreathGroupOpened { id } = event {
-            state.active_groups.entry(*id).or_default();
+        match event {
+            HearingEvent::SpeechStarted => {
+                let _ = event_tx.send(ContinueEarEvent::SpeechStarted);
+            }
+            HearingEvent::BreathGroupOpened { id } => {
+                state.active_groups.entry(*id).or_default();
+            }
+            HearingEvent::BreathGroupClosed { .. } => {
+                let _ = event_tx.send(ContinueEarEvent::SpeechStopped);
+            }
+            HearingEvent::SpeechContinued { .. } | HearingEvent::PauseStarted => {}
         }
     }
     for group in state.active_groups.values_mut() {
@@ -1158,9 +1468,8 @@ fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) ->
     feature = "tts-piper"
 ))]
 struct ContinueMouth {
-    tts: PiperTextToSpeech,
-    queued_text: VecDeque<String>,
-    capture_enabled: Arc<AtomicBool>,
+    tx: crossbeam_channel::Sender<ContinueMouthCommand>,
+    worker: Option<JoinHandle<()>>,
 }
 
 #[cfg(all(
@@ -1170,48 +1479,779 @@ struct ContinueMouth {
     feature = "tts-piper"
 ))]
 impl ContinueMouth {
-    fn new(tts: PiperTextToSpeech, capture_enabled: Arc<AtomicBool>) -> Self {
-        Self {
-            tts,
-            queued_text: VecDeque::new(),
-            capture_enabled,
-        }
+    fn start(
+        tts: PiperTextToSpeech,
+        capture_enabled: Arc<AtomicBool>,
+    ) -> Result<(Self, crossbeam_channel::Receiver<ContinueMouthEvent>)> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let worker = std::thread::Builder::new()
+            .name("listenbury-dev-continue-mouth".to_string())
+            .spawn(move || run_continue_mouth_worker(tts, rx, event_tx, capture_enabled))
+            .context("failed to spawn dev continue mouth worker")?;
+        Ok((
+            Self {
+                tx,
+                worker: Some(worker),
+            },
+            event_rx,
+        ))
     }
 
     fn enqueue_runtime_event(&mut self, event: &ContinueRuntimeEvent) -> Result<bool> {
-        let ContinueRuntimeEvent::UtteranceCompleted { content, .. } = event else {
-            return Ok(false);
+        match event {
+            ContinueRuntimeEvent::UtteranceCompleted { id, content } => {
+                if strip_emoji(content).trim().is_empty() {
+                    return Ok(false);
+                }
+
+                self.tx
+                    .send(ContinueMouthCommand::Speak {
+                        id: *id,
+                        text: content.to_string(),
+                    })
+                    .context("failed to send speech to dev continue mouth worker")?;
+                Ok(true)
+            }
+            ContinueRuntimeEvent::SpeechControl { command } => {
+                let command = match command {
+                    SpeechControlCommand::Shutup => ContinueMouthCommand::Shutup,
+                    SpeechControlCommand::Pause => ContinueMouthCommand::Pause,
+                    SpeechControlCommand::Resume => ContinueMouthCommand::Resume,
+                };
+                self.tx
+                    .send(command)
+                    .context("failed to send speech control to dev continue mouth worker")?;
+                Ok(false)
+            }
+            ContinueRuntimeEvent::UtteranceStarted { .. } => Ok(false),
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl Drop for ContinueMouth {
+    fn drop(&mut self) {
+        let _ = self.tx.send(ContinueMouthCommand::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+enum ContinueMouthCommand {
+    Speak { id: u64, text: String },
+    Shutup,
+    Pause,
+    Resume,
+    Shutdown,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+enum ContinueMouthEvent {
+    WorkerStarted,
+    SpeechQueued { id: u64, text: String },
+    SpeechSynthesisStarted { id: u64, text: String },
+    SpeechPlaybackStarted { id: u64, text: String },
+    SpeechPlaybackCompleted { id: u64, text: String },
+    SpeechInterrupted { id: u64, text: String },
+    SpeechQueueCleared { count: usize },
+    SpeechPaused,
+    SpeechResumed,
+    SpeechError { id: u64, message: String },
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl ContinueMouthEvent {
+    fn to_message(&self) -> String {
+        match self {
+            Self::WorkerStarted => "worker_started".to_string(),
+            Self::SpeechQueued { id, text } => {
+                format!(
+                    "speech_queued: id={id}\ncontent:\n{}",
+                    sanitize_runtime_event_content(text)
+                )
+            }
+            Self::SpeechSynthesisStarted { id, text } => {
+                format!(
+                    "speech_synthesis_started: id={id}\ncontent:\n{}",
+                    sanitize_runtime_event_content(text)
+                )
+            }
+            Self::SpeechPlaybackStarted { id, text } => {
+                format!(
+                    "speech_playback_started: id={id}\ncontent:\n{}",
+                    sanitize_runtime_event_content(text)
+                )
+            }
+            Self::SpeechPlaybackCompleted { id, text } => {
+                format!(
+                    "speech_playback_completed: id={id}\ncontent:\n{}",
+                    sanitize_runtime_event_content(text)
+                )
+            }
+            Self::SpeechInterrupted { id, text } => {
+                format!(
+                    "speech_interrupted: id={id}\ncontent:\n{}",
+                    sanitize_runtime_event_content(text)
+                )
+            }
+            Self::SpeechQueueCleared { count } => {
+                format!("speech_queue_cleared: count={count}")
+            }
+            Self::SpeechPaused => "speech_paused".to_string(),
+            Self::SpeechResumed => "speech_resumed".to_string(),
+            Self::SpeechError { id, message } => {
+                format!(
+                    "speech_error: id={id}\nmessage:\n{}",
+                    sanitize_runtime_event_content(message)
+                )
+            }
+        }
+    }
+
+    fn completed_pending_speech_count(&self) -> usize {
+        match self {
+            Self::SpeechPlaybackCompleted { .. }
+            | Self::SpeechInterrupted { .. }
+            | Self::SpeechError { .. } => 1,
+            Self::SpeechQueueCleared { count } => *count,
+            Self::WorkerStarted
+            | Self::SpeechQueued { .. }
+            | Self::SpeechSynthesisStarted { .. }
+            | Self::SpeechPlaybackStarted { .. }
+            | Self::SpeechPaused
+            | Self::SpeechResumed => 0,
+        }
+    }
+
+    fn apply_playback_state(&self, paused: &mut bool) {
+        match self {
+            Self::SpeechPaused => *paused = true,
+            Self::SpeechResumed
+            | Self::SpeechPlaybackCompleted { .. }
+            | Self::SpeechInterrupted { .. }
+            | Self::SpeechError { .. } => *paused = false,
+            Self::WorkerStarted
+            | Self::SpeechQueued { .. }
+            | Self::SpeechSynthesisStarted { .. }
+            | Self::SpeechPlaybackStarted { .. }
+            | Self::SpeechQueueCleared { .. } => {}
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn run_continue_mouth_worker(
+    mut tts: PiperTextToSpeech,
+    rx: crossbeam_channel::Receiver<ContinueMouthCommand>,
+    event_tx: crossbeam_channel::Sender<ContinueMouthEvent>,
+    capture_enabled: Arc<AtomicBool>,
+) {
+    let _ = event_tx.send(ContinueMouthEvent::WorkerStarted);
+    let mut pending = VecDeque::<(u64, String)>::new();
+    let mut paused = false;
+    loop {
+        let command = if let Some((id, text)) = pending.pop_front() {
+            ContinueMouthCommand::Speak { id, text }
+        } else {
+            match rx.recv() {
+                Ok(command) => command,
+                Err(_) => return,
+            }
         };
-        if strip_emoji(content).trim().is_empty() {
-            return Ok(false);
+        match command {
+            ContinueMouthCommand::Speak { id, text } => {
+                match run_continue_mouth_speech(
+                    id,
+                    text,
+                    &mut tts,
+                    &rx,
+                    &mut pending,
+                    &event_tx,
+                    &capture_enabled,
+                    &mut paused,
+                ) {
+                    Ok(MouthWorkerFlow::Continue) | Err(_) => {}
+                    Ok(MouthWorkerFlow::Shutdown) => return,
+                }
+            }
+            ContinueMouthCommand::Shutup => {
+                let _ = tts.stop();
+                if send_cleared_mouth_queue_event(&rx, &mut pending, &event_tx) {
+                    return;
+                }
+            }
+            ContinueMouthCommand::Pause => pause_mouth_playback(&event_tx, &mut paused),
+            ContinueMouthCommand::Resume => resume_mouth_playback(&event_tx, &mut paused),
+            ContinueMouthCommand::Shutdown => return,
         }
-
-        self.tts
-            .enqueue(SpeechPlan::from(SpeechUnit::CompleteSentence(
-                content.to_string(),
-            )))?;
-        self.queued_text.push_back(content.to_string());
-        Ok(true)
     }
+}
 
-    fn is_throttling_llm(&self) -> bool {
-        !self.queued_text.is_empty()
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouthWorkerFlow {
+    Continue,
+    Shutdown,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouthControlFlow {
+    Continue,
+    StopCurrent,
+    Shutdown,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug)]
+enum MouthAudioOutcome {
+    Frames(Vec<AudioFrame>),
+    Interrupted,
+    Shutdown,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouthPlaybackOutcome {
+    Completed,
+    Interrupted,
+    Shutdown,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn pause_mouth_playback(
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    paused: &mut bool,
+) {
+    if !*paused {
+        *paused = true;
+        let _ = event_tx.send(ContinueMouthEvent::SpeechPaused);
     }
+}
 
-    fn drain_ready_audio(&mut self, source: &str) -> Result<bool> {
-        let frames = self.tts.poll_audio()?;
-        if frames.is_empty() {
-            return Ok(false);
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn resume_mouth_playback(
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    paused: &mut bool,
+) {
+    if *paused {
+        *paused = false;
+        let _ = event_tx.send(ContinueMouthEvent::SpeechResumed);
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_mouth_control_commands(
+    rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
+    pending: &mut VecDeque<(u64, String)>,
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    tts: &mut PiperTextToSpeech,
+    paused: &mut bool,
+) -> MouthControlFlow {
+    loop {
+        match rx.try_recv() {
+            Ok(ContinueMouthCommand::Speak { id, text }) => pending.push_back((id, text)),
+            Ok(ContinueMouthCommand::Pause) => pause_mouth_playback(event_tx, paused),
+            Ok(ContinueMouthCommand::Resume) => resume_mouth_playback(event_tx, paused),
+            Ok(ContinueMouthCommand::Shutup) => {
+                let _ = tts.stop();
+                if send_cleared_mouth_queue_event(rx, pending, event_tx) {
+                    return MouthControlFlow::Shutdown;
+                }
+                return MouthControlFlow::StopCurrent;
+            }
+            Ok(ContinueMouthCommand::Shutdown) => {
+                let _ = tts.stop();
+                send_cleared_mouth_queue_event(rx, pending, event_tx);
+                return MouthControlFlow::Shutdown;
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => return MouthControlFlow::Continue,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                return MouthControlFlow::Shutdown;
+            }
         }
-
-        let spoken_text = self.queued_text.pop_front().unwrap_or_default();
-        eprintln!("[dev continue] speaking: {spoken_text}");
-        self.capture_enabled.store(false, Ordering::Relaxed);
-        let playback = play_audio_frames(&frames, source);
-        self.capture_enabled.store(true, Ordering::Relaxed);
-        playback?;
-        Ok(true)
     }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_cleared_mouth_queue_event(
+    rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
+    pending: &mut VecDeque<(u64, String)>,
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+) -> bool {
+    let mut cleared = pending.len();
+    let mut shutdown = false;
+    pending.clear();
+    loop {
+        match rx.try_recv() {
+            Ok(ContinueMouthCommand::Speak { .. }) => cleared += 1,
+            Ok(ContinueMouthCommand::Shutdown) => shutdown = true,
+            Ok(ContinueMouthCommand::Shutup)
+            | Ok(ContinueMouthCommand::Pause)
+            | Ok(ContinueMouthCommand::Resume) => {}
+            Err(crossbeam_channel::TryRecvError::Empty)
+            | Err(crossbeam_channel::TryRecvError::Disconnected) => break,
+        }
+    }
+    let _ = event_tx.send(ContinueMouthEvent::SpeechQueueCleared { count: cleared });
+    shutdown
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn run_continue_mouth_speech(
+    id: u64,
+    text: String,
+    tts: &mut PiperTextToSpeech,
+    rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
+    pending: &mut VecDeque<(u64, String)>,
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    capture_enabled: &AtomicBool,
+    paused: &mut bool,
+) -> Result<MouthWorkerFlow> {
+    event_tx
+        .send(ContinueMouthEvent::SpeechQueued {
+            id,
+            text: text.clone(),
+        })
+        .ok();
+    event_tx
+        .send(ContinueMouthEvent::SpeechSynthesisStarted {
+            id,
+            text: text.clone(),
+        })
+        .ok();
+
+    if let Err(error) = tts.enqueue(SpeechPlan::from(SpeechUnit::CompleteSentence(text.clone()))) {
+        let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+            id,
+            message: error.to_string(),
+        });
+        return Err(error);
+    }
+
+    let frames = match collect_continue_mouth_audio(
+        tts,
+        Duration::from_secs(30),
+        rx,
+        pending,
+        event_tx,
+        paused,
+    ) {
+        Ok(MouthAudioOutcome::Frames(frames)) => frames,
+        Ok(MouthAudioOutcome::Interrupted) => {
+            let _ = event_tx.send(ContinueMouthEvent::SpeechInterrupted { id, text });
+            return Ok(MouthWorkerFlow::Continue);
+        }
+        Ok(MouthAudioOutcome::Shutdown) => return Ok(MouthWorkerFlow::Shutdown),
+        Err(error) => {
+            let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+                id,
+                message: error.to_string(),
+            });
+            return Err(error);
+        }
+    };
+
+    event_tx
+        .send(ContinueMouthEvent::SpeechPlaybackStarted {
+            id,
+            text: text.clone(),
+        })
+        .ok();
+    capture_enabled.store(false, Ordering::Relaxed);
+    let playback = play_continue_audio_frames_interruptible(
+        &frames,
+        "listenbury dev continue speech",
+        rx,
+        pending,
+        event_tx,
+        tts,
+        paused,
+    );
+    capture_enabled.store(true, Ordering::Relaxed);
+    match playback {
+        Ok(MouthPlaybackOutcome::Completed) => {}
+        Ok(MouthPlaybackOutcome::Interrupted) => {
+            let _ = event_tx.send(ContinueMouthEvent::SpeechInterrupted { id, text });
+            return Ok(MouthWorkerFlow::Continue);
+        }
+        Ok(MouthPlaybackOutcome::Shutdown) => return Ok(MouthWorkerFlow::Shutdown),
+        Err(error) => {
+            let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+                id,
+                message: error.to_string(),
+            });
+            return Err(error);
+        }
+    }
+    event_tx
+        .send(ContinueMouthEvent::SpeechPlaybackCompleted { id, text })
+        .ok();
+    Ok(MouthWorkerFlow::Continue)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn collect_continue_mouth_audio(
+    tts: &mut PiperTextToSpeech,
+    timeout: Duration,
+    rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
+    pending: &mut VecDeque<(u64, String)>,
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    paused: &mut bool,
+) -> Result<MouthAudioOutcome> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match drain_mouth_control_commands(rx, pending, event_tx, tts, paused) {
+            MouthControlFlow::Continue => {}
+            MouthControlFlow::StopCurrent => return Ok(MouthAudioOutcome::Interrupted),
+            MouthControlFlow::Shutdown => return Ok(MouthAudioOutcome::Shutdown),
+        }
+        let frames = tts.poll_audio()?;
+        if !frames.is_empty() {
+            return Ok(MouthAudioOutcome::Frames(frames));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    anyhow::bail!("Piper produced no audio frames before timeout")
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn play_continue_audio_frames_interruptible(
+    frames: &[AudioFrame],
+    source: &str,
+    rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
+    pending: &mut VecDeque<(u64, String)>,
+    event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
+    tts: &mut PiperTextToSpeech,
+    paused: &mut bool,
+) -> Result<MouthPlaybackOutcome> {
+    let Some(first_frame) = frames.first() else {
+        anyhow::bail!("no audio frames available for playback from {source}");
+    };
+    let sample_rate = first_frame.sample_rate_hz;
+    let channels = first_frame.channels;
+    anyhow::ensure!(
+        sample_rate > 0,
+        "audio from {source} has invalid sample rate"
+    );
+    anyhow::ensure!(
+        channels > 0,
+        "audio from {source} has invalid channel count"
+    );
+
+    let total_samples: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    let mut audio_samples = Vec::with_capacity(total_samples);
+    for frame in frames {
+        anyhow::ensure!(
+            frame.sample_rate_hz == sample_rate,
+            "audio from {source} changed sample rate mid-stream ({} -> {})",
+            sample_rate,
+            frame.sample_rate_hz
+        );
+        anyhow::ensure!(
+            frame.channels == channels,
+            "audio from {source} changed channel count mid-stream ({} -> {})",
+            channels,
+            frame.channels
+        );
+        audio_samples.extend_from_slice(&frame.samples);
+    }
+
+    let host = cpal::default_host();
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device available"))?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "<unknown output device>".to_string());
+    let supported = select_continue_output_config(&device, sample_rate, channels)?;
+    let stream_config = supported
+        .with_sample_rate(cpal::SampleRate(sample_rate))
+        .config();
+
+    let playback_cursor = Arc::new(AtomicUsize::new(0));
+    let playback_paused = Arc::new(AtomicBool::new(*paused));
+    let samples = Arc::new(audio_samples);
+    let done_threshold = samples.len();
+    let err_fn = |err| eprintln!("output stream error: {err}");
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => build_continue_output_stream::<f32>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::F64 => build_continue_output_stream::<f64>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I8 => build_continue_output_stream::<i8>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I16 => build_continue_output_stream::<i16>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I32 => build_continue_output_stream::<i32>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I64 => build_continue_output_stream::<i64>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U8 => build_continue_output_stream::<u8>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U16 => build_continue_output_stream::<u16>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U32 => build_continue_output_stream::<u32>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U64 => build_continue_output_stream::<u64>(
+            &device,
+            &stream_config,
+            Arc::clone(&samples),
+            Arc::clone(&playback_cursor),
+            Arc::clone(&playback_paused),
+            err_fn,
+        )?,
+        sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
+    };
+    stream
+        .play()
+        .with_context(|| format!("failed to start playback on {device_name}"))?;
+
+    while playback_cursor.load(Ordering::Relaxed) < done_threshold {
+        match drain_mouth_control_commands(rx, pending, event_tx, tts, paused) {
+            MouthControlFlow::Continue => {
+                playback_paused.store(*paused, Ordering::Relaxed);
+            }
+            MouthControlFlow::StopCurrent => {
+                drop(stream);
+                return Ok(MouthPlaybackOutcome::Interrupted);
+            }
+            MouthControlFlow::Shutdown => {
+                drop(stream);
+                return Ok(MouthPlaybackOutcome::Shutdown);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(20));
+    drop(stream);
+
+    let audio_duration = continue_playback_duration(total_samples, sample_rate, channels);
+    println!(
+        "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {source}",
+        sample_rate,
+        audio_duration.as_secs_f64(),
+    );
+
+    Ok(MouthPlaybackOutcome::Completed)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_continue_output_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    samples: Arc<Vec<f32>>,
+    playback_cursor: Arc<AtomicUsize>,
+    playback_paused: Arc<AtomicBool>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample + FromSample<f32>,
+{
+    device
+        .build_output_stream(
+            config,
+            move |output: &mut [T], _| {
+                for out in output.iter_mut() {
+                    if playback_paused.load(Ordering::Relaxed) {
+                        *out = T::from_sample(0.0);
+                        continue;
+                    }
+                    let idx = playback_cursor.fetch_add(1, Ordering::Relaxed);
+                    let sample = samples.get(idx).copied().unwrap_or(0.0);
+                    *out = T::from_sample(sample);
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("failed to build output stream")
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn select_continue_output_config(
+    device: &cpal::Device,
+    sample_rate: u32,
+    channels: u16,
+) -> Result<SupportedStreamConfigRange> {
+    let mut candidates = device
+        .supported_output_configs()
+        .context("failed to list output stream configs")?;
+    candidates
+        .find(|config| {
+            config.channels() == channels
+                && config.min_sample_rate().0 <= sample_rate
+                && config.max_sample_rate().0 >= sample_rate
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no output stream supports {} Hz, {} channel(s)",
+                sample_rate,
+                channels
+            )
+        })
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn continue_playback_duration(total_samples: usize, sample_rate: u32, channels: u16) -> Duration {
+    if sample_rate == 0 || channels == 0 {
+        return Duration::ZERO;
+    }
+    let frames = total_samples as f64 / f64::from(channels);
+    Duration::from_secs_f64(frames / f64::from(sample_rate))
 }
 
 #[cfg(any(
@@ -1263,6 +2303,23 @@ struct SpeechEventDetector {
 enum ContinueRuntimeEvent {
     UtteranceStarted { id: u64 },
     UtteranceCompleted { id: u64, content: String },
+    SpeechControl { command: SpeechControlCommand },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechControlCommand {
+    Shutup,
+    Pause,
+    Resume,
 }
 
 #[cfg(any(
@@ -1286,6 +2343,26 @@ impl ContinueRuntimeEvent {
                     sanitize_runtime_event_content(content)
                 )
             }
+            Self::SpeechControl { command } => format!("speech_control: {}", command.as_str()),
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl SpeechControlCommand {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Shutup => "shutup",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
         }
     }
 }
@@ -1300,13 +2377,17 @@ impl ContinueRuntimeEvent {
     )
 ))]
 impl SpeechEventDetector {
+    fn defers_live_events(&self) -> bool {
+        self.in_speech || longest_marker_prefix_suffix_len(&self.pending) > 0
+    }
+
     fn ingest(&mut self, text: &str) -> Vec<ContinueRuntimeEvent> {
         self.pending.push_str(text);
         let mut events = Vec::new();
 
         loop {
             if self.in_speech {
-                let Some(next_marker) = self.next_speech_close_marker() else {
+                let Some(next_marker) = next_any_speech_marker(&self.pending) else {
                     self.commit_pending_speech_text_before_marker_prefix(&mut events);
                     return events;
                 };
@@ -1316,21 +2397,36 @@ impl SpeechEventDetector {
                 self.pending.drain(..marker_end);
 
                 self.append_speech_text(&speech_text, &mut events);
-                if let Some(event) = self.flush_current_utterance() {
-                    events.push(event);
-                }
-                if next_marker.kind == SpeechMarkerKind::Start {
-                    events.push(self.start_utterance());
+                match next_marker.kind {
+                    SpeechMarkerKind::Start => {
+                        if let Some(event) = self.flush_current_utterance() {
+                            events.push(event);
+                        }
+                        events.push(self.start_utterance());
+                    }
+                    SpeechMarkerKind::End => {
+                        if let Some(event) = self.flush_current_utterance() {
+                            events.push(event);
+                        }
+                    }
+                    SpeechMarkerKind::Control(command) => {
+                        events.push(ContinueRuntimeEvent::SpeechControl { command });
+                    }
                 }
             } else {
-                let Some(next_marker) = next_speech_marker(&self.pending, SpeechMarkerKind::Start)
-                else {
+                let Some(next_marker) = next_any_open_speech_marker(&self.pending) else {
                     self.trim_pending_to_marker_prefix();
                     return events;
                 };
                 let marker_end = next_marker.index + next_marker.text.len();
                 self.pending.drain(..marker_end);
-                events.push(self.start_utterance());
+                match next_marker.kind {
+                    SpeechMarkerKind::Start => events.push(self.start_utterance()),
+                    SpeechMarkerKind::Control(command) => {
+                        events.push(ContinueRuntimeEvent::SpeechControl { command });
+                    }
+                    SpeechMarkerKind::End => {}
+                }
             }
         }
     }
@@ -1401,10 +2497,6 @@ impl SpeechEventDetector {
         Some(ContinueRuntimeEvent::UtteranceCompleted { id, content })
     }
 
-    fn next_speech_close_marker(&self) -> Option<SpeechMarker> {
-        next_any_speech_marker(&self.pending)
-    }
-
     fn commit_pending_speech_text_before_marker_prefix(
         &mut self,
         events: &mut Vec<ContinueRuntimeEvent>,
@@ -1440,6 +2532,7 @@ impl SpeechEventDetector {
 enum SpeechMarkerKind {
     Start,
     End,
+    Control(SpeechControlCommand),
 }
 
 #[cfg(any(
@@ -1471,6 +2564,42 @@ fn next_any_speech_marker(text: &str) -> Option<SpeechMarker> {
     [
         next_speech_marker(text, SpeechMarkerKind::Start),
         next_speech_marker(text, SpeechMarkerKind::End),
+        next_speech_marker(
+            text,
+            SpeechMarkerKind::Control(SpeechControlCommand::Shutup),
+        ),
+        next_speech_marker(text, SpeechMarkerKind::Control(SpeechControlCommand::Pause)),
+        next_speech_marker(
+            text,
+            SpeechMarkerKind::Control(SpeechControlCommand::Resume),
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|marker| marker.index)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn next_any_open_speech_marker(text: &str) -> Option<SpeechMarker> {
+    [
+        next_speech_marker(text, SpeechMarkerKind::Start),
+        next_speech_marker(
+            text,
+            SpeechMarkerKind::Control(SpeechControlCommand::Shutup),
+        ),
+        next_speech_marker(text, SpeechMarkerKind::Control(SpeechControlCommand::Pause)),
+        next_speech_marker(
+            text,
+            SpeechMarkerKind::Control(SpeechControlCommand::Resume),
+        ),
     ]
     .into_iter()
     .flatten()
@@ -1512,6 +2641,9 @@ fn speech_markers(kind: SpeechMarkerKind) -> [&'static str; 1] {
     match kind {
         SpeechMarkerKind::Start => [INLINE_SPEECH_START_MARKER],
         SpeechMarkerKind::End => [INLINE_SPEECH_END_MARKER],
+        SpeechMarkerKind::Control(SpeechControlCommand::Shutup) => [SPEECH_SHUTUP_MARKER],
+        SpeechMarkerKind::Control(SpeechControlCommand::Pause) => [SPEECH_PAUSE_MARKER],
+        SpeechMarkerKind::Control(SpeechControlCommand::Resume) => [SPEECH_RESUME_MARKER],
     }
 }
 
@@ -1524,8 +2656,14 @@ fn speech_markers(kind: SpeechMarkerKind) -> [&'static str; 1] {
         feature = "tts-piper"
     )
 ))]
-fn all_speech_markers() -> [&'static str; 2] {
-    [INLINE_SPEECH_START_MARKER, INLINE_SPEECH_END_MARKER]
+fn all_speech_markers() -> [&'static str; 5] {
+    [
+        INLINE_SPEECH_START_MARKER,
+        INLINE_SPEECH_END_MARKER,
+        SPEECH_SHUTUP_MARKER,
+        SPEECH_PAUSE_MARKER,
+        SPEECH_RESUME_MARKER,
+    ]
 }
 
 #[cfg(any(
@@ -1562,11 +2700,11 @@ fn longest_marker_prefix_suffix_len(text: &str) -> usize {
         feature = "tts-piper"
     )
 ))]
-fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
-    static DETECTOR: OnceLock<Option<SentenceDetectorDialog>> = OnceLock::new();
-    DETECTOR
-        .get_or_init(|| SentenceDetectorDialog::new().ok())
-        .as_ref()
+fn sentence_detector() -> &'static SentenceDetectorDialog {
+    static DETECTOR: OnceLock<SentenceDetectorDialog> = OnceLock::new();
+    DETECTOR.get_or_init(|| {
+        SentenceDetectorDialog::new().expect("failed to initialize seams sentence detector")
+    })
 }
 
 #[cfg(any(
@@ -1579,8 +2717,10 @@ fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
     )
 ))]
 fn seams_sentence_end(text: &str) -> Option<usize> {
-    let detector = sentence_detector()?;
-    let sentences = detector.detect_sentences_borrowed(text).ok()?;
+    let detector = sentence_detector();
+    let sentences = detector
+        .detect_sentences_borrowed(text)
+        .expect("failed to split speech with seams");
     let mut search_from = 0;
     for sentence in sentences {
         if let Some(rel) = text[search_from..].find(sentence.raw_content) {
@@ -1613,8 +2753,8 @@ fn sanitize_runtime_event_content(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinueRuntimeEvent, SpeechEventDetector, build_initial_prompt, wrap_heard_input,
-        wrap_live_input, wrap_runtime_event, wrap_time_event,
+        ContinueRuntimeEvent, SpeechControlCommand, SpeechEventDetector, build_initial_prompt,
+        wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_time_event,
     };
 
     #[test]
@@ -1636,8 +2776,16 @@ mod tests {
     #[test]
     fn heard_speech_is_wrapped_as_live_input() {
         assert_eq!(
-            wrap_heard_input("hello from the room\n"),
+            wrap_ear_event("Heard: hello from the room"),
             "\n\n--- LIVE EVENT: ear ---\nHeard: hello from the room\n--- END LIVE EVENT ---\n\n"
+        );
+    }
+
+    #[test]
+    fn mouth_event_is_wrapped_as_live_input() {
+        assert_eq!(
+            wrap_mouth_event("speech_playback_completed: id=3"),
+            "\n\n--- LIVE EVENT: mouth ---\nspeech_playback_completed: id=3\n--- END LIVE EVENT ---\n\n"
         );
     }
 
@@ -1662,6 +2810,10 @@ mod tests {
         assert!(prompt.contains("Do not copy live event delimiters or runtime event text."));
         assert!(prompt.contains("Do not write system, assistant, analysis, channel"));
         assert!(prompt.contains("<sp>words to say aloud :)</sp>"));
+        assert!(prompt.contains("event text is never inserted inside speech"));
+        assert!(prompt.contains("<shutup/> immediately halts current speech"));
+        assert!(prompt.contains("<pause/> pauses speech playback"));
+        assert!(prompt.contains("<resume/> resumes paused speech"));
         assert!(!prompt.contains("--- SPEECH ---"));
         assert!(prompt.contains("Emoji inside speech tags are instructions to your countenance"));
     }
@@ -1840,6 +2992,93 @@ mod tests {
             detector
                 .ingest("--- SPEECH ---no fallback--- END SPEECH ---")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn speech_detector_defers_live_events_inside_speech() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert!(!detector.defers_live_events());
+        assert_eq!(
+            detector.ingest("<sp>Hello"),
+            vec![ContinueRuntimeEvent::UtteranceStarted { id: 0 }]
+        );
+        assert!(detector.defers_live_events());
+        assert_eq!(
+            detector.ingest("</sp>"),
+            vec![ContinueRuntimeEvent::UtteranceCompleted {
+                id: 0,
+                content: "Hello".to_string()
+            }]
+        );
+        assert!(!detector.defers_live_events());
+    }
+
+    #[test]
+    fn speech_detector_defers_live_events_during_partial_markers() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert!(detector.ingest("<pau").is_empty());
+        assert!(detector.defers_live_events());
+        assert_eq!(
+            detector.ingest("se/>"),
+            vec![ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Pause
+            }]
+        );
+        assert!(!detector.defers_live_events());
+    }
+
+    #[test]
+    fn speech_detector_parses_self_closing_speech_controls_outside_speech() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert_eq!(
+            detector.ingest("thinking <pause/> then <resume/> and <shutup/>"),
+            vec![
+                ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Pause
+                },
+                ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Resume
+                },
+                ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Shutup
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn speech_detector_parses_self_closing_speech_controls_inside_speech() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert_eq!(
+            detector.ingest("<sp>Hello. <pause/>Wait here. <resume/>Go now.</sp>"),
+            vec![
+                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
+                ContinueRuntimeEvent::UtteranceCompleted {
+                    id: 0,
+                    content: "Hello.".to_string()
+                },
+                ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Pause
+                },
+                ContinueRuntimeEvent::UtteranceStarted { id: 1 },
+                ContinueRuntimeEvent::UtteranceCompleted {
+                    id: 1,
+                    content: "Wait here.".to_string()
+                },
+                ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Resume
+                },
+                ContinueRuntimeEvent::UtteranceStarted { id: 2 },
+                ContinueRuntimeEvent::UtteranceCompleted {
+                    id: 2,
+                    content: "Go now.".to_string()
+                }
+            ]
         );
     }
 }
