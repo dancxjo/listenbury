@@ -2,6 +2,7 @@ pub mod audio;
 pub mod config;
 pub mod event;
 pub mod hearing;
+pub mod memory;
 pub mod mind;
 #[cfg(feature = "model-download")]
 pub mod models;
