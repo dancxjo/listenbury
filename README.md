@@ -318,8 +318,8 @@ just cuda listen
 
 ## Browser transcript player demo
 
-The repository now includes a static browser viewer for multi-lane
-`TimedWordStream` inspection:
+The repository now includes a static debug viewer for serialized
+`TimedWordStream` payloads:
 
 ```text
 examples/browser-transcript-player/
@@ -342,7 +342,15 @@ Use **Load bundled demo** to inspect the included sample payload wired to
 `welcome.wav`, or choose your own local JSON/audio files with the file pickers.
 The viewer renders multiple streams vertically, highlights the active word
 during playback, and lets you click a word chip to seek the shared audio
-timeline.
+timeline. This is an early local oscilloscope for inspecting recorded,
+generated, and playback speech lanes, not a final browser transcript product.
+
+Words without `timing` are displayed with fallback layout timing so they are
+visibly distinct from measured/aligned timings.
+
+Current milestone audio model: one shared `audio.url` timeline for all lanes.
+Future trace payloads may require per-lane audio references and event-only
+lanes.
 
 ### Browser transcript player JSON format
 
@@ -388,6 +396,10 @@ The bundled demo uses the richer object form:
 Each `stream` payload is the shared Rust `TimedWordStream` model serialized
 through `serde`, so the viewer consumes the same substrate used by ASR and TTS
 export paths.
+
+The bundled demo includes a provisional auditory-scene lane to illustrate
+multi-lane/event-like debugging context. This is a temporary shape; future
+non-word span/event lanes should evolve toward dedicated schemas.
 
 Model utilities:
 

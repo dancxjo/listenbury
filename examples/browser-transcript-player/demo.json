@@ -91,11 +91,8 @@
               "start": 8,
               "end": 10
             },
-            "timing": {
-              "start_ms": 700,
-              "end_ms": 980
-            },
-            "timing_confidence": 0.62,
+            "timing": null,
+            "timing_confidence": null,
             "commitment": "StableText",
             "boundary_source": "Predicted",
             "audio_ref": null
@@ -181,6 +178,10 @@
     },
     {
       "label": "Auditory scene",
+      "kind": "provisional-event-like-lane",
+      "metadata": {
+        "note": "Scene observations are shown as TimedWordStream words for this static debug milestone; future event/span lanes should use a dedicated schema."
+      },
       "stream": {
         "id": 4,
         "source": "LiveAsr",

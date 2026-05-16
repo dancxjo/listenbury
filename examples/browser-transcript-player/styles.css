@@ -40,6 +40,7 @@ button:hover {
 .page-header,
 .toolbar,
 .status-bar,
+.milestone-note,
 .workspace {
   width: min(1200px, calc(100vw - 2rem));
   margin-inline: auto;
@@ -96,6 +97,16 @@ h1,
   align-items: center;
   padding: 1rem 0.25rem;
   color: #cbd5e1;
+}
+
+.milestone-note {
+  margin: 0.25rem auto 1rem;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #334155;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.8);
 }
 
 #viewer-title {
@@ -198,6 +209,18 @@ h1,
   border-color: #fbbf24;
   background: #92400e;
   box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.35);
+}
+
+.word-chip.fallback-timing {
+  border-style: dashed;
+  border-color: #f59e0b;
+  background: #3f2a09;
+}
+
+.word-chip.fallback-timing:hover,
+.word-chip.fallback-timing.selected {
+  border-color: #fbbf24;
+  background: #7c4a03;
 }
 
 .inspector {

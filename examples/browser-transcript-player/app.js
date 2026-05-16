@@ -178,10 +178,15 @@ function normalizeLane(lane, laneIndex) {
   return {
     ...lane,
     words: lane.stream.words.map((word, wordIndex) => {
-      const timing = word.timing ?? fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
+      const hasMeasuredTiming = Boolean(word.timing);
+      const timing = hasMeasuredTiming
+        ? word.timing
+        : fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
       return {
         ...word,
         resolvedTiming: timing,
+        timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
+        timingSourceDetail: describeTimingSource(word, hasMeasuredTiming),
         laneIndex,
         wordIndex,
       };
@@ -254,11 +259,14 @@ function renderLane(lane) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "word-chip";
+    if (word.timingResolution === "fallback-layout") {
+      chip.classList.add("fallback-timing");
+    }
     chip.dataset.key = wordKey(word.laneIndex, word.wordIndex);
     chip.dataset.startMs = String(word.resolvedTiming.start_ms);
     chip.dataset.endMs = String(word.resolvedTiming.end_ms);
     chip.textContent = word.text;
-    chip.title = `${word.text} (${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms)`;
+    chip.title = `${word.text} (${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms) · ${word.timingSourceDetail}`;
 
     const left = (word.resolvedTiming.start_ms / state.maxDurationMs) * 100;
     const width = Math.max(
@@ -311,7 +319,8 @@ function renderSelection() {
     Word <strong>${word.text}</strong><br />
     ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${
       word.timing_confidence ?? "n/a"
-    }
+    }<br />
+    Timing source: <strong>${word.timingSourceDetail}</strong>
   `;
 
   selectionJson.textContent = JSON.stringify(
@@ -323,6 +332,8 @@ function renderSelection() {
       text: word.text,
       timing: word.timing,
       resolvedTiming: word.resolvedTiming,
+      timingResolution: word.timingResolution,
+      timingSourceDetail: word.timingSourceDetail,
       confidence: word.timing_confidence,
       commitment: word.commitment,
       boundarySource: word.boundary_source,
@@ -375,6 +386,18 @@ function defaultLaneLabel(stream, index) {
 
 function isTimedWordStream(candidate) {
   return Boolean(candidate && typeof candidate === "object" && Array.isArray(candidate.words));
+}
+
+function describeTimingSource(word, hasMeasuredTiming) {
+  if (!hasMeasuredTiming) {
+    return "fallback layout timing (resolved locally, not measured)";
+  }
+
+  if (word.boundary_source) {
+    return `measured word.timing (${word.boundary_source})`;
+  }
+
+  return "measured word.timing";
 }
 
 function wordKey(laneIndex, wordIndex) {

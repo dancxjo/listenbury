@@ -3,17 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Listenbury TimedWordStream Viewer</title>
+    <title>Listenbury TimedWordStream Static Debug Viewer</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="page-header">
       <div>
         <p class="eyebrow">Listenbury debug surface</p>
-        <h1>TimedWordStream browser viewer</h1>
+        <h1>TimedWordStream static debug viewer</h1>
         <p class="subtitle">
-          Load one or more synchronized TimedWordStreams, inspect metadata, and
-          click words to seek playback.
+          Static debug viewer for serialized TimedWordStream payloads. This is
+          an early local oscilloscope for inspecting recorded, generated, and
+          playback speech lanes.
         </p>
       </div>
     </header>
@@ -38,6 +39,11 @@
       <span id="status-message">Load the bundled demo or choose a local JSON payload.</span>
       <span id="playback-time">0.000s</span>
     </section>
+    <p class="milestone-note">
+      Milestone note: this viewer currently supports one shared audio timeline
+      (`audio.url`) for all lanes. Real traces may require per-lane audio
+      references and event-only lanes.
+    </p>
 
     <audio id="audio" controls preload="metadata"></audio>
 
