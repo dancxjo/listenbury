@@ -14,9 +14,12 @@
 //! - [`mod`] (this file) — re-exports all public types from submodules.
 //! - [`stream`] — [`TimedWordStream`], [`WordNode`], and supporting enums.
 //! - [`export`] — [`transcript_to_word_stream`] adapter and [`WordBoundaryRefiner`] trait.
+//! - [`tts_export`] — [`generated_text_to_word_stream`], [`attach_heuristic_timing`],
+//!   [`attach_audio_frame_timing`], and [`PlaybackCursor`] for outgoing/synthetic speech.
 
 pub mod export;
 pub mod stream;
+pub mod tts_export;
 
 pub use export::{NoopWordBoundaryRefiner, TranscriptWord, WordBoundaryRefiner, transcript_to_word_stream};
 pub use stream::{
