@@ -2939,6 +2939,7 @@ impl ContinueEarEvent {
             Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
             Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
             Self::EnvironmentalSound { sound } => {
+                // TODO(#54): Route environmental observations through PromptGate/auditory-scene state instead of direct prompt append.
                 Some(PromptPacket::ear_observation(sound.description.clone()))
             }
             Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
