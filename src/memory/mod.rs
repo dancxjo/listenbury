@@ -19,15 +19,19 @@
 //! # Default configuration
 //!
 //! Use [`NoopMemorySink`] when no persistent backend is required.  Replace it
-//! with [`ChannelMemorySink`] when a background worker should process traces.
+//! with [`ChannelMemorySink`] when a background worker should process traces,
+//! or with [`JournalMemorySink`] to write traces directly to a JSONL file.
 //!
 //! [`MemoryTrace`]: trace::MemoryTrace
 //! [`MemorySink`]: sink::MemorySink
 //! [`NoopMemorySink`]: sink::NoopMemorySink
 //! [`ChannelMemorySink`]: sink::ChannelMemorySink
+//! [`JournalMemorySink`]: journal::JournalMemorySink
 
+pub mod journal;
 pub mod sink;
 pub mod trace;
 
+pub use journal::{JournalEntry, JournalMemorySink, MemoryJournal};
 pub use sink::{ChannelMemorySink, MemorySink, NoopMemorySink};
 pub use trace::{MemoryTrace, SpeakerRole};

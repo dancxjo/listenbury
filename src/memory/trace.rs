@@ -1,7 +1,9 @@
 use crate::time::ExactTimestamp;
+use serde::{Deserialize, Serialize};
 
 /// The role of a speaker in a conversation turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SpeakerRole {
     User,
     Pete,
@@ -16,7 +18,8 @@ pub enum SpeakerRole {
 /// overlap events, and recall results — without imposing any database schema.
 ///
 /// [`MemorySink`]: crate::memory::sink::MemorySink
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MemoryTrace {
     /// A conversation turn (user utterance or Pete response) was finalised.
     ConversationTurnFinalized {
