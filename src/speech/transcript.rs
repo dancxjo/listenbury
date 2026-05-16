@@ -181,7 +181,10 @@ impl TranscriptCandidateTracker {
     }
 
     fn next_id(&mut self) -> TranscriptCandidateId {
-        self.next_id += 1;
+        self.next_id = self.next_id.wrapping_add(1);
+        if self.next_id == 0 {
+            self.next_id = 1;
+        }
         TranscriptCandidateId(self.next_id)
     }
 }
@@ -221,8 +224,12 @@ pub fn stable_prefix_len(previous: &str, next: &str) -> usize {
 }
 
 fn last_word_boundary_at_or_before(text: &str, limit: usize) -> Option<usize> {
-    let capped = limit.min(text.len());
-    if capped == 0 || !text.is_char_boundary(capped) {
+    let mut capped = limit.min(text.len());
+    while capped > 0 && !text.is_char_boundary(capped) {
+        capped -= 1;
+    }
+
+    if capped == 0 {
         return None;
     }
 
