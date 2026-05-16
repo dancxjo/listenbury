@@ -229,9 +229,8 @@ function normalizeEvents(events, markers) {
     }
 
     const startMs = coerceMs(entry.start_ms, `event ${index} start_ms`);
-    const endMs = entry.end_ms === undefined || entry.end_ms === null
-      ? startMs
-      : Math.max(startMs, coerceMs(entry.end_ms, `event ${index} end_ms`));
+    const rawEndMs = entry.end_ms ?? startMs;
+    const endMs = Math.max(startMs, coerceMs(rawEndMs, `event ${index} end_ms`));
 
     normalizedEvents.push({
       id: entry.id ?? `event-${index + 1}`,
@@ -633,7 +632,7 @@ function classToken(value) {
 
 function coerceMs(value, label) {
   if (!Number.isFinite(value)) {
-    throw new Error(`${label} must be a finite number`);
+    throw new Error(`${label} must be a finite number, received: ${String(value)}`);
   }
   return Math.max(0, Math.round(value));
 }
