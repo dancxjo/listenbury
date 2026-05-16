@@ -1,11 +1,14 @@
 use crate::cli::ContinueCommand;
 use anyhow::Result;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 use crate::cli::commands::llama::build_prompt;
 #[cfg(all(
@@ -83,11 +86,14 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObserver};
 #[cfg(all(
@@ -112,7 +118,17 @@ use listenbury::hearing::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
+use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mind::llm::LlmEvent;
 #[cfg(any(
     test,
     all(
@@ -150,7 +166,17 @@ use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, Pip
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{VadBackendKind, WhisperSpeechRecognizer};
+use listenbury::WhisperSpeechRecognizer;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::VadBackendKind;
 #[cfg(any(
     test,
     all(
@@ -202,11 +228,14 @@ use std::path::PathBuf;
     )
 ))]
 use std::sync::OnceLock;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(all(
@@ -223,11 +252,14 @@ use std::sync::{Arc, Mutex};
     feature = "tts-piper"
 ))]
 use std::thread::JoinHandle;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 use std::time::{Duration, Instant};
 #[cfg(any(
@@ -243,6 +275,81 @@ use tsrun::{
     Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
     js_value_to_json,
 };
+
+mod ear;
+mod mouth;
+mod prompt;
+mod source;
+mod trace;
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use ear::ContinueEarEvent;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use source::SourceCommand;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use source::{
+    SourceCommandExecution, execute_grep_source, execute_list_source_files, execute_search_source,
+    execute_source_command, execute_view_source_file,
+};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use trace::{
+    current_time_message, next_time_event_interval, wrap_ear_event, wrap_live_input,
+    wrap_source_event, wrap_time_event,
+};
+#[cfg(test)]
+use trace::{wrap_mouth_event, wrap_runtime_event};
 
 #[cfg(any(
     test,
@@ -315,11 +422,14 @@ const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
     feature = "tts-piper"
 ))]
 const MONO_CHANNELS: u16 = 1;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 const TIME_EVENT_INTERVAL_BASE_MS: u64 = 1_000;
 #[cfg(any(
@@ -631,90 +741,6 @@ pub(crate) fn run_continue(_command: ContinueCommand) -> Result<()> {
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn wrap_live_input(text: &str) -> String {
-    format!(
-        "\n\n--- LIVE EVENT: user ---\n{}\n--- END LIVE EVENT ---\n\n",
-        text.trim()
-    )
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn wrap_time_event(message: &str) -> String {
-    format!("\n\n--- LIVE EVENT: clock ---\n{message}\n--- END LIVE EVENT ---\n\n")
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn wrap_ear_event(message: &str) -> String {
-    format!("\n\n--- LIVE EVENT: ear ---\n{message}\n--- END LIVE EVENT ---\n\n")
-}
-
-#[cfg(test)]
-fn wrap_mouth_event(message: &str) -> String {
-    format!("\n\n--- LIVE EVENT: mouth ---\n{message}\n--- END LIVE EVENT ---\n\n")
-}
-
-#[cfg(test)]
-fn wrap_runtime_event(message: &str) -> String {
-    format!("\n\n--- LIVE EVENT: runtime ---\n{message}\n--- END LIVE EVENT ---\n\n")
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn wrap_source_event(message: &str) -> String {
-    format!("\n\n--- LIVE EVENT: source ---\n{message}\n--- END LIVE EVENT ---\n\n")
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn current_time_message() -> String {
-    let now = Local::now();
-    format!(
-        "The current local time is {}. Unix time is {}.{:03} seconds.",
-        now.to_rfc3339_opts(SecondsFormat::Millis, false),
-        now.timestamp(),
-        now.timestamp_subsec_millis()
-    )
-}
-
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -732,28 +758,6 @@ fn initial_time_event_jitter_state() -> u64 {
     } else {
         seed
     }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn next_time_event_interval(jitter_state: &mut u64) -> Duration {
-    *jitter_state ^= *jitter_state << 7;
-    *jitter_state ^= *jitter_state >> 9;
-    *jitter_state ^= *jitter_state << 8;
-    if *jitter_state == 0 {
-        *jitter_state = 0x9e37_79b9_7f4a_7c15;
-    }
-
-    let span = TIME_EVENT_INTERVAL_JITTER_MS * 2 + 1;
-    let jitter = (*jitter_state % span) as i64 - TIME_EVENT_INTERVAL_JITTER_MS as i64;
-    Duration::from_millis((TIME_EVENT_INTERVAL_BASE_MS as i64 + jitter) as u64)
 }
 
 #[cfg(any(
@@ -1513,207 +1517,6 @@ fn next_char_boundary(text: &str, mut index: usize) -> usize {
         index += 1;
     }
     index
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn execute_source_command(command: &SourceCommand) -> SourceCommandExecution {
-    match command {
-        SourceCommand::RunTypeScript { source } => execute_typescript_source(source),
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SourceCommandExecution {
-    message: String,
-    runtime_events: Vec<ContinueRuntimeEvent>,
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn execute_list_source_files() -> String {
-    let mut files: Vec<_> = source_bundle().keys().cloned().collect();
-    files.sort();
-    let mut response = String::from("Available source files:\n");
-    for file in files {
-        response.push_str(&file);
-        response.push('\n');
-    }
-    response
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn execute_view_source_file(path: &str, page: usize) -> String {
-    let normalized = path.trim().trim_start_matches("./");
-    let page = page.max(1);
-    let Some(content) = source_bundle().get(normalized) else {
-        return format!("File not found: {normalized}");
-    };
-    let lines: Vec<_> = content.lines().collect();
-    let start = (page - 1) * SOURCE_PAGE_LINES;
-    if start >= lines.len() {
-        return format!(
-            "File {normalized} has only {} lines (page {page} is past EOF).",
-            lines.len()
-        );
-    }
-    let end = (start + SOURCE_PAGE_LINES).min(lines.len());
-    format!(
-        "--- {normalized} (lines {} to {} of {}) ---\n{}\n---",
-        start + 1,
-        end,
-        lines.len(),
-        lines[start..end].join("\n")
-    )
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn execute_search_source(query: &str, limit: usize) -> String {
-    search_source_lines(query, limit, false)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn execute_grep_source(pattern: &str, limit: usize) -> String {
-    search_source_lines(pattern, limit, true)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn search_source_lines(needle: &str, limit: usize, literal: bool) -> String {
-    let needle = needle.trim();
-    if needle.is_empty() {
-        return "Search query was empty.".to_string();
-    }
-
-    let max_results = limit.clamp(1, 30);
-    let folded_needle = needle.to_lowercase();
-    let mut files: Vec<_> = source_bundle().iter().collect();
-    files.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-    let mut results = Vec::new();
-    for (file, content) in files {
-        for (index, line) in content.lines().enumerate() {
-            if line.to_lowercase().contains(&folded_needle) {
-                results.push(format!(
-                    "{}:{}: {}",
-                    file,
-                    index + 1,
-                    compact_prompt_line(line.trim(), 220)
-                ));
-                if results.len() >= max_results {
-                    break;
-                }
-            }
-        }
-        if results.len() >= max_results {
-            break;
-        }
-    }
-
-    if results.is_empty() {
-        format!(
-            "No source matches for {}: {}",
-            if literal { "pattern" } else { "query" },
-            needle
-        )
-    } else {
-        format!(
-            "Source matches for {} \"{}\":\n{}",
-            if literal { "pattern" } else { "query" },
-            needle,
-            results.join("\n")
-        )
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn source_bundle() -> &'static std::collections::HashMap<String, String> {
-    static BUNDLE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
-    BUNDLE.get_or_init(|| {
-        let bundle = include_str!(concat!(env!("OUT_DIR"), "/listenbury_source.txt"));
-        let mut map = std::collections::HashMap::new();
-        let mut current_file = String::new();
-        let mut current_content = String::new();
-
-        for line in bundle.lines() {
-            if let Some(path) = line.strip_prefix("@@@FILE: ") {
-                if !current_file.is_empty() {
-                    map.insert(current_file.clone(), current_content.clone());
-                    current_content.clear();
-                }
-                current_file = path.to_string();
-            } else {
-                current_content.push_str(line);
-                current_content.push('\n');
-            }
-        }
-        if !current_file.is_empty() {
-            map.insert(current_file, current_content);
-        }
-        map
-    })
 }
 
 #[cfg(any(
@@ -2895,302 +2698,6 @@ struct ContinueEarConfig {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-#[allow(dead_code)]
-enum ContinueEarEvent {
-    ListeningStarted {
-        device: String,
-        sample_rate_hz: u32,
-        channels: u16,
-        vad: VadBackendKind,
-    },
-    SpeechStarted,
-    SpeechStopped,
-    AuditoryObservation {
-        text: String,
-    },
-    EnvironmentalSound {
-        sound: EnvironmentalSound,
-    },
-    SelfVoiceHeard {
-        delay_ms: i64,
-        gain: f32,
-        confidence: f32,
-    },
-    OverlapDetected {
-        self_confidence: f32,
-        external_confidence: f32,
-        duration_ms: u64,
-    },
-    Transcript {
-        text: String,
-    },
-    Error {
-        message: String,
-    },
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl ContinueEarEvent {
-    #[allow(dead_code)]
-    fn to_message(&self) -> String {
-        match self {
-            Self::ListeningStarted {
-                device,
-                sample_rate_hz,
-                channels,
-                vad,
-            } => format!(
-                "listening_started: device={device:?} sample_rate_hz={sample_rate_hz} channels={channels} vad={}",
-                vad.as_str()
-            ),
-            Self::SpeechStarted => "speech_started".to_string(),
-            Self::SpeechStopped => "speech_stopped".to_string(),
-            Self::AuditoryObservation { text } => text.clone(),
-            Self::EnvironmentalSound { sound } => sound.description.clone(),
-            Self::SelfVoiceHeard {
-                delay_ms,
-                gain,
-                confidence,
-            } => format!(
-                "Pete's own playback is audible in the microphone but has been excluded from ASR. delay_ms={delay_ms} gain={gain:.2} confidence={confidence:.2}"
-            ),
-            Self::OverlapDetected {
-                self_confidence,
-                external_confidence,
-                duration_ms,
-            } => format!(
-                "Someone began speaking while Pete was speaking. self_confidence={self_confidence:.2} external_confidence={external_confidence:.2} duration_ms={duration_ms}"
-            ),
-            Self::Transcript { text } => format!("Heard: {}", text.trim()),
-            Self::Error { message } => format!("error: {message}"),
-        }
-    }
-
-    fn direct_prompt_packet(&self) -> Option<PromptPacket> {
-        match self {
-            Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
-            Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
-            Self::EnvironmentalSound { sound } => {
-                Some(PromptPacket::ear_observation(sound.description.clone()))
-            }
-            Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
-                Some(PromptPacket::ear_observation(self.to_message()))
-            }
-            Self::ListeningStarted { .. }
-            | Self::SpeechStarted
-            | Self::SpeechStopped
-            | Self::Error { .. } => None,
-        }
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, Copy)]
-struct ContinuePromptGateConfig {
-    duplicate_suppression_window: Duration,
-    auditory_min_interval: Duration,
-    overlap_summary_threshold: usize,
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl Default for ContinuePromptGateConfig {
-    fn default() -> Self {
-        Self {
-            duplicate_suppression_window: Duration::from_millis(1_500),
-            auditory_min_interval: Duration::from_millis(800),
-            overlap_summary_threshold: 2,
-        }
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-trait PromptGate {
-    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket>;
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug)]
-struct ContinuePromptGate {
-    config: ContinuePromptGateConfig,
-    last_emitted_packet: Option<String>,
-    last_emitted_at: Option<Instant>,
-    last_auditory_at: Option<Instant>,
-    pending_overlap_count: usize,
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl Default for ContinuePromptGate {
-    fn default() -> Self {
-        Self::new(ContinuePromptGateConfig::default())
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl ContinuePromptGate {
-    fn new(config: ContinuePromptGateConfig) -> Self {
-        Self {
-            config,
-            last_emitted_packet: None,
-            last_emitted_at: None,
-            last_auditory_at: None,
-            pending_overlap_count: 0,
-        }
-    }
-
-    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket> {
-        <Self as PromptGate>::consider_ear_event(self, event, now)
-    }
-
-    fn flush_overlap_summary(&mut self, now: Instant) -> Option<PromptPacket> {
-        if self.pending_overlap_count == 0 {
-            return None;
-        }
-        self.pending_overlap_count = 0;
-        Some(PromptPacket::ear_observation(
-            "Pete heard overlapping speech while speaking.".to_string(),
-        ))
-        .and_then(|packet| self.filter_packet(packet, now))
-    }
-
-    fn filter_packet(&mut self, packet: PromptPacket, now: Instant) -> Option<PromptPacket> {
-        let is_important = matches!(packet.memory, PromptMemory::Listened(_));
-        if !is_important
-            && matches!(packet.memory, PromptMemory::AuditoryObservation(_))
-            && self.last_auditory_at.is_some_and(|last| {
-                now.saturating_duration_since(last) < self.config.auditory_min_interval
-            })
-        {
-            return None;
-        }
-
-        let signature = packet.text.clone();
-        if !is_important
-            && self.last_emitted_packet.as_deref() == Some(signature.as_str())
-            && self.last_emitted_at.is_some_and(|last| {
-                now.saturating_duration_since(last) < self.config.duplicate_suppression_window
-            })
-        {
-            return None;
-        }
-
-        if matches!(packet.memory, PromptMemory::AuditoryObservation(_)) {
-            self.last_auditory_at = Some(now);
-        }
-        self.last_emitted_packet = Some(signature);
-        self.last_emitted_at = Some(now);
-        Some(packet)
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl PromptGate for ContinuePromptGate {
-    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket> {
-        let mut packets = Vec::new();
-        if !matches!(
-            event,
-            ContinueEarEvent::OverlapDetected { .. } | ContinueEarEvent::SelfVoiceHeard { .. }
-        ) {
-            if let Some(packet) = self.flush_overlap_summary(now) {
-                packets.push(packet);
-            }
-        }
-
-        match event {
-            ContinueEarEvent::OverlapDetected { .. } => {
-                self.pending_overlap_count += 1;
-                if self.pending_overlap_count >= self.config.overlap_summary_threshold {
-                    if let Some(packet) = self.flush_overlap_summary(now) {
-                        packets.push(packet);
-                    }
-                }
-            }
-            ContinueEarEvent::SelfVoiceHeard { .. } => {
-                // Ignore raw self-hearing telemetry here; overlap summaries carry the salient signal.
-            }
-            _ => {
-                if let Some(packet) = event
-                    .direct_prompt_packet()
-                    .and_then(|packet| self.filter_packet(packet, now))
-                {
-                    packets.push(packet);
-                }
-            }
-        }
-
-        packets
-    }
-}
-
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
 struct ContinueEar {
     stop: Arc<AtomicBool>,
     _stream: cpal::Stream,
@@ -4172,68 +3679,6 @@ impl Drop for ContinueMouth {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ContinueMouthCommand {
-    Speak {
-        id: u64,
-        text: String,
-        interrupt: bool,
-    },
-    Shutup,
-    Pause,
-    Resume,
-    Shutdown,
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn mouth_command_for_runtime_event(
-    event: &ContinueRuntimeEvent,
-) -> Option<(ContinueMouthCommand, bool)> {
-    match event {
-        ContinueRuntimeEvent::UtteranceCompleted {
-            id,
-            content,
-            interrupt,
-        } => {
-            let content = clean_spoken_content(content)?;
-            Some((
-                ContinueMouthCommand::Speak {
-                    id: *id,
-                    text: content,
-                    interrupt: *interrupt,
-                },
-                true,
-            ))
-        }
-        ContinueRuntimeEvent::SpeechControl { command } => {
-            let command = match command {
-                SpeechControlCommand::Shutup => ContinueMouthCommand::Shutup,
-                SpeechControlCommand::Pause => ContinueMouthCommand::Pause,
-                SpeechControlCommand::Resume => ContinueMouthCommand::Resume,
-            };
-            Some((command, false))
-        }
-        ContinueRuntimeEvent::SourceCommand { .. } => None,
-    }
-}
-
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -4853,19 +4298,6 @@ enum SpeechControlCommand {
     Resume,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SourceCommand {
-    RunTypeScript { source: String },
-}
 
 #[cfg(test)]
 impl ContinueRuntimeEvent {
@@ -5851,10 +5283,10 @@ grepSource("build_initial_prompt", 1)"#,
     #[test]
     fn source_bundle_lists_and_views_files() {
         let files = execute_list_source_files();
-        assert!(files.contains("src/cli/commands/continue_generation.rs"));
+        assert!(files.contains("src/cli/commands/continue_generation/mod.rs"));
 
-        let page = execute_view_source_file("src/cli/commands/continue_generation.rs", 1);
-        assert!(page.contains("--- src/cli/commands/continue_generation.rs"));
+        let page = execute_view_source_file("src/cli/commands/continue_generation/mod.rs", 1);
+        assert!(page.contains("--- src/cli/commands/continue_generation/mod.rs"));
         assert!(page.contains("use crate::cli::ContinueCommand;"));
     }
 
