@@ -77,6 +77,10 @@ impl WhisperSpeechRecognizer {
     /// The current Whisper integration is final-only, so each recognition result maps to
     /// `CandidateStarted -> CandidateFinalized`. This method is the seam for future
     /// partial/streaming ASR to emit updates and replacements.
+    ///
+    /// ⚠️ This method and [`SpeechRecognizer::poll_chunks`] consume the same pending audio.
+    /// Callers must treat them as alternative polling APIs and should not call both expecting
+    /// duplicated output for the same buffered frames.
     pub fn poll_candidate_events(&mut self) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
         let Some(text) = self.poll_transcript_text()? else {
             return Ok(Vec::new());
@@ -107,6 +111,13 @@ impl SpeechRecognizer for WhisperSpeechRecognizer {
         self.accept_frame(frame)
     }
 
+    /// Returns final transcript chunks for all currently buffered audio.
+    ///
+    /// ⚠️ This method and [`WhisperSpeechRecognizer::poll_candidate_events`] are alternative
+    /// consumers over the same pending buffer. Calling one drains the audio for both paths.
+    ///
+    /// Prefer `poll_candidate_events` for new integrations and use this method as
+    /// compatibility sugar until a unified transcript event stream fully replaces chunk polling.
     fn poll_chunks(&mut self) -> anyhow::Result<Vec<TranscriptChunk>> {
         let Some(text) = self.poll_transcript_text()? else {
             return Ok(Vec::new());
