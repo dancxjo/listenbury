@@ -40,9 +40,9 @@
       <span id="playback-time">0.000s</span>
     </section>
     <p class="milestone-note">
-      Milestone note: this viewer currently supports one shared audio timeline
-      (`audio.url`) for all lanes. Real traces may require per-lane audio
-      references and event-only lanes.
+      Milestone note: this viewer now supports synchronized word and
+      event/span lanes on one shared audio timeline (`audio.url`). Real traces
+      may still require per-lane audio references.
     </p>
 
     <audio id="audio" controls preload="metadata"></audio>
@@ -55,7 +55,7 @@
       <aside class="inspector">
         <h2>Inspector</h2>
         <div id="selection-summary" class="selection-summary">
-          Select a word to inspect timing, confidence, and stream metadata.
+          Select a word or event to inspect timing and metadata.
         </div>
         <pre id="selection-json" class="selection-json">{}</pre>
       </aside>
