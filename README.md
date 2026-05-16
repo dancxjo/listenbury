@@ -1,291 +1,517 @@
-# Listenbury
+# PETE Listenbury
 
-Listenbury is a single-binary, low-latency PETE implementation focused on real-time embodied conversation: hearing, turn-taking, local inference, speech planning, and speaking.
+**PETE Listenbury** is an experimental Rust system for low-latency, local, spoken interaction with an embodied conversational agent.
 
-Part of [Project PETE](https://dancxjo.github.io/project-pete.html): the Pseudoconscious Experiment in Thought and Emotions. Listenbury explores low-latency local conversational flow where listening, inference, planning, and speaking can overlap.
+It is part of **Project PETE**: the *Pseudoconscious Experiment in Thought and Emotions*. Earlier PETE prototypes explored whether relatively simple language-agent systems could produce coherent emotional and narrative behavior. Listenbury focuses on the main practical failure mode of those systems: latency.
 
-## Current status
+The central research question is:
 
-Listenbury is an active prototype with working pipeline components and CLI demos:
+> How can a conversational agent listen, infer, plan, speak, and monitor itself in overlapping time, rather than waiting for each stage to finish before beginning the next?
 
-- Live listening loop (`listen`, feature-gated)
-- Local LLM prompt (`ask`, feature-gated)
-- Whisper ASR WAV transcription (`transcribe`, feature-gated)
-- Piper TTS demo (`say`, feature-gated)
-- End-to-end WAV reply (ASR -> LLM -> TTS) (`reply`, feature-gated)
-- Model asset inspection/fetch utilities (`models`, feature-gated)
+Listenbury begins with an operational question: what timing, memory, perception, and expressive coordination are required for an artificial interlocutor to remain socially acceptable in an ongoing spoken exchange?
 
-The repository currently emphasizes local backend integration and CLI-driven validation.
+In this sense, PETE uses “pseudoconscious” seriously but cautiously. The project studies the behaviors adjacent to lived interaction: continuity, emotional tone, turn-taking, self-monitoring, and repair. It treats these as engineering and research problems before treating them as philosophical claims.
 
-## Contributor note: export policy and chokepoints
+## Research Motivation
 
-To reduce merge conflicts in parallel feature work:
+Most spoken LLM interfaces are architecturally sequential:
 
-- `src/lib.rs` should mostly declare top-level modules and only re-export stable, high-level API entry points.
-- Internal/experimental pipeline types should stay under subsystem paths (for example `listenbury::speculative::...`).
-- Prefer subsystem-local façades (for example `listenbury::hearing::...`, `listenbury::memory::...`) over expanding crate-root exports.
-- Avoid adding new `pub use` entries to `src/lib.rs` unless there is a concrete external API reason.
+1. record user speech,
+2. transcribe it,
+3. send the transcript to a language model,
+4. wait for the full response,
+5. synthesize speech,
+6. play the audio.
 
-Current high-contention chokepoint files (audit):
+This produces more than technical delay. It produces a social failure.
 
-- `src/cli/commands/continue_generation.rs` (~5.5k lines): command orchestration + worker logic + helpers + tests.
-- `src/cli/commands/live_half_duplex.rs` (~1.9k lines): runtime control, IO flow, and tests in one file.
-- `src/lib.rs` (crate root): historically central export fan-out point.
+A conversational agent that pauses too long, interrupts at the wrong time, speaks in full paragraphs when a nod would do, misses opportunities for backchannels, or cannot recover when the user starts talking again is not merely slow. It becomes socially awkward. The user begins to reject it as an interlocutor. Even capable systems can become impractical or annoying when their timing violates ordinary conversational expectations.
 
-## Low-latency reflex planning (design)
+Listenbury treats latency as a social and interactional problem, not merely a throughput problem.
 
-Listenbury now includes a controller/filler-planner skeleton for low-latency social reflexes while the main LLM is still generating.
+The project explores a more overlapping model:
 
-- `FillerPlanner` produces `FillerDecision` from `FillerContext`.
-- Initial path is intentionally conservative and silence-first.
-- Cached backchannels are selected through `BackchannelId` and converted into safe `SpeechUnit::Backchannel` values for `SpeechPlanner` / mouth playback.
-- Repetition guards are included by default:
-  - avoid repeating the same filler within 60 seconds,
-  - avoid more than one filler per user turn unless explicitly configured.
+- audio capture and voice activity detection happen continuously,
+- speech is segmented into breath groups or conversational units,
+- ASR produces text for completed segments,
+- local LLM generation can begin quickly,
+- speech planning can operate on partial language-model output,
+- TTS can begin before a full conversational response is complete,
+- playback and expressive output can be scheduled together,
+- self-hearing can compare intended speech with actual emitted audio,
+- runtime context can be appended at safe boundaries during generation.
 
-### Runtime context updates: append-only at safe boundaries
+The goal is not simply to make an assistant faster. The goal is to study the timing structure of spoken cognition-like behavior: how an agent can become socially tolerable, interruptible, responsive, and expressive in real time.
 
-The controller uses append-only `RuntimePacket` events and applies updates at safe boundaries (especially between committed `SpeechUnit`s), instead of pretending earlier prompt text was mutated in place.
+## Current Status
 
-Initial stance:
+Listenbury is an active prototype. It currently emphasizes local backend integration, CLI-driven validation, and incremental development of the real-time speech loop.
 
-- append new runtime facts to ongoing context,
-- decide continue/cancel/restart at safe boundaries,
-- avoid token-level prompt mutation/KV-cache surgery for v1.
+Working or partially working components include:
+
+- local Whisper-based ASR for WAV transcription,
+- live microphone capture through CPAL,
+- voice activity detection experiments,
+- local llama.cpp-backed LLM prompting and text completion,
+- Piper-based speech synthesis,
+- WAV input/output utilities,
+- an end-to-end WAV reply path: ASR -> LLM -> TTS,
+- a live half-duplex listening loop,
+- model selection and fetch utilities,
+- CUDA feature variants for Whisper and llama.cpp,
+- early filler/backchannel planning,
+- runtime packet/context update design using append-only updates at safe boundaries,
+- optional Qdrant and Neo4j services for cold memory experiments.
+
+The repository is still a research prototype, not a polished application. Some code paths are diagnostic or experimental, and some components are intentionally conservative while the timing model is being tested.
+
+## What “Low Latency” Means Here
+
+Listenbury treats latency as a systems problem, not just a model-speed problem.
+
+There are several distinct latencies:
+
+- **auditory latency**: how quickly speech is detected,
+- **segmentation latency**: how quickly a breath group is judged complete,
+- **ASR latency**: how quickly speech becomes text,
+- **LLM first-token latency**: how quickly the agent begins forming a response,
+- **planning latency**: how quickly partial text becomes speakable units,
+- **TTS latency**: how quickly text becomes audio,
+- **playback latency**: how quickly audio reaches the speaker,
+- **social latency**: how long the system feels silent or unresponsive.
+
+A usable embodied agent may need to reduce all of these. In some cases, it may be better to produce a safe backchannel or filler than to wait silently for a complete response.
+
+Listenbury therefore distinguishes between:
+
+- the **hot path**, which must remain fast enough for live interaction,
+- and the **cold path**, where slower memory, graph storage, reflection, or summarization can occur asynchronously.
+
+## Architecture
+
+At a high level:
+
+```text
+microphone
+   ↓
+audio capture / resampling
+   ↓
+VAD and breath-group segmentation
+   ↓
+ASR
+   ↓
+conversation/runtime context
+   ↓
+local LLM
+   ↓
+speech planner
+   ↓
+TTS
+   ↓
+speaker playback
+   ↓
+self-hearing / monitoring
+```
+
+The current implementation is organized around a single Rust binary with feature-gated subsystems.
+
+Major subsystems include:
+
+- **Hearing**: audio capture, WAV handling, resampling, VAD, ASR integration.
+- **Inference**: local llama.cpp-backed language model execution.
+- **Speech planning**: conversion from LLM output into speakable units.
+- **Mouth / playback**: TTS generation and audio output.
+- **Runtime context**: append-only events that can update the ongoing conversational state.
+- **Model management**: local model selection, paths, and optional downloading.
+- **Cold memory**: optional Qdrant/Neo4j support for slower memory experiments.
+
+## Runtime Context and Safe Boundaries
+
+Listenbury does not currently attempt arbitrary prompt mutation or KV-cache surgery in the middle of token generation.
+
+Instead, runtime updates are modeled as append-only packets. The system can apply those updates at safe boundaries, especially between committed speech units.
+
+The initial rule is:
+
+- append new facts rather than pretending old prompt text changed,
+- continue, cancel, or restart generation at explicit boundaries,
+- avoid token-level mutation in the first version,
+- preserve intelligibility and timing over theoretical cleverness.
+
+## Reflexes, Fillers, and Backchannels
+
+Human conversation often includes short responses that are not full semantic turns: acknowledgments, hesitation markers, backchannels, and floor-holding sounds.
+
+Listenbury includes an early conservative planner for this kind of behavior.
+
+The current design prefers silence unless a short, cached response is useful and safe. Repetition guards prevent the same filler from being repeated too often.
+
+This area is intentionally cautious. Poorly timed filler speech is worse than silence.
+
+## Syllable-Level Prosody Planning
+
+A longer-term goal is to move below sentence-level or clause-level TTS planning into syllable-level expressive timing.
+
+Human speech is not emitted as plain text. It is shaped continuously by breath, emphasis, affect, uncertainty, interruption, and social intention. A system that waits for complete text and then synthesizes a neutral waveform loses access to much of this control.
+
+Listenbury therefore aims to explore a pipeline where speech is represented as a stream of small expressive units:
+
+```text
+LLM text stream
+   ↓
+phonemicization
+   ↓
+syllable / stress / phrase planning
+   ↓
+prosody planner
+   ↓
+TTS acoustic generation
+   ↓
+playback with self-monitoring
+```
+
+In this model, emotional state would not merely choose an emoji or a voice preset. It would influence timing, pitch contour, intensity, pause length, and emphasis dynamically as speech is being prepared.
+
+A future version should be able to represent a planned utterance as something like:
+
+```text
+word -> phonemes -> syllables -> stress groups -> breath groups -> expressive audio
+```
+
+This would allow the system to:
+
+- begin speaking before a whole paragraph is complete,
+- adjust prosody as emotional state changes,
+- align facial expression or gesture to syllable timing,
+- soften or abandon speech when interrupted,
+- repair an utterance when later LLM output changes the intended phrase,
+- compare intended syllable timing with actual emitted audio.
+
+This requires taking ownership of phonemicization and TTS model execution rather than treating TTS as a black-box command that consumes finished text. Piper can serve as an initial model source, but deeper control likely requires running the ONNX model directly and building Listenbury’s own text-to-phoneme, syllabification, duration, and prosody layers around it.
+
+## Self-Hearing
+
+One of the long-term goals is for Listenbury to distinguish between:
+
+- intended speech,
+- synthesized target PCM,
+- audio actually emitted by the speaker,
+- and audio perceived through the microphone.
+
+This matters because an embodied system’s speech is not merely text output. It is an event in the world. Playback may fail, clip, crackle, overlap with user speech, or be interrupted.
+
+A future version of Listenbury should be able to say, in effect:
+
+> I intended to say this, but what reached the room was different.
+
+That comparison is useful for interruption handling, self-suppression, conversational repair, and embodied accountability.
+
+## Project Scope
+
+Listenbury is currently focused on local, real-time spoken interaction. It is not currently trying to be:
+
+- a general chatbot framework,
+- a cloud assistant,
+- a production speech API,
+- a complete cognitive architecture,
+- or a polished end-user application.
+
+It is a research workbench for the timing problem underneath believable spoken agents.
+
+## Relation to Project PETE
+
+PETE stands for **Pseudoconscious Experiment in Thought and Emotions**.
+
+Earlier PETE systems explored narrative continuity, emotional state, memory, and social presence. They demonstrated that emotionally coherent behavior can emerge from relatively simple language-agent loops when supported by memory and narrative framing.
+
+Their weakness was latency.
+
+Listenbury is the next step: preserving the expressive and narrative ambitions of PETE while rebuilding the interaction loop around immediacy.
+
+In that sense:
+
+- **Daringsby** explored emotional/narrative coherence.
+- **psycheOS** explored memory, distillation, and cognitive layering.
+- **Listenbury** explores real-time embodied conversation.
 
 ## Requirements
 
-- Rust toolchain (edition 2024; stable toolchain recommended)
+- Rust toolchain, edition 2024
 - Cargo
-- [`just`](https://github.com/casey/just), optional but recommended for project shortcuts
+- [`just`](https://github.com/casey/just), recommended
+- Linux audio dependencies for CPAL/ALSA
+- local model files for enabled ASR, LLM, and TTS backends
 
-On Debian/Ubuntu systems, install the native build dependencies for the
-default feature set before running `cargo build` or `cargo run`:
+On Debian/Ubuntu:
 
 ```bash
 sudo apt update
 sudo apt install -y build-essential cmake clang libclang-dev pkg-config libasound2-dev
-```
-
-Install `just` with Cargo:
-
-```bash
 cargo install just
 ```
 
-Or use your system package manager if it has a recent package, for example:
+Depending on features, you may also need:
 
-```bash
-sudo apt install -y just
-```
+- Whisper model files,
+- GGUF LLM model files,
+- Piper executable and voice models,
+- NVIDIA CUDA toolkit for CUDA builds.
 
-Depending on enabled features, additional runtime/system dependencies are needed:
+## Building
 
-- `audio-cpal` (enabled by default): Linux builds require ALSA development files (`alsa.pc`, from `libasound2-dev` on Debian/Ubuntu) and `pkg-config`
-- `llm-llama-cpp`: local GGUF model file(s)
-- `llm-llama-cpp-cuda`: NVIDIA CUDA toolkit for llama.cpp GPU offload
-- `asr-whisper`: local Whisper `.bin` model file(s)
-- `asr-whisper-cuda`: NVIDIA CUDA toolkit for whisper.cpp GPU execution
-- `tts-piper`: Piper executable and Piper `.onnx` voice model (and optional `.onnx.json` config)
-- `model-download`: network access for model downloads
-
-## Build and install dependencies
-
-### 1) Build with defaults (full local stack)
+Default local build:
 
 ```bash
 just build
 ```
 
-If this fails with `Package 'alsa' not found` or `alsa.pc` missing, install:
-
-```bash
-sudo apt install -y pkg-config libasound2-dev
-```
-
-This enables default features:
-
-- `audio-cpal`
-- `resample-rubato`
-- `vad-silero`
-- `vad-webrtc`
-- `llm-llama-cpp`
-- `asr-whisper`
-- `tts-piper`
-- `vision-webcam`
-
-The default feature set is CPU-only for Whisper and llama.cpp. If Whisper logs
-`whisper_backend_init_gpu: no GPU found` while `nvidia-smi` can see your GPU,
-rebuild with `asr-whisper-cuda`; the plain `asr-whisper` feature does not compile
-the CUDA backend.
-
-### 2) Build a minimal profile (avoids audio backend/system ALSA dependency)
-
-```bash
-cargo build --no-default-features --features tts-piper
-```
-
-### 3) Build selected local AI pipeline features without defaults
-
-```bash
-cargo build --no-default-features --features "asr-whisper llm-llama-cpp tts-piper model-download"
-```
-
-For NVIDIA GPU builds, use the CUDA feature variants:
+CUDA build:
 
 ```bash
 just build-cuda
 ```
 
-The CUDA recipes default `CUDA_LIBRARY_PATH` to `/usr/lib/x86_64-linux-gnu`,
-which is where Debian/Ubuntu CUDA packages commonly install `libcudart_static.a`,
-`libcublas_static.a`, and related libraries. The recipes also pass that path to
-Rust via `RUSTFLAGS` so native CUDA archives can be found during the final link.
-If your CUDA toolkit is elsewhere, set it explicitly before running Cargo or
-`just`:
+Minimal build example:
 
 ```bash
-CUDA_LIBRARY_PATH=/path/to/cuda/lib64 just build-cuda
+cargo build --no-default-features --features tts-piper
 ```
 
-When switching an existing checkout from CPU-only to CUDA, a clean rebuild avoids
-reusing a previously compiled CPU-only native backend:
+Selected local AI stack:
+
+```bash
+cargo build --no-default-features --features "asr-whisper llm-llama-cpp tts-piper model-download"
+```
+
+When switching between CPU and CUDA builds, a clean rebuild may avoid stale native artifacts:
 
 ```bash
 just clean
 just build-cuda
 ```
 
-Useful `just` recipes:
-
-```bash
-just              # list available recipes
-just run -- --help   # cargo run -- --help
-just cuda -- --help  # cargo run with asr-whisper-cuda and llm-llama-cpp-cuda
-just check
-just check-cuda
-just test
-```
-
 ## Usage
 
-Run commands with `just`:
+List available commands:
 
 ```bash
-just run <command> [args...]
-just cuda <command> [args...]
+just run -- --help
 ```
 
-CLI commands:
-
-```text
-listenbury transcribe [input.wav] [--seconds 30] [--until-ctrl-c] [--whisper-model <model.bin>]
-listenbury say [--piper-bin <piper>] [--piper-voice <voice.onnx>] [--output-wav <out.wav>] "text"
-listenbury listen [--seconds <n>] [--model-profile tiny] [--no-backchannels] [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
-listenbury ask [--llm-model <model.gguf>] [--mode <spoken|chat|inner|raw>] [--max-tokens <n>] "prompt"
-listenbury complete [--llm-model <model.gguf>] [--max-tokens <n>] "prompt"
-listenbury reply <input.wav> [--whisper-model <model.bin>] [--llm-model <model.gguf>] [--piper-bin <piper>] [--piper-voice <voice.onnx>]
-listenbury models <list|use|fetch|status|path>
-```
-
-### Command notes
-
-- `transcribe`: transcribes microphone audio by default; pass a WAV path to transcribe a file with Whisper
-- `say`: plays synthesized speech through the default speaker; `--output-wav` writes a WAV instead
-- `listen`:
-  - half-duplex loop: listen for a completed breath group, transcribe, generate, synthesize, play, return to listening
-  - no interruption while Pete is speaking (capture pauses during playback)
-  - cached filler/backchannel speech can start after about 800ms of Pete thinking with no safe speech ready
-  - listens until Ctrl-C by default; pass `--seconds <n>` for a bounded run
-  - `--no-backchannels` skips cached filler and short backchannel-only planner units in spoken responses
-- `ask`: wraps your prompt as a short Pete Listenbury spoken/chat turn, with a default 48-token budget
-- `complete`: streams raw text completion from a local llama.cpp model
-- `reply`:
-  - input WAV is mixed/resampled to mono 16kHz before transcription
-  - writes output WAV to `out/listenbury-round-trip.wav`
-- Diagnostics and milestone experiments are hidden under `listenbury dev ...`.
-
-## Models and paths
-
-If built with `model-download`, use:
+Common commands:
 
 ```bash
-cargo run -- models path
+just run ask "Can you hear me?"
+just run complete "The system listens because"
+just run transcribe input.wav
+just run say "Hello from Pete Listenbury."
+just run reply input.wav
+just run listen
+```
+
+CUDA variants:
+
+```bash
+just cuda ask "Can you hear me?"
+just cuda listen
+```
+
+Model utilities:
+
+```bash
 cargo run -- models list
 cargo run -- models status
+cargo run -- models path
 cargo run -- models use voice Amy
 cargo run -- models use llm gpt-oss
 cargo run -- models fetch
 ```
 
-`models fetch` downloads the currently selected Whisper, LLM, and Piper voice assets. Use `models fetch <name>` for one selectable bundle, or `models fetch --all` to download every registered asset.
+## Important Commands
 
-Runtime commands also download the selected registered model on demand if it is missing locally, so the first `listen`, `ask`, `say`, or `reply` after a model switch may wait while the model arrives.
+### `ask`
 
-Quick voice and LLM overrides:
+Runs a local LLM prompt using a Pete Listenbury interaction wrapper.
 
 ```bash
-export PETE_VOICE=Amy
-export PETE_LLM=gpt-oss
-just listen
+listenbury ask "Can you hear me?"
 ```
 
-Registered model assets include:
+### `complete`
 
-- `ggml-tiny.en.bin` (Whisper)
-- `llama-3.2-3b-instruct-q4_k_m.gguf` (Llama 3.2 3B Instruct via llama.cpp)
-- `gpt-oss-20b-mxfp4.gguf` (gpt-oss 20B via llama.cpp)
-- Piper voices: Ryan, Amy, HFC Male, HFC Female, John, LJSpeech, and LibriTTS
+Runs raw local text completion.
 
-### Environment variables
+```bash
+listenbury complete "The next thing to say is"
+```
 
-- `LISTENBURY_HOME`: base directory for model asset management
-- `LISTENBURY_WHISPER_MODEL`: path override for round-trip Whisper model
-- `LISTENBURY_LLM_MODEL`: path override for round-trip llama.cpp model
-- `LISTENBURY_PIPER_BIN`: path override for round-trip Piper executable
-- `LISTENBURY_PIPER_VOICE`: path override for round-trip Piper voice model
-- `PETE_LLM`: selected registered LLM alias, for example `gpt-oss`
-- `PETE_VOICE`: selected registered Piper voice alias, for example `Amy`
+### `transcribe`
 
-`transcribe`, `listen`, `ask`, `say`, and `reply` model resolution order is: explicit CLI flag -> path environment variable -> selected registered model under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
+Transcribes microphone audio or a WAV file using Whisper.
 
-## Optional cold-memory stack (Qdrant + Neo4j)
+```bash
+listenbury transcribe input.wav
+```
 
-Listenbury's core runtime does not require Docker or cold-memory services. This stack is optional and intended for asynchronous distilled traces only (never the hot audio/LLM/TTS path).
-Run these commands from the repository root so relative volume paths resolve correctly.
+### `say`
 
-1. Copy the example env file:
+Synthesizes and plays speech using Piper.
+
+```bash
+listenbury say "Testing one two three."
+```
+
+### `reply`
+
+Runs a WAV through ASR, generates a reply, and synthesizes the response.
+
+```bash
+listenbury reply input.wav
+```
+
+### `listen`
+
+Runs the current live half-duplex loop.
+
+```bash
+listenbury listen
+```
+
+The current loop listens for speech, transcribes a completed segment, generates a response, synthesizes it, plays it, and returns to listening. It is intentionally simple and serves as the baseline for future duplex and interruption-aware behavior.
+
+## Configuration
+
+Common environment variables:
+
+```bash
+LISTENBURY_HOME=/path/to/listenbury/models
+LISTENBURY_WHISPER_MODEL=/path/to/model.bin
+LISTENBURY_LLM_MODEL=/path/to/model.gguf
+LISTENBURY_PIPER_BIN=/path/to/piper
+LISTENBURY_PIPER_VOICE=/path/to/voice.onnx
+PETE_LLM=gpt-oss
+PETE_VOICE=Amy
+```
+
+Model resolution order is generally:
+
+1. explicit CLI flag,
+2. environment variable,
+3. selected registered model under `LISTENBURY_HOME`,
+4. discovered local file under `./models`.
+
+## Optional Cold Memory
+
+Listenbury’s hot path should not depend on Qdrant, Neo4j, Docker, or network services.
+
+Optional cold-memory services can be started for slower memory experiments:
 
 ```bash
 cp .env.example .env
-```
-
-Then edit `.env`, set a secure `NEO4J_PASS`, and review the other values (for example `NEO4J_USER`) for your environment.
-
-2. Start the cold-memory services:
-
-```bash
 docker compose up -d qdrant neo4j
 ```
 
-3. Stop them when done:
+Stop them with:
 
 ```bash
 docker compose stop qdrant neo4j
 docker compose rm -f qdrant neo4j
 ```
 
-Persistent local data directories:
+Cold memory is intended for asynchronous traces, summaries, recall experiments, and analysis. It should not block live speech.
 
-- `./qdrant_data`
-- `./neo4j_data`
+## Development Principles
 
-## Validation
+1. **Keep the hot path hot.**  
+   Anything needed for immediate conversational timing should avoid avoidable network calls, heavyweight databases, or blocking reflection.
 
-Useful local checks:
+2. **Prefer measurable timing over vague intelligence.**  
+   Latency, first-token time, breath-group completion time, TTS startup time, and playback timing are first-class research data.
 
-```bash
-cargo test --no-default-features --features tts-piper
-```
+3. **Commit speech at boundaries.**  
+   The system should not pretend it can freely revise already-spoken audio. Revision must happen before commitment, or through explicit conversational repair.
 
-If your environment has all system dependencies installed, you can also run broader checks/tests with default features.
+4. **Separate planning from playback.**  
+   Speech text, expressive units, TTS audio, and actual speaker output are related but distinct.
+
+5. **Treat self-hearing as part of embodiment.**  
+   The agent should eventually know not only what it intended to say, but what was actually heard.
+
+6. **Keep claims precise.**  
+   Listenbury studies pseudoconscious behavior, timing, and embodied interaction through working systems and measurable constraints.
+
+7. **Prosody is part of thought-in-action.**  
+   Speech timing, stress, intonation, hesitation, and repair are not decorative output effects. They are part of how a spoken agent participates in conversation.
+
+8. **Avoid socially invalid timing.**  
+   A system that is technically correct but conversationally mistimed will be rejected by users. Responsiveness, interruptibility, and graceful silence are core requirements.
+
+## Research Directions
+
+Near-term:
+
+- improve live VAD and breath-group segmentation,
+- reduce ASR and TTS startup latency,
+- add stronger diagnostics for timing and audio routing,
+- separate orchestration code into clearer modules,
+- stabilize the speech planner and playback executor,
+- improve interruption and fadeout behavior,
+- add self-hearing suppression.
+
+Medium-term:
+
+- support overlapping listening and speaking,
+- plan TTS from partial LLM output,
+- coordinate speech, face, and prosody commands,
+- add target-versus-actual PCM comparison,
+- support vision as another live input stream,
+- persist timing traces for analysis.
+
+Long-term:
+
+- model turn-taking as a continuous control problem,
+- support conversational repair when speech diverges from intent,
+- build memory systems that operate asynchronously from the hot path,
+- develop syllable-level expressive speech planning,
+- evaluate whether low-latency embodied timing improves perceived presence, trust, or usability.
+
+## Academic Framing
+
+Listenbury may be relevant to work in:
+
+- human-computer interaction,
+- spoken dialogue systems,
+- embodied conversational agents,
+- social robotics,
+- assistive communication,
+- low-latency speech interfaces,
+- local-first AI systems,
+- cognitive architectures,
+- and educational technology.
+
+A reasonable academic description would be:
+
+> PETE Listenbury investigates how a local conversational agent can coordinate listening, inference, speech planning, synthesis, playback, prosody, and self-monitoring in overlapping time to reduce the latency, social awkwardness, and practical brittleness of spoken LLM interaction.
+
+## Limitations
+
+Current limitations include:
+
+- live interaction is mostly half-duplex,
+- interruption handling is early,
+- filler/backchannel behavior is conservative,
+- prompt/context updates are append-only and boundary-based,
+- model behavior depends heavily on local model choice,
+- audio device configuration can be fragile on Linux,
+- CUDA support depends on local driver/toolkit compatibility,
+- cold memory is optional and not yet central to the real-time loop.
+
+## Citation / Attribution
+
+This is an independent research prototype by Travis D. Reed as part of Project PETE.
+
+If this work informs academic or applied research, please cite the repository and describe it as a prototype for low-latency embodied spoken interaction.
+
+## License
+
+See `LICENSE`.
