@@ -181,10 +181,10 @@ impl TranscriptCandidateTracker {
     }
 
     fn next_id(&mut self) -> TranscriptCandidateId {
-        self.next_id = self.next_id.wrapping_add(1);
-        if self.next_id == 0 {
-            self.next_id = 1;
-        }
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("transcript candidate id space exhausted");
         TranscriptCandidateId(self.next_id)
     }
 }
@@ -220,6 +220,8 @@ pub fn stable_prefix_len(previous: &str, next: &str) -> usize {
         .zip(last_word_boundary_at_or_before(next, shared))
         .map(|(previous_boundary, next_boundary)| previous_boundary.min(next_boundary));
 
+    // `shared` is always a valid char boundary because `shared_prefix_len` advances using
+    // `char_indices` from both strings.
     boundary.unwrap_or(shared)
 }
 
