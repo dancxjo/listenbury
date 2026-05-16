@@ -1,6 +1,6 @@
 use crate::time::ExactTimestamp;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AudioFrame {
     pub captured_at: ExactTimestamp,
     pub sample_rate_hz: u32,

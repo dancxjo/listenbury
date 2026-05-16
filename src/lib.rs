@@ -17,6 +17,10 @@ pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
     VisionEvent,
 };
+pub use hearing::audition::{
+    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, ExternalVoiceEstimate,
+    NoiseEstimate, SelfVoiceEstimate,
+};
 pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };

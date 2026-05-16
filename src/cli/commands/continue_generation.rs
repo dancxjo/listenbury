@@ -128,8 +128,8 @@ use listenbury::mouth::tts::TextToSpeech;
     feature = "tts-piper"
 ))]
 use listenbury::{
-    AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech,
-    SpeakerReferenceMask,
+    AudioFrame, AuditoryRouting, AuditorySceneAnalyzer, ExactTimestamp, LlamaCppConfig,
+    LlamaCppEngine, PiperTextToSpeech, SpeakerReferenceMask,
 };
 #[cfg(all(
     feature = "audio-cpal",
@@ -447,7 +447,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut llm_paused_for_mouth = false;
     let mut mouth_playback_paused = false;
     let mut deferred_live_events = VecDeque::<PromptPacket>::new();
-    let mut tts_vad = TtsVadInterruption::new(TtsVadInterruptionConfig {
+    let mut tts_vad = DuplexTurnController::new(DuplexTurnControllerConfig {
         pause_after: Duration::from_millis(command.tts_vad_pause_ms),
         listen_for: Duration::from_millis(command.tts_vad_listen_ms),
     });
@@ -2286,7 +2286,7 @@ fn append_pending_live_events(
     defer_live_events: bool,
     deferred_live_events: &mut VecDeque<PromptPacket>,
     mouth: &mut ContinueMouth,
-    tts_vad: &mut TtsVadInterruption,
+    tts_vad: &mut DuplexTurnController,
 ) -> Result<()> {
     if !defer_live_events {
         flush_deferred_live_events(llm_session, deferred_live_events)?;
@@ -2333,6 +2333,8 @@ fn append_pending_live_events(
             | ContinueEarEvent::SpeechStarted
             | ContinueEarEvent::SpeechStopped
             | ContinueEarEvent::AuditoryObservation { .. }
+            | ContinueEarEvent::SelfVoiceHeard { .. }
+            | ContinueEarEvent::OverlapDetected { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
         if let Some(packet) = ear_event.prompt_packet() {
@@ -2415,7 +2417,7 @@ fn flush_deferred_live_events(
     feature = "tts-piper"
 ))]
 #[derive(Debug, Clone, Copy)]
-struct TtsVadInterruptionConfig {
+struct DuplexTurnControllerConfig {
     pause_after: Duration,
     listen_for: Duration,
 }
@@ -2427,11 +2429,11 @@ struct TtsVadInterruptionConfig {
     feature = "tts-piper"
 ))]
 #[derive(Debug)]
-struct TtsVadInterruption {
-    config: TtsVadInterruptionConfig,
-    vad_active: bool,
-    vad_started_at: Option<Instant>,
-    paused_for_vad: bool,
+struct DuplexTurnController {
+    config: DuplexTurnControllerConfig,
+    external_speech_active: bool,
+    external_speech_started_at: Option<Instant>,
+    paused_for_external_speech: bool,
     listen_deadline: Option<Instant>,
 }
 
@@ -2441,13 +2443,26 @@ struct TtsVadInterruption {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-impl TtsVadInterruption {
-    fn new(config: TtsVadInterruptionConfig) -> Self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DuplexTurnAction {
+    Pause,
+    Resume,
+    Clear,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl DuplexTurnController {
+    fn new(config: DuplexTurnControllerConfig) -> Self {
         Self {
             config,
-            vad_active: false,
-            vad_started_at: None,
-            paused_for_vad: false,
+            external_speech_active: false,
+            external_speech_started_at: None,
+            paused_for_external_speech: false,
             listen_deadline: None,
         }
     }
@@ -2461,28 +2476,23 @@ impl TtsVadInterruption {
         deferred_live_events: &mut VecDeque<PromptPacket>,
         pending_mouth_utterances: usize,
     ) -> Result<()> {
+        let now = Instant::now();
         match event {
             ContinueEarEvent::SpeechStarted => {
-                self.vad_active = true;
-                self.vad_started_at = Some(Instant::now());
+                self.mark_external_speech_started(now);
             }
+            ContinueEarEvent::OverlapDetected { .. } => self.mark_external_speech_started(now),
             ContinueEarEvent::SpeechStopped => {
-                self.vad_active = false;
-                self.vad_started_at = None;
-                if self.paused_for_vad {
-                    self.listen_deadline = Some(Instant::now() + self.config.listen_for);
-                }
+                self.mark_external_speech_stopped(now);
             }
             ContinueEarEvent::Transcript { .. } => {
-                self.vad_active = true;
-                self.vad_started_at = Some(
-                    Instant::now()
-                        .checked_sub(self.config.pause_after)
-                        .unwrap_or_else(Instant::now),
-                );
+                self.external_speech_active = true;
+                self.external_speech_started_at =
+                    Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
             }
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::AuditoryObservation { .. }
+            | ContinueEarEvent::SelfVoiceHeard { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
         self.poll(
@@ -2506,8 +2516,8 @@ impl TtsVadInterruption {
             ContinueRuntimeEvent::UtteranceCompleted {
                 interrupt: true, ..
             } => {
-                if self.paused_for_vad {
-                    self.resume_after_vad(
+                if self.paused_for_external_speech {
+                    self.resume_after_external_speech(
                         mouth,
                         llm_session,
                         defer_live_events,
@@ -2519,13 +2529,13 @@ impl TtsVadInterruption {
             ContinueRuntimeEvent::UtteranceCompleted {
                 interrupt: false, ..
             } => {
-                if self.vad_active && !self.paused_for_vad {
-                    self.pause_for_vad(
+                if self.external_speech_active && !self.paused_for_external_speech {
+                    self.pause_for_external_speech(
                         mouth,
                         llm_session,
                         defer_live_events,
                         deferred_live_events,
-                        "TTS start deferred because VAD is currently detecting speech.",
+                        "TTS start deferred because external speech is currently detected.",
                     )?;
                     self.listen_deadline = None;
                 }
@@ -2544,54 +2554,87 @@ impl TtsVadInterruption {
         deferred_live_events: &mut VecDeque<PromptPacket>,
         pending_mouth_utterances: usize,
     ) -> Result<()> {
-        if pending_mouth_utterances == 0 {
-            self.paused_for_vad = false;
-            self.listen_deadline = None;
+        let Some(action) = self.next_action(Instant::now(), pending_mouth_utterances) else {
             return Ok(());
-        }
-
-        if self.vad_active && !self.paused_for_vad {
-            if let Some(started_at) = self.vad_started_at {
-                if started_at.elapsed() >= self.config.pause_after {
-                    self.pause_for_vad(
-                        mouth,
-                        llm_session,
-                        defer_live_events,
-                        deferred_live_events,
-                        "TTS auto-paused because VAD detected sustained speech while Pete was speaking.",
-                    )?;
-                    self.listen_deadline = Some(Instant::now() + self.config.listen_for);
-                }
-            }
-        }
-
-        if self.paused_for_vad
-            && self
-                .listen_deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            if self.vad_active {
-                self.clear_after_vad(
-                    mouth,
-                    llm_session,
-                    defer_live_events,
-                    deferred_live_events,
-                    "TTS queue cleared because VAD continued during the interruption listen window.",
-                )?;
-            } else {
-                self.resume_after_vad(
-                    mouth,
-                    llm_session,
-                    defer_live_events,
-                    deferred_live_events,
-                    "TTS resumed after the interruption listen window stayed quiet.",
-                )?;
-            }
+        };
+        match action {
+            DuplexTurnAction::Pause => self.pause_for_external_speech(
+                mouth,
+                llm_session,
+                defer_live_events,
+                deferred_live_events,
+                "TTS auto-paused because external speech was detected while Pete was speaking.",
+            )?,
+            DuplexTurnAction::Resume => self.resume_after_external_speech(
+                mouth,
+                llm_session,
+                defer_live_events,
+                deferred_live_events,
+                "TTS resumed after the interruption listen window stayed quiet.",
+            )?,
+            DuplexTurnAction::Clear => self.clear_after_external_speech(
+                mouth,
+                llm_session,
+                defer_live_events,
+                deferred_live_events,
+                "TTS queue cleared because external speech continued during the interruption listen window.",
+            )?,
         }
         Ok(())
     }
 
-    fn pause_for_vad(
+    fn mark_external_speech_started(&mut self, now: Instant) {
+        if !self.external_speech_active {
+            self.external_speech_started_at = Some(now);
+        }
+        self.external_speech_active = true;
+    }
+
+    fn mark_external_speech_stopped(&mut self, now: Instant) {
+        self.external_speech_active = false;
+        self.external_speech_started_at = None;
+        if self.paused_for_external_speech {
+            self.listen_deadline = Some(now + self.config.listen_for);
+        }
+    }
+
+    fn next_action(
+        &mut self,
+        now: Instant,
+        pending_mouth_utterances: usize,
+    ) -> Option<DuplexTurnAction> {
+        if pending_mouth_utterances == 0 {
+            self.paused_for_external_speech = false;
+            self.listen_deadline = None;
+            return None;
+        }
+
+        if self.external_speech_active && !self.paused_for_external_speech {
+            if let Some(started_at) = self.external_speech_started_at {
+                let elapsed = now.checked_duration_since(started_at).unwrap_or_default();
+                if elapsed >= self.config.pause_after {
+                    self.paused_for_external_speech = true;
+                    self.listen_deadline = Some(now + self.config.listen_for);
+                    return Some(DuplexTurnAction::Pause);
+                }
+            }
+        }
+
+        if self.paused_for_external_speech
+            && self.listen_deadline.is_some_and(|deadline| now >= deadline)
+        {
+            self.paused_for_external_speech = false;
+            self.listen_deadline = None;
+            return if self.external_speech_active {
+                Some(DuplexTurnAction::Clear)
+            } else {
+                Some(DuplexTurnAction::Resume)
+            };
+        }
+        None
+    }
+
+    fn pause_for_external_speech(
         &mut self,
         mouth: &mut ContinueMouth,
         llm_session: &mut ContinueLlmSession,
@@ -2599,8 +2642,8 @@ impl TtsVadInterruption {
         deferred_live_events: &mut VecDeque<PromptPacket>,
         message: &'static str,
     ) -> Result<()> {
-        self.paused_for_vad = true;
-        send_tts_vad_control(
+        self.paused_for_external_speech = true;
+        send_duplex_turn_control(
             mouth,
             llm_session,
             defer_live_events,
@@ -2610,7 +2653,7 @@ impl TtsVadInterruption {
         )
     }
 
-    fn resume_after_vad(
+    fn resume_after_external_speech(
         &mut self,
         mouth: &mut ContinueMouth,
         llm_session: &mut ContinueLlmSession,
@@ -2618,9 +2661,9 @@ impl TtsVadInterruption {
         deferred_live_events: &mut VecDeque<PromptPacket>,
         message: &'static str,
     ) -> Result<()> {
-        self.paused_for_vad = false;
+        self.paused_for_external_speech = false;
         self.listen_deadline = None;
-        send_tts_vad_control(
+        send_duplex_turn_control(
             mouth,
             llm_session,
             defer_live_events,
@@ -2630,7 +2673,7 @@ impl TtsVadInterruption {
         )
     }
 
-    fn clear_after_vad(
+    fn clear_after_external_speech(
         &mut self,
         mouth: &mut ContinueMouth,
         llm_session: &mut ContinueLlmSession,
@@ -2638,9 +2681,9 @@ impl TtsVadInterruption {
         deferred_live_events: &mut VecDeque<PromptPacket>,
         message: &'static str,
     ) -> Result<()> {
-        self.paused_for_vad = false;
+        self.paused_for_external_speech = false;
         self.listen_deadline = None;
-        send_tts_vad_control(
+        send_duplex_turn_control(
             mouth,
             llm_session,
             defer_live_events,
@@ -2660,7 +2703,7 @@ impl TtsVadInterruption {
 fn prepare_tts_runtime_event(
     event: &ContinueRuntimeEvent,
     mouth: &mut ContinueMouth,
-    tts_vad: &mut TtsVadInterruption,
+    tts_vad: &mut DuplexTurnController,
     llm_session: &mut ContinueLlmSession,
     defer_live_events: bool,
     deferred_live_events: &mut VecDeque<PromptPacket>,
@@ -2680,7 +2723,7 @@ fn prepare_tts_runtime_event(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn send_tts_vad_control(
+fn send_duplex_turn_control(
     mouth: &mut ContinueMouth,
     llm_session: &mut ContinueLlmSession,
     defer_live_events: bool,
@@ -2694,7 +2737,7 @@ fn send_tts_vad_control(
         PromptPacket::source(message.to_string()),
         defer_live_events,
         deferred_live_events,
-        "failed to append TTS/VAD control event to live generation",
+        "failed to append duplex turn control event to live generation",
     )
 }
 
@@ -2821,6 +2864,16 @@ enum ContinueEarEvent {
     AuditoryObservation {
         text: String,
     },
+    SelfVoiceHeard {
+        delay_ms: i64,
+        gain: f32,
+        confidence: f32,
+    },
+    OverlapDetected {
+        self_confidence: f32,
+        external_confidence: f32,
+        duration_ms: u64,
+    },
     Transcript {
         text: String,
     },
@@ -2851,6 +2904,20 @@ impl ContinueEarEvent {
             Self::SpeechStarted => "speech_started".to_string(),
             Self::SpeechStopped => "speech_stopped".to_string(),
             Self::AuditoryObservation { text } => text.clone(),
+            Self::SelfVoiceHeard {
+                delay_ms,
+                gain,
+                confidence,
+            } => format!(
+                "Pete's own playback is audible in the microphone but has been excluded from ASR. delay_ms={delay_ms} gain={gain:.2} confidence={confidence:.2}"
+            ),
+            Self::OverlapDetected {
+                self_confidence,
+                external_confidence,
+                duration_ms,
+            } => format!(
+                "Someone began speaking while Pete was speaking. self_confidence={self_confidence:.2} external_confidence={external_confidence:.2} duration_ms={duration_ms}"
+            ),
             Self::Transcript { text } => format!("Heard: {}", text.trim()),
             Self::Error { message } => format!("error: {message}"),
         }
@@ -2860,6 +2927,9 @@ impl ContinueEarEvent {
         match self {
             Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
             Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
+            Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
+                Some(PromptPacket::ear_observation(self.to_message()))
+            }
             Self::ListeningStarted { .. }
             | Self::SpeechStarted
             | Self::SpeechStopped
@@ -3113,9 +3183,11 @@ struct ContinueEarState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
-    speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
+    auditory_scene: AuditorySceneAnalyzer,
     frame_time_ms: u64,
     vad_observation: VadObservationState,
+    last_self_hearing_observation_ms: Option<u64>,
+    last_overlap_observation_ms: Option<u64>,
 }
 
 #[cfg(any(
@@ -3151,6 +3223,22 @@ struct VadObservationState {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+const SELF_HEARING_OBSERVATION_INTERVAL_MS: u64 = 2_000;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const OVERLAP_OBSERVATION_INTERVAL_MS: u64 = 500;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn run_continue_ear_processor(
     sample_rx: crossbeam_channel::Receiver<f32>,
     asr_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -3170,12 +3258,14 @@ fn run_continue_ear_processor(
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
-        speaker_reference,
+        auditory_scene: AuditorySceneAnalyzer::new(speaker_reference),
         frame_time_ms: 0,
         vad_observation: VadObservationState {
             kind: VadObservationKind::Silence,
             started_at_ms: 0,
         },
+        last_self_hearing_observation_ms: None,
+        last_overlap_observation_ms: None,
     };
 
     while !stop.load(Ordering::Relaxed) {
@@ -3350,27 +3440,55 @@ fn process_continue_ear_frame(
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
-    let speaker_decision = {
-        let mut speaker_reference = state
-            .speaker_reference
-            .lock()
-            .map_err(|_| anyhow::anyhow!("speaker reference mask lock poisoned"))?;
-        speaker_reference.analyze_frame(&frame)
-    };
-    if speaker_decision.decision == listenbury::SuppressionDecision::Suppress {
-        if listenbury::developer_diagnostics_enabled() {
-            eprintln!(
-                "[dev continue ear] masked speaker echo t_ms={} corr={:.3} residual={:.3} delay_ms={}",
-                state.frame_time_ms,
-                speaker_decision.correlation,
-                speaker_decision.residual_ratio,
-                speaker_decision.delay_ms
-            );
+    let analysis = state.auditory_scene.analyze(frame)?;
+    match analysis.routing {
+        AuditoryRouting::EchoOnly => {
+            send_self_hearing_event_if_due(state, event_tx, &analysis);
+            if listenbury::developer_diagnostics_enabled() {
+                eprintln!(
+                    "[dev continue ear] echo_only t_ms={} corr={:.3} residual={:.3} delay_ms={}",
+                    state.frame_time_ms,
+                    analysis.self_voice.correlation,
+                    analysis.self_voice.residual_ratio,
+                    analysis.self_voice.delay_ms
+                );
+            }
+            state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+            return Ok(());
         }
-        state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
-        return Ok(());
+        AuditoryRouting::MixedSpeech => {
+            send_overlap_event_if_due(state, event_tx, &analysis, frame_duration_ms);
+            process_continue_vad_and_asr_frame(
+                analysis.external_residual_frame().clone(),
+                state,
+                asr_tx,
+                event_tx,
+            )?;
+        }
+        AuditoryRouting::ExternalOnly => {
+            process_continue_vad_and_asr_frame(analysis.frame, state, asr_tx, event_tx)?;
+        }
+        AuditoryRouting::SilenceOrNoise => {
+            process_continue_vad_and_asr_frame(analysis.frame, state, asr_tx, event_tx)?;
+        }
     }
 
+    state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn process_continue_vad_and_asr_frame(
+    frame: AudioFrame,
+    state: &mut ContinueEarState,
+    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+) -> Result<()> {
     let vad_result = state.vad.process_frame(&frame)?;
     let events = state.segmenter.process(vad_result);
     for event in &events {
@@ -3401,8 +3519,72 @@ fn process_continue_ear_frame(
             }
         }
     }
-    state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_self_hearing_event_if_due(
+    state: &mut ContinueEarState,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+    analysis: &listenbury::AuditoryFrameAnalysis,
+) {
+    if !rate_limit_elapsed(
+        state.last_self_hearing_observation_ms,
+        state.frame_time_ms,
+        SELF_HEARING_OBSERVATION_INTERVAL_MS,
+    ) {
+        return;
+    }
+    state.last_self_hearing_observation_ms = Some(state.frame_time_ms);
+    let _ = event_tx.send(ContinueEarEvent::SelfVoiceHeard {
+        delay_ms: analysis.self_voice.delay_ms,
+        gain: analysis.self_voice.gain,
+        confidence: analysis.self_voice.confidence,
+    });
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_overlap_event_if_due(
+    state: &mut ContinueEarState,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+    analysis: &listenbury::AuditoryFrameAnalysis,
+    duration_ms: u64,
+) {
+    if !rate_limit_elapsed(
+        state.last_overlap_observation_ms,
+        state.frame_time_ms,
+        OVERLAP_OBSERVATION_INTERVAL_MS,
+    ) {
+        return;
+    }
+    state.last_overlap_observation_ms = Some(state.frame_time_ms);
+    let _ = event_tx.send(ContinueEarEvent::OverlapDetected {
+        self_confidence: analysis.self_voice.confidence,
+        external_confidence: analysis.external_voice.confidence,
+        duration_ms,
+    });
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn rate_limit_elapsed(last_at_ms: Option<u64>, now_ms: u64, interval_ms: u64) -> bool {
+    last_at_ms
+        .map(|last| now_ms.saturating_sub(last) >= interval_ms)
+        .unwrap_or(true)
 }
 
 #[cfg(all(
@@ -5293,5 +5475,51 @@ grepSource("build_initial_prompt", 1)"#,
         let page = execute_view_source_file("src/cli/commands/continue_generation.rs", 1);
         assert!(page.contains("--- src/cli/commands/continue_generation.rs"));
         assert!(page.contains("use crate::cli::ContinueCommand;"));
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_pauses_then_clears_for_sustained_overlap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.mark_external_speech_started(started_at);
+        assert_eq!(controller.next_action(started_at, 1), None);
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(151), 1),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(452), 1),
+            Some(super::DuplexTurnAction::Clear)
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_ignores_silence_and_noise() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let now = std::time::Instant::now();
+
+        assert_eq!(
+            controller.next_action(now + std::time::Duration::from_secs(10), 1),
+            None
+        );
     }
 }

@@ -134,12 +134,15 @@ struct SpeakerReference {
 }
 
 /// Diagnostic result from comparing one mic frame with the speaker reference.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpeakerReferenceDecision {
     pub decision: SuppressionDecision,
     pub correlation: f32,
     pub residual_ratio: f32,
     pub delay_ms: i64,
+    pub gain: f32,
+    pub residual_frame: AudioFrame,
+    pub self_frame: AudioFrame,
 }
 
 impl SpeakerReferenceMask {
@@ -209,18 +212,18 @@ impl SpeakerReferenceMask {
     pub fn analyze_frame(&mut self, frame: &AudioFrame) -> SpeakerReferenceDecision {
         self.expire(frame.captured_at);
         let Some(reference) = &self.reference else {
-            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+            return empty_speaker_reference_decision(frame, SuppressionDecision::Allow);
         };
         if frame.sample_rate_hz == 0 || frame.channels == 0 || frame.samples.is_empty() {
-            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+            return empty_speaker_reference_decision(frame, SuppressionDecision::Allow);
         }
 
         let mic = downmix_mono(&frame.samples, frame.channels);
         if mic.is_empty() || rms_energy(&mic) <= f32::EPSILON {
-            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+            return empty_speaker_reference_decision(frame, SuppressionDecision::Allow);
         }
 
-        let mut best = speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+        let mut best = empty_speaker_reference_decision(frame, SuppressionDecision::Allow);
         for delay_ms in
             (0..=SPEAKER_REFERENCE_MAX_DELAY_MS).step_by(SPEAKER_REFERENCE_DELAY_STEP_MS as usize)
         {
@@ -273,12 +276,16 @@ fn compare_with_reference(
     let ref_step = reference.sample_rate_hz as f64 / frame.sample_rate_hz as f64;
     let reference_window =
         sample_reference_window(&reference.samples, ref_start, ref_step, mic.len())?;
-    let (correlation, residual_ratio) = correlation_and_residual(mic, &reference_window);
+    let (correlation, residual_ratio, gain) = correlation_and_residual_gain(mic, &reference_window);
+    let (self_frame, residual_frame) = decompose_frame(frame, &reference_window, gain);
     Some(speaker_reference_decision(
         SuppressionDecision::Allow,
         correlation,
         residual_ratio,
         delay_ms,
+        gain,
+        residual_frame,
+        self_frame,
     ))
 }
 
@@ -304,7 +311,7 @@ fn sample_reference_window(
     Some(output)
 }
 
-fn correlation_and_residual(mic: &[f32], reference: &[f32]) -> (f32, f32) {
+fn correlation_and_residual_gain(mic: &[f32], reference: &[f32]) -> (f32, f32, f32) {
     let mut dot = 0.0f32;
     let mut mic_energy = 0.0f32;
     let mut ref_energy = 0.0f32;
@@ -314,7 +321,7 @@ fn correlation_and_residual(mic: &[f32], reference: &[f32]) -> (f32, f32) {
         ref_energy += ref_sample * ref_sample;
     }
     if mic_energy <= f32::EPSILON || ref_energy <= f32::EPSILON {
-        return (0.0, 1.0);
+        return (0.0, 1.0, 0.0);
     }
     let gain = dot / ref_energy;
     let mut residual_energy = 0.0f32;
@@ -324,7 +331,38 @@ fn correlation_and_residual(mic: &[f32], reference: &[f32]) -> (f32, f32) {
     }
     let correlation = (dot.abs() / (mic_energy.sqrt() * ref_energy.sqrt())).clamp(0.0, 1.0);
     let residual_ratio = (residual_energy / mic_energy).clamp(0.0, 1.0);
-    (correlation, residual_ratio)
+    (correlation, residual_ratio, gain)
+}
+
+fn decompose_frame(
+    frame: &AudioFrame,
+    reference_window: &[f32],
+    gain: f32,
+) -> (AudioFrame, AudioFrame) {
+    let channel_count = usize::from(frame.channels).max(1);
+    let mut self_samples = Vec::with_capacity(frame.samples.len());
+    let mut residual_samples = Vec::with_capacity(frame.samples.len());
+    for (chunk, &reference_sample) in frame.samples.chunks(channel_count).zip(reference_window) {
+        let self_sample = gain * reference_sample;
+        for &sample in chunk {
+            self_samples.push(self_sample);
+            residual_samples.push(sample - self_sample);
+        }
+    }
+    (
+        AudioFrame {
+            captured_at: frame.captured_at,
+            sample_rate_hz: frame.sample_rate_hz,
+            channels: frame.channels,
+            samples: self_samples,
+        },
+        AudioFrame {
+            captured_at: frame.captured_at,
+            sample_rate_hz: frame.sample_rate_hz,
+            channels: frame.channels,
+            samples: residual_samples,
+        },
+    )
 }
 
 fn speaker_reference_decision(
@@ -332,13 +370,32 @@ fn speaker_reference_decision(
     correlation: f32,
     residual_ratio: f32,
     delay_ms: i64,
+    gain: f32,
+    residual_frame: AudioFrame,
+    self_frame: AudioFrame,
 ) -> SpeakerReferenceDecision {
     SpeakerReferenceDecision {
         decision,
         correlation,
         residual_ratio,
         delay_ms,
+        gain,
+        residual_frame,
+        self_frame,
     }
+}
+
+fn empty_speaker_reference_decision(
+    frame: &AudioFrame,
+    decision: SuppressionDecision,
+) -> SpeakerReferenceDecision {
+    let self_frame = AudioFrame {
+        captured_at: frame.captured_at,
+        sample_rate_hz: frame.sample_rate_hz,
+        channels: frame.channels,
+        samples: vec![0.0; frame.samples.len()],
+    };
+    speaker_reference_decision(decision, 0.0, 1.0, 0, 0.0, frame.clone(), self_frame)
 }
 
 fn downmix_mono(samples: &[f32], channels: u16) -> Vec<f32> {
