@@ -217,7 +217,7 @@ mod tests {
         let user = test_noise(160).into_iter().rev().collect::<Vec<_>>();
         let mic = reference[800..960]
             .iter()
-            .zip(user.iter().copied())
+            .zip(user.clone())
             .map(|(echo, user)| echo * 0.25 + user * 0.8)
             .collect::<Vec<_>>();
 
@@ -284,17 +284,25 @@ mod tests {
     #[test]
     fn delayed_room_echo_in_tail_window_remains_echo_only() {
         let (analyzer, reference, started_at) = analyzer_with_reference();
-        let delayed_echo = reference[2_720..2_880]
+        let delayed_echo_delay_ms = 90u128;
+        let delayed_echo_capture_offset_ms = 260u128;
+        let delayed_echo_start =
+            ((delayed_echo_capture_offset_ms - delayed_echo_delay_ms) * 16_000 / 1_000) as usize;
+        let delayed_echo_end = delayed_echo_start + 160;
+        let delayed_echo = reference[delayed_echo_start..delayed_echo_end]
             .iter()
             .map(|sample| sample * 0.35)
             .collect::<Vec<_>>();
 
         let analysis = analyzer
-            .analyze(frame_at(started_at.unix_nanos + 260_000_000, delayed_echo))
+            .analyze(frame_at(
+                started_at.unix_nanos + delayed_echo_capture_offset_ms * 1_000_000,
+                delayed_echo,
+            ))
             .expect("analysis should succeed");
 
         assert_eq!(analysis.routing, AuditoryRouting::EchoOnly);
-        assert_eq!(analysis.self_voice.delay_ms, 90);
+        assert_eq!(analysis.self_voice.delay_ms, delayed_echo_delay_ms as i64);
         assert!(analysis.self_voice.correlation > 0.99);
     }
 
