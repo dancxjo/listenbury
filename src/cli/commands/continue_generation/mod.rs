@@ -3220,7 +3220,11 @@ fn process_continue_ear_frame(
             send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
         AuditoryRouting::SilenceOrNoise => {
-            let _ = state.environment.observe_frame(&analysis.frame, false);
+            if let Some(sound) = state.environment.observe_frame(&analysis.frame, false) {
+                if sound.label.as_deref() != Some("silence") {
+                    let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+                }
+            }
             send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
     }
@@ -3240,11 +3244,19 @@ fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
         return;
     }
     eprintln!(
-        "[ear] routing={:?} corr={:.3} residual={:.3} delay_ms={}",
+        "[ear] routing={:?} rms={:.4} zcr={:.3} brightness={:.3} vad_speech={} voice_score={:.3} env_score={:.3} noise_floor={:.4} corr={:.3} residual={:.3} delay_ms={} reason={}",
         analysis.routing,
+        analysis.diagnostics.rms,
+        analysis.diagnostics.zero_crossing_rate,
+        analysis.diagnostics.brightness,
+        analysis.external.vad_candidate,
+        analysis.diagnostics.voice_score,
+        analysis.diagnostics.environment_score,
+        analysis.diagnostics.noise_floor_rms,
         analysis.self_voice.correlation,
         analysis.self_voice.residual_ratio,
-        analysis.self_voice.delay_ms
+        analysis.self_voice.delay_ms,
+        analysis.diagnostics.routing_reason
     );
 }
 

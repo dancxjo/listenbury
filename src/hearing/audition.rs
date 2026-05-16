@@ -7,10 +7,15 @@ use crate::hearing::suppression::{
 use crate::time::ExactTimestamp;
 
 const AUDITION_MIN_VOICE_ENERGY: f32 = 0.0004;
+const AUDITION_MIN_VOICE_RMS: f32 = 0.020;
 const AUDITION_MIN_MIXED_CORRELATION: f32 = 0.10;
 const AUDITION_MIN_SELF_GAIN: f32 = 0.05;
-const AUDITION_MIN_SPEECH_ZERO_CROSSING_RATE: f32 = 0.08;
-const AUDITION_MIN_ENVIRONMENTAL_ENERGY: f32 = 0.00008;
+const AUDITION_MIN_ENVIRONMENTAL_RMS: f32 = 0.012;
+const AUDITION_BASELINE_NOISE_RMS: f32 = 0.003;
+const AUDITION_VOICE_SCORE_THRESHOLD: f32 = 0.38;
+const AUDITION_STRONG_VOICE_SCORE_THRESHOLD: f32 = 0.45;
+const AUDITION_ENVIRONMENT_SCORE_THRESHOLD: f32 = 0.53;
+const AUDITION_ENVIRONMENT_COOLDOWN_FRAMES: u8 = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditoryRouting {
@@ -45,6 +50,17 @@ pub struct NoiseEstimate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct AuditoryFrameDiagnostics {
+    pub rms: f32,
+    pub zero_crossing_rate: f32,
+    pub brightness: f32,
+    pub voice_score: f32,
+    pub environment_score: f32,
+    pub noise_floor_rms: f32,
+    pub routing_reason: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct AuditoryFrameAnalysis {
     pub captured_at: ExactTimestamp,
     pub frame: AudioFrame,
@@ -54,6 +70,7 @@ pub struct AuditoryFrameAnalysis {
     pub routing: AuditoryRouting,
     pub residual_frame: Option<AudioFrame>,
     pub self_frame: AudioFrame,
+    pub diagnostics: AuditoryFrameDiagnostics,
 }
 
 impl AuditoryFrameAnalysis {
@@ -65,11 +82,15 @@ impl AuditoryFrameAnalysis {
 #[derive(Debug, Clone)]
 pub struct AuditorySceneAnalyzer {
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
+    state: Arc<Mutex<AuditorySceneState>>,
 }
 
 impl AuditorySceneAnalyzer {
     pub fn new(speaker_reference: Arc<Mutex<SpeakerReferenceMask>>) -> Self {
-        Self { speaker_reference }
+        Self {
+            speaker_reference,
+            state: Arc::new(Mutex::new(AuditorySceneState::default())),
+        }
     }
 
     pub fn analyze(&self, frame: AudioFrame) -> anyhow::Result<AuditoryFrameAnalysis> {
@@ -80,7 +101,13 @@ impl AuditorySceneAnalyzer {
                 .map_err(|_| anyhow::anyhow!("speaker reference mask lock poisoned"))?;
             speaker_reference.analyze_frame(&frame)
         };
-        Ok(analyze_speaker_reference(frame, speaker))
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("auditory scene state lock poisoned"))?;
+        Ok(analyze_speaker_reference_with_state(
+            frame, speaker, &mut state,
+        ))
     }
 }
 
@@ -88,26 +115,88 @@ pub fn analyze_speaker_reference(
     frame: AudioFrame,
     speaker: SpeakerReferenceDecision,
 ) -> AuditoryFrameAnalysis {
+    let mut state = AuditorySceneState::default();
+    analyze_speaker_reference_with_state(frame, speaker, &mut state)
+}
+
+#[derive(Debug, Clone)]
+struct AuditorySceneState {
+    noise_floor_rms: f32,
+    speech_like_frames: u8,
+    environmental_cooldown_frames: u8,
+}
+
+impl Default for AuditorySceneState {
+    fn default() -> Self {
+        Self {
+            noise_floor_rms: AUDITION_BASELINE_NOISE_RMS,
+            speech_like_frames: 0,
+            environmental_cooldown_frames: 0,
+        }
+    }
+}
+
+fn analyze_speaker_reference_with_state(
+    frame: AudioFrame,
+    speaker: SpeakerReferenceDecision,
+    state: &mut AuditorySceneState,
+) -> AuditoryFrameAnalysis {
     let frame_energy = mean_square_energy(&frame.samples);
+    let frame_rms = frame_energy.sqrt();
     let residual_energy = mean_square_energy(&speaker.residual_frame.samples);
     let residual_is_voice = residual_energy >= AUDITION_MIN_VOICE_ENERGY;
-    let speech_like = is_speech_candidate(&frame.samples, frame_energy);
+    let features = frame_features(&frame, frame_rms, state.noise_floor_rms);
+    let speech_like = features.voice_score >= AUDITION_VOICE_SCORE_THRESHOLD
+        && frame_rms >= AUDITION_MIN_VOICE_RMS;
     let self_confidence = self_voice_confidence(&speaker);
     let external_confidence = external_voice_confidence(residual_energy, speaker.residual_ratio);
-    let routing = if speaker.decision == SuppressionDecision::Suppress {
-        AuditoryRouting::EchoOnly
+    if speech_like {
+        state.speech_like_frames = state.speech_like_frames.saturating_add(1).min(8);
+    } else {
+        state.speech_like_frames = 0;
+    }
+    if state.environmental_cooldown_frames > 0 {
+        state.environmental_cooldown_frames -= 1;
+    }
+
+    let environmental_candidate = frame_rms >= AUDITION_MIN_ENVIRONMENTAL_RMS
+        && features.environment_score >= AUDITION_ENVIRONMENT_SCORE_THRESHOLD;
+    let (routing, routing_reason) = if speaker.decision == SuppressionDecision::Suppress {
+        (AuditoryRouting::EchoOnly, "speaker_reference_suppressed")
     } else if residual_is_voice
         && speaker.correlation >= AUDITION_MIN_MIXED_CORRELATION
         && speaker.gain.abs() >= AUDITION_MIN_SELF_GAIN
     {
-        AuditoryRouting::MixedSelfAndExternal
-    } else if speech_like {
-        AuditoryRouting::ExternalSpeechCandidate
-    } else if frame_energy >= AUDITION_MIN_ENVIRONMENTAL_ENERGY {
-        AuditoryRouting::EnvironmentalSoundCandidate
+        (
+            AuditoryRouting::MixedSelfAndExternal,
+            "speaker_reference_mixed_with_residual",
+        )
+    } else if speech_like && features.voice_score >= AUDITION_STRONG_VOICE_SCORE_THRESHOLD {
+        (
+            AuditoryRouting::ExternalSpeechCandidate,
+            "strong_voice_score",
+        )
+    } else if speech_like && state.speech_like_frames >= 2 {
+        (
+            AuditoryRouting::ExternalSpeechCandidate,
+            "sustained_voice_score",
+        )
+    } else if environmental_candidate && state.environmental_cooldown_frames == 0 {
+        state.environmental_cooldown_frames = AUDITION_ENVIRONMENT_COOLDOWN_FRAMES;
+        (
+            AuditoryRouting::EnvironmentalSoundCandidate,
+            "salient_non_speech_sound",
+        )
+    } else if environmental_candidate {
+        (
+            AuditoryRouting::SilenceOrNoise,
+            "environmental_candidate_rate_limited",
+        )
     } else {
-        AuditoryRouting::SilenceOrNoise
+        (AuditoryRouting::SilenceOrNoise, "below_voice_threshold")
     };
+    update_noise_floor(state, frame_rms, routing, speech_like);
+
     let residual_frame = match routing {
         AuditoryRouting::MixedSelfAndExternal => Some(speaker.residual_frame.clone()),
         AuditoryRouting::ExternalSpeechCandidate => Some(frame.clone()),
@@ -144,6 +233,15 @@ pub fn analyze_speaker_reference(
         routing,
         residual_frame,
         self_frame: speaker.self_frame,
+        diagnostics: AuditoryFrameDiagnostics {
+            rms: frame_rms,
+            zero_crossing_rate: features.zero_crossing_rate,
+            brightness: features.brightness,
+            voice_score: features.voice_score,
+            environment_score: features.environment_score,
+            noise_floor_rms: state.noise_floor_rms,
+            routing_reason,
+        },
     }
 }
 
@@ -166,9 +264,115 @@ fn mean_square_energy(samples: &[f32]) -> f32 {
     samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32
 }
 
-fn is_speech_candidate(samples: &[f32], energy: f32) -> bool {
-    energy >= AUDITION_MIN_VOICE_ENERGY
-        && zero_crossing_rate(samples) >= AUDITION_MIN_SPEECH_ZERO_CROSSING_RATE
+fn update_noise_floor(
+    state: &mut AuditorySceneState,
+    rms: f32,
+    routing: AuditoryRouting,
+    speech_like: bool,
+) {
+    if speech_like
+        || matches!(
+            routing,
+            AuditoryRouting::EchoOnly | AuditoryRouting::MixedSelfAndExternal
+        )
+    {
+        return;
+    }
+    let alpha = if routing == AuditoryRouting::SilenceOrNoise {
+        0.04
+    } else {
+        0.005
+    };
+    let capped_rms = rms.min(state.noise_floor_rms * 3.0);
+    state.noise_floor_rms = (state.noise_floor_rms * (1.0 - alpha) + capped_rms * alpha)
+        .max(AUDITION_BASELINE_NOISE_RMS);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrameFeatures {
+    zero_crossing_rate: f32,
+    brightness: f32,
+    voice_score: f32,
+    environment_score: f32,
+}
+
+fn frame_features(frame: &AudioFrame, rms: f32, noise_floor_rms: f32) -> FrameFeatures {
+    let zero_crossing_rate = zero_crossing_rate(&frame.samples);
+    let brightness = (zero_crossing_rate * 2.0).clamp(0.0, 1.0);
+    let voice_band_score = band_score(zero_crossing_rate, 0.025, 0.12, 0.30);
+    let periodicity = pitch_periodicity(&frame.samples, frame.sample_rate_hz);
+    let energy_score = ((rms - AUDITION_MIN_VOICE_RMS) / 0.040).clamp(0.0, 1.0);
+    let voice_score = (energy_score
+        * (voice_band_score * 0.72 + periodicity * voice_band_score.min(0.85) * 0.28))
+        .clamp(0.0, 1.0);
+    let salience = ((rms - noise_floor_rms * 1.8)
+        / noise_floor_rms.max(AUDITION_BASELINE_NOISE_RMS))
+    .clamp(0.0, 1.0);
+    let crest = crest_factor(&frame.samples, rms);
+    let transient_score = ((crest - 4.0) / 5.0).clamp(0.0, 1.0);
+    let non_voice_score = (1.0 - voice_score).clamp(0.0, 1.0);
+    let environment_score =
+        (salience * non_voice_score * (0.55 + transient_score * 0.35 + brightness * 0.10))
+            .clamp(0.0, 1.0);
+
+    FrameFeatures {
+        zero_crossing_rate,
+        brightness,
+        voice_score,
+        environment_score,
+    }
+}
+
+fn band_score(value: f32, low: f32, peak: f32, high: f32) -> f32 {
+    if value <= low || value >= high {
+        0.0
+    } else if value <= peak {
+        ((value - low) / (peak - low)).clamp(0.0, 1.0)
+    } else {
+        ((high - value) / (high - peak)).clamp(0.0, 1.0)
+    }
+}
+
+fn pitch_periodicity(samples: &[f32], sample_rate_hz: u32) -> f32 {
+    if samples.len() < 24 || sample_rate_hz == 0 {
+        return 0.0;
+    }
+    let min_lag = (sample_rate_hz / 400).max(1) as usize;
+    let max_lag = (sample_rate_hz / 90).max(min_lag as u32) as usize;
+    let max_lag = max_lag.min(samples.len().saturating_sub(2));
+    if min_lag >= max_lag {
+        return 0.0;
+    }
+
+    let mut best = 0.0f32;
+    for lag in min_lag..=max_lag {
+        let mut dot = 0.0f32;
+        let mut left_energy = 0.0f32;
+        let mut right_energy = 0.0f32;
+        for idx in lag..samples.len() {
+            let left = samples[idx - lag];
+            let right = samples[idx];
+            dot += left * right;
+            left_energy += left * left;
+            right_energy += right * right;
+        }
+        let denom = (left_energy * right_energy).sqrt();
+        if denom > f32::EPSILON {
+            best = best.max((dot / denom).clamp(0.0, 1.0));
+        }
+    }
+    best
+}
+
+fn crest_factor(samples: &[f32], rms: f32) -> f32 {
+    if samples.is_empty() || rms <= f32::EPSILON {
+        return 0.0;
+    }
+    samples
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0, f32::max)
+        / rms
 }
 
 fn zero_crossing_rate(samples: &[f32]) -> f32 {
@@ -242,10 +446,17 @@ mod tests {
         let analyzer =
             AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
         let analysis = analyzer
-            .analyze(frame_at(1_000_000_000, test_noise(160)))
+            .analyze(frame_at(1_000_000_000, synthetic_voice(160)))
             .expect("analysis should succeed");
 
-        assert_eq!(analysis.routing, AuditoryRouting::ExternalSpeechCandidate);
+        assert_eq!(
+            analysis.routing,
+            AuditoryRouting::ExternalSpeechCandidate,
+            "{:?}",
+            analysis.diagnostics
+        );
+        assert!(analysis.external.vad_candidate);
+        assert!(analysis.diagnostics.voice_score >= 0.45);
     }
 
     #[test]
@@ -264,7 +475,9 @@ mod tests {
 
         assert_eq!(
             analysis.routing,
-            AuditoryRouting::EnvironmentalSoundCandidate
+            AuditoryRouting::EnvironmentalSoundCandidate,
+            "{:?}",
+            analysis.diagnostics
         );
         assert!(!analysis.external.vad_candidate);
     }
@@ -279,6 +492,92 @@ mod tests {
 
         assert_eq!(analysis.routing, AuditoryRouting::SilenceOrNoise);
         assert!(!analysis.external.vad_candidate);
+    }
+
+    #[test]
+    fn low_level_fan_noise_routes_mostly_to_silence_or_noise() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        let mut external_count = 0;
+        let mut environmental_count = 0;
+        let mut silence_count = 0;
+
+        for frame_index in 0..80 {
+            let analysis = analyzer
+                .analyze(frame_at(
+                    1_000_000_000 + frame_index * 10_000_000,
+                    low_level_fan_noise(160),
+                ))
+                .expect("analysis should succeed");
+            match analysis.routing {
+                AuditoryRouting::ExternalSpeechCandidate => external_count += 1,
+                AuditoryRouting::EnvironmentalSoundCandidate => environmental_count += 1,
+                AuditoryRouting::SilenceOrNoise => silence_count += 1,
+                AuditoryRouting::EchoOnly | AuditoryRouting::MixedSelfAndExternal => {}
+            }
+        }
+
+        assert_eq!(external_count, 0);
+        assert!(
+            environmental_count <= 2,
+            "low-level fan should not become frame-level events"
+        );
+        assert!(silence_count >= 78);
+    }
+
+    #[test]
+    fn transient_tick_routes_environmental_only_briefly() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        let mut environmental_count = 0;
+        let mut external_count = 0;
+
+        for frame_index in 0..40 {
+            let samples = if frame_index == 10 {
+                transient_tick()
+            } else {
+                vec![0.0; 160]
+            };
+            let analysis = analyzer
+                .analyze(frame_at(1_000_000_000 + frame_index * 10_000_000, samples))
+                .expect("analysis should succeed");
+            match analysis.routing {
+                AuditoryRouting::EnvironmentalSoundCandidate => environmental_count += 1,
+                AuditoryRouting::ExternalSpeechCandidate => external_count += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(external_count, 0);
+        assert_eq!(environmental_count, 1);
+    }
+
+    #[test]
+    fn repeated_noise_frames_are_rate_limited_environmental_not_speech() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        let mut external_count = 0;
+        let mut environmental_count = 0;
+
+        for frame_index in 0..100 {
+            let analysis = analyzer
+                .analyze(frame_at(
+                    1_000_000_000 + frame_index * 10_000_000,
+                    mid_level_fan_noise(160),
+                ))
+                .expect("analysis should succeed");
+            match analysis.routing {
+                AuditoryRouting::ExternalSpeechCandidate => external_count += 1,
+                AuditoryRouting::EnvironmentalSoundCandidate => environmental_count += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(external_count, 0);
+        assert!(
+            environmental_count <= 4,
+            "sustained noise should be state, not per-frame news"
+        );
     }
 
     #[test]
@@ -343,6 +642,57 @@ mod tests {
                 value * 0.5
             })
             .collect()
+    }
+
+    fn synthetic_voice(len: usize) -> Vec<f32> {
+        let sample_rate = 16_000.0f32;
+        let fundamental_hz = 180.0f32;
+        (0..len)
+            .map(|idx| {
+                let t = idx as f32 / sample_rate;
+                let phase = std::f32::consts::TAU * fundamental_hz * t;
+                let harmonics = phase.sin() * 0.55
+                    + (phase * 2.0).sin() * 0.30
+                    + (phase * 3.0).sin() * 0.22
+                    + (phase * 5.0).sin() * 0.18
+                    + (phase * 7.0).sin() * 0.12;
+                let aspiration = if idx % 5 < 2 { 0.05 } else { -0.05 };
+                (harmonics + aspiration) * 0.14
+            })
+            .collect()
+    }
+
+    fn low_level_fan_noise(len: usize) -> Vec<f32> {
+        fan_noise(len, 0.006)
+    }
+
+    fn mid_level_fan_noise(len: usize) -> Vec<f32> {
+        fan_noise(len, 0.025)
+    }
+
+    fn fan_noise(len: usize, amplitude: f32) -> Vec<f32> {
+        let sample_rate = 16_000.0f32;
+        let freq_hz = 120.0f32;
+        (0..len)
+            .map(|idx| {
+                let t = idx as f32 / sample_rate;
+                let hum = (std::f32::consts::TAU * freq_hz * t).sin() * amplitude;
+                let ripple = if idx % 17 == 0 {
+                    amplitude * 0.08
+                } else {
+                    -amplitude * 0.02
+                };
+                hum + ripple
+            })
+            .collect()
+    }
+
+    fn transient_tick() -> Vec<f32> {
+        let mut samples = vec![0.0; 160];
+        samples[8] = 0.50;
+        samples[9] = -0.35;
+        samples[10] = 0.20;
+        samples
     }
 
     fn mean_square_error(actual: &[f32], expected: &[f32]) -> f32 {
