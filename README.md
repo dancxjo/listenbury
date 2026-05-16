@@ -17,6 +17,21 @@ Listenbury is an active prototype with working pipeline components and CLI demos
 
 The repository currently emphasizes local backend integration and CLI-driven validation.
 
+## Contributor note: export policy and chokepoints
+
+To reduce merge conflicts in parallel feature work:
+
+- `src/lib.rs` should mostly declare top-level modules and only re-export stable, high-level API entry points.
+- Internal/experimental pipeline types should stay under subsystem paths (for example `listenbury::speculative::...`).
+- Prefer subsystem-local façades (for example `listenbury::hearing::...`, `listenbury::memory::...`) over expanding crate-root exports.
+- Avoid adding new `pub use` entries to `src/lib.rs` unless there is a concrete external API reason.
+
+Current high-contention chokepoint files (audit):
+
+- `src/cli/commands/continue_generation.rs` (~5.5k lines): command orchestration + worker logic + helpers + tests.
+- `src/cli/commands/live_half_duplex.rs` (~1.9k lines): runtime control, IO flow, and tests in one file.
+- `src/lib.rs` (crate root): historically central export fan-out point.
+
 ## Low-latency reflex planning (design)
 
 Listenbury now includes a controller/filler-planner skeleton for low-latency social reflexes while the main LLM is still generating.

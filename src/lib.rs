@@ -20,20 +20,7 @@ pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
     VisionEvent,
 };
-pub use hearing::audition::{
-    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, ExternalVoiceEstimate,
-    NoiseEstimate, SelfVoiceEstimate,
-};
-pub use hearing::breath::{
-    BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
-};
-pub use hearing::suppression::{
-    SPEAKER_REFERENCE_TAIL_MS, SUPPRESSION_TAIL_MS, SelfHearingState, SpeakerReferenceDecision,
-    SpeakerReferenceMask, SuppressionDecision,
-};
-pub use hearing::vad::{
-    EnergyVad, VadBackendKind, VadResult, VoiceActivityDetector, create_vad_backend,
-};
+pub use hearing::{BreathGroupSegmenter, VadBackendKind, create_vad_backend};
 pub use mind::controller::{
     BackchannelId, ConversationController, ConversationMessage, ConversationRole,
     DEFAULT_FILLER_ACTIVATION_DELAY_MS, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
@@ -51,11 +38,6 @@ pub use mouth::planner::{
 };
 pub use mouth::tts::TextToSpeech;
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
-pub use speculative::{
-    Candidate, CandidateId, CandidateIdGenerator, CandidateStage, FallbackKind, FallbackMetadata,
-    StableHeadDecision, can_reuse_buffer, head_changed_requires_restart, is_pure_extension,
-    shares_stable_prefix, stable_head_decision,
-};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
