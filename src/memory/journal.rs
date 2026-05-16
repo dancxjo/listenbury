@@ -132,8 +132,7 @@ impl MemoryJournal {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("open journal for replay at {:?}", path));
+                return Err(e).with_context(|| format!("open journal for replay at {:?}", path));
             }
         };
         let reader = BufReader::new(file);
@@ -200,8 +199,8 @@ impl crate::memory::sink::MemorySink for JournalMemorySink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trace::SpeakerRole;
     use crate::memory::sink::MemorySink as _;
+    use crate::memory::trace::SpeakerRole;
     use crate::time::ExactTimestamp;
 
     fn sample_trace() -> MemoryTrace {
