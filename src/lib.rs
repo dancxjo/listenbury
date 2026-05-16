@@ -37,7 +37,7 @@ pub use mouth::planner::{
     ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechPlannerConfig,
     SpeechUnit, strip_emoji,
 };
-pub use mouth::tts::TextToSpeech;
+pub use mouth::player::{PlaybackEvent, PlaybackUnitId, Player, SequentialPlayer};
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
