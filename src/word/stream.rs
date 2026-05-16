@@ -109,12 +109,31 @@ pub struct TextSpan {
 }
 
 /// Start/end timestamps for a word in the audio timeline.
+///
+/// Invariant: `start_ms <= end_ms`.  Use [`WordTiming::new`] to construct
+/// validated instances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WordTiming {
     /// Start of the word in milliseconds from the beginning of the stream.
     pub start_ms: u64,
     /// End of the word in milliseconds from the beginning of the stream.
     pub end_ms: u64,
+}
+
+impl WordTiming {
+    /// Create a new `WordTiming`, returning `None` if `end_ms < start_ms`.
+    pub fn new(start_ms: u64, end_ms: u64) -> Option<Self> {
+        if end_ms >= start_ms {
+            Some(Self { start_ms, end_ms })
+        } else {
+            None
+        }
+    }
+
+    /// Duration of the word in milliseconds.
+    pub fn duration_ms(&self) -> u64 {
+        self.end_ms - self.start_ms
+    }
 }
 
 /// Describes how stable or actionable a word's position in the timeline is.
@@ -368,5 +387,15 @@ mod tests {
         assert_eq!(stream.id, WordStreamId(99));
         assert_eq!(stream.source, WordStreamSource::SyntheticSpeech);
         assert!(stream.words.is_empty());
+    }
+
+    /// Verify `WordTiming::new` validates the start ≤ end invariant.
+    #[test]
+    fn word_timing_new_validates_invariant() {
+        assert!(WordTiming::new(100, 300).is_some());
+        assert!(WordTiming::new(100, 100).is_some()); // zero-duration is allowed
+        assert!(WordTiming::new(300, 100).is_none()); // end before start is rejected
+        let t = WordTiming::new(200, 600).unwrap();
+        assert_eq!(t.duration_ms(), 400);
     }
 }

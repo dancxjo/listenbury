@@ -11,7 +11,7 @@
 //!
 //! # Module layout
 //!
-//! - [`mod`] (this file) — type re-exports and shared ID newtype helpers.
+//! - [`mod`] (this file) — re-exports all public types from submodules.
 //! - [`stream`] — [`TimedWordStream`], [`WordNode`], and supporting enums.
 
 pub mod stream;
