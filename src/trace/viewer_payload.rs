@@ -11,6 +11,9 @@ use crate::word::{
     WordStreamSource, WordTiming,
 };
 
+const DEFAULT_WORD_SLOT_MS: u64 = 240;
+const DEFAULT_LANE_TAIL_BUFFER_MS: u64 = 200;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewerPayload {
     pub title: String,
@@ -169,7 +172,10 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                     .get(snippet_index + 1)
                     .map(|(next_ms, _)| *next_ms)
                     .unwrap_or_else(|| {
-                        start_ms.saturating_add(240 * text.split_whitespace().count() as u64 + 200)
+                        start_ms.saturating_add(
+                            DEFAULT_WORD_SLOT_MS * text.split_whitespace().count() as u64
+                                + DEFAULT_LANE_TAIL_BUFFER_MS,
+                        )
                     });
                 let end_ms = end_ms.max(start_ms.saturating_add(1));
 
@@ -263,7 +269,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         let lane = lane_for_kind(&event.kind).to_string();
         let metadata = Some(metadata_from_event(event));
 
-        if let Some((base_kind, end_kind)) = start_to_end_kind(&event.kind) {
+        if let Some((base_kind, _end_kind)) = start_to_end_kind(&event.kind) {
             if event.kind == "self_hearing_suppression_started" {
                 if let Some(until_unix_ns) = event.expected_until_unix_ns {
                     let until_ms = until_unix_ns / 1_000_000;
@@ -291,9 +297,6 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
                 label: Some(humanize_kind(&event.kind)),
                 metadata,
             });
-            if end_kind.is_empty() {
-                continue;
-            }
             continue;
         }
 
