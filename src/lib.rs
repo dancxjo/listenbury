@@ -20,7 +20,10 @@ pub use event::{
 pub use hearing::breath::{
     BreathGroupConfig, BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter,
 };
-pub use hearing::suppression::{SUPPRESSION_TAIL_MS, SelfHearingState, SuppressionDecision};
+pub use hearing::suppression::{
+    SPEAKER_REFERENCE_TAIL_MS, SUPPRESSION_TAIL_MS, SelfHearingState, SpeakerReferenceDecision,
+    SpeakerReferenceMask, SuppressionDecision,
+};
 pub use hearing::vad::{
     EnergyVad, VadBackendKind, VadResult, VoiceActivityDetector, create_vad_backend,
 };

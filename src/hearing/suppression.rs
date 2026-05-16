@@ -1,9 +1,16 @@
 use std::time::Duration;
 
+use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
 
 /// Additional silence to suppress after Pete's TTS output ends, to absorb room echo.
 pub const SUPPRESSION_TAIL_MS: u64 = 300;
+/// Additional acoustic reference lifetime after playback ends.
+pub const SPEAKER_REFERENCE_TAIL_MS: u64 = 500;
+const SPEAKER_REFERENCE_MAX_DELAY_MS: i64 = 450;
+const SPEAKER_REFERENCE_DELAY_STEP_MS: i64 = 15;
+const SPEAKER_REFERENCE_MIN_CORRELATION: f32 = 0.72;
+const SPEAKER_REFERENCE_MAX_RESIDUAL_RATIO: f32 = 0.35;
 
 /// Tracks when Pete (the TTS assistant) is emitting audio output, and provides
 /// a policy for suppressing incoming microphone frames during that window.
@@ -110,13 +117,250 @@ impl Default for SelfHearingState {
     }
 }
 
+/// Keeps a short reference copy of audio being sent to the speaker and decides
+/// whether incoming microphone frames are just delayed speaker bleed.
+#[derive(Debug, Clone)]
+pub struct SpeakerReferenceMask {
+    reference: Option<SpeakerReference>,
+    tail: Duration,
+}
+
+#[derive(Debug, Clone)]
+struct SpeakerReference {
+    started_at: ExactTimestamp,
+    sample_rate_hz: u32,
+    samples: Vec<f32>,
+    expected_until: ExactTimestamp,
+}
+
+/// Diagnostic result from comparing one mic frame with the speaker reference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeakerReferenceDecision {
+    pub decision: SuppressionDecision,
+    pub correlation: f32,
+    pub residual_ratio: f32,
+    pub delay_ms: i64,
+}
+
+impl SpeakerReferenceMask {
+    pub fn new() -> Self {
+        Self {
+            reference: None,
+            tail: Duration::from_millis(SPEAKER_REFERENCE_TAIL_MS),
+        }
+    }
+
+    /// Record the audio that is about to be played through Pete's speaker.
+    pub fn mark_output_started(&mut self, frames: &[AudioFrame], started_at: ExactTimestamp) {
+        let Some(first_frame) = frames.first() else {
+            self.reference = None;
+            return;
+        };
+        if first_frame.sample_rate_hz == 0 || first_frame.channels == 0 {
+            self.reference = None;
+            return;
+        }
+
+        let sample_rate_hz = first_frame.sample_rate_hz;
+        let channels = first_frame.channels;
+        let mut samples = Vec::new();
+        for frame in frames {
+            if frame.sample_rate_hz != sample_rate_hz || frame.channels != channels {
+                self.reference = None;
+                return;
+            }
+            samples.extend(downmix_mono(&frame.samples, channels));
+        }
+        if samples.is_empty() {
+            self.reference = None;
+            return;
+        }
+
+        let duration_nanos =
+            (samples.len() as u128).saturating_mul(1_000_000_000) / u128::from(sample_rate_hz);
+        let expected_until = ExactTimestamp {
+            unix_nanos: started_at
+                .unix_nanos
+                .saturating_add(duration_nanos)
+                .saturating_add(self.tail.as_nanos()),
+        };
+        self.reference = Some(SpeakerReference {
+            started_at,
+            sample_rate_hz,
+            samples,
+            expected_until,
+        });
+    }
+
+    pub fn mark_output_finished(&mut self) {
+        if let Some(reference) = &mut self.reference {
+            reference.expected_until = ExactTimestamp {
+                unix_nanos: ExactTimestamp::now()
+                    .unix_nanos
+                    .saturating_add(self.tail.as_nanos()),
+            };
+        }
+    }
+
+    pub fn suppression_decision_for_frame(&mut self, frame: &AudioFrame) -> SuppressionDecision {
+        self.analyze_frame(frame).decision
+    }
+
+    pub fn analyze_frame(&mut self, frame: &AudioFrame) -> SpeakerReferenceDecision {
+        self.expire(frame.captured_at);
+        let Some(reference) = &self.reference else {
+            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+        };
+        if frame.sample_rate_hz == 0 || frame.channels == 0 || frame.samples.is_empty() {
+            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+        }
+
+        let mic = downmix_mono(&frame.samples, frame.channels);
+        if mic.is_empty() || rms_energy(&mic) <= f32::EPSILON {
+            return speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+        }
+
+        let mut best = speaker_reference_decision(SuppressionDecision::Allow, 0.0, 1.0, 0);
+        for delay_ms in
+            (0..=SPEAKER_REFERENCE_MAX_DELAY_MS).step_by(SPEAKER_REFERENCE_DELAY_STEP_MS as usize)
+        {
+            if let Some(candidate) = compare_with_reference(reference, frame, &mic, delay_ms) {
+                if candidate.correlation > best.correlation {
+                    best = candidate;
+                }
+            }
+        }
+
+        if best.correlation >= SPEAKER_REFERENCE_MIN_CORRELATION
+            && best.residual_ratio <= SPEAKER_REFERENCE_MAX_RESIDUAL_RATIO
+        {
+            best.decision = SuppressionDecision::Suppress;
+        }
+        best
+    }
+
+    fn expire(&mut self, now: ExactTimestamp) {
+        if self
+            .reference
+            .as_ref()
+            .is_some_and(|reference| now.unix_nanos > reference.expected_until.unix_nanos)
+        {
+            self.reference = None;
+        }
+    }
+}
+
+impl Default for SpeakerReferenceMask {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn compare_with_reference(
+    reference: &SpeakerReference,
+    frame: &AudioFrame,
+    mic: &[f32],
+    delay_ms: i64,
+) -> Option<SpeakerReferenceDecision> {
+    let elapsed_nanos = frame
+        .captured_at
+        .unix_nanos
+        .checked_sub(reference.started_at.unix_nanos)?;
+    let delayed_nanos = elapsed_nanos.checked_sub((delay_ms as u128).saturating_mul(1_000_000))?;
+    let ref_start =
+        delayed_nanos.saturating_mul(u128::from(reference.sample_rate_hz)) / 1_000_000_000;
+    let ref_start = usize::try_from(ref_start).ok()?;
+    let ref_step = reference.sample_rate_hz as f64 / frame.sample_rate_hz as f64;
+    let reference_window =
+        sample_reference_window(&reference.samples, ref_start, ref_step, mic.len())?;
+    let (correlation, residual_ratio) = correlation_and_residual(mic, &reference_window);
+    Some(speaker_reference_decision(
+        SuppressionDecision::Allow,
+        correlation,
+        residual_ratio,
+        delay_ms,
+    ))
+}
+
+fn sample_reference_window(
+    reference: &[f32],
+    ref_start: usize,
+    ref_step: f64,
+    len: usize,
+) -> Option<Vec<f32>> {
+    let last = ref_start as f64 + ref_step * len.saturating_sub(1) as f64;
+    if last as usize >= reference.len() {
+        return None;
+    }
+    let mut output = Vec::with_capacity(len);
+    for i in 0..len {
+        let pos = ref_start as f64 + ref_step * i as f64;
+        let idx = pos.floor() as usize;
+        let frac = (pos - idx as f64) as f32;
+        let a = reference.get(idx).copied().unwrap_or(0.0);
+        let b = reference.get(idx + 1).copied().unwrap_or(a);
+        output.push(a + (b - a) * frac);
+    }
+    Some(output)
+}
+
+fn correlation_and_residual(mic: &[f32], reference: &[f32]) -> (f32, f32) {
+    let mut dot = 0.0f32;
+    let mut mic_energy = 0.0f32;
+    let mut ref_energy = 0.0f32;
+    for (&mic_sample, &ref_sample) in mic.iter().zip(reference) {
+        dot += mic_sample * ref_sample;
+        mic_energy += mic_sample * mic_sample;
+        ref_energy += ref_sample * ref_sample;
+    }
+    if mic_energy <= f32::EPSILON || ref_energy <= f32::EPSILON {
+        return (0.0, 1.0);
+    }
+    let gain = dot / ref_energy;
+    let mut residual_energy = 0.0f32;
+    for (&mic_sample, &ref_sample) in mic.iter().zip(reference) {
+        let residual = mic_sample - gain * ref_sample;
+        residual_energy += residual * residual;
+    }
+    let correlation = (dot.abs() / (mic_energy.sqrt() * ref_energy.sqrt())).clamp(0.0, 1.0);
+    let residual_ratio = (residual_energy / mic_energy).clamp(0.0, 1.0);
+    (correlation, residual_ratio)
+}
+
+fn speaker_reference_decision(
+    decision: SuppressionDecision,
+    correlation: f32,
+    residual_ratio: f32,
+    delay_ms: i64,
+) -> SpeakerReferenceDecision {
+    SpeakerReferenceDecision {
+        decision,
+        correlation,
+        residual_ratio,
+        delay_ms,
+    }
+}
+
+fn downmix_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let channels = usize::from(channels.max(1));
+    samples
+        .chunks(channels)
+        .map(|chunk| chunk.iter().copied().sum::<f32>() / chunk.len() as f32)
+        .collect()
+}
+
+fn rms_energy(samples: &[f32]) -> f32 {
+    samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use crate::audio::frame::AudioFrame;
     use crate::time::ExactTimestamp;
 
-    use super::{SUPPRESSION_TAIL_MS, SelfHearingState, SuppressionDecision};
+    use super::{SUPPRESSION_TAIL_MS, SelfHearingState, SpeakerReferenceMask, SuppressionDecision};
 
     #[test]
     fn initial_state_allows_all_frames() {
@@ -212,5 +456,86 @@ mod tests {
         assert!(state.pete_speaking);
         state.mark_output_finished();
         assert!(!state.pete_speaking);
+    }
+
+    #[test]
+    fn speaker_reference_mask_suppresses_delayed_echo() {
+        let sample_rate_hz = 16_000;
+        let started_at = ExactTimestamp {
+            unix_nanos: 1_000_000_000,
+        };
+        let reference = test_noise(3_200);
+        let frames = vec![AudioFrame {
+            captured_at: started_at,
+            sample_rate_hz,
+            channels: 1,
+            samples: reference.clone(),
+        }];
+        let mut mask = SpeakerReferenceMask::new();
+        mask.mark_output_started(&frames, started_at);
+
+        let mic_start = 800;
+        let mic = reference[mic_start..mic_start + 160]
+            .iter()
+            .map(|sample| sample * 0.4)
+            .collect::<Vec<_>>();
+        let decision = mask.analyze_frame(&AudioFrame {
+            captured_at: ExactTimestamp {
+                unix_nanos: started_at.unix_nanos + 50_000_000,
+            },
+            sample_rate_hz,
+            channels: 1,
+            samples: mic,
+        });
+
+        assert_eq!(decision.decision, SuppressionDecision::Suppress);
+        assert!(decision.correlation > 0.99);
+        assert!(decision.residual_ratio < 0.01);
+    }
+
+    #[test]
+    fn speaker_reference_mask_allows_speech_mixed_with_echo() {
+        let sample_rate_hz = 16_000;
+        let started_at = ExactTimestamp {
+            unix_nanos: 1_000_000_000,
+        };
+        let reference = test_noise(3_200);
+        let frames = vec![AudioFrame {
+            captured_at: started_at,
+            sample_rate_hz,
+            channels: 1,
+            samples: reference.clone(),
+        }];
+        let mut mask = SpeakerReferenceMask::new();
+        mask.mark_output_started(&frames, started_at);
+
+        let mic_start = 800;
+        let user = test_noise(160).into_iter().rev().collect::<Vec<_>>();
+        let mic = reference[mic_start..mic_start + 160]
+            .iter()
+            .zip(user)
+            .map(|(echo, user)| echo * 0.25 + user * 0.8)
+            .collect::<Vec<_>>();
+        let decision = mask.analyze_frame(&AudioFrame {
+            captured_at: ExactTimestamp {
+                unix_nanos: started_at.unix_nanos + 50_000_000,
+            },
+            sample_rate_hz,
+            channels: 1,
+            samples: mic,
+        });
+
+        assert_eq!(decision.decision, SuppressionDecision::Allow);
+    }
+
+    fn test_noise(len: usize) -> Vec<f32> {
+        let mut state = 0x1234_5678u32;
+        (0..len)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let value = ((state >> 8) as f32 / 16_777_215.0) * 2.0 - 1.0;
+                value * 0.5
+            })
+            .collect()
     }
 }

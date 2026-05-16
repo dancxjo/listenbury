@@ -21,6 +21,13 @@ use crate::cli::commands::mic_transcribe::transcribe_group;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use crate::cli::commands::prepare_audio_playback;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use crate::cli::model_paths::{
     llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
 };
@@ -61,7 +68,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use cpal::{FromSample, Sample, SizedSample, SupportedStreamConfigRange};
+use cpal::{FromSample, Sample, SizedSample};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -120,7 +127,10 @@ use listenbury::mouth::tts::TextToSpeech;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{
+    AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech,
+    SpeakerReferenceMask,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -169,13 +179,6 @@ use std::io::{BufRead, Write};
     feature = "tts-piper"
 ))]
 use std::path::PathBuf;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use std::sync::Arc;
 #[cfg(any(
     test,
     all(
@@ -193,6 +196,13 @@ use std::sync::OnceLock;
     feature = "tts-piper"
 ))]
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use std::sync::{Arc, Mutex};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -376,14 +386,17 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let whisper_model = resolve_whisper_model(command.whisper_model)?;
     let vad_backend = command.vad.as_backend_kind();
     let capture_enabled = Arc::new(AtomicBool::new(true));
+    let speaker_reference = Arc::new(Mutex::new(SpeakerReferenceMask::default()));
     let (mut mouth, mouth_rx) = ContinueMouth::start(
         PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?),
         Arc::clone(&capture_enabled),
+        Arc::clone(&speaker_reference),
     )?;
     let (_ear, ear_rx) = ContinueEar::start(ContinueEarConfig {
         whisper_model,
         vad_backend,
         capture_enabled: Arc::clone(&capture_enabled),
+        speaker_reference,
     })?;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -981,6 +994,14 @@ impl PromptPacket {
         }
     }
 
+    fn ear_observation(text: String) -> Self {
+        let trimmed = text.trim().to_string();
+        Self {
+            text: wrap_ear_event(&trimmed),
+            memory: PromptMemory::AuditoryObservation(trimmed),
+        }
+    }
+
     fn spoken(text: String) -> Self {
         Self {
             text: String::new(),
@@ -1016,6 +1037,7 @@ impl PromptPacket {
 enum PromptMemory {
     Listened(String),
     Spoken(String),
+    AuditoryObservation(String),
     Clock(String),
     Source(String),
 }
@@ -1228,6 +1250,7 @@ impl RollingContextManager {
         match memory {
             PromptMemory::Listened(text) => self.push_turn(ConversationTurnKind::Listened, text),
             PromptMemory::Spoken(text) => self.push_turn(ConversationTurnKind::Spoken, text),
+            PromptMemory::AuditoryObservation(message) => self.set_ear_scene(message),
             PromptMemory::Clock(message) => self.set_auditory_scene(message),
             PromptMemory::Source(message) => self.push_scratch(message),
         }
@@ -1278,6 +1301,14 @@ impl RollingContextManager {
         self.auditory_scene.events.clear();
         self.auditory_scene.events.push(format!(
             "Clock: {}",
+            compact_prompt_line(&message, MAX_SCRATCH_EVENT_CHARS)
+        ));
+    }
+
+    fn set_ear_scene(&mut self, message: String) {
+        self.auditory_scene.events.clear();
+        self.auditory_scene.events.push(format!(
+            "Ear: {}",
             compact_prompt_line(&message, MAX_SCRATCH_EVENT_CHARS)
         ));
     }
@@ -2286,12 +2317,22 @@ fn append_pending_live_events(
         }
     }
 
+    drain_mouth_events_into_llm(
+        llm_session,
+        mouth_rx,
+        pending_mouth_utterances,
+        mouth_playback_paused,
+        defer_live_events,
+        deferred_live_events,
+    )?;
+
     for ear_event in ear_rx.try_iter() {
-        match ear_event {
-            ContinueEarEvent::Transcript { ref text } => eprintln!("[dev continue] heard: {text}"),
+        match &ear_event {
+            ContinueEarEvent::Transcript { text } => eprintln!("[dev continue] heard: {text}"),
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::SpeechStarted
             | ContinueEarEvent::SpeechStopped
+            | ContinueEarEvent::AuditoryObservation { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
         if let Some(packet) = ear_event.prompt_packet() {
@@ -2315,15 +2356,6 @@ fn append_pending_live_events(
             *pending_mouth_utterances,
         )?;
     }
-
-    drain_mouth_events_into_llm(
-        llm_session,
-        mouth_rx,
-        pending_mouth_utterances,
-        mouth_playback_paused,
-        defer_live_events,
-        deferred_live_events,
-    )?;
 
     tts_vad.poll(
         mouth,
@@ -2441,8 +2473,16 @@ impl TtsVadInterruption {
                     self.listen_deadline = Some(Instant::now() + self.config.listen_for);
                 }
             }
+            ContinueEarEvent::Transcript { .. } => {
+                self.vad_active = true;
+                self.vad_started_at = Some(
+                    Instant::now()
+                        .checked_sub(self.config.pause_after)
+                        .unwrap_or_else(Instant::now),
+                );
+            }
             ContinueEarEvent::ListeningStarted { .. }
-            | ContinueEarEvent::Transcript { .. }
+            | ContinueEarEvent::AuditoryObservation { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
         self.poll(
@@ -2759,6 +2799,7 @@ struct ContinueEarConfig {
     whisper_model: PathBuf,
     vad_backend: VadBackendKind,
     capture_enabled: Arc<AtomicBool>,
+    speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
 }
 
 #[cfg(all(
@@ -2777,6 +2818,9 @@ enum ContinueEarEvent {
     },
     SpeechStarted,
     SpeechStopped,
+    AuditoryObservation {
+        text: String,
+    },
     Transcript {
         text: String,
     },
@@ -2806,6 +2850,7 @@ impl ContinueEarEvent {
             ),
             Self::SpeechStarted => "speech_started".to_string(),
             Self::SpeechStopped => "speech_stopped".to_string(),
+            Self::AuditoryObservation { text } => text.clone(),
             Self::Transcript { text } => format!("Heard: {}", text.trim()),
             Self::Error { message } => format!("error: {message}"),
         }
@@ -2814,6 +2859,7 @@ impl ContinueEarEvent {
     fn prompt_packet(&self) -> Option<PromptPacket> {
         match self {
             Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
+            Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
             Self::ListeningStarted { .. }
             | Self::SpeechStarted
             | Self::SpeechStopped
@@ -2845,8 +2891,8 @@ impl ContinueEar {
     fn start(
         config: ContinueEarConfig,
     ) -> Result<(Self, crossbeam_channel::Receiver<ContinueEarEvent>)> {
-        let mut recognizer =
-            WhisperSpeechRecognizer::new(&config.whisper_model).with_context(|| {
+        let mut recognizer = WhisperSpeechRecognizer::new_quiet(&config.whisper_model)
+            .with_context(|| {
                 format!(
                     "failed to load Whisper model at {}",
                     config.whisper_model.display()
@@ -3018,6 +3064,7 @@ impl ContinueEar {
                     config.vad_backend,
                     input_sample_rate_hz,
                     input_channels,
+                    Arc::clone(&config.speaker_reference),
                 ) {
                     let _ = event_tx.send(ContinueEarEvent::Error {
                         message: error.to_string(),
@@ -3066,8 +3113,36 @@ struct ContinueEarState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     frame_time_ms: u64,
-    last_vad_state: Option<bool>,
+    vad_observation: VadObservationState,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VadObservationKind {
+    Silence,
+    Voice,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy)]
+struct VadObservationState {
+    kind: VadObservationKind,
+    started_at_ms: u64,
 }
 
 #[cfg(all(
@@ -3084,6 +3159,7 @@ fn run_continue_ear_processor(
     vad_backend: VadBackendKind,
     input_sample_rate_hz: u32,
     input_channels: u16,
+    speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
 ) -> Result<()> {
     let input_frame_samples =
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
@@ -3094,8 +3170,12 @@ fn run_continue_ear_processor(
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
+        speaker_reference,
         frame_time_ms: 0,
-        last_vad_state: None,
+        vad_observation: VadObservationState {
+            kind: VadObservationKind::Silence,
+            started_at_ms: 0,
+        },
     };
 
     while !stop.load(Ordering::Relaxed) {
@@ -3188,6 +3268,75 @@ fn drain_pending_continue_ear_frames(
     Ok(())
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn vad_observation_message(kind: VadObservationKind, duration_ms: u64) -> String {
+    match kind {
+        VadObservationKind::Silence => format!("I heard silence for {duration_ms} ms."),
+        VadObservationKind::Voice => {
+            format!(
+                "I heard what sounded like a voice for {}.",
+                format_seconds_duration(duration_ms)
+            )
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_seconds_duration(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        format!("{:.2} s", duration_ms as f64 / 1_000.0)
+    } else if duration_ms < 10_000 {
+        format!("{:.1} s", duration_ms as f64 / 1_000.0)
+    } else {
+        format!("{} s", duration_ms / 1_000)
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_vad_observation_transition(
+    state: &mut ContinueEarState,
+    next_kind: VadObservationKind,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+) {
+    if state.vad_observation.kind == next_kind {
+        return;
+    }
+
+    let duration_ms = state
+        .frame_time_ms
+        .saturating_sub(state.vad_observation.started_at_ms);
+    if duration_ms > 0 {
+        let _ = event_tx.send(ContinueEarEvent::AuditoryObservation {
+            text: vad_observation_message(state.vad_observation.kind, duration_ms),
+        });
+    }
+    state.vad_observation = VadObservationState {
+        kind: next_kind,
+        started_at_ms: state.frame_time_ms,
+    };
+}
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -3201,21 +3350,33 @@ fn process_continue_ear_frame(
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
-    let vad_result = state.vad.process_frame(&frame)?;
-    if listenbury::developer_diagnostics_enabled()
-        && state.last_vad_state != Some(vad_result.is_speech)
-    {
-        eprintln!(
-            "[dev continue ear] vad t_ms={} speech={} prob={:.3}",
-            state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
-        );
-        state.last_vad_state = Some(vad_result.is_speech);
+    let speaker_decision = {
+        let mut speaker_reference = state
+            .speaker_reference
+            .lock()
+            .map_err(|_| anyhow::anyhow!("speaker reference mask lock poisoned"))?;
+        speaker_reference.analyze_frame(&frame)
+    };
+    if speaker_decision.decision == listenbury::SuppressionDecision::Suppress {
+        if listenbury::developer_diagnostics_enabled() {
+            eprintln!(
+                "[dev continue ear] masked speaker echo t_ms={} corr={:.3} residual={:.3} delay_ms={}",
+                state.frame_time_ms,
+                speaker_decision.correlation,
+                speaker_decision.residual_ratio,
+                speaker_decision.delay_ms
+            );
+        }
+        state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+        return Ok(());
     }
 
+    let vad_result = state.vad.process_frame(&frame)?;
     let events = state.segmenter.process(vad_result);
     for event in &events {
         match event {
             HearingEvent::SpeechStarted => {
+                send_vad_observation_transition(state, VadObservationKind::Voice, event_tx);
                 let _ = event_tx.send(ContinueEarEvent::SpeechStarted);
             }
             HearingEvent::BreathGroupOpened { id } => {
@@ -3223,6 +3384,7 @@ fn process_continue_ear_frame(
             }
             HearingEvent::BreathGroupClosed { .. } => {
                 let _ = event_tx.send(ContinueEarEvent::SpeechStopped);
+                send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
             }
             HearingEvent::SpeechContinued { .. } | HearingEvent::PauseStarted => {}
         }
@@ -3314,14 +3476,25 @@ fn convert_frame_samples(
         return samples.to_vec();
     }
 
+    let mut current_channels = input_channels;
     let mut converted = if input_channels != frame_channels && frame_channels == MONO_CHANNELS {
+        current_channels = MONO_CHANNELS;
         mix_to_mono(samples, input_channels)
     } else {
         samples.to_vec()
     };
 
     if input_sample_rate_hz != frame_sample_rate_hz {
-        converted = resample_linear(&converted, input_sample_rate_hz, frame_sample_rate_hz);
+        converted = resample_interleaved(
+            &converted,
+            input_sample_rate_hz,
+            frame_sample_rate_hz,
+            current_channels,
+        );
+    }
+
+    if current_channels != frame_channels {
+        converted = convert_channels(&converted, current_channels, frame_channels);
     }
 
     converted
@@ -3375,6 +3548,46 @@ fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn convert_channels(samples: &[f32], source_channels: u16, target_channels: u16) -> Vec<f32> {
+    if source_channels == target_channels {
+        return samples.to_vec();
+    }
+
+    if target_channels == MONO_CHANNELS {
+        return mix_to_mono(samples, source_channels);
+    }
+
+    let source_channel_count = usize::from(source_channels).max(1);
+    let target_channel_count = usize::from(target_channels).max(1);
+    if source_channel_count == 1 {
+        let mut converted =
+            Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
+        for sample in samples {
+            converted.extend(std::iter::repeat_n(*sample, target_channel_count));
+        }
+        return converted;
+    }
+
+    let mut converted = Vec::with_capacity(
+        samples
+            .len()
+            .saturating_div(source_channel_count)
+            .saturating_mul(target_channel_count),
+    );
+    for frame in samples.chunks_exact(source_channel_count) {
+        for channel_idx in 0..target_channel_count {
+            converted.push(frame[channel_idx.min(source_channel_count - 1)]);
+        }
+    }
+    converted
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
     if samples.is_empty() || source_rate_hz == target_rate_hz {
         return samples.to_vec();
@@ -3405,6 +3618,49 @@ fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) ->
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn resample_interleaved(
+    samples: &[f32],
+    source_rate_hz: u32,
+    target_rate_hz: u32,
+    channels: u16,
+) -> Vec<f32> {
+    let channel_count = usize::from(channels).max(1);
+    if channel_count == 1 {
+        return resample_linear(samples, source_rate_hz, target_rate_hz);
+    }
+
+    let frame_count = samples.len() / channel_count;
+    if frame_count == 0 || source_rate_hz == target_rate_hz {
+        return samples.to_vec();
+    }
+
+    let output_frame_count = ((frame_count as f64 * f64::from(target_rate_hz))
+        / f64::from(source_rate_hz))
+    .round() as usize;
+    let mut output = Vec::with_capacity(output_frame_count.saturating_mul(channel_count));
+    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
+
+    for output_frame_idx in 0..output_frame_count {
+        let source_pos = output_frame_idx as f64 * source_step;
+        let left_frame_idx = source_pos.floor() as usize;
+        let right_frame_idx = (left_frame_idx + 1).min(frame_count - 1);
+        let fraction = (source_pos - left_frame_idx as f64) as f32;
+        for channel_idx in 0..channel_count {
+            let left = samples[left_frame_idx * channel_count + channel_idx];
+            let right = samples[right_frame_idx * channel_count + channel_idx];
+            output.push(left + (right - left) * fraction);
+        }
+    }
+
+    output
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 struct ContinueMouth {
     tx: crossbeam_channel::Sender<ContinueMouthCommand>,
     worker: Option<JoinHandle<()>>,
@@ -3420,12 +3676,15 @@ impl ContinueMouth {
     fn start(
         tts: PiperTextToSpeech,
         capture_enabled: Arc<AtomicBool>,
+        speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     ) -> Result<(Self, crossbeam_channel::Receiver<ContinueMouthEvent>)> {
         let (tx, rx) = crossbeam_channel::unbounded();
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
         let worker = std::thread::Builder::new()
             .name("listenbury-dev-continue-mouth".to_string())
-            .spawn(move || run_continue_mouth_worker(tts, rx, event_tx, capture_enabled))
+            .spawn(move || {
+                run_continue_mouth_worker(tts, rx, event_tx, capture_enabled, speaker_reference)
+            })
             .context("failed to spawn dev continue mouth worker")?;
         Ok((
             Self {
@@ -3641,6 +3900,7 @@ fn run_continue_mouth_worker(
     rx: crossbeam_channel::Receiver<ContinueMouthCommand>,
     event_tx: crossbeam_channel::Sender<ContinueMouthEvent>,
     capture_enabled: Arc<AtomicBool>,
+    speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
 ) {
     let _ = event_tx.send(ContinueMouthEvent::WorkerStarted);
     let mut pending = VecDeque::<PendingMouthSpeech>::new();
@@ -3673,6 +3933,7 @@ fn run_continue_mouth_worker(
                     &mut pending,
                     &event_tx,
                     &capture_enabled,
+                    &speaker_reference,
                     &mut paused,
                 ) {
                     Ok(MouthWorkerFlow::Continue) | Err(_) => {}
@@ -3880,6 +4141,7 @@ fn run_continue_mouth_speech(
     pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     _capture_enabled: &AtomicBool,
+    speaker_reference: &Arc<Mutex<SpeakerReferenceMask>>,
     paused: &mut bool,
 ) -> Result<MouthWorkerFlow> {
     event_tx
@@ -3939,6 +4201,7 @@ fn run_continue_mouth_speech(
         pending,
         event_tx,
         tts,
+        speaker_reference,
         paused,
     );
     match playback {
@@ -4006,143 +4269,26 @@ fn play_continue_audio_frames_interruptible(
     pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     tts: &mut PiperTextToSpeech,
+    speaker_reference: &Arc<Mutex<SpeakerReferenceMask>>,
     paused: &mut bool,
 ) -> Result<MouthPlaybackOutcome> {
-    let Some(first_frame) = frames.first() else {
-        anyhow::bail!("no audio frames available for playback from {source}");
-    };
-    let sample_rate = first_frame.sample_rate_hz;
-    let channels = first_frame.channels;
-    anyhow::ensure!(
-        sample_rate > 0,
-        "audio from {source} has invalid sample rate"
-    );
-    anyhow::ensure!(
-        channels > 0,
-        "audio from {source} has invalid channel count"
-    );
-
-    let total_samples: usize = frames.iter().map(|frame| frame.samples.len()).sum();
-    let mut audio_samples = Vec::with_capacity(total_samples);
-    for frame in frames {
-        anyhow::ensure!(
-            frame.sample_rate_hz == sample_rate,
-            "audio from {source} changed sample rate mid-stream ({} -> {})",
-            sample_rate,
-            frame.sample_rate_hz
-        );
-        anyhow::ensure!(
-            frame.channels == channels,
-            "audio from {source} changed channel count mid-stream ({} -> {})",
-            channels,
-            frame.channels
-        );
-        audio_samples.extend_from_slice(&frame.samples);
-    }
-
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no default output device available"))?;
-    let device_name = device
-        .name()
-        .unwrap_or_else(|_| "<unknown output device>".to_string());
-    let supported = select_continue_output_config(&device, sample_rate, channels)?;
-    let stream_config = supported
-        .with_sample_rate(cpal::SampleRate(sample_rate))
-        .config();
-
+    let playback = prepare_audio_playback(frames, source)?;
     let playback_cursor = Arc::new(AtomicUsize::new(0));
     let playback_paused = Arc::new(AtomicBool::new(*paused));
-    let samples = Arc::new(audio_samples);
-    let done_threshold = samples.len();
-    let err_fn = |err| eprintln!("output stream error: {err}");
-    let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => build_continue_output_stream::<f32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::F64 => build_continue_output_stream::<f64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I8 => build_continue_output_stream::<i8>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I16 => build_continue_output_stream::<i16>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I32 => build_continue_output_stream::<i32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I64 => build_continue_output_stream::<i64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U8 => build_continue_output_stream::<u8>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U16 => build_continue_output_stream::<u16>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U32 => build_continue_output_stream::<u32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U64 => build_continue_output_stream::<u64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            Arc::clone(&playback_paused),
-            err_fn,
-        )?,
-        sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
-    };
+    let done_threshold = playback.sample_count();
+    let stream =
+        playback.build_stream(Arc::clone(&playback_cursor), Arc::clone(&playback_paused))?;
     stream
         .play()
-        .with_context(|| format!("failed to start playback on {device_name}"))?;
+        .with_context(|| format!("failed to start playback on {}", playback.device_name))?;
+    {
+        let started_at = ExactTimestamp::now();
+        let reference_frame = playback.as_audio_frame(started_at);
+        let mut speaker_reference = speaker_reference
+            .lock()
+            .map_err(|_| anyhow::anyhow!("speaker reference mask lock poisoned"))?;
+        speaker_reference.mark_output_started(&[reference_frame], started_at);
+    }
 
     while playback_cursor.load(Ordering::Relaxed) < done_threshold {
         match drain_mouth_control_commands(rx, pending, event_tx, tts, paused) {
@@ -4150,10 +4296,16 @@ fn play_continue_audio_frames_interruptible(
                 playback_paused.store(*paused, Ordering::Relaxed);
             }
             MouthControlFlow::StopCurrent => {
+                if let Ok(mut speaker_reference) = speaker_reference.lock() {
+                    speaker_reference.mark_output_finished();
+                }
                 drop(stream);
                 return Ok(MouthPlaybackOutcome::Interrupted);
             }
             MouthControlFlow::Shutdown => {
+                if let Ok(mut speaker_reference) = speaker_reference.lock() {
+                    speaker_reference.mark_output_finished();
+                }
                 drop(stream);
                 return Ok(MouthPlaybackOutcome::Shutdown);
             }
@@ -4162,95 +4314,20 @@ fn play_continue_audio_frames_interruptible(
     }
     std::thread::sleep(Duration::from_millis(20));
     drop(stream);
+    if let Ok(mut speaker_reference) = speaker_reference.lock() {
+        speaker_reference.mark_output_finished();
+    }
 
-    let audio_duration = continue_playback_duration(total_samples, sample_rate, channels);
+    let audio_duration = playback.duration();
     println!(
-        "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {source}",
-        sample_rate,
+        "Played with {}: {} Hz, {} channel(s), {:.2}s from {source}",
+        playback.device_name,
+        playback.sample_rate_hz,
+        playback.channels,
         audio_duration.as_secs_f64(),
     );
 
     Ok(MouthPlaybackOutcome::Completed)
-}
-
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-fn build_continue_output_stream<T>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    samples: Arc<Vec<f32>>,
-    playback_cursor: Arc<AtomicUsize>,
-    playback_paused: Arc<AtomicBool>,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
-) -> Result<cpal::Stream>
-where
-    T: Sample + SizedSample + FromSample<f32>,
-{
-    device
-        .build_output_stream(
-            config,
-            move |output: &mut [T], _| {
-                for out in output.iter_mut() {
-                    if playback_paused.load(Ordering::Relaxed) {
-                        *out = T::from_sample(0.0);
-                        continue;
-                    }
-                    let idx = playback_cursor.fetch_add(1, Ordering::Relaxed);
-                    let sample = samples.get(idx).copied().unwrap_or(0.0);
-                    *out = T::from_sample(sample);
-                }
-            },
-            err_fn,
-            None,
-        )
-        .context("failed to build output stream")
-}
-
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-fn select_continue_output_config(
-    device: &cpal::Device,
-    sample_rate: u32,
-    channels: u16,
-) -> Result<SupportedStreamConfigRange> {
-    let mut candidates = device
-        .supported_output_configs()
-        .context("failed to list output stream configs")?;
-    candidates
-        .find(|config| {
-            config.channels() == channels
-                && config.min_sample_rate().0 <= sample_rate
-                && config.max_sample_rate().0 >= sample_rate
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no output stream supports {} Hz, {} channel(s)",
-                sample_rate,
-                channels
-            )
-        })
-}
-
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-fn continue_playback_duration(total_samples: usize, sample_rate: u32, channels: u16) -> Duration {
-    if sample_rate == 0 || channels == 0 {
-        return Duration::ZERO;
-    }
-    let frames = total_samples as f64 / f64::from(channels);
-    Duration::from_secs_f64(frames / f64::from(sample_rate))
 }
 
 #[cfg(any(
@@ -4753,6 +4830,7 @@ fn contains_template_token(content: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::VadObservationKind;
     use super::{
         ContinueMouthCommand, ContinuePromptFormat, ContinueRuntimeEvent, HarmonyFinalFilter,
         PromptPacket, RollingContextManager, SourceCommand, SpeechControlCommand,
@@ -4760,8 +4838,9 @@ mod tests {
         TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
-        mouth_command_for_runtime_event, next_time_event_interval, wrap_ear_event, wrap_live_input,
-        wrap_mouth_event, wrap_runtime_event, wrap_source_event, wrap_time_event,
+        mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
+        wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event,
+        wrap_time_event,
     };
     use listenbury::mind::llm::LlmEvent;
 
@@ -4786,6 +4865,24 @@ mod tests {
         assert_eq!(
             wrap_ear_event("Heard: hello from the room"),
             "\n\n--- LIVE EVENT: ear ---\nHeard: hello from the room\n--- END LIVE EVENT ---\n\n"
+        );
+    }
+
+    #[test]
+    fn vad_observations_are_short_ear_events() {
+        assert_eq!(
+            vad_observation_message(VadObservationKind::Silence, 160),
+            "I heard silence for 160 ms."
+        );
+        assert_eq!(
+            vad_observation_message(VadObservationKind::Voice, 2_410),
+            "I heard what sounded like a voice for 2.4 s."
+        );
+
+        let packet = PromptPacket::ear_observation("I heard silence for 160 ms.".to_string());
+        assert_eq!(
+            packet.text,
+            "\n\n--- LIVE EVENT: ear ---\nI heard silence for 160 ms.\n--- END LIVE EVENT ---\n\n"
         );
     }
 

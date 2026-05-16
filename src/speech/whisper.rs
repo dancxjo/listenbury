@@ -13,7 +13,18 @@ pub struct WhisperSpeechRecognizer {
 
 impl WhisperSpeechRecognizer {
     pub fn new(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
-        configure_whisper_logging();
+        Self::new_with_log_suppression(model_path, false)
+    }
+
+    pub fn new_quiet(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
+        Self::new_with_log_suppression(model_path, true)
+    }
+
+    fn new_with_log_suppression(
+        model_path: impl AsRef<std::path::Path>,
+        suppress_logs: bool,
+    ) -> anyhow::Result<Self> {
+        configure_whisper_logging(suppress_logs);
         let ctx = whisper_cpp_plus::WhisperContext::new(model_path.as_ref())?;
 
         Ok(Self {
@@ -42,15 +53,13 @@ impl WhisperSpeechRecognizer {
     }
 }
 
-fn configure_whisper_logging() {
+fn configure_whisper_logging(suppress_logs: bool) {
     static LOGGING_CONFIGURED: OnceLock<()> = OnceLock::new();
-    LOGGING_CONFIGURED.get_or_init(|| {
-        if !developer_diagnostics_enabled() {
-            unsafe {
-                whisper_ffi::whisper_log_set(Some(drop_whisper_log), std::ptr::null_mut());
-            }
-        }
-    });
+    if suppress_logs || !developer_diagnostics_enabled() {
+        LOGGING_CONFIGURED.get_or_init(|| unsafe {
+            whisper_ffi::whisper_log_set(Some(drop_whisper_log), std::ptr::null_mut());
+        });
+    }
 }
 
 unsafe extern "C" fn drop_whisper_log(

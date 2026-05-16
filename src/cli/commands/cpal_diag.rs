@@ -6,7 +6,7 @@ use anyhow::Context;
 #[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(feature = "audio-cpal")]
-use cpal::{FromSample, Sample, SizedSample, SupportedStreamConfigRange};
+use cpal::{FromSample, Sample, SizedSample};
 #[cfg(feature = "audio-cpal")]
 use listenbury::audio::frame::AudioFrame;
 #[cfg(feature = "audio-cpal")]
@@ -16,7 +16,7 @@ use listenbury::time::ExactTimestamp;
 #[cfg(feature = "audio-cpal")]
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 #[cfg(feature = "audio-cpal")]
 use std::time::{Duration, Instant};
@@ -185,6 +185,7 @@ fn build_output_stream<T>(
     config: &cpal::StreamConfig,
     samples: Arc<Vec<f32>>,
     playback_cursor: Arc<AtomicUsize>,
+    playback_paused: Arc<AtomicBool>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<cpal::Stream>
 where
@@ -195,6 +196,10 @@ where
             config,
             move |output: &mut [T], _| {
                 for out in output.iter_mut() {
+                    if playback_paused.load(Ordering::Relaxed) {
+                        *out = T::from_sample(0.0);
+                        continue;
+                    }
                     let idx = playback_cursor.fetch_add(1, Ordering::Relaxed);
                     let sample = samples.get(idx).copied().unwrap_or(0.0);
                     *out = T::from_sample(sample);
@@ -207,7 +212,132 @@ where
 }
 
 #[cfg(feature = "audio-cpal")]
-pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<()> {
+pub(crate) struct PreparedAudioPlayback {
+    device: cpal::Device,
+    stream_config: cpal::StreamConfig,
+    sample_format: cpal::SampleFormat,
+    pub(crate) device_name: String,
+    pub(crate) sample_rate_hz: u32,
+    pub(crate) channels: u16,
+    pub(crate) samples: Arc<Vec<f32>>,
+}
+
+#[cfg(feature = "audio-cpal")]
+impl PreparedAudioPlayback {
+    pub(crate) fn sample_count(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub(crate) fn duration(&self) -> Duration {
+        playback_duration(self.sample_count(), self.sample_rate_hz, self.channels)
+    }
+
+    pub(crate) fn as_audio_frame(&self, captured_at: ExactTimestamp) -> AudioFrame {
+        AudioFrame {
+            captured_at,
+            sample_rate_hz: self.sample_rate_hz,
+            channels: self.channels,
+            samples: self.samples.as_ref().clone(),
+        }
+    }
+
+    pub(crate) fn build_stream(
+        &self,
+        playback_cursor: Arc<AtomicUsize>,
+        playback_paused: Arc<AtomicBool>,
+    ) -> Result<cpal::Stream> {
+        let err_fn = |err| eprintln!("output stream error: {err}");
+        match self.sample_format {
+            cpal::SampleFormat::F32 => build_output_stream::<f32>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::F64 => build_output_stream::<f64>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::I8 => build_output_stream::<i8>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::I16 => build_output_stream::<i16>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::I32 => build_output_stream::<i32>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::I64 => build_output_stream::<i64>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::U8 => build_output_stream::<u8>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::U16 => build_output_stream::<u16>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::U32 => build_output_stream::<u32>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            cpal::SampleFormat::U64 => build_output_stream::<u64>(
+                &self.device,
+                &self.stream_config,
+                Arc::clone(&self.samples),
+                playback_cursor,
+                playback_paused,
+                err_fn,
+            ),
+            sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
+        }
+    }
+}
+
+#[cfg(feature = "audio-cpal")]
+pub(crate) fn prepare_audio_playback(
+    frames: &[AudioFrame],
+    source: &str,
+) -> Result<PreparedAudioPlayback> {
     let Some(first_frame) = frames.first() else {
         anyhow::bail!("no audio frames available for playback from {source}");
     };
@@ -247,91 +377,42 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
     let device_name = device
         .name()
         .unwrap_or_else(|_| "<unknown output device>".to_string());
-    let supported = select_output_config(&device, sample_rate, channels)?;
-    let stream_config = supported
-        .with_sample_rate(cpal::SampleRate(sample_rate))
-        .config();
+    let output_config = select_output_config(&device, sample_rate, channels)?;
+    let output_sample_rate = output_config.sample_rate_hz;
+    let output_channels = output_config.channels;
+    let audio_samples = convert_audio_samples(
+        &audio_samples,
+        sample_rate,
+        channels,
+        output_sample_rate,
+        output_channels,
+    );
+    anyhow::ensure!(
+        !audio_samples.is_empty(),
+        "audio from {source} had no samples after output conversion"
+    );
 
+    Ok(PreparedAudioPlayback {
+        device,
+        stream_config: output_config.stream_config,
+        sample_format: output_config.sample_format,
+        device_name,
+        sample_rate_hz: output_sample_rate,
+        channels: output_channels,
+        samples: Arc::new(audio_samples),
+    })
+}
+
+#[cfg(feature = "audio-cpal")]
+pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<()> {
+    let playback = prepare_audio_playback(frames, source)?;
     let playback_cursor = Arc::new(AtomicUsize::new(0));
-    let samples = Arc::new(audio_samples);
-    let done_threshold = samples.len();
-    let err_fn = |err| eprintln!("output stream error: {err}");
-    let stream = match supported.sample_format() {
-        cpal::SampleFormat::F32 => build_output_stream::<f32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::F64 => build_output_stream::<f64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I8 => build_output_stream::<i8>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I16 => build_output_stream::<i16>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I32 => build_output_stream::<i32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::I64 => build_output_stream::<i64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U8 => build_output_stream::<u8>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U16 => build_output_stream::<u16>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U32 => build_output_stream::<u32>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        cpal::SampleFormat::U64 => build_output_stream::<u64>(
-            &device,
-            &stream_config,
-            Arc::clone(&samples),
-            Arc::clone(&playback_cursor),
-            err_fn,
-        )?,
-        sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
-    };
+    let playback_paused = Arc::new(AtomicBool::new(false));
+    let done_threshold = playback.sample_count();
+    let stream = playback.build_stream(Arc::clone(&playback_cursor), playback_paused)?;
     stream
         .play()
-        .with_context(|| format!("failed to start playback on {device_name}"))?;
+        .with_context(|| format!("failed to start playback on {}", playback.device_name))?;
 
     while playback_cursor.load(Ordering::Relaxed) < done_threshold {
         std::thread::sleep(Duration::from_millis(10));
@@ -339,10 +420,12 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
     std::thread::sleep(Duration::from_millis(20));
     drop(stream);
 
-    let audio_duration = playback_duration(total_samples, sample_rate, channels);
+    let audio_duration = playback.duration();
     println!(
-        "Played with {device_name}: {} Hz, {channels} channel(s), {:.2}s from {source}",
-        sample_rate,
+        "Played with {}: {} Hz, {} channel(s), {:.2}s from {source}",
+        playback.device_name,
+        playback.sample_rate_hz,
+        playback.channels,
         audio_duration.as_secs_f64(),
     );
 
@@ -350,28 +433,164 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
 }
 
 #[cfg(feature = "audio-cpal")]
+struct OutputConfig {
+    sample_format: cpal::SampleFormat,
+    sample_rate_hz: u32,
+    channels: u16,
+    stream_config: cpal::StreamConfig,
+}
+
+#[cfg(feature = "audio-cpal")]
 fn select_output_config(
     device: &cpal::Device,
     sample_rate: u32,
     channels: u16,
-) -> Result<SupportedStreamConfigRange> {
-    let mut candidates = device
+) -> Result<OutputConfig> {
+    if let Ok(default_config) = device.default_output_config() {
+        return Ok(output_config_from_supported(default_config));
+    }
+
+    let candidates = device
         .supported_output_configs()
-        .context("failed to list output stream configs")?;
+        .context("failed to list output stream configs")?
+        .collect::<Vec<_>>();
     let desired_rate = cpal::SampleRate(sample_rate);
-    candidates
+    let selected = candidates
+        .iter()
         .find(|config| {
             config.channels() == channels
                 && config.min_sample_rate() <= desired_rate
                 && desired_rate <= config.max_sample_rate()
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "default output device does not support {} Hz with {} channel(s)",
-                sample_rate,
-                channels
-            )
-        })
+        .or_else(|| candidates.first())
+        .ok_or_else(|| anyhow::anyhow!("no output stream configs available"))?;
+    let selected_rate =
+        if selected.min_sample_rate() <= desired_rate && desired_rate <= selected.max_sample_rate()
+        {
+            desired_rate
+        } else {
+            selected.max_sample_rate()
+        };
+    Ok(output_config_from_supported(
+        selected.clone().with_sample_rate(selected_rate),
+    ))
+}
+
+#[cfg(feature = "audio-cpal")]
+fn output_config_from_supported(config: cpal::SupportedStreamConfig) -> OutputConfig {
+    let sample_format = config.sample_format();
+    let sample_rate_hz = config.sample_rate().0;
+    let channels = config.channels();
+    let stream_config = config.config();
+    OutputConfig {
+        sample_format,
+        sample_rate_hz,
+        channels,
+        stream_config,
+    }
+}
+
+#[cfg(feature = "audio-cpal")]
+fn convert_audio_samples(
+    samples: &[f32],
+    source_sample_rate_hz: u32,
+    source_channels: u16,
+    target_sample_rate_hz: u32,
+    target_channels: u16,
+) -> Vec<f32> {
+    let mut converted = convert_channels(samples, source_channels, target_channels);
+    if source_sample_rate_hz != target_sample_rate_hz {
+        converted = resample_interleaved(
+            &converted,
+            source_sample_rate_hz,
+            target_sample_rate_hz,
+            target_channels,
+        );
+    }
+    converted
+}
+
+#[cfg(feature = "audio-cpal")]
+fn convert_channels(samples: &[f32], source_channels: u16, target_channels: u16) -> Vec<f32> {
+    if source_channels == target_channels {
+        return samples.to_vec();
+    }
+
+    if target_channels == 1 {
+        return mix_to_mono(samples, source_channels);
+    }
+
+    let source_channel_count = usize::from(source_channels).max(1);
+    let target_channel_count = usize::from(target_channels).max(1);
+    if source_channel_count == 1 {
+        let mut converted =
+            Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
+        for sample in samples {
+            for _ in 0..target_channel_count {
+                converted.push(*sample);
+            }
+        }
+        return converted;
+    }
+
+    let mut converted = Vec::with_capacity(
+        samples
+            .len()
+            .saturating_div(source_channel_count)
+            .saturating_mul(target_channel_count),
+    );
+    for frame in samples.chunks_exact(source_channel_count) {
+        for channel_idx in 0..target_channel_count {
+            converted.push(frame[channel_idx.min(source_channel_count - 1)]);
+        }
+    }
+    converted
+}
+
+#[cfg(feature = "audio-cpal")]
+fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
+    let channel_count = usize::from(channels).max(1);
+    if channel_count == 1 {
+        return samples.to_vec();
+    }
+    samples
+        .chunks_exact(channel_count)
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
+        .collect()
+}
+
+#[cfg(feature = "audio-cpal")]
+fn resample_interleaved(
+    samples: &[f32],
+    source_rate_hz: u32,
+    target_rate_hz: u32,
+    channels: u16,
+) -> Vec<f32> {
+    let channel_count = usize::from(channels).max(1);
+    let frame_count = samples.len() / channel_count;
+    if samples.is_empty() || frame_count == 0 || source_rate_hz == target_rate_hz {
+        return samples.to_vec();
+    }
+
+    let output_frame_count = ((frame_count as f64 * f64::from(target_rate_hz))
+        / f64::from(source_rate_hz))
+    .round() as usize;
+    let mut output = Vec::with_capacity(output_frame_count.saturating_mul(channel_count));
+    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
+
+    for output_frame_idx in 0..output_frame_count {
+        let source_pos = output_frame_idx as f64 * source_step;
+        let left_frame_idx = source_pos.floor() as usize;
+        let right_frame_idx = (left_frame_idx + 1).min(frame_count - 1);
+        let fraction = (source_pos - left_frame_idx as f64) as f32;
+        for channel_idx in 0..channel_count {
+            let left = samples[left_frame_idx * channel_count + channel_idx];
+            let right = samples[right_frame_idx * channel_count + channel_idx];
+            output.push(left + (right - left) * fraction);
+        }
+    }
+
+    output
 }
 
 #[cfg(feature = "audio-cpal")]
