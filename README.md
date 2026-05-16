@@ -352,6 +352,32 @@ Current milestone audio model: one shared `audio.url` timeline for all lanes.
 Future trace payloads may require per-lane audio references and event-only
 lanes.
 
+### Export runtime live trace JSONL into viewer payload JSON
+
+`listenbury listen --jsonl ...` writes runtime trace lines as `LiveTraceEvent`
+JSONL. Convert that JSONL into the browser viewer payload with:
+
+```bash
+cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.json
+```
+
+Then load `out/live-trace.viewer.json` in the browser viewer with **Choose JSON
+file**.
+
+An example artifact is included:
+
+```text
+examples/browser-transcript-player/live-trace.sample.jsonl
+```
+
+You can generate its corresponding viewer payload locally:
+
+```bash
+cargo run -- dev trace-viewer-export \
+  examples/browser-transcript-player/live-trace.sample.jsonl \
+  examples/browser-transcript-player/live-trace.sample.viewer.json
+```
+
 ### Browser transcript player JSON format
 
 The viewer accepts any of the following:

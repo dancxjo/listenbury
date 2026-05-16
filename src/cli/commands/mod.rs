@@ -9,6 +9,7 @@ mod mic_transcribe;
 mod models;
 mod round_trip;
 mod speech_cache;
+mod trace_viewer_export;
 mod transcribe;
 mod vad_trace;
 
@@ -25,6 +26,7 @@ pub(crate) use mic_transcribe::run_mic_transcribe;
 pub(crate) use models::run_models;
 pub(crate) use round_trip::run_round_trip_wav;
 pub(crate) use speech_cache::run_speech_cache;
+pub(crate) use trace_viewer_export::run_trace_viewer_export;
 pub(crate) use transcribe::run_transcribe;
 pub(crate) use vad_trace::run_vad_trace;
 
