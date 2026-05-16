@@ -197,7 +197,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nYou may emit speech at any time by surrounding it with inline speech tags:\n<sp>words to say aloud :)</sp>\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nYou may emit speech at any time by surrounding it with inline speech tags:\n<sp>words to say aloud :)</sp>\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.\nYou may inspect your source with these tags: <list_files/> lists bundled source files, and <view_file path=\"src/main.rs\" page=\"1\"/> reads one file page. Use source tags outside speech.";
 #[cfg(any(
     test,
     all(
@@ -248,6 +248,56 @@ const SPEECH_PAUSE_MARKER: &str = "<pause/>";
     )
 ))]
 const SPEECH_RESUME_MARKER: &str = "<resume/>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SOURCE_LIST_FILES_MARKER: &str = "<list_files/>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SOURCE_VIEW_FILE_START: &str = "<view_file";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SOURCE_READ_FILE_START: &str = "<read_file";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SOURCE_READ_SOURCE_FILE_START: &str = "<read_source_file";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const SOURCE_PAGE_LINES: usize = 50;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -477,6 +527,19 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                                 "failed to append runtime speech event to live generation",
                             )?;
                         }
+                        if let ContinueRuntimeEvent::SourceCommand { command } = &speech_event {
+                            let source_result = execute_source_command(command);
+                            if !generation_terminal {
+                                append_or_defer_live_event(
+                                    &mut llm,
+                                    id,
+                                    wrap_source_event(&source_result),
+                                    speech_events.defers_live_events(),
+                                    &mut deferred_live_events,
+                                    "failed to append source event to live generation",
+                                )?;
+                            }
+                        }
                         if mouth.enqueue_runtime_event(&speech_event)? {
                             pending_mouth_utterances += 1;
                         }
@@ -582,6 +645,19 @@ fn wrap_runtime_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: runtime ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn wrap_source_event(message: &str) -> String {
+    format!("\n\n--- LIVE EVENT: source ---\n{message}\n--- END LIVE EVENT ---\n\n")
+}
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -597,6 +673,111 @@ fn current_time_message() -> String {
         now.as_secs(),
         now.subsec_millis()
     )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_source_command(command: &SourceCommand) -> String {
+    match command {
+        SourceCommand::ListFiles => execute_list_source_files(),
+        SourceCommand::ViewFile { path, page } => execute_view_source_file(path, *page),
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_list_source_files() -> String {
+    let mut files: Vec<_> = source_bundle().keys().cloned().collect();
+    files.sort();
+    let mut response = String::from("Available source files:\n");
+    for file in files {
+        response.push_str(&file);
+        response.push('\n');
+    }
+    response
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_view_source_file(path: &str, page: usize) -> String {
+    let normalized = path.trim().trim_start_matches("./");
+    let page = page.max(1);
+    let Some(content) = source_bundle().get(normalized) else {
+        return format!("File not found: {normalized}");
+    };
+    let lines: Vec<_> = content.lines().collect();
+    let start = (page - 1) * SOURCE_PAGE_LINES;
+    if start >= lines.len() {
+        return format!(
+            "File {normalized} has only {} lines (page {page} is past EOF).",
+            lines.len()
+        );
+    }
+    let end = (start + SOURCE_PAGE_LINES).min(lines.len());
+    format!(
+        "--- {normalized} (lines {} to {} of {}) ---\n{}\n---",
+        start + 1,
+        end,
+        lines.len(),
+        lines[start..end].join("\n")
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn source_bundle() -> &'static std::collections::HashMap<String, String> {
+    static BUNDLE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
+    BUNDLE.get_or_init(|| {
+        let bundle = include_str!(concat!(env!("OUT_DIR"), "/listenbury_source.txt"));
+        let mut map = std::collections::HashMap::new();
+        let mut current_file = String::new();
+        let mut current_content = String::new();
+
+        for line in bundle.lines() {
+            if let Some(path) = line.strip_prefix("@@@FILE: ") {
+                if !current_file.is_empty() {
+                    map.insert(current_file.clone(), current_content.clone());
+                    current_content.clear();
+                }
+                current_file = path.to_string();
+            } else {
+                current_content.push_str(line);
+                current_content.push('\n');
+            }
+        }
+        if !current_file.is_empty() {
+            map.insert(current_file, current_content);
+        }
+        map
+    })
 }
 
 #[cfg(all(
@@ -1525,6 +1706,7 @@ impl ContinueMouth {
                 Ok(false)
             }
             ContinueRuntimeEvent::UtteranceStarted { .. } => Ok(false),
+            ContinueRuntimeEvent::SourceCommand { .. } => Ok(false),
         }
     }
 }
@@ -2304,6 +2486,7 @@ enum ContinueRuntimeEvent {
     UtteranceStarted { id: u64 },
     UtteranceCompleted { id: u64, content: String },
     SpeechControl { command: SpeechControlCommand },
+    SourceCommand { command: SourceCommand },
 }
 
 #[cfg(any(
@@ -2331,6 +2514,21 @@ enum SpeechControlCommand {
         feature = "tts-piper"
     )
 ))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceCommand {
+    ListFiles,
+    ViewFile { path: String, page: usize },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 impl ContinueRuntimeEvent {
     fn to_message(&self) -> String {
         match self {
@@ -2344,6 +2542,15 @@ impl ContinueRuntimeEvent {
                 )
             }
             Self::SpeechControl { command } => format!("speech_control: {}", command.as_str()),
+            Self::SourceCommand { command } => match command {
+                SourceCommand::ListFiles => "source_command: list_files".to_string(),
+                SourceCommand::ViewFile { path, page } => {
+                    format!(
+                        "source_command: view_file\npath: {}\npage: {page}",
+                        sanitize_runtime_event_content(path)
+                    )
+                }
+            },
         }
     }
 }
@@ -2378,7 +2585,9 @@ impl SpeechControlCommand {
 ))]
 impl SpeechEventDetector {
     fn defers_live_events(&self) -> bool {
-        self.in_speech || longest_marker_prefix_suffix_len(&self.pending) > 0
+        self.in_speech
+            || longest_marker_prefix_suffix_len(&self.pending) > 0
+            || incomplete_source_tag_start(&self.pending).is_some()
     }
 
     fn ingest(&mut self, text: &str) -> Vec<ContinueRuntimeEvent> {
@@ -2391,9 +2600,8 @@ impl SpeechEventDetector {
                     self.commit_pending_speech_text_before_marker_prefix(&mut events);
                     return events;
                 };
-                let marker_text = next_marker.text;
                 let speech_text = self.pending[..next_marker.index].to_string();
-                let marker_end = next_marker.index + marker_text.len();
+                let marker_end = next_marker.index + next_marker.len;
                 self.pending.drain(..marker_end);
 
                 self.append_speech_text(&speech_text, &mut events);
@@ -2412,18 +2620,24 @@ impl SpeechEventDetector {
                     SpeechMarkerKind::Control(command) => {
                         events.push(ContinueRuntimeEvent::SpeechControl { command });
                     }
+                    SpeechMarkerKind::Source(command) => {
+                        events.push(ContinueRuntimeEvent::SourceCommand { command });
+                    }
                 }
             } else {
                 let Some(next_marker) = next_any_open_speech_marker(&self.pending) else {
-                    self.trim_pending_to_marker_prefix();
+                    self.trim_pending_to_marker_prefix_or_source_tag();
                     return events;
                 };
-                let marker_end = next_marker.index + next_marker.text.len();
+                let marker_end = next_marker.index + next_marker.len;
                 self.pending.drain(..marker_end);
                 match next_marker.kind {
                     SpeechMarkerKind::Start => events.push(self.start_utterance()),
                     SpeechMarkerKind::Control(command) => {
                         events.push(ContinueRuntimeEvent::SpeechControl { command });
+                    }
+                    SpeechMarkerKind::Source(command) => {
+                        events.push(ContinueRuntimeEvent::SourceCommand { command });
                     }
                     SpeechMarkerKind::End => {}
                 }
@@ -2508,7 +2722,11 @@ impl SpeechEventDetector {
         self.append_speech_text(&speech_text, events);
     }
 
-    fn trim_pending_to_marker_prefix(&mut self) {
+    fn trim_pending_to_marker_prefix_or_source_tag(&mut self) {
+        if let Some(start) = incomplete_source_tag_start(&self.pending) {
+            self.pending = self.pending[start..].to_string();
+            return;
+        }
         let keep = longest_marker_prefix_suffix_len(&self.pending);
         if keep == 0 {
             self.pending.clear();
@@ -2528,11 +2746,12 @@ impl SpeechEventDetector {
         feature = "tts-piper"
     )
 ))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum SpeechMarkerKind {
     Start,
     End,
     Control(SpeechControlCommand),
+    Source(SourceCommand),
 }
 
 #[cfg(any(
@@ -2544,11 +2763,11 @@ enum SpeechMarkerKind {
         feature = "tts-piper"
     )
 ))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct SpeechMarker {
     kind: SpeechMarkerKind,
     index: usize,
-    text: &'static str,
+    len: usize,
 }
 
 #[cfg(any(
@@ -2573,6 +2792,7 @@ fn next_any_speech_marker(text: &str) -> Option<SpeechMarker> {
             text,
             SpeechMarkerKind::Control(SpeechControlCommand::Resume),
         ),
+        next_source_marker(text),
     ]
     .into_iter()
     .flatten()
@@ -2600,6 +2820,7 @@ fn next_any_open_speech_marker(text: &str) -> Option<SpeechMarker> {
             text,
             SpeechMarkerKind::Control(SpeechControlCommand::Resume),
         ),
+        next_source_marker(text),
     ]
     .into_iter()
     .flatten()
@@ -2615,14 +2836,123 @@ fn next_any_open_speech_marker(text: &str) -> Option<SpeechMarker> {
         feature = "tts-piper"
     )
 ))]
+fn next_source_marker(text: &str) -> Option<SpeechMarker> {
+    let list_marker = text
+        .find(SOURCE_LIST_FILES_MARKER)
+        .map(|index| SpeechMarker {
+            kind: SpeechMarkerKind::Source(SourceCommand::ListFiles),
+            index,
+            len: SOURCE_LIST_FILES_MARKER.len(),
+        });
+
+    [
+        list_marker,
+        next_view_source_marker(text, SOURCE_VIEW_FILE_START),
+        next_view_source_marker(text, SOURCE_READ_FILE_START),
+        next_view_source_marker(text, SOURCE_READ_SOURCE_FILE_START),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|marker| marker.index)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn next_view_source_marker(text: &str, start_marker: &'static str) -> Option<SpeechMarker> {
+    let start = text.find(start_marker)?;
+    let tag = &text[start..];
+    let end_rel = tag.find("/>")?;
+    let raw_tag = &tag[..end_rel + 2];
+    let attrs = &raw_tag[start_marker.len()..raw_tag.len() - 2];
+    let path = tag_attribute(attrs, "path").or_else(|| tag_attribute(attrs, "file"))?;
+    let page = tag_attribute(attrs, "page")
+        .and_then(|page| page.parse::<usize>().ok())
+        .unwrap_or(1)
+        .max(1);
+    Some(SpeechMarker {
+        kind: SpeechMarkerKind::Source(SourceCommand::ViewFile { path, page }),
+        index: start,
+        len: end_rel + 2,
+    })
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn tag_attribute(attrs: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=");
+    let start = attrs.find(&needle)? + needle.len();
+    let rest = attrs[start..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let value = &rest[quote.len_utf8()..];
+        let end = value.find(quote)?;
+        return Some(value[..end].to_string());
+    }
+    let end = rest
+        .find(|ch: char| ch.is_whitespace() || ch == '/')
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn incomplete_source_tag_start(text: &str) -> Option<usize> {
+    [
+        SOURCE_VIEW_FILE_START,
+        SOURCE_READ_FILE_START,
+        SOURCE_READ_SOURCE_FILE_START,
+    ]
+    .into_iter()
+    .filter_map(|start_marker| {
+        let start = text.rfind(start_marker)?;
+        let rest = &text[start..];
+        if rest.contains("/>") {
+            None
+        } else {
+            Some(start)
+        }
+    })
+    .min()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn next_speech_marker(text: &str, kind: SpeechMarkerKind) -> Option<SpeechMarker> {
-    speech_markers(kind)
+    speech_markers(kind.clone())
         .into_iter()
         .filter_map(|marker| {
             text.find(marker).map(|index| SpeechMarker {
-                kind,
+                kind: kind.clone(),
                 index,
-                text: marker,
+                len: marker.len(),
             })
         })
         .min_by_key(|marker| marker.index)
@@ -2644,6 +2974,7 @@ fn speech_markers(kind: SpeechMarkerKind) -> [&'static str; 1] {
         SpeechMarkerKind::Control(SpeechControlCommand::Shutup) => [SPEECH_SHUTUP_MARKER],
         SpeechMarkerKind::Control(SpeechControlCommand::Pause) => [SPEECH_PAUSE_MARKER],
         SpeechMarkerKind::Control(SpeechControlCommand::Resume) => [SPEECH_RESUME_MARKER],
+        SpeechMarkerKind::Source(_) => unreachable!("source markers are variable-length"),
     }
 }
 
@@ -2656,13 +2987,17 @@ fn speech_markers(kind: SpeechMarkerKind) -> [&'static str; 1] {
         feature = "tts-piper"
     )
 ))]
-fn all_speech_markers() -> [&'static str; 5] {
+fn all_speech_markers() -> [&'static str; 9] {
     [
         INLINE_SPEECH_START_MARKER,
         INLINE_SPEECH_END_MARKER,
         SPEECH_SHUTUP_MARKER,
         SPEECH_PAUSE_MARKER,
         SPEECH_RESUME_MARKER,
+        SOURCE_LIST_FILES_MARKER,
+        SOURCE_VIEW_FILE_START,
+        SOURCE_READ_FILE_START,
+        SOURCE_READ_SOURCE_FILE_START,
     ]
 }
 
@@ -2753,8 +3088,9 @@ fn sanitize_runtime_event_content(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinueRuntimeEvent, SpeechControlCommand, SpeechEventDetector, build_initial_prompt,
-        wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_time_event,
+        ContinueRuntimeEvent, SourceCommand, SpeechControlCommand, SpeechEventDetector,
+        build_initial_prompt, execute_list_source_files, execute_view_source_file, wrap_ear_event,
+        wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
 
     #[test]
@@ -2802,6 +3138,14 @@ mod tests {
     }
 
     #[test]
+    fn source_event_is_wrapped_as_live_input() {
+        assert_eq!(
+            wrap_source_event("Available source files:\nsrc/main.rs\n"),
+            "\n\n--- LIVE EVENT: source ---\nAvailable source files:\nsrc/main.rs\n\n--- END LIVE EVENT ---\n\n"
+        );
+    }
+
+    #[test]
     fn initial_prompt_includes_live_event_hygiene() {
         let prompt = build_initial_prompt(&["Think continuously.".to_string()]);
 
@@ -2814,6 +3158,8 @@ mod tests {
         assert!(prompt.contains("<shutup/> immediately halts current speech"));
         assert!(prompt.contains("<pause/> pauses speech playback"));
         assert!(prompt.contains("<resume/> resumes paused speech"));
+        assert!(prompt.contains("<list_files/> lists bundled source files"));
+        assert!(prompt.contains("<view_file path=\"src/main.rs\" page=\"1\"/>"));
         assert!(!prompt.contains("--- SPEECH ---"));
         assert!(prompt.contains("Emoji inside speech tags are instructions to your countenance"));
     }
@@ -3028,6 +3374,60 @@ mod tests {
             }]
         );
         assert!(!detector.defers_live_events());
+    }
+
+    #[test]
+    fn speech_detector_parses_source_file_tags() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert_eq!(
+            detector.ingest(
+                "inspect <list_files/> then <view_file path=\"src/cli/commands/continue_generation.rs\" page=\"2\"/>"
+            ),
+            vec![
+                ContinueRuntimeEvent::SourceCommand {
+                    command: SourceCommand::ListFiles
+                },
+                ContinueRuntimeEvent::SourceCommand {
+                    command: SourceCommand::ViewFile {
+                        path: "src/cli/commands/continue_generation.rs".to_string(),
+                        page: 2
+                    }
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn speech_detector_defers_live_events_during_partial_source_tag() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert!(
+            detector
+                .ingest("<view_file path=\"src/main.rs\"")
+                .is_empty()
+        );
+        assert!(detector.defers_live_events());
+        assert_eq!(
+            detector.ingest(" page=\"1\"/>"),
+            vec![ContinueRuntimeEvent::SourceCommand {
+                command: SourceCommand::ViewFile {
+                    path: "src/main.rs".to_string(),
+                    page: 1
+                }
+            }]
+        );
+        assert!(!detector.defers_live_events());
+    }
+
+    #[test]
+    fn source_bundle_lists_and_views_files() {
+        let files = execute_list_source_files();
+        assert!(files.contains("src/cli/commands/continue_generation.rs"));
+
+        let page = execute_view_source_file("src/cli/commands/continue_generation.rs", 1);
+        assert!(page.contains("--- src/cli/commands/continue_generation.rs"));
+        assert!(page.contains("use crate::cli::ContinueCommand;"));
     }
 
     #[test]
