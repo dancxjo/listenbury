@@ -39,34 +39,18 @@ fn browser_transcript_player_demo_json_deserializes() {
     assert!(audio.url.ends_with("welcome.wav"));
     assert_eq!(audio.duration_ms, Some(2081));
 
-    assert_eq!(
-        payload.streams.len(),
-        4,
-        "demo should include all bundled lanes"
-    );
-    assert!(
-        payload
-            .streams
-            .iter()
-            .all(|lane| lane.label.as_ref().is_some_and(|label| !label.is_empty()))
-    );
-
-    let stream_ids: Vec<u64> = payload
+    assert_eq!(payload.streams.len(), 4, "demo should include all bundled lanes");
+    assert!(payload
         .streams
         .iter()
-        .map(|lane| lane.stream.id.0)
-        .collect();
-    assert_eq!(
-        stream_ids,
-        vec![1, 2, 3, 4],
-        "expected stream IDs in demo order"
-    );
-    assert!(
-        payload
-            .streams
-            .iter()
-            .all(|lane| !lane.stream.words.is_empty())
-    );
+        .all(|lane| lane.label.as_ref().is_some_and(|label| !label.is_empty())));
+
+    let stream_ids: Vec<u64> = payload.streams.iter().map(|lane| lane.stream.id.0).collect();
+    assert_eq!(stream_ids, vec![1, 2, 3, 4], "expected stream IDs in demo order");
+    assert!(payload
+        .streams
+        .iter()
+        .all(|lane| !lane.stream.words.is_empty()));
     assert!(
         payload
             .streams
