@@ -13,6 +13,7 @@ pub mod speech;
 pub mod text_stability;
 pub mod time;
 pub mod vision;
+pub mod word;
 
 pub use audio::frame::AudioFrame;
 pub use audio::{AudioInput, AudioOutput};
