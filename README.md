@@ -244,6 +244,8 @@ Listenbury's core runtime does not require Docker or cold-memory services. This 
 cp .env.example .env
 ```
 
+Then edit `.env` and set a secure `NEO4J_PASS`.
+
 2. Start the cold-memory services:
 
 ```bash
