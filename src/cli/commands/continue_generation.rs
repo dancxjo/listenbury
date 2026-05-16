@@ -89,6 +89,13 @@ use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObserver};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
@@ -2864,6 +2871,9 @@ enum ContinueEarEvent {
     AuditoryObservation {
         text: String,
     },
+    EnvironmentalSound {
+        sound: EnvironmentalSound,
+    },
     SelfVoiceHeard {
         delay_ms: i64,
         gain: f32,
@@ -2904,6 +2914,7 @@ impl ContinueEarEvent {
             Self::SpeechStarted => "speech_started".to_string(),
             Self::SpeechStopped => "speech_stopped".to_string(),
             Self::AuditoryObservation { text } => text.clone(),
+            Self::EnvironmentalSound { sound } => sound.description.clone(),
             Self::SelfVoiceHeard {
                 delay_ms,
                 gain,
@@ -2927,6 +2938,9 @@ impl ContinueEarEvent {
         match self {
             Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
             Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
+            Self::EnvironmentalSound { sound } => {
+                Some(PromptPacket::ear_observation(sound.description.clone()))
+            }
             Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
                 Some(PromptPacket::ear_observation(self.to_message()))
             }
@@ -3183,6 +3197,7 @@ struct ContinueEarState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    environment: EnvironmentalSoundObserver,
     auditory_scene: AuditorySceneAnalyzer,
     frame_time_ms: u64,
     vad_observation: VadObservationState,
@@ -3258,6 +3273,7 @@ fn run_continue_ear_processor(
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
+        environment: EnvironmentalSoundObserver::default(),
         auditory_scene: AuditorySceneAnalyzer::new(speaker_reference),
         frame_time_ms: 0,
         vad_observation: VadObservationState {
@@ -3490,6 +3506,12 @@ fn process_continue_vad_and_asr_frame(
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let vad_result = state.vad.process_frame(&frame)?;
+    if let Some(sound) = state
+        .environment
+        .observe_frame(&frame, vad_result.is_speech)
+    {
+        let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+    }
     let events = state.segmenter.process(vad_result);
     for event in &events {
         match event {
