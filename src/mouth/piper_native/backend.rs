@@ -10,6 +10,8 @@ use crate::mouth::backend::TtsBackend;
 use super::{PiperIdSequence, PiperVoiceConfig};
 
 const NATIVE_PIPER_FRAME_SAMPLES: usize = 1024;
+// Piper ONNX vits output is a single waveform tensor for one speaker stream.
+const NATIVE_PIPER_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperModelContract {
@@ -514,17 +516,17 @@ fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
 }
 
 fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<AudioFrame> {
+    assert!(frame_samples > 0, "frame_samples must be greater than zero");
     if pcm.samples.is_empty() {
         return Vec::new();
     }
 
-    let frame_samples = frame_samples.max(1);
     pcm.samples
         .chunks(frame_samples)
         .map(|chunk| AudioFrame {
             captured_at: crate::time::ExactTimestamp::now(),
             sample_rate_hz: pcm.sample_rate_hz,
-            channels: 1,
+            channels: NATIVE_PIPER_CHANNELS,
             samples: chunk
                 .iter()
                 .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
