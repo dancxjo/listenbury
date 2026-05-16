@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use anyhow::Result;
 
 use crate::audio::frame::AudioFrame;
-use crate::mouth::planner::{ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan};
+use crate::mouth::planner::{ExpressiveUnit, FaceCommand, MouthCommand};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
 

@@ -87,6 +87,13 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::hearing::{SelfHearingState, SuppressionDecision};
 use listenbury::hearing::vad::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
@@ -260,7 +267,7 @@ struct LiveHalfDuplexState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
-    self_hearing: listenbury::SelfHearingState,
+    self_hearing: SelfHearingState,
     controller: ConversationController,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
@@ -490,7 +497,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
-        self_hearing: listenbury::SelfHearingState::default(),
+        self_hearing: SelfHearingState::default(),
         controller: ConversationController::default(),
         frame_time_ms: 0,
         last_vad_state: None,
@@ -587,7 +594,7 @@ fn process_live_frame(
     if state
         .self_hearing
         .suppression_decision_at(frame.captured_at)
-        == listenbury::SuppressionDecision::Suppress
+        == SuppressionDecision::Suppress
     {
         // Pete is speaking or the echo-tail window is still active; drop the frame
         // so that VAD/ASR cannot transcribe Pete's own voice.
@@ -674,7 +681,7 @@ fn stream_speech_to_tts(
     model_profile: ModelProfile,
     llm_model_path: &std::path::Path,
     no_backchannels: bool,
-    self_hearing: &mut listenbury::SelfHearingState,
+    self_hearing: &mut SelfHearingState,
     controller: &mut ConversationController,
     user_turn_id: u64,
 ) -> Result<()> {
@@ -1133,7 +1140,7 @@ fn maybe_plan_cached_backchannel(
 fn drain_ready_tts_audio(
     tts: &mut impl TextToSpeech,
     spoken_text: &str,
-    self_hearing: &mut listenbury::SelfHearingState,
+    self_hearing: &mut SelfHearingState,
     source: &str,
     controller: &mut ConversationController,
 ) -> Result<bool> {
@@ -1165,7 +1172,7 @@ fn drain_ready_tts_audio(
 fn flush_tts_audio(
     tts: &mut impl TextToSpeech,
     spoken_text: &str,
-    self_hearing: &mut listenbury::SelfHearingState,
+    self_hearing: &mut SelfHearingState,
     source: &str,
     timeout: Duration,
     prior_audio_played: bool,

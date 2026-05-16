@@ -96,6 +96,15 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::hearing::{
+    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
+};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
@@ -134,10 +143,7 @@ use listenbury::mouth::tts::TextToSpeech;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{
-    AudioFrame, AuditoryRouting, AuditorySceneAnalyzer, ExactTimestamp, LlamaCppConfig,
-    LlamaCppEngine, PiperTextToSpeech, SpeakerReferenceMask,
-};
+use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -2343,6 +2349,7 @@ fn append_pending_live_events(
             | ContinueEarEvent::SpeechStarted
             | ContinueEarEvent::SpeechStopped
             | ContinueEarEvent::AuditoryObservation { .. }
+            | ContinueEarEvent::EnvironmentalSound { .. }
             | ContinueEarEvent::SelfVoiceHeard { .. }
             | ContinueEarEvent::OverlapDetected { .. }
             | ContinueEarEvent::Error { .. } => {}
@@ -2502,6 +2509,7 @@ impl DuplexTurnController {
             }
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::AuditoryObservation { .. }
+            | ContinueEarEvent::EnvironmentalSound { .. }
             | ContinueEarEvent::SelfVoiceHeard { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
@@ -3756,7 +3764,7 @@ fn process_continue_vad_and_asr_frame(
 fn send_self_hearing_event_if_due(
     state: &mut ContinueEarState,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
-    analysis: &listenbury::AuditoryFrameAnalysis,
+    analysis: &AuditoryFrameAnalysis,
 ) {
     if !rate_limit_elapsed(
         state.last_self_hearing_observation_ms,
@@ -3782,7 +3790,7 @@ fn send_self_hearing_event_if_due(
 fn send_overlap_event_if_due(
     state: &mut ContinueEarState,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
-    analysis: &listenbury::AuditoryFrameAnalysis,
+    analysis: &AuditoryFrameAnalysis,
     duration_ms: u64,
 ) {
     if !rate_limit_elapsed(
