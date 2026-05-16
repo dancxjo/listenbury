@@ -234,6 +234,34 @@ Registered model assets include:
 
 `transcribe`, `listen`, `ask`, `say`, and `reply` model resolution order is: explicit CLI flag -> path environment variable -> selected registered model under `LISTENBURY_HOME` -> first matching file discovered under `./models`.
 
+## Optional cold-memory stack (Qdrant + Neo4j)
+
+Listenbury's core runtime does not require Docker or cold-memory services. This stack is optional and intended for asynchronous distilled traces only (never the hot audio/LLM/TTS path).
+
+1. Copy the example env file:
+
+```bash
+cp .env.example .env
+```
+
+2. Start the cold-memory services:
+
+```bash
+docker compose up -d qdrant neo4j
+```
+
+3. Stop them when done:
+
+```bash
+docker compose stop qdrant neo4j
+docker compose rm -f qdrant neo4j
+```
+
+Persistent local data directories:
+
+- `./qdrant_data`
+- `./neo4j_data`
+
 ## Validation
 
 Useful local checks:
