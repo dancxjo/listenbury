@@ -38,6 +38,16 @@ use crate::cli::piper::{piper_config_for_voice, resolve_piper_bin};
     feature = "tts-piper"
 ))]
 use anyhow::Context;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use chrono::{Local, SecondsFormat};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -80,13 +90,23 @@ use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
     feature = "tts-piper"
 ))]
 use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mouth::planner::strip_emoji;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit, strip_emoji};
+use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -117,7 +137,17 @@ use listenbury::{VadBackendKind, WhisperSpeechRecognizer};
         feature = "tts-piper"
     )
 ))]
-use seams::sentence_detector::dialog_detector::SentenceDetectorDialog;
+use serde::{Deserialize, Serialize};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use serde_json::{Value, json};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -162,7 +192,7 @@ use std::sync::OnceLock;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -176,7 +206,20 @@ use std::thread::JoinHandle;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use tsrun::{
+    Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
+    js_value_to_json,
+};
 
 #[cfg(any(
     test,
@@ -197,7 +240,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nText outside <sp>...</sp> is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nOnly text inside inline speech tags is spoken aloud or acts in the real world:\n<sp>words to say aloud :)</sp>\nIf you want the user to hear something, put those exact words inside <sp>...</sp>. If text is not inside <sp>...</sp>, the user does not hear it.\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.\nYou may inspect your own source code with these tags: <list_files/> lists bundled files from Pete's codebase, and <view_file path=\"src/main.rs\" page=\"1\"/> reads one page of Pete's source. Use source tags outside speech.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text), shutup(), pause(), resume(), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, and resume() to resume paused playback.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
 #[cfg(any(
     test,
     all(
@@ -207,7 +250,7 @@ const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript 
         feature = "tts-piper"
     )
 ))]
-const INLINE_SPEECH_START_MARKER: &str = "<sp>";
+const SOURCE_TYPESCRIPT_START: &str = "<ts>";
 #[cfg(any(
     test,
     all(
@@ -217,77 +260,7 @@ const INLINE_SPEECH_START_MARKER: &str = "<sp>";
         feature = "tts-piper"
     )
 ))]
-const INLINE_SPEECH_END_MARKER: &str = "</sp>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SPEECH_SHUTUP_MARKER: &str = "<shutup/>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SPEECH_PAUSE_MARKER: &str = "<pause/>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SPEECH_RESUME_MARKER: &str = "<resume/>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SOURCE_LIST_FILES_MARKER: &str = "<list_files/>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SOURCE_VIEW_FILE_START: &str = "<view_file";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SOURCE_READ_FILE_START: &str = "<read_file";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SOURCE_READ_SOURCE_FILE_START: &str = "<read_source_file";
+const SOURCE_TYPESCRIPT_END: &str = "</ts>";
 #[cfg(any(
     test,
     all(
@@ -325,7 +298,17 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-const TIME_EVENT_INTERVAL: Duration = Duration::from_secs(2);
+const TIME_EVENT_INTERVAL_BASE_MS: u64 = 1_000;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const TIME_EVENT_INTERVAL_JITTER_MS: u64 = 300;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -437,11 +420,13 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         .context("failed to spawn stdin reader")?;
 
     eprintln!(
-        "listenbury dev continue: streaming one generation; stdin lines, mic transcripts, and 10s time events append to the live context. Ctrl-C cancels."
+        "listenbury dev continue: streaming one generation; stdin lines, mic transcripts, and jittered ~1s time events append to the live context. Ctrl-C cancels."
     );
 
     let mut cancelled = false;
-    let mut next_time_event_at = Instant::now() + TIME_EVENT_INTERVAL;
+    let mut time_event_jitter_state = initial_time_event_jitter_state();
+    let mut next_time_event_at =
+        Instant::now() + next_time_event_interval(&mut time_event_jitter_state);
     let mut speech_events = SpeechEventDetector::default();
     let mut pending_mouth_utterances = 0usize;
     let mut llm_paused_for_mouth = false;
@@ -461,6 +446,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             &mut pending_mouth_utterances,
             &mut mouth_playback_paused,
             &mut next_time_event_at,
+            &mut time_event_jitter_state,
             speech_events.defers_live_events(),
             &mut deferred_live_events,
         )?;
@@ -507,18 +493,34 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                         if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
                             &speech_event
                         {
-                            llm_session.remember_spoken(content);
+                            if clean_spoken_content(content).is_some() {
+                                llm_session.remember_spoken(content);
+                            }
                         }
                         if let ContinueRuntimeEvent::SourceCommand { command } = &speech_event {
                             let source_result = execute_source_command(command);
+                            eprintln!("[dev continue] source result:\n{}", source_result.message);
                             if !generation_terminal {
                                 append_or_defer_live_event(
                                     &mut llm_session,
-                                    PromptPacket::source(source_result),
+                                    PromptPacket::source(source_result.message.clone()),
                                     speech_events.defers_live_events(),
                                     &mut deferred_live_events,
                                     "failed to append source event to live generation",
                                 )?;
+                            }
+                            for runtime_event in source_result.runtime_events {
+                                if let ContinueRuntimeEvent::UtteranceCompleted {
+                                    content, ..
+                                } = &runtime_event
+                                {
+                                    if clean_spoken_content(content).is_some() {
+                                        llm_session.remember_spoken(content);
+                                    }
+                                }
+                                if mouth.enqueue_runtime_event(&runtime_event)? {
+                                    pending_mouth_utterances += 1;
+                                }
                             }
                         }
                         if mouth.enqueue_runtime_event(&speech_event)? {
@@ -623,21 +625,64 @@ fn wrap_source_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: source ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn current_time_message() -> String {
+    let now = Local::now();
+    format!(
+        "The current local time is {}. Unix time is {}.{:03} seconds.",
+        now.to_rfc3339_opts(SecondsFormat::Millis, false),
+        now.timestamp(),
+        now.timestamp_subsec_millis()
+    )
+}
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn current_time_message() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::ZERO);
-    format!(
-        "The current Unix time is {}.{:03} seconds.",
-        now.as_secs(),
-        now.subsec_millis()
+fn initial_time_event_jitter_state() -> u64 {
+    let now = Local::now();
+    let nanos = now
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| now.timestamp_millis().saturating_mul(1_000_000));
+    let seed = nanos as u64 ^ u64::from(std::process::id());
+    if seed == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        seed
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
     )
+))]
+fn next_time_event_interval(jitter_state: &mut u64) -> Duration {
+    *jitter_state ^= *jitter_state << 7;
+    *jitter_state ^= *jitter_state >> 9;
+    *jitter_state ^= *jitter_state << 8;
+    if *jitter_state == 0 {
+        *jitter_state = 0x9e37_79b9_7f4a_7c15;
+    }
+
+    let span = TIME_EVENT_INTERVAL_JITTER_MS * 2 + 1;
+    let jitter = (*jitter_state % span) as i64 - TIME_EVENT_INTERVAL_JITTER_MS as i64;
+    Duration::from_millis((TIME_EVENT_INTERVAL_BASE_MS as i64 + jitter) as u64)
 }
 
 #[cfg(all(
@@ -1293,11 +1338,25 @@ fn next_char_boundary(text: &str, mut index: usize) -> usize {
         feature = "tts-piper"
     )
 ))]
-fn execute_source_command(command: &SourceCommand) -> String {
+fn execute_source_command(command: &SourceCommand) -> SourceCommandExecution {
     match command {
-        SourceCommand::ListFiles => execute_list_source_files(),
-        SourceCommand::ViewFile { path, page } => execute_view_source_file(path, *page),
+        SourceCommand::RunTypeScript { source } => execute_typescript_source(source),
     }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceCommandExecution {
+    message: String,
+    runtime_events: Vec<ContinueRuntimeEvent>,
 }
 
 #[cfg(any(
@@ -1362,6 +1421,88 @@ fn execute_view_source_file(path: &str, page: usize) -> String {
         feature = "tts-piper"
     )
 ))]
+fn execute_search_source(query: &str, limit: usize) -> String {
+    search_source_lines(query, limit, false)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_grep_source(pattern: &str, limit: usize) -> String {
+    search_source_lines(pattern, limit, true)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn search_source_lines(needle: &str, limit: usize, literal: bool) -> String {
+    let needle = needle.trim();
+    if needle.is_empty() {
+        return "Search query was empty.".to_string();
+    }
+
+    let max_results = limit.clamp(1, 30);
+    let folded_needle = needle.to_lowercase();
+    let mut files: Vec<_> = source_bundle().iter().collect();
+    files.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    let mut results = Vec::new();
+    for (file, content) in files {
+        for (index, line) in content.lines().enumerate() {
+            if line.to_lowercase().contains(&folded_needle) {
+                results.push(format!(
+                    "{}:{}: {}",
+                    file,
+                    index + 1,
+                    compact_prompt_line(line.trim(), 220)
+                ));
+                if results.len() >= max_results {
+                    break;
+                }
+            }
+        }
+        if results.len() >= max_results {
+            break;
+        }
+    }
+
+    if results.is_empty() {
+        format!(
+            "No source matches for {}: {}",
+            if literal { "pattern" } else { "query" },
+            needle
+        )
+    } else {
+        format!(
+            "Source matches for {} \"{}\":\n{}",
+            if literal { "pattern" } else { "query" },
+            needle,
+            results.join("\n")
+        )
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn source_bundle() -> &'static std::collections::HashMap<String, String> {
     static BUNDLE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
     BUNDLE.get_or_init(|| {
@@ -1389,6 +1530,517 @@ fn source_bundle() -> &'static std::collections::HashMap<String, String> {
     })
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TypeScriptCommand {
+    Say(String),
+    Shutup,
+    Pause,
+    Resume,
+    ListFiles,
+    ReadSourceFile { file: String, page: usize },
+    SearchSource { query: String, limit: usize },
+    GrepSource { pattern: String, limit: usize },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TypeScriptCommandPayload {
+    Say {
+        text: String,
+    },
+    Shutup,
+    Pause,
+    Resume,
+    ListFiles,
+    ReadSourceFile {
+        file: String,
+        page: Option<usize>,
+    },
+    SearchSource {
+        query: String,
+        limit: Option<usize>,
+    },
+    GrepSource {
+        pattern: String,
+        limit: Option<usize>,
+    },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_typescript_source(script: &str) -> SourceCommandExecution {
+    match execute_typescript_commands(script) {
+        Ok(commands) => execute_typescript_command_results(script, &commands),
+        Err(error) => SourceCommandExecution {
+            message: format!("TypeScript failed:\n{error}"),
+            runtime_events: Vec::new(),
+        },
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_typescript_command_results(
+    script: &str,
+    commands: &[TypeScriptCommand],
+) -> SourceCommandExecution {
+    let mut response = String::from("TypeScript executed.\nSource:\n");
+    response.push_str(script.trim());
+    if commands.is_empty() {
+        response.push_str("\n\nNo commands returned.");
+        return SourceCommandExecution {
+            message: response,
+            runtime_events: Vec::new(),
+        };
+    }
+
+    response.push_str("\n\nResults:");
+    let mut runtime_events = Vec::new();
+    for command in commands {
+        let (name, output) = match command {
+            TypeScriptCommand::Say(text) => {
+                runtime_events.push(ContinueRuntimeEvent::UtteranceCompleted {
+                    id: next_typescript_utterance_id(),
+                    content: text.trim().to_string(),
+                });
+                ("say", format!("Speech queued: {}", text.trim()))
+            }
+            TypeScriptCommand::Shutup => {
+                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Shutup,
+                });
+                (
+                    "shutup",
+                    "Speech playback stopped and queue cleared.".to_string(),
+                )
+            }
+            TypeScriptCommand::Pause => {
+                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Pause,
+                });
+                ("pause", "Speech playback paused.".to_string())
+            }
+            TypeScriptCommand::Resume => {
+                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
+                    command: SpeechControlCommand::Resume,
+                });
+                ("resume", "Speech playback resumed.".to_string())
+            }
+            TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
+            TypeScriptCommand::ReadSourceFile { file, page } => {
+                ("read_source_file", execute_view_source_file(file, *page))
+            }
+            TypeScriptCommand::SearchSource { query, limit } => {
+                ("search_source", execute_search_source(query, *limit))
+            }
+            TypeScriptCommand::GrepSource { pattern, limit } => {
+                ("grep_source", execute_grep_source(pattern, *limit))
+            }
+        };
+        response.push_str("\n\n[");
+        response.push_str(name);
+        response.push_str("]\n");
+        response.push_str(&output);
+    }
+    SourceCommandExecution {
+        message: response,
+        runtime_events,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn next_typescript_utterance_id() -> u64 {
+    static NEXT_ID: AtomicU64 = AtomicU64::new(10_000);
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
+    if script.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let config = InterpreterConfig {
+        internal_modules: vec![will_typescript_module()],
+        ..Default::default()
+    };
+    let mut interp = Interpreter::with_config(config);
+    interp
+        .prepare(script, Some(tsrun::ModulePath::new("/listenbury-will.ts")))
+        .map_err(tsrun_error)?;
+    let value = loop {
+        match interp.step().map_err(tsrun_error)? {
+            StepResult::Continue => continue,
+            StepResult::Complete(value) => break value,
+            StepResult::NeedImports(imports) => {
+                let names = imports
+                    .iter()
+                    .map(|request| request.specifier.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!("unsupported TypeScript import(s): {names}");
+            }
+            StepResult::Suspended { .. } => {
+                anyhow::bail!("TypeScript execution suspended; async host commands are not enabled")
+            }
+            StepResult::Done => return Ok(Vec::new()),
+        }
+    };
+    let command_value = js_value_to_json(value.value()).map_err(tsrun_error)?;
+    let payloads = parse_typescript_command_payloads(command_value)?;
+    Ok(payloads
+        .into_iter()
+        .filter_map(|payload| match payload {
+            TypeScriptCommandPayload::Say { text } => {
+                non_empty_text(&text).map(|text| TypeScriptCommand::Say(text.to_string()))
+            }
+            TypeScriptCommandPayload::Shutup => Some(TypeScriptCommand::Shutup),
+            TypeScriptCommandPayload::Pause => Some(TypeScriptCommand::Pause),
+            TypeScriptCommandPayload::Resume => Some(TypeScriptCommand::Resume),
+            TypeScriptCommandPayload::ListFiles => Some(TypeScriptCommand::ListFiles),
+            TypeScriptCommandPayload::ReadSourceFile { file, page } => {
+                let file = file.trim();
+                (!file.is_empty()).then(|| TypeScriptCommand::ReadSourceFile {
+                    file: file.to_string(),
+                    page: page.unwrap_or(1).max(1),
+                })
+            }
+            TypeScriptCommandPayload::SearchSource { query, limit } => {
+                non_empty_text(&query).map(|query| TypeScriptCommand::SearchSource {
+                    query: query.to_string(),
+                    limit: limit.unwrap_or(12).max(1),
+                })
+            }
+            TypeScriptCommandPayload::GrepSource { pattern, limit } => non_empty_text(&pattern)
+                .map(|pattern| TypeScriptCommand::GrepSource {
+                    pattern: pattern.to_string(),
+                    limit: limit.unwrap_or(12).max(1),
+                }),
+        })
+        .collect())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn non_empty_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn tsrun_error(err: JsError) -> anyhow::Error {
+    anyhow::anyhow!("TypeScript execution failed: {err}")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn parse_typescript_command_payloads(value: Value) -> Result<Vec<TypeScriptCommandPayload>> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(items) => items
+            .into_iter()
+            .filter(|item| !item.is_null())
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into),
+        Value::Object(_) => Ok(vec![serde_json::from_value(value)?]),
+        other => {
+            anyhow::bail!("TypeScript must return a command object or command array, got {other}")
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn will_typescript_module() -> InternalModule {
+    InternalModule::native("pete:will")
+        .with_function("say", ts_say, 1)
+        .with_function("shutup", ts_shutup, 0)
+        .with_function("pause", ts_pause, 0)
+        .with_function("resume", ts_resume, 0)
+        .with_function("listFiles", ts_list_files, 0)
+        .with_function("readSourceFile", ts_read_source_file, 2)
+        .with_function("readFile", ts_read_source_file, 2)
+        .with_function("searchSource", ts_search_source, 2)
+        .with_function("grepSource", ts_grep_source, 2)
+        .build()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn command_value(interp: &mut Interpreter, value: Value) -> std::result::Result<Guarded, JsError> {
+    let guard = api::create_guard(interp);
+    let value = api::create_from_json(interp, &guard, &value)?;
+    Ok(Guarded::with_guard(value, guard))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn string_arg(args: &[JsValue], index: usize) -> String {
+    args.get(index)
+        .and_then(JsValue::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn optional_positive_integer_arg(args: &[JsValue], index: usize) -> Option<usize> {
+    args.get(index)
+        .and_then(JsValue::as_number)
+        .filter(|number| number.is_finite() && *number > 0.0)
+        .map(|number| number.floor() as usize)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_say(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "say", "text": string_arg(args, 0) }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_shutup(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "shutup" }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_pause(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "pause" }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_resume(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "resume" }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_list_files(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "list_files" }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_read_source_file(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let mut value = json!({ "kind": "read_source_file", "file": string_arg(args, 0) });
+    if let Some(page) = optional_positive_integer_arg(args, 1) {
+        value["page"] = json!(page);
+    }
+    command_value(interp, value)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_search_source(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let mut value = json!({ "kind": "search_source", "query": string_arg(args, 0) });
+    if let Some(limit) = optional_positive_integer_arg(args, 1) {
+        value["limit"] = json!(limit);
+    }
+    command_value(interp, value)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_grep_source(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let mut value = json!({ "kind": "grep_source", "pattern": string_arg(args, 0) });
+    if let Some(limit) = optional_positive_integer_arg(args, 1) {
+        value["limit"] = json!(limit);
+    }
+    command_value(interp, value)
+}
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -1403,6 +2055,7 @@ fn append_pending_live_events(
     pending_mouth_utterances: &mut usize,
     mouth_playback_paused: &mut bool,
     next_time_event_at: &mut Instant,
+    time_event_jitter_state: &mut u64,
     defer_live_events: bool,
     deferred_live_events: &mut VecDeque<PromptPacket>,
 ) -> Result<()> {
@@ -1419,7 +2072,7 @@ fn append_pending_live_events(
             deferred_live_events,
             "failed to append time event to live generation",
         )?;
-        *next_time_event_at = now + TIME_EVENT_INTERVAL;
+        *next_time_event_at = now + next_time_event_interval(time_event_jitter_state);
     }
 
     for stdin_event in stdin_rx.try_iter() {
@@ -2290,14 +2943,14 @@ impl ContinueMouth {
     fn enqueue_runtime_event(&mut self, event: &ContinueRuntimeEvent) -> Result<bool> {
         match event {
             ContinueRuntimeEvent::UtteranceCompleted { id, content } => {
-                if strip_emoji(content).trim().is_empty() {
+                let Some(content) = clean_spoken_content(content) else {
                     return Ok(false);
-                }
+                };
 
                 self.tx
                     .send(ContinueMouthCommand::Speak {
                         id: *id,
-                        text: content.to_string(),
+                        text: content,
                     })
                     .context("failed to send speech to dev continue mouth worker")?;
                 Ok(true)
@@ -2313,7 +2966,6 @@ impl ContinueMouth {
                     .context("failed to send speech control to dev continue mouth worker")?;
                 Ok(false)
             }
-            ContinueRuntimeEvent::UtteranceStarted { .. } => Ok(false),
             ContinueRuntimeEvent::SourceCommand { .. } => Ok(false),
         }
     }
@@ -3076,10 +3728,6 @@ fn build_initial_prompt(prompt_words: &[String]) -> String {
 #[derive(Debug, Default)]
 struct SpeechEventDetector {
     pending: String,
-    in_speech: bool,
-    next_utterance_id: u64,
-    current_utterance_id: Option<u64>,
-    current_utterance_content: String,
 }
 
 #[cfg(any(
@@ -3093,7 +3741,6 @@ struct SpeechEventDetector {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContinueRuntimeEvent {
-    UtteranceStarted { id: u64 },
     UtteranceCompleted { id: u64, content: String },
     SpeechControl { command: SpeechControlCommand },
     SourceCommand { command: SourceCommand },
@@ -3126,17 +3773,13 @@ enum SpeechControlCommand {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SourceCommand {
-    ListFiles,
-    ViewFile { path: String, page: usize },
+    RunTypeScript { source: String },
 }
 
 #[cfg(test)]
 impl ContinueRuntimeEvent {
     fn to_message(&self) -> String {
         match self {
-            Self::UtteranceStarted { id } => {
-                format!("utterance_started: id={id}")
-            }
             Self::UtteranceCompleted { id, content } => {
                 format!(
                     "utterance_completed: id={id}\ncontent:\n{}",
@@ -3145,11 +3788,10 @@ impl ContinueRuntimeEvent {
             }
             Self::SpeechControl { command } => format!("speech_control: {}", command.as_str()),
             Self::SourceCommand { command } => match command {
-                SourceCommand::ListFiles => "source_command: list_files".to_string(),
-                SourceCommand::ViewFile { path, page } => {
+                SourceCommand::RunTypeScript { source } => {
                     format!(
-                        "source_command: view_file\npath: {}\npage: {page}",
-                        sanitize_runtime_event_content(path)
+                        "source_command: typescript\nsource:\n{}",
+                        sanitize_runtime_event_content(source)
                     )
                 }
             },
@@ -3179,8 +3821,7 @@ impl SpeechControlCommand {
 ))]
 impl SpeechEventDetector {
     fn defers_live_events(&self) -> bool {
-        self.in_speech
-            || longest_marker_prefix_suffix_len(&self.pending) > 0
+        longest_marker_prefix_suffix_len(&self.pending) > 0
             || incomplete_source_tag_start(&self.pending).is_some()
     }
 
@@ -3189,131 +3830,16 @@ impl SpeechEventDetector {
         let mut events = Vec::new();
 
         loop {
-            if self.in_speech {
-                let Some(next_marker) = next_any_speech_marker(&self.pending) else {
-                    self.commit_pending_speech_text_before_marker_prefix(&mut events);
-                    return events;
-                };
-                let speech_text = self.pending[..next_marker.index].to_string();
-                let marker_end = next_marker.index + next_marker.len;
-                self.pending.drain(..marker_end);
-
-                self.append_speech_text(&speech_text, &mut events);
-                match next_marker.kind {
-                    SpeechMarkerKind::Start => {
-                        if let Some(event) = self.flush_current_utterance() {
-                            events.push(event);
-                        }
-                        events.push(self.start_utterance());
-                    }
-                    SpeechMarkerKind::End => {
-                        if let Some(event) = self.flush_current_utterance() {
-                            events.push(event);
-                        }
-                    }
-                    SpeechMarkerKind::Control(command) => {
-                        events.push(ContinueRuntimeEvent::SpeechControl { command });
-                    }
-                    SpeechMarkerKind::Source(command) => {
-                        events.push(ContinueRuntimeEvent::SourceCommand { command });
-                    }
-                }
-            } else {
-                let Some(next_marker) = next_any_open_speech_marker(&self.pending) else {
-                    self.trim_pending_to_marker_prefix_or_source_tag();
-                    return events;
-                };
-                let marker_end = next_marker.index + next_marker.len;
-                self.pending.drain(..marker_end);
-                match next_marker.kind {
-                    SpeechMarkerKind::Start => events.push(self.start_utterance()),
-                    SpeechMarkerKind::Control(command) => {
-                        events.push(ContinueRuntimeEvent::SpeechControl { command });
-                    }
-                    SpeechMarkerKind::Source(command) => {
-                        events.push(ContinueRuntimeEvent::SourceCommand { command });
-                    }
-                    SpeechMarkerKind::End => {}
-                }
-            }
+            let Some(marker) = next_typescript_marker(&self.pending) else {
+                self.trim_pending_to_marker_prefix_or_source_tag();
+                return events;
+            };
+            let marker_end = marker.index + marker.len;
+            self.pending.drain(..marker_end);
+            events.push(ContinueRuntimeEvent::SourceCommand {
+                command: marker.command,
+            });
         }
-    }
-
-    fn start_utterance(&mut self) -> ContinueRuntimeEvent {
-        self.in_speech = true;
-        self.current_utterance_content.clear();
-        self.open_utterance()
-    }
-
-    fn open_utterance(&mut self) -> ContinueRuntimeEvent {
-        let id = self.next_utterance_id;
-        self.next_utterance_id += 1;
-        self.current_utterance_id = Some(id);
-        ContinueRuntimeEvent::UtteranceStarted { id }
-    }
-
-    fn append_speech_text(&mut self, text: &str, events: &mut Vec<ContinueRuntimeEvent>) {
-        if text.is_empty() {
-            return;
-        }
-        self.ensure_utterance_started_if_needed(text, events);
-        self.current_utterance_content.push_str(text);
-        self.emit_completed_sentences(events);
-    }
-
-    fn ensure_utterance_started_if_needed(
-        &mut self,
-        text: &str,
-        events: &mut Vec<ContinueRuntimeEvent>,
-    ) {
-        if self.current_utterance_id.is_none() && !text.trim().is_empty() {
-            events.push(self.start_utterance());
-        }
-    }
-
-    fn emit_completed_sentences(&mut self, events: &mut Vec<ContinueRuntimeEvent>) {
-        while let Some(end) = seams_sentence_end(&self.current_utterance_content) {
-            let sentence = self.current_utterance_content[..end].trim().to_string();
-            self.current_utterance_content.drain(..end);
-
-            if let Some(id) = self.current_utterance_id.take() {
-                events.push(ContinueRuntimeEvent::UtteranceCompleted {
-                    id,
-                    content: sentence,
-                });
-            }
-
-            let leading_whitespace = self.current_utterance_content.len()
-                - self.current_utterance_content.trim_start().len();
-            if leading_whitespace > 0 {
-                self.current_utterance_content.drain(..leading_whitespace);
-            }
-            if !self.current_utterance_content.trim().is_empty() {
-                events.push(self.open_utterance());
-            }
-        }
-    }
-
-    fn flush_current_utterance(&mut self) -> Option<ContinueRuntimeEvent> {
-        self.in_speech = false;
-        let id = self.current_utterance_id.take()?;
-        let content = self.current_utterance_content.trim().to_string();
-        self.current_utterance_content.clear();
-        if content.is_empty() {
-            return None;
-        }
-        Some(ContinueRuntimeEvent::UtteranceCompleted { id, content })
-    }
-
-    fn commit_pending_speech_text_before_marker_prefix(
-        &mut self,
-        events: &mut Vec<ContinueRuntimeEvent>,
-    ) {
-        let keep = longest_marker_prefix_suffix_len(&self.pending);
-        let emit_len = self.pending.len() - keep;
-        let speech_text = self.pending[..emit_len].to_string();
-        self.pending = self.pending[emit_len..].to_string();
-        self.append_speech_text(&speech_text, events);
     }
 
     fn trim_pending_to_marker_prefix_or_source_tag(&mut self) {
@@ -3341,25 +3867,8 @@ impl SpeechEventDetector {
     )
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum SpeechMarkerKind {
-    Start,
-    End,
-    Control(SpeechControlCommand),
-    Source(SourceCommand),
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SpeechMarker {
-    kind: SpeechMarkerKind,
+struct TypeScriptMarker {
+    command: SourceCommand,
     index: usize,
     len: usize,
 }
@@ -3373,133 +3882,17 @@ struct SpeechMarker {
         feature = "tts-piper"
     )
 ))]
-fn next_any_speech_marker(text: &str) -> Option<SpeechMarker> {
-    [
-        next_speech_marker(text, SpeechMarkerKind::Start),
-        next_speech_marker(text, SpeechMarkerKind::End),
-        next_speech_marker(
-            text,
-            SpeechMarkerKind::Control(SpeechControlCommand::Shutup),
-        ),
-        next_speech_marker(text, SpeechMarkerKind::Control(SpeechControlCommand::Pause)),
-        next_speech_marker(
-            text,
-            SpeechMarkerKind::Control(SpeechControlCommand::Resume),
-        ),
-        next_source_marker(text),
-    ]
-    .into_iter()
-    .flatten()
-    .min_by_key(|marker| marker.index)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn next_any_open_speech_marker(text: &str) -> Option<SpeechMarker> {
-    [
-        next_speech_marker(text, SpeechMarkerKind::Start),
-        next_speech_marker(
-            text,
-            SpeechMarkerKind::Control(SpeechControlCommand::Shutup),
-        ),
-        next_speech_marker(text, SpeechMarkerKind::Control(SpeechControlCommand::Pause)),
-        next_speech_marker(
-            text,
-            SpeechMarkerKind::Control(SpeechControlCommand::Resume),
-        ),
-        next_source_marker(text),
-    ]
-    .into_iter()
-    .flatten()
-    .min_by_key(|marker| marker.index)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn next_source_marker(text: &str) -> Option<SpeechMarker> {
-    let list_marker = text
-        .find(SOURCE_LIST_FILES_MARKER)
-        .map(|index| SpeechMarker {
-            kind: SpeechMarkerKind::Source(SourceCommand::ListFiles),
-            index,
-            len: SOURCE_LIST_FILES_MARKER.len(),
-        });
-
-    [
-        list_marker,
-        next_view_source_marker(text, SOURCE_VIEW_FILE_START),
-        next_view_source_marker(text, SOURCE_READ_FILE_START),
-        next_view_source_marker(text, SOURCE_READ_SOURCE_FILE_START),
-    ]
-    .into_iter()
-    .flatten()
-    .min_by_key(|marker| marker.index)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn next_view_source_marker(text: &str, start_marker: &'static str) -> Option<SpeechMarker> {
-    let start = text.find(start_marker)?;
-    let tag = &text[start..];
-    let end_rel = tag.find("/>")?;
-    let raw_tag = &tag[..end_rel + 2];
-    let attrs = &raw_tag[start_marker.len()..raw_tag.len() - 2];
-    let path = tag_attribute(attrs, "path").or_else(|| tag_attribute(attrs, "file"))?;
-    let page = tag_attribute(attrs, "page")
-        .and_then(|page| page.parse::<usize>().ok())
-        .unwrap_or(1)
-        .max(1);
-    Some(SpeechMarker {
-        kind: SpeechMarkerKind::Source(SourceCommand::ViewFile { path, page }),
+fn next_typescript_marker(text: &str) -> Option<TypeScriptMarker> {
+    let start = text.find(SOURCE_TYPESCRIPT_START)?;
+    let content_start = start + SOURCE_TYPESCRIPT_START.len();
+    let rest = &text[content_start..];
+    let end_rel = rest.find(SOURCE_TYPESCRIPT_END)?;
+    let source = rest[..end_rel].trim().to_string();
+    Some(TypeScriptMarker {
+        command: SourceCommand::RunTypeScript { source },
         index: start,
-        len: end_rel + 2,
+        len: SOURCE_TYPESCRIPT_START.len() + end_rel + SOURCE_TYPESCRIPT_END.len(),
     })
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn tag_attribute(attrs: &str, key: &str) -> Option<String> {
-    let needle = format!("{key}=");
-    let start = attrs.find(&needle)? + needle.len();
-    let rest = attrs[start..].trim_start();
-    let quote = rest.chars().next()?;
-    if quote == '"' || quote == '\'' {
-        let value = &rest[quote.len_utf8()..];
-        let end = value.find(quote)?;
-        return Some(value[..end].to_string());
-    }
-    let end = rest
-        .find(|ch: char| ch.is_whitespace() || ch == '/')
-        .unwrap_or(rest.len());
-    Some(rest[..end].to_string())
 }
 
 #[cfg(any(
@@ -3512,22 +3905,10 @@ fn tag_attribute(attrs: &str, key: &str) -> Option<String> {
     )
 ))]
 fn incomplete_source_tag_start(text: &str) -> Option<usize> {
-    [
-        SOURCE_VIEW_FILE_START,
-        SOURCE_READ_FILE_START,
-        SOURCE_READ_SOURCE_FILE_START,
-    ]
-    .into_iter()
-    .filter_map(|start_marker| {
-        let start = text.rfind(start_marker)?;
+    text.rfind(SOURCE_TYPESCRIPT_START).and_then(|start| {
         let rest = &text[start..];
-        if rest.contains("/>") {
-            None
-        } else {
-            Some(start)
-        }
+        (!rest.contains(SOURCE_TYPESCRIPT_END)).then_some(start)
     })
-    .min()
 }
 
 #[cfg(any(
@@ -3539,60 +3920,8 @@ fn incomplete_source_tag_start(text: &str) -> Option<usize> {
         feature = "tts-piper"
     )
 ))]
-fn next_speech_marker(text: &str, kind: SpeechMarkerKind) -> Option<SpeechMarker> {
-    speech_markers(kind.clone())
-        .into_iter()
-        .filter_map(|marker| {
-            text.find(marker).map(|index| SpeechMarker {
-                kind: kind.clone(),
-                index,
-                len: marker.len(),
-            })
-        })
-        .min_by_key(|marker| marker.index)
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn speech_markers(kind: SpeechMarkerKind) -> [&'static str; 1] {
-    match kind {
-        SpeechMarkerKind::Start => [INLINE_SPEECH_START_MARKER],
-        SpeechMarkerKind::End => [INLINE_SPEECH_END_MARKER],
-        SpeechMarkerKind::Control(SpeechControlCommand::Shutup) => [SPEECH_SHUTUP_MARKER],
-        SpeechMarkerKind::Control(SpeechControlCommand::Pause) => [SPEECH_PAUSE_MARKER],
-        SpeechMarkerKind::Control(SpeechControlCommand::Resume) => [SPEECH_RESUME_MARKER],
-        SpeechMarkerKind::Source(_) => unreachable!("source markers are variable-length"),
-    }
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn all_speech_markers() -> [&'static str; 9] {
-    [
-        INLINE_SPEECH_START_MARKER,
-        INLINE_SPEECH_END_MARKER,
-        SPEECH_SHUTUP_MARKER,
-        SPEECH_PAUSE_MARKER,
-        SPEECH_RESUME_MARKER,
-        SOURCE_LIST_FILES_MARKER,
-        SOURCE_VIEW_FILE_START,
-        SOURCE_READ_FILE_START,
-        SOURCE_READ_SOURCE_FILE_START,
-    ]
+fn all_speech_markers() -> [&'static str; 2] {
+    [SOURCE_TYPESCRIPT_START, SOURCE_TYPESCRIPT_END]
 }
 
 #[cfg(any(
@@ -3629,50 +3958,6 @@ fn longest_marker_prefix_suffix_len(text: &str) -> usize {
         feature = "tts-piper"
     )
 ))]
-fn sentence_detector() -> &'static SentenceDetectorDialog {
-    static DETECTOR: OnceLock<SentenceDetectorDialog> = OnceLock::new();
-    DETECTOR.get_or_init(|| {
-        SentenceDetectorDialog::new().expect("failed to initialize seams sentence detector")
-    })
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn seams_sentence_end(text: &str) -> Option<usize> {
-    let detector = sentence_detector();
-    let sentences = detector
-        .detect_sentences_borrowed(text)
-        .expect("failed to split speech with seams");
-    let mut search_from = 0;
-    for sentence in sentences {
-        if let Some(rel) = text[search_from..].find(sentence.raw_content) {
-            let start = search_from + rel;
-            let end = start + sentence.raw_content.len();
-            search_from = end;
-            if sentence.raw_content.trim().ends_with(['.', '?', '!']) {
-                return Some(end);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
 #[allow(dead_code)]
 fn sanitize_runtime_event_content(content: &str) -> String {
     content
@@ -3680,12 +3965,66 @@ fn sanitize_runtime_event_content(content: &str) -> String {
         .replace("--- LIVE EVENT:", "[live event]")
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn clean_spoken_content(content: &str) -> Option<String> {
+    if contains_template_token(content) {
+        return None;
+    }
+
+    let content = strip_emoji(content).trim().to_string();
+    if content.is_empty() || contains_template_token(&content) {
+        None
+    } else {
+        Some(content)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn contains_template_token(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    [
+        "<|",
+        "|>",
+        "<|start|>",
+        "<|end|>",
+        "<|message|>",
+        "<|channel|>",
+        "assistant<|",
+        "system<|",
+        "analysis<|",
+        "thoughts<|",
+        "assistant<|channel|>",
+        "assistant<|message|>",
+    ]
+    .into_iter()
+    .any(|marker| lower.contains(marker))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ContinueRuntimeEvent, PromptPacket, RollingContextManager, SourceCommand,
-        SpeechControlCommand, SpeechEventDetector, build_initial_prompt, execute_list_source_files,
-        execute_view_source_file, wrap_ear_event, wrap_live_input, wrap_mouth_event,
+        SpeechControlCommand, SpeechEventDetector, TIME_EVENT_INTERVAL_BASE_MS,
+        TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand, build_initial_prompt,
+        clean_spoken_content, current_time_message, execute_list_source_files,
+        execute_typescript_commands, execute_typescript_source, execute_view_source_file,
+        next_time_event_interval, wrap_ear_event, wrap_live_input, wrap_mouth_event,
         wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
 
@@ -3728,8 +4067,11 @@ mod tests {
             "\n\n--- LIVE EVENT: runtime ---\nutterance_started: id=0\n--- END LIVE EVENT ---\n\n"
         );
         assert_eq!(
-            ContinueRuntimeEvent::UtteranceStarted { id: 7 }.to_message(),
-            "utterance_started: id=7"
+            ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Pause
+            }
+            .to_message(),
+            "speech_control: pause"
         );
     }
 
@@ -3750,25 +4092,45 @@ mod tests {
         assert!(prompt.contains("Do not assume a user is currently present"));
         assert!(prompt.contains("there may be nobody in the room"));
         assert!(prompt.contains("Clock events arrive frequently"));
+        assert!(prompt.contains("about once per second but at slightly irregular intervals"));
+        assert!(prompt.contains("local ISO-8601 time and timezone offset"));
         assert!(prompt.contains("track timing, pauses, and elapsed time"));
         assert!(prompt.contains("Do not copy live event delimiters or runtime event text."));
-        assert!(prompt.contains("Do not write system, assistant, analysis, channel"));
-        assert!(prompt.contains("Text outside <sp>...</sp> is Pete's internal thought only"));
+        assert!(prompt.contains("Do not write system, assistant, analysis, channel, message"));
+        assert!(prompt.contains("Plain generated text is Pete's internal thought only"));
         assert!(prompt.contains("It is not spoken aloud"));
         assert!(prompt.contains("does not happen in the real world"));
-        assert!(prompt.contains("Only text inside inline speech tags is spoken aloud"));
-        assert!(prompt.contains("If text is not inside <sp>...</sp>, the user does not hear it"));
-        assert!(prompt.contains("<sp>words to say aloud :)</sp>"));
-        assert!(prompt.contains("event text is never inserted inside speech"));
-        assert!(prompt.contains("<shutup/> immediately halts current speech"));
-        assert!(prompt.contains("<pause/> pauses speech playback"));
-        assert!(prompt.contains("<resume/> resumes paused speech"));
-        assert!(prompt.contains("inspect your own source code"));
-        assert!(prompt.contains("<list_files/> lists bundled files from Pete's codebase"));
-        assert!(prompt.contains("<view_file path=\"src/main.rs\" page=\"1\"/>"));
-        assert!(prompt.contains("Pete's source"));
+        assert!(prompt.contains("The only way to affect the real world"));
+        assert!(prompt.contains("do not speak just to fill silence"));
+        assert!(prompt.contains("If you are bored, alone, or waiting"));
+        assert!(prompt.contains("explore Pete's own source code"));
+        assert!(prompt.contains("say(text), shutup(), pause(), resume()"));
+        assert!(prompt.contains("run small TypeScript modules with <ts>code</ts>"));
+        assert!(prompt.contains("internal module \"pete:will\""));
+        assert!(prompt.contains("Import the builders you need from \"pete:will\""));
+        assert!(prompt.contains("import { say, listFiles } from \"pete:will\""));
+        assert!(prompt.contains("listFiles(), readSourceFile(path, page?)"));
+        assert!(prompt.contains("Use shutup() to halt current speech"));
+        assert!(!prompt.contains("<sp>words to say aloud :)</sp>"));
+        assert!(!prompt.contains("<shutup/>"));
+        assert!(!prompt.contains("<list_files/>"));
         assert!(!prompt.contains("--- SPEECH ---"));
-        assert!(prompt.contains("Emoji inside speech tags are instructions to your countenance"));
+    }
+
+    #[test]
+    fn spoken_content_rejects_chat_template_tokens() {
+        assert_eq!(
+            clean_spoken_content("<|end|><|start|>assistant<|channel|>sp<|message|>Hey!"),
+            None
+        );
+        assert_eq!(
+            clean_spoken_content("assistant<|channel|>analysis<|message|>We respond."),
+            None
+        );
+        assert_eq!(
+            clean_spoken_content("I can hear you."),
+            Some("I can hear you.".to_string())
+        );
     }
 
     #[test]
@@ -3810,259 +4172,161 @@ mod tests {
     }
 
     #[test]
-    fn speech_detector_parses_inline_speech() {
-        let mut detector = SpeechEventDetector::default();
+    fn current_time_message_includes_local_iso_time_with_offset() {
+        let message = current_time_message();
 
-        assert_eq!(
-            detector
-                .ingest("<sp>:) This is how I speak. Parse here. And here. And here...live</sp>"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: ":) This is how I speak.".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 1 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 1,
-                    content: "Parse here.".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 2 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 2,
-                    content: "And here.".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 3 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 3,
-                    content: "And here...live".to_string()
-                }
-            ]
+        assert!(message.starts_with("The current local time is "));
+        assert!(message.contains(". Unix time is "));
+        let local_time = message
+            .strip_prefix("The current local time is ")
+            .and_then(|text| text.split(". Unix time is ").next())
+            .expect("clock message should contain local time");
+        assert!(local_time.contains('T'));
+        assert!(
+            local_time.len() >= 6,
+            "local time should include a timezone offset"
+        );
+        let offset = &local_time[local_time.len() - 6..];
+        assert!(
+            matches!(offset.as_bytes()[0], b'+' | b'-')
+                && offset.as_bytes()[3] == b':'
+                && offset[1..3].chars().all(|ch| ch.is_ascii_digit())
+                && offset[4..6].chars().all(|ch| ch.is_ascii_digit()),
+            "local time should end with an ISO timezone offset, got {local_time}"
         );
     }
 
     #[test]
-    fn speech_detector_handles_split_inline_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert!(detector.ingest("<s").is_empty());
-        assert_eq!(
-            detector.ingest("p>Hello</sp>"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "Hello".to_string()
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn speech_detector_emits_utterance_started_on_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("thinking <sp>Hello"),
-            vec![ContinueRuntimeEvent::UtteranceStarted { id: 0 }]
-        );
-    }
-
-    #[test]
-    fn speech_detector_handles_split_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert!(detector.ingest("thinking <s").is_empty());
-        assert_eq!(
-            detector.ingest("p>Hello"),
-            vec![ContinueRuntimeEvent::UtteranceStarted { id: 0 }]
-        );
-    }
-
-    #[test]
-    fn speech_detector_rearms_after_end_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>First</sp>Later <sp>Second"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "First".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 1 }
-            ]
-        );
-    }
-
-    #[test]
-    fn speech_detector_emits_utterance_completed_on_end_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>Hello there.</sp>"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "Hello there.".to_string()
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn speech_detector_treats_nested_start_as_recovery_boundary() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>Hello<sp>what happens up here?"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "Hello".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 1 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 1,
-                    content: "what happens up here?".to_string()
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn speech_detector_emits_complete_sentences_from_head_before_end_marker() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>First sentence. Second"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "First sentence.".to_string()
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 1 }
-            ]
-        );
-        assert!(detector.ingest(" sentence").is_empty());
-        assert_eq!(
-            detector.ingest(".</sp>"),
-            vec![ContinueRuntimeEvent::UtteranceCompleted {
-                id: 1,
-                content: "Second sentence.".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn speech_detector_captures_content_across_chunks() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>Hello "),
-            vec![ContinueRuntimeEvent::UtteranceStarted { id: 0 }]
-        );
-        assert_eq!(
-            detector.ingest("there.</sp>"),
-            vec![ContinueRuntimeEvent::UtteranceCompleted {
-                id: 0,
-                content: "Hello there.".to_string()
-            }]
-        );
-    }
-
-    #[test]
-    fn speech_detector_ignores_legacy_block_delimiters() {
-        let mut detector = SpeechEventDetector::default();
+    fn time_event_interval_is_jittered_around_one_second() {
+        let min_ms = TIME_EVENT_INTERVAL_BASE_MS - TIME_EVENT_INTERVAL_JITTER_MS;
+        let max_ms = TIME_EVENT_INTERVAL_BASE_MS + TIME_EVENT_INTERVAL_JITTER_MS;
+        let mut state = 0x1234_5678_9abc_def0;
+        let intervals = (0..20)
+            .map(|_| next_time_event_interval(&mut state).as_millis() as u64)
+            .collect::<Vec<_>>();
 
         assert!(
-            detector
-                .ingest("--- SPEECH ---no fallback--- END SPEECH ---")
-                .is_empty()
+            intervals
+                .iter()
+                .all(|millis| (min_ms..=max_ms).contains(millis)),
+            "intervals should stay near one second: {intervals:?}"
+        );
+        assert!(
+            intervals.windows(2).any(|pair| pair[0] != pair[1]),
+            "intervals should vary: {intervals:?}"
         );
     }
 
     #[test]
-    fn speech_detector_defers_live_events_inside_speech() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert!(!detector.defers_live_events());
-        assert_eq!(
-            detector.ingest("<sp>Hello"),
-            vec![ContinueRuntimeEvent::UtteranceStarted { id: 0 }]
-        );
-        assert!(detector.defers_live_events());
-        assert_eq!(
-            detector.ingest("</sp>"),
-            vec![ContinueRuntimeEvent::UtteranceCompleted {
-                id: 0,
-                content: "Hello".to_string()
-            }]
-        );
-        assert!(!detector.defers_live_events());
-    }
-
-    #[test]
-    fn speech_detector_defers_live_events_during_partial_markers() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert!(detector.ingest("<pau").is_empty());
-        assert!(detector.defers_live_events());
-        assert_eq!(
-            detector.ingest("se/>"),
-            vec![ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Pause
-            }]
-        );
-        assert!(!detector.defers_live_events());
-    }
-
-    #[test]
-    fn speech_detector_parses_source_file_tags() {
+    fn speech_detector_parses_typescript_tag() {
         let mut detector = SpeechEventDetector::default();
 
         assert_eq!(
             detector.ingest(
-                "inspect <list_files/> then <view_file path=\"src/cli/commands/continue_generation.rs\" page=\"2\"/>"
+                "think <ts>import { listFiles } from \"pete:will\";\nlistFiles()</ts> then continue"
             ),
-            vec![
-                ContinueRuntimeEvent::SourceCommand {
-                    command: SourceCommand::ListFiles
-                },
-                ContinueRuntimeEvent::SourceCommand {
-                    command: SourceCommand::ViewFile {
-                        path: "src/cli/commands/continue_generation.rs".to_string(),
-                        page: 2
-                    }
+            vec![ContinueRuntimeEvent::SourceCommand {
+                command: SourceCommand::RunTypeScript {
+                    source: "import { listFiles } from \"pete:will\";\nlistFiles()".to_string()
                 }
+            }]
+        );
+    }
+
+    #[test]
+    fn speech_detector_defers_live_events_during_partial_typescript_tag() {
+        let mut detector = SpeechEventDetector::default();
+
+        assert!(
+            detector
+                .ingest("<ts>import { listFiles } from \"pete:will\";\nlist")
+                .is_empty()
+        );
+        assert!(detector.defers_live_events());
+        assert_eq!(
+            detector.ingest("Files()</ts>"),
+            vec![ContinueRuntimeEvent::SourceCommand {
+                command: SourceCommand::RunTypeScript {
+                    source: "import { listFiles } from \"pete:will\";\nlistFiles()".to_string()
+                }
+            }]
+        );
+        assert!(!detector.defers_live_events());
+    }
+
+    #[test]
+    fn typescript_executes_pete_will_commands() {
+        let commands = execute_typescript_commands(
+            r#"import { listFiles, readFile, grepSource, say, pause, resume, shutup } from "pete:will";
+[listFiles(), readFile("src/main.rs", 1 + 1), grepSource("ContinueCommand", 2), say("check complete"), pause(), resume(), shutup()]"#,
+        )
+        .expect("typescript should execute");
+
+        assert_eq!(
+            commands,
+            vec![
+                TypeScriptCommand::ListFiles,
+                TypeScriptCommand::ReadSourceFile {
+                    file: "src/main.rs".to_string(),
+                    page: 2
+                },
+                TypeScriptCommand::GrepSource {
+                    pattern: "ContinueCommand".to_string(),
+                    limit: 2
+                },
+                TypeScriptCommand::Say("check complete".to_string()),
+                TypeScriptCommand::Pause,
+                TypeScriptCommand::Resume,
+                TypeScriptCommand::Shutup
             ]
         );
     }
 
     #[test]
-    fn speech_detector_defers_live_events_during_partial_source_tag() {
-        let mut detector = SpeechEventDetector::default();
+    fn typescript_source_reports_command_results() {
+        let output = execute_typescript_source(
+            r#"import { grepSource } from "pete:will";
+grepSource("build_initial_prompt", 1)"#,
+        );
 
-        assert!(
-            detector
-                .ingest("<view_file path=\"src/main.rs\"")
-                .is_empty()
+        assert!(output.message.contains("TypeScript executed."));
+        assert!(output.message.contains("[grep_source]"));
+        assert!(output.message.contains("build_initial_prompt"));
+        assert!(output.runtime_events.is_empty());
+    }
+
+    #[test]
+    fn typescript_say_and_controls_emit_runtime_events() {
+        let output = execute_typescript_source(
+            r#"import { say, pause, resume, shutup } from "pete:will";
+[say("I can hear you."), pause(), resume(), shutup()]"#,
         );
-        assert!(detector.defers_live_events());
+
+        assert!(output.message.contains("[say]"));
+        assert!(output.message.contains("[pause]"));
+        assert_eq!(output.runtime_events.len(), 4);
+        assert!(matches!(
+            &output.runtime_events[0],
+            ContinueRuntimeEvent::UtteranceCompleted { content, .. } if content == "I can hear you."
+        ));
         assert_eq!(
-            detector.ingest(" page=\"1\"/>"),
-            vec![ContinueRuntimeEvent::SourceCommand {
-                command: SourceCommand::ViewFile {
-                    path: "src/main.rs".to_string(),
-                    page: 1
-                }
-            }]
+            output.runtime_events[1],
+            ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Pause
+            }
         );
-        assert!(!detector.defers_live_events());
+        assert_eq!(
+            output.runtime_events[2],
+            ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Resume
+            }
+        );
+        assert_eq!(
+            output.runtime_events[3],
+            ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Shutup
+            }
+        );
     }
 
     #[test]
@@ -4073,57 +4337,5 @@ mod tests {
         let page = execute_view_source_file("src/cli/commands/continue_generation.rs", 1);
         assert!(page.contains("--- src/cli/commands/continue_generation.rs"));
         assert!(page.contains("use crate::cli::ContinueCommand;"));
-    }
-
-    #[test]
-    fn speech_detector_parses_self_closing_speech_controls_outside_speech() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("thinking <pause/> then <resume/> and <shutup/>"),
-            vec![
-                ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Pause
-                },
-                ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Resume
-                },
-                ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Shutup
-                }
-            ]
-        );
-    }
-
-    #[test]
-    fn speech_detector_parses_self_closing_speech_controls_inside_speech() {
-        let mut detector = SpeechEventDetector::default();
-
-        assert_eq!(
-            detector.ingest("<sp>Hello. <pause/>Wait here. <resume/>Go now.</sp>"),
-            vec![
-                ContinueRuntimeEvent::UtteranceStarted { id: 0 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 0,
-                    content: "Hello.".to_string()
-                },
-                ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Pause
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 1 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 1,
-                    content: "Wait here.".to_string()
-                },
-                ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Resume
-                },
-                ContinueRuntimeEvent::UtteranceStarted { id: 2 },
-                ContinueRuntimeEvent::UtteranceCompleted {
-                    id: 2,
-                    content: "Go now.".to_string()
-                }
-            ]
-        );
     }
 }
