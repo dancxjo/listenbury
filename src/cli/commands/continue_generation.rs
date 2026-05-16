@@ -653,6 +653,7 @@ struct ContinueLlmSession {
     mode: crate::cli::PromptMode,
     max_tokens: Option<usize>,
     rolling: RollingContextManager,
+    paused: bool,
 }
 
 #[cfg(all(
@@ -684,6 +685,7 @@ impl ContinueLlmSession {
             mode,
             max_tokens,
             rolling,
+            paused: false,
         };
         session.rolling.note_context_loaded(&prompt);
         Ok(session)
@@ -698,7 +700,9 @@ impl ContinueLlmSession {
     }
 
     fn set_paused(&mut self, paused: bool) -> Result<()> {
-        self.llm.set_paused(self.id, paused)
+        self.llm.set_paused(self.id, paused)?;
+        self.paused = paused;
+        Ok(())
     }
 
     fn record_generated_text(&mut self, text: &str) {
@@ -728,6 +732,9 @@ impl ContinueLlmSession {
             stop,
         })?;
         self.rolling.note_context_loaded(&prompt);
+        if self.paused {
+            self.llm.set_paused(self.id, true)?;
+        }
         Ok(())
     }
 
