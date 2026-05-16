@@ -62,6 +62,7 @@ pub fn generated_text_to_word_stream(id: WordStreamId, text: &str) -> TimedWordS
     let word_nodes: Vec<WordNode> = split_words(text)
         .enumerate()
         .map(|(i, (word_text, span_start, span_end))| WordNode {
+            // Word counts in practice are far below u32::MAX, so the cast is safe.
             id: WordId(i as u64 + 1),
             text: word_text.to_string(),
             lexical_span: Some(TextSpan {
@@ -157,23 +158,31 @@ impl<'a> Iterator for SplitWordsIter<'a> {
 ///
 /// If the stream is empty the function returns immediately without modifying
 /// anything.
+/// Minimum character count used as denominator guard when computing
+/// proportional timing for a word with an empty text field.
+const MIN_WORD_CHARS: usize = 1;
+
 pub fn attach_heuristic_timing(stream: &mut TimedWordStream, total_duration_ms: u64) {
     if stream.words.is_empty() {
         return;
     }
 
-    // Total character count across all words (use 1 as minimum to avoid div/0).
-    let total_chars: usize = stream.words.iter().map(|w| w.text.len().max(1)).sum();
+    // Total character count across all words (floor at MIN_WORD_CHARS to avoid
+    // division by zero for empty-text words).
+    let total_chars: usize = stream.words.iter().map(|w| w.text.len().max(MIN_WORD_CHARS)).sum();
 
     let mut cursor_ms: u64 = 0;
     let n = stream.words.len();
 
     for (i, word) in stream.words.iter_mut().enumerate() {
-        let word_chars = word.text.len().max(1);
+        let word_chars = word.text.len().max(MIN_WORD_CHARS);
         // Last word gets all remaining duration to avoid rounding drift.
         let duration_ms = if i == n - 1 {
             total_duration_ms.saturating_sub(cursor_ms)
         } else {
+            // Widen to u128 to avoid overflow when total_duration_ms is large
+            // (e.g. hours-long synthesis).  The result is guaranteed to fit in
+            // u64 because it is at most total_duration_ms.
             (total_duration_ms as u128 * word_chars as u128 / total_chars as u128) as u64
         };
 
@@ -202,6 +211,10 @@ pub fn attach_audio_frame_timing(stream: &mut TimedWordStream, frames: &[AudioFr
 }
 
 /// Sum the playback duration of all `frames` in milliseconds.
+///
+/// Samples are assumed to be interleaved channel data.  If `samples.len()` is
+/// not evenly divisible by `channels`, the integer division truncates — this
+/// is intentional and loses at most one incomplete sample frame.
 fn total_duration_ms(frames: &[AudioFrame]) -> u64 {
     frames
         .iter()
@@ -209,7 +222,9 @@ fn total_duration_ms(frames: &[AudioFrame]) -> u64 {
             if f.sample_rate_hz == 0 || f.channels == 0 {
                 return 0u64;
             }
-            // samples contains interleaved channel data.
+            // samples contains interleaved channel data; divide by channels to
+            // get the mono-equivalent sample count.  Integer division
+            // intentionally truncates any incomplete final frame.
             let per_channel = f.samples.len() / f.channels as usize;
             per_channel as u64 * 1_000 / f.sample_rate_hz as u64
         })
