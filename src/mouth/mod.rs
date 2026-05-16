@@ -2,6 +2,8 @@ pub mod backend;
 pub mod cache;
 #[cfg(feature = "tts-piper")]
 pub mod piper;
+#[cfg(feature = "tts-piper")]
+pub mod piper_native;
 pub mod planner;
 pub mod player;
 pub mod tts;
