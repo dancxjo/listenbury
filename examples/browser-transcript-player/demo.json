@@ -63,7 +63,7 @@
       }
     },
     {
-      "label": "Pete intended",
+      "label": "Intended speech",
       "stream": {
         "id": 2,
         "source": "GeneratedText",
@@ -120,7 +120,7 @@
       }
     },
     {
-      "label": "Pete playback",
+      "label": "Playback stream",
       "stream": {
         "id": 3,
         "source": "SyntheticSpeech",

@@ -40,7 +40,7 @@ fn browser_transcript_player_demo_json_deserializes() {
     assert!(payload
         .streams
         .iter()
-        .all(|lane| lane.label.as_deref().is_some_and(|label| !label.is_empty())));
+        .all(|lane| lane.label.as_ref().is_some_and(|label| !label.is_empty())));
     assert!(payload
         .streams
         .iter()
