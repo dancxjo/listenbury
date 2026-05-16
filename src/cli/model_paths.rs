@@ -55,7 +55,7 @@ pub(crate) fn llm_runtime_placement(
         });
     }
 
-    if llm_model_needs_cpu_runtime(model_path) {
+    if default_gpu_layers.is_none() && llm_model_needs_cpu_runtime(model_path) {
         return Ok(LlmRuntimePlacement {
             gpu_layers: Some(0),
             cpu_only: true,
@@ -81,6 +81,31 @@ fn llm_model_filename(model_path: &Path) -> String {
         .unwrap_or_default()
         .to_ascii_lowercase();
     filename
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "llm-llama-cpp")]
+    #[test]
+    fn gpt_oss_defaults_to_cpu_without_gpu_default() {
+        let placement =
+            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, None).unwrap();
+
+        assert_eq!(placement.gpu_layers, Some(0));
+        assert!(placement.cpu_only);
+    }
+
+    #[cfg(feature = "llm-llama-cpp")]
+    #[test]
+    fn gpt_oss_uses_cuda_default_when_provided() {
+        let placement =
+            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, Some(999)).unwrap();
+
+        assert_eq!(placement.gpu_layers, Some(999));
+        assert!(!placement.cpu_only);
+    }
 }
 
 #[cfg(feature = "asr-whisper")]

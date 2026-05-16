@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, bail};
-use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, unbounded};
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -70,6 +70,7 @@ struct ActiveGeneration {
 #[derive(Debug)]
 enum GenerationControl {
     AppendPrompt { text: String },
+    SetPaused { paused: bool },
 }
 
 impl LlamaCppEngine {
@@ -212,6 +213,18 @@ impl LlmEngine for LlamaCppEngine {
     }
 }
 
+impl LlamaCppEngine {
+    pub fn set_paused(&mut self, id: GenerationId, paused: bool) -> Result<()> {
+        let Some(active) = self.active.get(&id) else {
+            bail!("generation not found");
+        };
+        active
+            .controls
+            .send(GenerationControl::SetPaused { paused })
+            .context("generation is no longer accepting pause controls")
+    }
+}
+
 impl Drop for LlamaCppEngine {
     fn drop(&mut self) {
         for active in self.active.values() {
@@ -297,6 +310,7 @@ impl LlamaGenerationWorker {
         let mut sampler = build_sampler(self.config.temperature, self.config.top_p);
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut stop_detector = StopDetector::new(self.request.stop);
+        let mut paused = false;
 
         while within_generation_limit(generated_tokens, self.request.max_tokens)
             && (n_cur as usize) < n_ctx
@@ -314,7 +328,21 @@ impl LlamaGenerationWorker {
                 &mut n_cur,
                 n_ctx,
                 &self.controls,
+                &mut paused,
             )?;
+            wait_while_paused(
+                &self.model,
+                &mut ctx,
+                &mut batch,
+                &mut n_cur,
+                n_ctx,
+                &self.controls,
+                &self.cancel,
+                &mut paused,
+            )?;
+            if self.cancel.load(Ordering::Relaxed) {
+                return Ok(GenerationOutcome::Cancelled);
+            }
             if (n_cur as usize) >= n_ctx {
                 break;
             }
@@ -386,16 +414,48 @@ fn drain_generation_controls(
     n_cur: &mut i32,
     n_ctx: usize,
     controls: &Receiver<GenerationControl>,
+    paused: &mut bool,
 ) -> Result<()> {
     loop {
         match controls.try_recv() {
             Ok(GenerationControl::AppendPrompt { text }) => {
                 decode_appended_prompt(model, ctx, batch, n_cur, n_ctx, &text)?;
             }
+            Ok(GenerationControl::SetPaused { paused: next }) => {
+                *paused = next;
+            }
             Err(TryRecvError::Empty) => return Ok(()),
             Err(TryRecvError::Disconnected) => return Ok(()),
         }
     }
+}
+
+fn wait_while_paused(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext<'_>,
+    batch: &mut LlamaBatch<'_>,
+    n_cur: &mut i32,
+    n_ctx: usize,
+    controls: &Receiver<GenerationControl>,
+    cancel: &AtomicBool,
+    paused: &mut bool,
+) -> Result<()> {
+    while *paused {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        match controls.recv_timeout(std::time::Duration::from_millis(10)) {
+            Ok(GenerationControl::AppendPrompt { text }) => {
+                decode_appended_prompt(model, ctx, batch, n_cur, n_ctx, &text)?;
+            }
+            Ok(GenerationControl::SetPaused { paused: next }) => {
+                *paused = next;
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 fn decode_appended_prompt(

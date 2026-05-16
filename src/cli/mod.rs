@@ -149,6 +149,14 @@ pub(crate) struct ContinueCommand {
     /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
     #[arg(long)]
     pub(crate) llm_gpu_layers: Option<u32>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
+    pub(crate) vad: VadBackendOption,
     /// Prompt framing to apply to the initial prompt only. Stdin appends are inserted raw.
     #[arg(long, value_enum, default_value_t = PromptMode::Raw)]
     pub(crate) mode: PromptMode,
@@ -742,6 +750,10 @@ mod tests {
             panic!("expected continue command");
         };
         assert!(command.llm_model.is_none());
+        assert!(command.piper_bin.is_none());
+        assert!(command.piper_voice.is_none());
+        assert!(command.whisper_model.is_none());
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
         assert_eq!(command.mode, PromptMode::Raw);
         assert_eq!(command.max_tokens, None);
         assert_eq!(command.context_size, 4096);
@@ -760,6 +772,55 @@ mod tests {
             panic!("expected continue command");
         };
         assert_eq!(command.max_tokens, Some(64));
+    }
+
+    #[test]
+    fn dev_continue_accepts_mouth_overrides() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "continue",
+            "--piper-bin",
+            "/usr/bin/piper",
+            "--piper-voice",
+            "voices/pete.onnx",
+        ])
+        .expect("dev continue should parse optional mouth overrides");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert_eq!(command.piper_bin, Some(PathBuf::from("/usr/bin/piper")));
+        assert_eq!(command.piper_voice, Some(PathBuf::from("voices/pete.onnx")));
+    }
+
+    #[test]
+    fn dev_continue_accepts_ear_overrides() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "continue",
+            "--whisper-model",
+            "models/ggml-base.en.bin",
+            "--vad",
+            "energy",
+        ])
+        .expect("dev continue should parse optional ear overrides");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
+        assert_eq!(command.vad, VadBackendOption::Energy);
     }
 
     #[test]

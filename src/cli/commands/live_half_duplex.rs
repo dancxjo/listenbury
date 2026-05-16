@@ -1627,6 +1627,7 @@ mod tests {
     use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, RuntimePacket,
+        SpeechPlannerConfig,
     };
 
     fn token(text: &str) -> LlmEvent {
