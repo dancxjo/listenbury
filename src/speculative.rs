@@ -9,6 +9,10 @@
 //!
 //! Candidates may be linked in a parent chain and only become committed when
 //! callers explicitly confirm a safe boundary.
+//!
+//! Stable-prefix helpers are provided by [`crate::text_stability`].
+
+use crate::text_stability::stable_prefix_len;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CandidateId(pub u64);
@@ -168,79 +172,6 @@ pub fn head_changed_requires_restart(previous: &str, next: &str) -> bool {
 
 pub fn can_reuse_buffer(previous: &str, next: &str) -> bool {
     !head_changed_requires_restart(previous, next)
-}
-
-/// Character-level shared prefix length.
-///
-/// This does not enforce word boundaries.
-pub fn shared_prefix_len(previous: &str, next: &str) -> usize {
-    let mut len = 0;
-
-    let mut previous_chars = previous.char_indices();
-    let mut next_chars = next.char_indices();
-    loop {
-        match (previous_chars.next(), next_chars.next()) {
-            (Some((idx, previous_char)), Some((_, next_char))) if previous_char == next_char => {
-                len = idx + previous_char.len_utf8();
-            }
-            _ => break,
-        }
-    }
-
-    len
-}
-
-/// Stable prefix length suitable for speculative head decisions.
-///
-/// Unlike [`shared_prefix_len`], this prefers full-word boundaries when both
-/// strings diverge in the middle of a word.
-pub fn stable_prefix_len(previous: &str, next: &str) -> usize {
-    let shared = shared_prefix_len(previous, next);
-    if shared == 0 {
-        return 0;
-    }
-
-    if shared == previous.len() || shared == next.len() {
-        return shared;
-    }
-
-    let boundary = last_word_boundary_at_or_before(previous, shared)
-        .zip(last_word_boundary_at_or_before(next, shared))
-        .map(|(previous_boundary, next_boundary)| previous_boundary.min(next_boundary));
-
-    boundary.unwrap_or(shared)
-}
-
-fn last_word_boundary_at_or_before(text: &str, limit: usize) -> Option<usize> {
-    let mut capped = limit.min(text.len());
-    while capped > 0 && !text.is_char_boundary(capped) {
-        capped -= 1;
-    }
-
-    if capped == 0 {
-        return None;
-    }
-
-    let mut last_boundary = None;
-    for (idx, ch) in text[..capped].char_indices() {
-        if ch.is_whitespace() {
-            last_boundary = Some(idx + ch.len_utf8());
-        }
-    }
-
-    if capped < text.len() {
-        let previous = text[..capped].chars().next_back();
-        let next = text[capped..].chars().next();
-        if let (Some(previous), Some(next)) = (previous, next)
-            && (previous.is_whitespace() || next.is_whitespace())
-        {
-            last_boundary = Some(capped);
-        }
-    } else {
-        last_boundary = Some(capped);
-    }
-
-    last_boundary
 }
 
 #[cfg(test)]
