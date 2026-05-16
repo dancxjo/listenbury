@@ -24,6 +24,7 @@ impl CandidateIdGenerator {
     }
 
     pub fn next(&mut self) -> CandidateId {
+        // IDs intentionally start at 1 to align with existing transcript candidate IDs.
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -169,6 +170,9 @@ pub fn can_reuse_buffer(previous: &str, next: &str) -> bool {
     !head_changed_requires_restart(previous, next)
 }
 
+/// Character-level shared prefix length.
+///
+/// This does not enforce word boundaries.
 pub fn shared_prefix_len(previous: &str, next: &str) -> usize {
     let mut len = 0;
 
@@ -186,6 +190,10 @@ pub fn shared_prefix_len(previous: &str, next: &str) -> usize {
     len
 }
 
+/// Stable prefix length suitable for speculative head decisions.
+///
+/// Unlike [`shared_prefix_len`], this prefers full-word boundaries when both
+/// strings diverge in the middle of a word.
 pub fn stable_prefix_len(previous: &str, next: &str) -> usize {
     let shared = shared_prefix_len(previous, next);
     if shared == 0 {
@@ -315,5 +323,11 @@ mod tests {
         assert!(candidate.commit_at_boundary(true));
         assert!(candidate.committed);
         assert!(!candidate.commit_at_boundary(true));
+    }
+
+    #[test]
+    fn candidate_ids_start_at_one() {
+        let mut ids = CandidateIdGenerator::new();
+        assert_eq!(ids.next(), CandidateId(1));
     }
 }
