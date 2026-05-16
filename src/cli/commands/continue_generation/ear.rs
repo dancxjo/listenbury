@@ -18,7 +18,6 @@ use super::*;
         feature = "tts-piper"
     )
 ))]
-#[allow(dead_code)]
 pub(super) enum ContinueEarEvent {
     ListeningStarted {
         device: String,
@@ -62,7 +61,6 @@ pub(super) enum ContinueEarEvent {
     )
 ))]
 impl ContinueEarEvent {
-    #[allow(dead_code)]
     pub(super) fn to_message(&self) -> String {
         match self {
             Self::ListeningStarted {
