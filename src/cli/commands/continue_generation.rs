@@ -96,16 +96,16 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::{
-    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
-};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::{
+    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -2433,6 +2433,14 @@ fn flush_deferred_live_events(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+const DUPLEX_TURN_MIN_OVERLAP_EXTERNAL_CONFIDENCE: f32 = 0.45;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 #[derive(Debug, Clone, Copy)]
 struct DuplexTurnControllerConfig {
     pause_after: Duration,
@@ -2484,6 +2492,36 @@ impl DuplexTurnController {
         }
     }
 
+    fn observe_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) {
+        match event {
+            ContinueEarEvent::SpeechStarted => {
+                self.mark_external_speech_started(now, 1.0);
+            }
+            ContinueEarEvent::OverlapDetected {
+                external_confidence,
+                ..
+            } if *external_confidence >= DUPLEX_TURN_MIN_OVERLAP_EXTERNAL_CONFIDENCE => {
+                self.mark_external_speech_started(now, *external_confidence);
+            }
+            ContinueEarEvent::SpeechStopped => {
+                self.mark_external_speech_stopped(now);
+            }
+            ContinueEarEvent::Transcript { .. } => {
+                // A transcript means ASR already observed enough sustained external speech to
+                // produce text, so treat the pause grace window as already elapsed.
+                self.external_speech_active = true;
+                self.external_speech_started_at =
+                    Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
+            }
+            ContinueEarEvent::ListeningStarted { .. }
+            | ContinueEarEvent::AuditoryObservation { .. }
+            | ContinueEarEvent::EnvironmentalSound { .. }
+            | ContinueEarEvent::SelfVoiceHeard { .. }
+            | ContinueEarEvent::OverlapDetected { .. }
+            | ContinueEarEvent::Error { .. } => {}
+        }
+    }
+
     fn handle_ear_event(
         &mut self,
         event: &ContinueEarEvent,
@@ -2494,25 +2532,7 @@ impl DuplexTurnController {
         pending_mouth_utterances: usize,
     ) -> Result<()> {
         let now = Instant::now();
-        match event {
-            ContinueEarEvent::SpeechStarted => {
-                self.mark_external_speech_started(now);
-            }
-            ContinueEarEvent::OverlapDetected { .. } => self.mark_external_speech_started(now),
-            ContinueEarEvent::SpeechStopped => {
-                self.mark_external_speech_stopped(now);
-            }
-            ContinueEarEvent::Transcript { .. } => {
-                self.external_speech_active = true;
-                self.external_speech_started_at =
-                    Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
-            }
-            ContinueEarEvent::ListeningStarted { .. }
-            | ContinueEarEvent::AuditoryObservation { .. }
-            | ContinueEarEvent::EnvironmentalSound { .. }
-            | ContinueEarEvent::SelfVoiceHeard { .. }
-            | ContinueEarEvent::Error { .. } => {}
-        }
+        self.observe_ear_event(event, now);
         self.poll(
             mouth,
             llm_session,
@@ -2530,38 +2550,44 @@ impl DuplexTurnController {
         defer_live_events: bool,
         deferred_live_events: &mut VecDeque<PromptPacket>,
     ) -> Result<()> {
+        let Some(action) = self.prepare_runtime_action(event) else {
+            return Ok(());
+        };
+        match action {
+            DuplexTurnAction::Pause => self.pause_for_external_speech(
+                mouth,
+                llm_session,
+                defer_live_events,
+                deferred_live_events,
+                "TTS start deferred because external speech is currently detected.",
+            )?,
+            DuplexTurnAction::Resume => self.resume_after_external_speech(
+                mouth,
+                llm_session,
+                defer_live_events,
+                deferred_live_events,
+                "TTS resumed because this say command was marked interrupt=true.",
+            )?,
+            DuplexTurnAction::Clear => {}
+        }
+        Ok(())
+    }
+
+    fn prepare_runtime_action(&mut self, event: &ContinueRuntimeEvent) -> Option<DuplexTurnAction> {
         match event {
             ContinueRuntimeEvent::UtteranceCompleted {
                 interrupt: true, ..
-            } => {
-                if self.paused_for_external_speech {
-                    self.resume_after_external_speech(
-                        mouth,
-                        llm_session,
-                        defer_live_events,
-                        deferred_live_events,
-                        "TTS resumed because this say command was marked interrupt=true.",
-                    )?;
-                }
-            }
+            } if self.paused_for_external_speech => Some(DuplexTurnAction::Resume),
             ContinueRuntimeEvent::UtteranceCompleted {
                 interrupt: false, ..
-            } => {
-                if self.external_speech_active && !self.paused_for_external_speech {
-                    self.pause_for_external_speech(
-                        mouth,
-                        llm_session,
-                        defer_live_events,
-                        deferred_live_events,
-                        "TTS start deferred because external speech is currently detected.",
-                    )?;
-                    self.listen_deadline = None;
-                }
+            } if self.external_speech_active && !self.paused_for_external_speech => {
+                self.listen_deadline = None;
+                Some(DuplexTurnAction::Pause)
             }
-            ContinueRuntimeEvent::SpeechControl { .. }
-            | ContinueRuntimeEvent::SourceCommand { .. } => {}
+            ContinueRuntimeEvent::UtteranceCompleted { .. }
+            | ContinueRuntimeEvent::SpeechControl { .. }
+            | ContinueRuntimeEvent::SourceCommand { .. } => None,
         }
-        Ok(())
     }
 
     fn poll(
@@ -2601,7 +2627,7 @@ impl DuplexTurnController {
         Ok(())
     }
 
-    fn mark_external_speech_started(&mut self, now: Instant) {
+    fn mark_external_speech_started(&mut self, now: Instant, _confidence: f32) {
         if !self.external_speech_active {
             self.external_speech_started_at = Some(now);
         }
@@ -3702,7 +3728,7 @@ fn process_continue_ear_frame(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn log_auditory_frame_if_enabled(analysis: &listenbury::AuditoryFrameAnalysis) {
+fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
     if !listenbury::developer_diagnostics_enabled() {
         return;
     }
@@ -5839,21 +5865,84 @@ grepSource("build_initial_prompt", 1)"#,
         feature = "tts-piper"
     ))]
     #[test]
-    fn duplex_controller_pauses_then_clears_for_sustained_overlap() {
+    fn duplex_controller_ignores_low_confidence_overlap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
             pause_after: std::time::Duration::from_millis(150),
             listen_for: std::time::Duration::from_millis(300),
         });
         let started_at = std::time::Instant::now();
 
-        controller.mark_external_speech_started(started_at);
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.95,
+                external_confidence: 0.2,
+                duration_ms: 20,
+            },
+            started_at,
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(500), 1),
+            None
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_pauses_for_sustained_overlap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.4,
+                external_confidence: 0.8,
+                duration_ms: 20,
+            },
+            started_at,
+        );
         assert_eq!(controller.next_action(started_at, 1), None);
         assert_eq!(
             controller.next_action(started_at + std::time::Duration::from_millis(151), 1),
             Some(super::DuplexTurnAction::Pause)
         );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_clears_queue_after_sustained_overlap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.4,
+                external_confidence: 0.8,
+                duration_ms: 20,
+            },
+            started_at,
+        );
         assert_eq!(
-            controller.next_action(started_at + std::time::Duration::from_millis(452), 1),
+            controller.next_action(started_at + std::time::Duration::from_millis(151), 2),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(452), 2),
             Some(super::DuplexTurnAction::Clear)
         );
     }
@@ -5875,6 +5964,85 @@ grepSource("build_initial_prompt", 1)"#,
         assert_eq!(
             controller.next_action(now + std::time::Duration::from_secs(10), 1),
             None
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_resumes_after_silence() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.4,
+                external_confidence: 0.8,
+                duration_ms: 20,
+            },
+            started_at,
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(151), 1),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::SpeechStopped,
+            started_at + std::time::Duration::from_millis(200),
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(499), 1),
+            None
+        );
+        assert_eq!(
+            controller.next_action(started_at + std::time::Duration::from_millis(500), 1),
+            Some(super::DuplexTurnAction::Resume)
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_allows_interrupting_utterances_to_resume() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let started_at = std::time::Instant::now();
+
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::Transcript {
+                text: "wait".to_string(),
+            },
+            started_at,
+        );
+        assert_eq!(
+            controller.prepare_runtime_action(&super::ContinueRuntimeEvent::UtteranceCompleted {
+                id: 7,
+                content: "Hold on.".to_string(),
+                interrupt: false,
+            }),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        controller.paused_for_external_speech = true;
+        assert_eq!(
+            controller.prepare_runtime_action(&super::ContinueRuntimeEvent::UtteranceCompleted {
+                id: 8,
+                content: "Excuse me.".to_string(),
+                interrupt: true,
+            }),
+            Some(super::DuplexTurnAction::Resume)
         );
     }
 }
