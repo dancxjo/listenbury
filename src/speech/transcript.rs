@@ -181,6 +181,7 @@ impl TranscriptCandidateTracker {
     }
 
     fn next_id(&mut self) -> TranscriptCandidateId {
+        // IDs intentionally start at 1.
         self.next_id = self
             .next_id
             .checked_add(1)

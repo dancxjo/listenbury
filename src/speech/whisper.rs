@@ -78,7 +78,7 @@ impl WhisperSpeechRecognizer {
     /// `CandidateStarted -> CandidateFinalized`. This method is the seam for future
     /// partial/streaming ASR to emit updates and replacements.
     ///
-    /// ⚠️ This method and [`SpeechRecognizer::poll_chunks`] consume the same pending audio.
+    /// ⚠️ This method and `poll_chunks` consume the same pending audio.
     /// Callers must treat them as alternative polling APIs and should not call both expecting
     /// duplicated output for the same buffered frames.
     pub fn poll_candidate_events(&mut self) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
