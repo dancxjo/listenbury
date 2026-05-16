@@ -197,7 +197,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nYou may emit speech at any time by surrounding it with inline speech tags:\n<sp>words to say aloud :)</sp>\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.\nYou may inspect your source with these tags: <list_files/> lists bundled source files, and <view_file path=\"src/main.rs\" page=\"1\"/> reads one file page. Use source tags outside speech.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, or template tokens.\nContinue naturally as Pete.\nText outside <sp>...</sp> is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nOnly text inside inline speech tags is spoken aloud or acts in the real world:\n<sp>words to say aloud :)</sp>\nIf you want the user to hear something, put those exact words inside <sp>...</sp>. If text is not inside <sp>...</sp>, the user does not hear it.\nEmoji inside speech tags are instructions to your countenance, not words to speak.\nLive events are queued until you finish any open speech tag, so event text is never inserted inside speech.\nYou may control speech with self-closing tags outside or inside speech: <shutup/> immediately halts current speech and clears queued speech, <pause/> pauses speech playback, and <resume/> resumes paused speech.\nYou may inspect your own source code with these tags: <list_files/> lists bundled files from Pete's codebase, and <view_file path=\"src/main.rs\" page=\"1\"/> reads one page of Pete's source. Use source tags outside speech.";
 #[cfg(any(
     test,
     all(
@@ -325,7 +325,7 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-const TIME_EVENT_INTERVAL: Duration = Duration::from_secs(10);
+const TIME_EVENT_INTERVAL: Duration = Duration::from_secs(2);
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -3747,15 +3747,26 @@ mod tests {
 
         assert!(prompt.starts_with("Think continuously.\n\n"));
         assert!(prompt.contains("Live events may appear in the transcript"));
+        assert!(prompt.contains("Do not assume a user is currently present"));
+        assert!(prompt.contains("there may be nobody in the room"));
+        assert!(prompt.contains("Clock events arrive frequently"));
+        assert!(prompt.contains("track timing, pauses, and elapsed time"));
         assert!(prompt.contains("Do not copy live event delimiters or runtime event text."));
         assert!(prompt.contains("Do not write system, assistant, analysis, channel"));
+        assert!(prompt.contains("Text outside <sp>...</sp> is Pete's internal thought only"));
+        assert!(prompt.contains("It is not spoken aloud"));
+        assert!(prompt.contains("does not happen in the real world"));
+        assert!(prompt.contains("Only text inside inline speech tags is spoken aloud"));
+        assert!(prompt.contains("If text is not inside <sp>...</sp>, the user does not hear it"));
         assert!(prompt.contains("<sp>words to say aloud :)</sp>"));
         assert!(prompt.contains("event text is never inserted inside speech"));
         assert!(prompt.contains("<shutup/> immediately halts current speech"));
         assert!(prompt.contains("<pause/> pauses speech playback"));
         assert!(prompt.contains("<resume/> resumes paused speech"));
-        assert!(prompt.contains("<list_files/> lists bundled source files"));
+        assert!(prompt.contains("inspect your own source code"));
+        assert!(prompt.contains("<list_files/> lists bundled files from Pete's codebase"));
         assert!(prompt.contains("<view_file path=\"src/main.rs\" page=\"1\"/>"));
+        assert!(prompt.contains("Pete's source"));
         assert!(!prompt.contains("--- SPEECH ---"));
         assert!(prompt.contains("Emoji inside speech tags are instructions to your countenance"));
     }
