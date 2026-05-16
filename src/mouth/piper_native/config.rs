@@ -22,10 +22,7 @@ pub enum PiperVoiceConfigError {
     #[error("missing required Piper voice config field `{field}`")]
     MissingField { field: &'static str },
     #[error("invalid Piper voice config field `{field}`: {reason}")]
-    InvalidField {
-        field: &'static str,
-        reason: String,
-    },
+    InvalidField { field: &'static str, reason: String },
 }
 
 impl PiperVoiceConfig {
@@ -146,9 +143,7 @@ fn parse_f32(value: &Value, field: &'static str) -> Result<f32, PiperVoiceConfig
     Ok(number as f32)
 }
 
-fn parse_phoneme_id_map(
-    value: &Value,
-) -> Result<HashMap<String, Vec<i64>>, PiperVoiceConfigError> {
+fn parse_phoneme_id_map(value: &Value) -> Result<HashMap<String, Vec<i64>>, PiperVoiceConfigError> {
     let entries = value
         .as_object()
         .ok_or_else(|| invalid_field("phoneme_id_map", "expected an object"))?;
