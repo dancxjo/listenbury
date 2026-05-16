@@ -33,9 +33,8 @@ impl NativePiperBackend {
             );
         }
 
-        let mut session_builder =
-            Session::builder().context("failed to create Piper ONNX session builder")?;
-        let session = session_builder
+        let session = Session::builder()
+            .context("failed to create Piper ONNX session builder")?
             .commit_from_file(&model_path)
             .with_context(|| {
                 format!(

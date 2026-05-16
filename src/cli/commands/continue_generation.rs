@@ -96,16 +96,16 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::{
-    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
-};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::{
+    AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",

@@ -5,7 +5,7 @@ use std::{env, fs, path::PathBuf};
 use listenbury::mouth::piper_native::{NativePiperBackend, PiperVoiceConfig};
 
 #[test]
-#[ignore = "requires a local Piper ONNX model, config JSON, and ONNX Runtime shared library"]
+#[ignore = "set LISTENBURY_TEST_PIPER_MODEL and LISTENBURY_TEST_PIPER_CONFIG to a local Piper model/config, and ensure an ONNX Runtime shared library is available"]
 fn loads_real_local_piper_model_when_configured() {
     let model_path = PathBuf::from(
         env::var("LISTENBURY_TEST_PIPER_MODEL").expect("LISTENBURY_TEST_PIPER_MODEL"),
