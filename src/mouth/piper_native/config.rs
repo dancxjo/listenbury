@@ -139,7 +139,8 @@ fn parse_f32(value: &Value, field: &'static str) -> Result<f32, PiperVoiceConfig
     let number = value
         .as_f64()
         .ok_or_else(|| invalid_field(field, "expected a number"))?;
-    if !number.is_finite() || number < f32::MIN as f64 || number > f32::MAX as f64 {
+    let max = f32::MAX as f64;
+    if !number.is_finite() || number < -max || number > max {
         return Err(invalid_field(field, "value is out of f32 range"));
     }
     Ok(number as f32)
@@ -257,9 +258,18 @@ mod tests {
         assert_eq!(config.num_speakers, Some(2));
         assert_eq!(config.speaker_id_map["alice"], 0);
         assert_eq!(config.speaker_id_map["bob"], 1);
-        assert_eq!(config.length_scale, Some(1.1));
-        assert_eq!(config.noise_scale, Some(0.667));
-        assert_eq!(config.noise_w, Some(0.8));
+        assert!(
+            (config.length_scale.expect("length_scale") - 1.1).abs() < f32::EPSILON,
+            "expected length_scale to round-trip"
+        );
+        assert!(
+            (config.noise_scale.expect("noise_scale") - 0.667).abs() < f32::EPSILON,
+            "expected noise_scale to round-trip"
+        );
+        assert!(
+            (config.noise_w.expect("noise_w") - 0.8).abs() < f32::EPSILON,
+            "expected noise_w to round-trip"
+        );
         assert_eq!(
             config.model_metadata.get("model.name"),
             Some(&"Test Voice".to_string())
