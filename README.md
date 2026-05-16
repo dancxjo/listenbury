@@ -237,6 +237,7 @@ Registered model assets include:
 ## Optional cold-memory stack (Qdrant + Neo4j)
 
 Listenbury's core runtime does not require Docker or cold-memory services. This stack is optional and intended for asynchronous distilled traces only (never the hot audio/LLM/TTS path).
+Run these commands from the repository root so relative volume paths resolve correctly.
 
 1. Copy the example env file:
 
