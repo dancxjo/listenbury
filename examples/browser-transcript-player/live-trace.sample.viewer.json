@@ -1,0 +1,494 @@
+{
+  "title": "Listenbury Live Trace",
+  "streams": [
+    {
+      "label": "Pete intended speech",
+      "stream": {
+        "id": 1,
+        "source": "GeneratedText",
+        "words": [
+          {
+            "id": 1,
+            "text": "Sure.",
+            "lexical_span": {
+              "start": 0,
+              "end": 5
+            },
+            "timing": {
+              "start_ms": 2050,
+              "end_ms": 2310
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 2,
+            "text": "Overlap",
+            "lexical_span": {
+              "start": 6,
+              "end": 13
+            },
+            "timing": {
+              "start_ms": 2310,
+              "end_ms": 2570
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 3,
+            "text": "routing",
+            "lexical_span": {
+              "start": 14,
+              "end": 21
+            },
+            "timing": {
+              "start_ms": 2570,
+              "end_ms": 2830
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 4,
+            "text": "decides",
+            "lexical_span": {
+              "start": 22,
+              "end": 29
+            },
+            "timing": {
+              "start_ms": 2830,
+              "end_ms": 3090
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 5,
+            "text": "whether",
+            "lexical_span": {
+              "start": 30,
+              "end": 37
+            },
+            "timing": {
+              "start_ms": 3090,
+              "end_ms": 3350
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 6,
+            "text": "to",
+            "lexical_span": {
+              "start": 38,
+              "end": 40
+            },
+            "timing": {
+              "start_ms": 3350,
+              "end_ms": 3610
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 7,
+            "text": "yield",
+            "lexical_span": {
+              "start": 41,
+              "end": 46
+            },
+            "timing": {
+              "start_ms": 3610,
+              "end_ms": 3870
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 8,
+            "text": "or",
+            "lexical_span": {
+              "start": 47,
+              "end": 49
+            },
+            "timing": {
+              "start_ms": 3870,
+              "end_ms": 4130
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 9,
+            "text": "keep",
+            "lexical_span": {
+              "start": 50,
+              "end": 54
+            },
+            "timing": {
+              "start_ms": 4130,
+              "end_ms": 4390
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          },
+          {
+            "id": 10,
+            "text": "speaking.",
+            "lexical_span": {
+              "start": 55,
+              "end": 64
+            },
+            "timing": {
+              "start_ms": 4390,
+              "end_ms": 4650
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null
+          }
+        ]
+      }
+    },
+    {
+      "label": "User transcript",
+      "stream": {
+        "id": 2,
+        "source": "RecordedAudio",
+        "words": [
+          {
+            "id": 1,
+            "text": "Can",
+            "lexical_span": {
+              "start": 0,
+              "end": 3
+            },
+            "timing": {
+              "start_ms": 1670,
+              "end_ms": 1938
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 2,
+            "text": "you",
+            "lexical_span": {
+              "start": 4,
+              "end": 7
+            },
+            "timing": {
+              "start_ms": 1938,
+              "end_ms": 2206
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 3,
+            "text": "explain",
+            "lexical_span": {
+              "start": 8,
+              "end": 15
+            },
+            "timing": {
+              "start_ms": 2206,
+              "end_ms": 2474
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 4,
+            "text": "what",
+            "lexical_span": {
+              "start": 16,
+              "end": 20
+            },
+            "timing": {
+              "start_ms": 2474,
+              "end_ms": 2742
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 5,
+            "text": "overlap",
+            "lexical_span": {
+              "start": 21,
+              "end": 28
+            },
+            "timing": {
+              "start_ms": 2742,
+              "end_ms": 3010
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 6,
+            "text": "routing",
+            "lexical_span": {
+              "start": 29,
+              "end": 36
+            },
+            "timing": {
+              "start_ms": 3010,
+              "end_ms": 3278
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 7,
+            "text": "means?",
+            "lexical_span": {
+              "start": 37,
+              "end": 43
+            },
+            "timing": {
+              "start_ms": 3278,
+              "end_ms": 3550
+            },
+            "timing_confidence": null,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 1410,
+      "end_ms": 1670,
+      "label": "Asr",
+      "metadata": {
+        "t_unix_ns": 1715000001670000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback",
+      "start_ms": 2360,
+      "end_ms": 3460,
+      "label": "Playback",
+      "metadata": {
+        "t_unix_ns": 1715000003460000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Overlap",
+      "kind": "overlap",
+      "start_ms": 2920,
+      "end_ms": 3270,
+      "label": "Overlap",
+      "metadata": {
+        "reason": "external_speech_candidate",
+        "t_unix_ns": 1715000003270000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "yield",
+      "start_ms": 3000,
+      "end_ms": 3270,
+      "label": "Yield",
+      "metadata": {
+        "reason": "fade_then_stop",
+        "t_unix_ns": 1715000003270000000,
+        "turn": 1
+      }
+    }
+  ],
+  "markers": [
+    {
+      "lane": "Latency",
+      "kind": "capture_started",
+      "at_ms": 0,
+      "label": "Capture Started",
+      "metadata": {
+        "t_unix_ns": 1715000000000000000,
+        "turn": 0
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 1120,
+      "label": "Speech Started",
+      "metadata": {
+        "t_unix_ns": 1715000001120000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 1410,
+      "label": "Asr Started",
+      "metadata": {
+        "t_unix_ns": 1715000001410000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 1670,
+      "label": "Transcript",
+      "metadata": {
+        "t_unix_ns": 1715000001670000000,
+        "text": "Can you explain what overlap routing means?",
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "llm_generation_started",
+      "at_ms": 1760,
+      "label": "Llm Generation Started",
+      "metadata": {
+        "t_unix_ns": 1715000001760000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_llm_token",
+      "at_ms": 1915,
+      "label": "First Llm Token",
+      "metadata": {
+        "t_unix_ns": 1715000001915000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "first_safe_speech_unit_emitted",
+      "at_ms": 2050,
+      "label": "First Safe Speech Unit Emitted",
+      "metadata": {
+        "t_unix_ns": 1715000002050000000,
+        "text": "Sure. Overlap routing decides whether to yield or keep speaking.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "tts_enqueue_started",
+      "at_ms": 2140,
+      "label": "Tts Enqueue Started",
+      "metadata": {
+        "t_unix_ns": 1715000002140000000,
+        "text": "Sure. Overlap routing decides whether to yield or keep speaking.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_tts_audio_frame_available",
+      "at_ms": 2300,
+      "label": "First Tts Audio Frame Available",
+      "metadata": {
+        "t_unix_ns": 1715000002300000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback_started",
+      "at_ms": 2360,
+      "label": "Playback Started",
+      "metadata": {
+        "t_unix_ns": 1715000002360000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Overlap",
+      "kind": "overlap_started",
+      "at_ms": 2920,
+      "label": "Overlap Started",
+      "metadata": {
+        "reason": "external_speech_candidate",
+        "t_unix_ns": 1715000002920000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "yield_started",
+      "at_ms": 3000,
+      "label": "Yield Started",
+      "metadata": {
+        "reason": "sustained_external_speech",
+        "t_unix_ns": 1715000003000000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "interruption_detected",
+      "at_ms": 3080,
+      "label": "Interruption Detected",
+      "metadata": {
+        "t_unix_ns": 1715000003080000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Environmental",
+      "kind": "environment_observation",
+      "at_ms": 3330,
+      "label": "Environment Observation",
+      "metadata": {
+        "confidence": 0.8199999928474426,
+        "t_unix_ns": 1715000003330000000,
+        "text": "keyboard_ticks",
+        "turn": 1
+      }
+    }
+  ]
+}

@@ -13,6 +13,7 @@ pub mod speculative;
 pub mod speech;
 pub mod text_stability;
 pub mod time;
+pub mod trace;
 pub mod vision;
 pub mod word;
 
