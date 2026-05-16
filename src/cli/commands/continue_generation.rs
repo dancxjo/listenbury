@@ -240,7 +240,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text), shutup(), pause(), resume(), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, and resume() to resume paused playback.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text, options?), shutup(), pause(), resume(), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If speech should intentionally talk over active user speech, use say(text, { interrupt: true }); otherwise TTS waits for VAD to clear before starting. Speak sparingly: after you say something, leave room for the interlocutor to answer instead of immediately saying more. Do not narrate every clock tick, quiet moment, or idle thought aloud. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, and resume() to resume paused playback.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
 #[cfg(any(
     test,
     all(
@@ -434,6 +434,10 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut llm_paused_for_mouth = false;
     let mut mouth_playback_paused = false;
     let mut deferred_live_events = VecDeque::<PromptPacket>::new();
+    let mut tts_vad = TtsVadInterruption::new(TtsVadInterruptionConfig {
+        pause_after: Duration::from_millis(command.tts_vad_pause_ms),
+        listen_for: Duration::from_millis(command.tts_vad_listen_ms),
+    });
     loop {
         if interrupted.load(Ordering::Relaxed) && !cancelled {
             llm_session.cancel()?;
@@ -451,6 +455,8 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             &mut time_event_jitter_state,
             speech_events.defers_live_events(),
             &mut deferred_live_events,
+            &mut mouth,
+            &mut tts_vad,
         )?;
 
         if llm_paused_for_mouth && (pending_mouth_utterances == 0 || mouth_playback_paused) {
@@ -499,8 +505,10 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         for event in &visible_events {
             match event {
                 LlmEvent::Token { text } => {
-                    print!("{text}");
-                    std::io::stdout().flush()?;
+                    if !llm_session.uses_harmony() {
+                        print!("{text}");
+                        std::io::stdout().flush()?;
+                    }
                     for speech_event in speech_events.ingest(text) {
                         if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
                             &speech_event
@@ -530,11 +538,27 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                                         llm_session.remember_spoken(content);
                                     }
                                 }
+                                prepare_tts_runtime_event(
+                                    &runtime_event,
+                                    &mut mouth,
+                                    &mut tts_vad,
+                                    &mut llm_session,
+                                    speech_events.defers_live_events(),
+                                    &mut deferred_live_events,
+                                )?;
                                 if mouth.enqueue_runtime_event(&runtime_event)? {
                                     pending_mouth_utterances += 1;
                                 }
                             }
                         }
+                        prepare_tts_runtime_event(
+                            &speech_event,
+                            &mut mouth,
+                            &mut tts_vad,
+                            &mut llm_session,
+                            speech_events.defers_live_events(),
+                            &mut deferred_live_events,
+                        )?;
                         if mouth.enqueue_runtime_event(&speech_event)? {
                             pending_mouth_utterances += 1;
                         }
@@ -758,7 +782,7 @@ fn build_continue_prompt(format: ContinuePromptFormat, prompt_body: &str) -> (St
         ContinuePromptFormat::Legacy(mode) => build_prompt(mode, prompt_body),
         ContinuePromptFormat::GptOssHarmony => (
             format!(
-                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete Listenbury. Use the analysis channel for private internal monologue. Use the final channel only when you need to emit a real-world action, usually a <ts>...</ts> TypeScript command. Do not put Harmony template tokens in final channel content.<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete Listenbury. Use the analysis channel for private internal monologue. Use the final channel only to emit a real-world action. Final channel content must be exactly one or more <ts>...</ts> TypeScript blocks, or empty. Never write plain conversational text in final. Never put Harmony template tokens in final channel content.\n\nTo speak to the user, write final content like <ts>say(\"Hello, I can hear you.\")</ts>. If speech should intentionally talk over active user speech, use <ts>say(\"Excuse me.\", {{ interrupt: true }})</ts>; otherwise TTS waits for VAD to clear before starting. Speak sparingly: after one say command, leave room for the interlocutor to answer before saying more. Do not use say for clock ticks, quiet moments, or idle narration. To inspect code, write final content like <ts>listFiles()</ts>. The TypeScript builders say, shutup, pause, resume, listFiles, readSourceFile, readFile, searchSource, and grepSource are already available in scope; imports from \"pete:will\" are also allowed.<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
             ),
             harmony_continue_stops(),
         ),
@@ -1657,7 +1681,7 @@ fn source_bundle() -> &'static std::collections::HashMap<String, String> {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TypeScriptCommand {
-    Say(String),
+    Say { text: String, interrupt: bool },
     Shutup,
     Pause,
     Resume,
@@ -1681,6 +1705,8 @@ enum TypeScriptCommand {
 enum TypeScriptCommandPayload {
     Say {
         text: String,
+        #[serde(default)]
+        interrupt: bool,
     },
     Shutup,
     Pause,
@@ -1746,12 +1772,20 @@ fn execute_typescript_command_results(
     let mut runtime_events = Vec::new();
     for command in commands {
         let (name, output) = match command {
-            TypeScriptCommand::Say(text) => {
+            TypeScriptCommand::Say { text, interrupt } => {
                 runtime_events.push(ContinueRuntimeEvent::UtteranceCompleted {
                     id: next_typescript_utterance_id(),
                     content: text.trim().to_string(),
+                    interrupt: *interrupt,
                 });
-                ("say", format!("Speech queued: {}", text.trim()))
+                (
+                    "say",
+                    format!(
+                        "Speech queued{}: {}",
+                        if *interrupt { " (interrupt)" } else { "" },
+                        text.trim()
+                    ),
+                )
             }
             TypeScriptCommand::Shutup => {
                 runtime_events.push(ContinueRuntimeEvent::SpeechControl {
@@ -1823,6 +1857,7 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
     if script.trim().is_empty() {
         return Ok(Vec::new());
     }
+    let script = typescript_source_with_default_will_imports(script);
 
     let config = InterpreterConfig {
         internal_modules: vec![will_typescript_module()],
@@ -1830,7 +1865,7 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
     };
     let mut interp = Interpreter::with_config(config);
     interp
-        .prepare(script, Some(tsrun::ModulePath::new("/listenbury-will.ts")))
+        .prepare(&script, Some(tsrun::ModulePath::new("/listenbury-will.ts")))
         .map_err(tsrun_error)?;
     let value = loop {
         match interp.step().map_err(tsrun_error)? {
@@ -1855,8 +1890,11 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
     Ok(payloads
         .into_iter()
         .filter_map(|payload| match payload {
-            TypeScriptCommandPayload::Say { text } => {
-                non_empty_text(&text).map(|text| TypeScriptCommand::Say(text.to_string()))
+            TypeScriptCommandPayload::Say { text, interrupt } => {
+                non_empty_text(&text).map(|text| TypeScriptCommand::Say {
+                    text: text.to_string(),
+                    interrupt,
+                })
             }
             TypeScriptCommandPayload::Shutup => Some(TypeScriptCommand::Shutup),
             TypeScriptCommandPayload::Pause => Some(TypeScriptCommand::Pause),
@@ -1882,6 +1920,25 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
                 }),
         })
         .collect())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn typescript_source_with_default_will_imports(script: &str) -> String {
+    if script.contains("\"pete:will\"") || script.contains("'pete:will'") {
+        return script.to_string();
+    }
+
+    format!(
+        "import {{ say, shutup, pause, resume, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
+    )
 }
 
 #[cfg(any(
@@ -1947,7 +2004,7 @@ fn parse_typescript_command_payloads(value: Value) -> Result<Vec<TypeScriptComma
 ))]
 fn will_typescript_module() -> InternalModule {
     InternalModule::native("pete:will")
-        .with_function("say", ts_say, 1)
+        .with_function("say", ts_say, 2)
         .with_function("shutup", ts_shutup, 0)
         .with_function("pause", ts_pause, 0)
         .with_function("resume", ts_resume, 0)
@@ -2015,6 +2072,29 @@ fn optional_positive_integer_arg(args: &[JsValue], index: usize) -> Option<usize
         feature = "tts-piper"
     )
 ))]
+fn interrupt_arg(args: &[JsValue], index: usize) -> bool {
+    let Some(value) = args.get(index) else {
+        return false;
+    };
+    match value {
+        JsValue::Boolean(value) => *value,
+        JsValue::Object(_) => matches!(
+            api::get_property(value, "interrupt"),
+            Ok(JsValue::Boolean(true))
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn ts_say(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -2022,7 +2102,7 @@ fn ts_say(
 ) -> std::result::Result<Guarded, JsError> {
     command_value(
         interp,
-        json!({ "kind": "say", "text": string_arg(args, 0) }),
+        json!({ "kind": "say", "text": string_arg(args, 0), "interrupt": interrupt_arg(args, 1) }),
     )
 }
 
@@ -2174,6 +2254,8 @@ fn append_pending_live_events(
     time_event_jitter_state: &mut u64,
     defer_live_events: bool,
     deferred_live_events: &mut VecDeque<PromptPacket>,
+    mouth: &mut ContinueMouth,
+    tts_vad: &mut TtsVadInterruption,
 ) -> Result<()> {
     if !defer_live_events {
         flush_deferred_live_events(llm_session, deferred_live_events)?;
@@ -2221,9 +2303,17 @@ fn append_pending_live_events(
                 "failed to append ear event to live generation",
             )?;
         }
-        if let ContinueEarEvent::Error { message } = ear_event {
+        if let ContinueEarEvent::Error { message } = &ear_event {
             anyhow::bail!("dev continue ear failed: {message}");
         }
+        tts_vad.handle_ear_event(
+            &ear_event,
+            mouth,
+            llm_session,
+            defer_live_events,
+            deferred_live_events,
+            *pending_mouth_utterances,
+        )?;
     }
 
     drain_mouth_events_into_llm(
@@ -2233,6 +2323,14 @@ fn append_pending_live_events(
         mouth_playback_paused,
         defer_live_events,
         deferred_live_events,
+    )?;
+
+    tts_vad.poll(
+        mouth,
+        llm_session,
+        defer_live_events,
+        deferred_live_events,
+        *pending_mouth_utterances,
     )?;
 
     Ok(())
@@ -2276,6 +2374,288 @@ fn flush_deferred_live_events(
             .context("failed to append deferred live event to live generation")?;
     }
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy)]
+struct TtsVadInterruptionConfig {
+    pause_after: Duration,
+    listen_for: Duration,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug)]
+struct TtsVadInterruption {
+    config: TtsVadInterruptionConfig,
+    vad_active: bool,
+    vad_started_at: Option<Instant>,
+    paused_for_vad: bool,
+    listen_deadline: Option<Instant>,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl TtsVadInterruption {
+    fn new(config: TtsVadInterruptionConfig) -> Self {
+        Self {
+            config,
+            vad_active: false,
+            vad_started_at: None,
+            paused_for_vad: false,
+            listen_deadline: None,
+        }
+    }
+
+    fn handle_ear_event(
+        &mut self,
+        event: &ContinueEarEvent,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+        pending_mouth_utterances: usize,
+    ) -> Result<()> {
+        match event {
+            ContinueEarEvent::SpeechStarted => {
+                self.vad_active = true;
+                self.vad_started_at = Some(Instant::now());
+            }
+            ContinueEarEvent::SpeechStopped => {
+                self.vad_active = false;
+                self.vad_started_at = None;
+                if self.paused_for_vad {
+                    self.listen_deadline = Some(Instant::now() + self.config.listen_for);
+                }
+            }
+            ContinueEarEvent::ListeningStarted { .. }
+            | ContinueEarEvent::Transcript { .. }
+            | ContinueEarEvent::Error { .. } => {}
+        }
+        self.poll(
+            mouth,
+            llm_session,
+            defer_live_events,
+            deferred_live_events,
+            pending_mouth_utterances,
+        )
+    }
+
+    fn prepare_runtime_event(
+        &mut self,
+        event: &ContinueRuntimeEvent,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+    ) -> Result<()> {
+        match event {
+            ContinueRuntimeEvent::UtteranceCompleted {
+                interrupt: true, ..
+            } => {
+                if self.paused_for_vad {
+                    self.resume_after_vad(
+                        mouth,
+                        llm_session,
+                        defer_live_events,
+                        deferred_live_events,
+                        "TTS resumed because this say command was marked interrupt=true.",
+                    )?;
+                }
+            }
+            ContinueRuntimeEvent::UtteranceCompleted {
+                interrupt: false, ..
+            } => {
+                if self.vad_active && !self.paused_for_vad {
+                    self.pause_for_vad(
+                        mouth,
+                        llm_session,
+                        defer_live_events,
+                        deferred_live_events,
+                        "TTS start deferred because VAD is currently detecting speech.",
+                    )?;
+                    self.listen_deadline = None;
+                }
+            }
+            ContinueRuntimeEvent::SpeechControl { .. }
+            | ContinueRuntimeEvent::SourceCommand { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn poll(
+        &mut self,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+        pending_mouth_utterances: usize,
+    ) -> Result<()> {
+        if pending_mouth_utterances == 0 {
+            self.paused_for_vad = false;
+            self.listen_deadline = None;
+            return Ok(());
+        }
+
+        if self.vad_active && !self.paused_for_vad {
+            if let Some(started_at) = self.vad_started_at {
+                if started_at.elapsed() >= self.config.pause_after {
+                    self.pause_for_vad(
+                        mouth,
+                        llm_session,
+                        defer_live_events,
+                        deferred_live_events,
+                        "TTS auto-paused because VAD detected sustained speech while Pete was speaking.",
+                    )?;
+                    self.listen_deadline = Some(Instant::now() + self.config.listen_for);
+                }
+            }
+        }
+
+        if self.paused_for_vad
+            && self
+                .listen_deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            if self.vad_active {
+                self.clear_after_vad(
+                    mouth,
+                    llm_session,
+                    defer_live_events,
+                    deferred_live_events,
+                    "TTS queue cleared because VAD continued during the interruption listen window.",
+                )?;
+            } else {
+                self.resume_after_vad(
+                    mouth,
+                    llm_session,
+                    defer_live_events,
+                    deferred_live_events,
+                    "TTS resumed after the interruption listen window stayed quiet.",
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pause_for_vad(
+        &mut self,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+        message: &'static str,
+    ) -> Result<()> {
+        self.paused_for_vad = true;
+        send_tts_vad_control(
+            mouth,
+            llm_session,
+            defer_live_events,
+            deferred_live_events,
+            SpeechControlCommand::Pause,
+            message,
+        )
+    }
+
+    fn resume_after_vad(
+        &mut self,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+        message: &'static str,
+    ) -> Result<()> {
+        self.paused_for_vad = false;
+        self.listen_deadline = None;
+        send_tts_vad_control(
+            mouth,
+            llm_session,
+            defer_live_events,
+            deferred_live_events,
+            SpeechControlCommand::Resume,
+            message,
+        )
+    }
+
+    fn clear_after_vad(
+        &mut self,
+        mouth: &mut ContinueMouth,
+        llm_session: &mut ContinueLlmSession,
+        defer_live_events: bool,
+        deferred_live_events: &mut VecDeque<PromptPacket>,
+        message: &'static str,
+    ) -> Result<()> {
+        self.paused_for_vad = false;
+        self.listen_deadline = None;
+        send_tts_vad_control(
+            mouth,
+            llm_session,
+            defer_live_events,
+            deferred_live_events,
+            SpeechControlCommand::Shutup,
+            message,
+        )
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn prepare_tts_runtime_event(
+    event: &ContinueRuntimeEvent,
+    mouth: &mut ContinueMouth,
+    tts_vad: &mut TtsVadInterruption,
+    llm_session: &mut ContinueLlmSession,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
+) -> Result<()> {
+    tts_vad.prepare_runtime_event(
+        event,
+        mouth,
+        llm_session,
+        defer_live_events,
+        deferred_live_events,
+    )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_tts_vad_control(
+    mouth: &mut ContinueMouth,
+    llm_session: &mut ContinueLlmSession,
+    defer_live_events: bool,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
+    command: SpeechControlCommand,
+    message: &'static str,
+) -> Result<()> {
+    mouth.enqueue_runtime_event(&ContinueRuntimeEvent::SpeechControl { command })?;
+    append_or_defer_live_event(
+        llm_session,
+        PromptPacket::source(message.to_string()),
+        defer_live_events,
+        deferred_live_events,
+        "failed to append TTS/VAD control event to live generation",
+    )
 }
 
 #[cfg(all(
@@ -3057,33 +3437,13 @@ impl ContinueMouth {
     }
 
     fn enqueue_runtime_event(&mut self, event: &ContinueRuntimeEvent) -> Result<bool> {
-        match event {
-            ContinueRuntimeEvent::UtteranceCompleted { id, content } => {
-                let Some(content) = clean_spoken_content(content) else {
-                    return Ok(false);
-                };
-
-                self.tx
-                    .send(ContinueMouthCommand::Speak {
-                        id: *id,
-                        text: content,
-                    })
-                    .context("failed to send speech to dev continue mouth worker")?;
-                Ok(true)
-            }
-            ContinueRuntimeEvent::SpeechControl { command } => {
-                let command = match command {
-                    SpeechControlCommand::Shutup => ContinueMouthCommand::Shutup,
-                    SpeechControlCommand::Pause => ContinueMouthCommand::Pause,
-                    SpeechControlCommand::Resume => ContinueMouthCommand::Resume,
-                };
-                self.tx
-                    .send(command)
-                    .context("failed to send speech control to dev continue mouth worker")?;
-                Ok(false)
-            }
-            ContinueRuntimeEvent::SourceCommand { .. } => Ok(false),
-        }
+        let Some((command, pending_speech)) = mouth_command_for_runtime_event(event) else {
+            return Ok(false);
+        };
+        self.tx
+            .send(command)
+            .context("failed to send runtime event to dev continue mouth worker")?;
+        Ok(pending_speech)
     }
 }
 
@@ -3102,18 +3462,66 @@ impl Drop for ContinueMouth {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ContinueMouthCommand {
-    Speak { id: u64, text: String },
+    Speak {
+        id: u64,
+        text: String,
+        interrupt: bool,
+    },
     Shutup,
     Pause,
     Resume,
     Shutdown,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn mouth_command_for_runtime_event(
+    event: &ContinueRuntimeEvent,
+) -> Option<(ContinueMouthCommand, bool)> {
+    match event {
+        ContinueRuntimeEvent::UtteranceCompleted {
+            id,
+            content,
+            interrupt,
+        } => {
+            let content = clean_spoken_content(content)?;
+            Some((
+                ContinueMouthCommand::Speak {
+                    id: *id,
+                    text: content,
+                    interrupt: *interrupt,
+                },
+                true,
+            ))
+        }
+        ContinueRuntimeEvent::SpeechControl { command } => {
+            let command = match command {
+                SpeechControlCommand::Shutup => ContinueMouthCommand::Shutup,
+                SpeechControlCommand::Pause => ContinueMouthCommand::Pause,
+                SpeechControlCommand::Resume => ContinueMouthCommand::Resume,
+            };
+            Some((command, false))
+        }
+        ContinueRuntimeEvent::SourceCommand { .. } => None,
+    }
 }
 
 #[cfg(all(
@@ -3212,12 +3620,12 @@ impl ContinueMouthEvent {
             Self::SpeechResumed
             | Self::SpeechPlaybackCompleted { .. }
             | Self::SpeechInterrupted { .. }
+            | Self::SpeechQueueCleared { .. }
             | Self::SpeechError { .. } => *paused = false,
             Self::WorkerStarted
             | Self::SpeechQueued { .. }
             | Self::SpeechSynthesisStarted { .. }
-            | Self::SpeechPlaybackStarted { .. }
-            | Self::SpeechQueueCleared { .. } => {}
+            | Self::SpeechPlaybackStarted { .. } => {}
         }
     }
 }
@@ -3235,11 +3643,15 @@ fn run_continue_mouth_worker(
     capture_enabled: Arc<AtomicBool>,
 ) {
     let _ = event_tx.send(ContinueMouthEvent::WorkerStarted);
-    let mut pending = VecDeque::<(u64, String)>::new();
+    let mut pending = VecDeque::<PendingMouthSpeech>::new();
     let mut paused = false;
     loop {
-        let command = if let Some((id, text)) = pending.pop_front() {
-            ContinueMouthCommand::Speak { id, text }
+        let command = if let Some(speech) = pending.pop_front() {
+            ContinueMouthCommand::Speak {
+                id: speech.id,
+                text: speech.text,
+                interrupt: speech.interrupt,
+            }
         } else {
             match rx.recv() {
                 Ok(command) => command,
@@ -3247,10 +3659,15 @@ fn run_continue_mouth_worker(
             }
         };
         match command {
-            ContinueMouthCommand::Speak { id, text } => {
+            ContinueMouthCommand::Speak {
+                id,
+                text,
+                interrupt,
+            } => {
                 match run_continue_mouth_speech(
                     id,
                     text,
+                    interrupt,
                     &mut tts,
                     &rx,
                     &mut pending,
@@ -3264,6 +3681,7 @@ fn run_continue_mouth_worker(
             }
             ContinueMouthCommand::Shutup => {
                 let _ = tts.stop();
+                resume_mouth_playback(&event_tx, &mut paused);
                 if send_cleared_mouth_queue_event(&rx, &mut pending, &event_tx) {
                     return;
                 }
@@ -3332,6 +3750,19 @@ enum MouthPlaybackOutcome {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingMouthSpeech {
+    id: u64,
+    text: String,
+    interrupt: bool,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn pause_mouth_playback(
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     paused: &mut bool,
@@ -3366,18 +3797,27 @@ fn resume_mouth_playback(
 ))]
 fn drain_mouth_control_commands(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<(u64, String)>,
+    pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     tts: &mut PiperTextToSpeech,
     paused: &mut bool,
 ) -> MouthControlFlow {
     loop {
         match rx.try_recv() {
-            Ok(ContinueMouthCommand::Speak { id, text }) => pending.push_back((id, text)),
+            Ok(ContinueMouthCommand::Speak {
+                id,
+                text,
+                interrupt,
+            }) => pending.push_back(PendingMouthSpeech {
+                id,
+                text,
+                interrupt,
+            }),
             Ok(ContinueMouthCommand::Pause) => pause_mouth_playback(event_tx, paused),
             Ok(ContinueMouthCommand::Resume) => resume_mouth_playback(event_tx, paused),
             Ok(ContinueMouthCommand::Shutup) => {
                 let _ = tts.stop();
+                resume_mouth_playback(event_tx, paused);
                 if send_cleared_mouth_queue_event(rx, pending, event_tx) {
                     return MouthControlFlow::Shutdown;
                 }
@@ -3404,7 +3844,7 @@ fn drain_mouth_control_commands(
 ))]
 fn send_cleared_mouth_queue_event(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<(u64, String)>,
+    pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
 ) -> bool {
     let mut cleared = pending.len();
@@ -3434,11 +3874,12 @@ fn send_cleared_mouth_queue_event(
 fn run_continue_mouth_speech(
     id: u64,
     text: String,
+    _interrupt: bool,
     tts: &mut PiperTextToSpeech,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<(u64, String)>,
+    pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
-    capture_enabled: &AtomicBool,
+    _capture_enabled: &AtomicBool,
     paused: &mut bool,
 ) -> Result<MouthWorkerFlow> {
     event_tx
@@ -3491,7 +3932,6 @@ fn run_continue_mouth_speech(
             text: text.clone(),
         })
         .ok();
-    capture_enabled.store(false, Ordering::Relaxed);
     let playback = play_continue_audio_frames_interruptible(
         &frames,
         "listenbury dev continue speech",
@@ -3501,7 +3941,6 @@ fn run_continue_mouth_speech(
         tts,
         paused,
     );
-    capture_enabled.store(true, Ordering::Relaxed);
     match playback {
         Ok(MouthPlaybackOutcome::Completed) => {}
         Ok(MouthPlaybackOutcome::Interrupted) => {
@@ -3533,7 +3972,7 @@ fn collect_continue_mouth_audio(
     tts: &mut PiperTextToSpeech,
     timeout: Duration,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<(u64, String)>,
+    pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     paused: &mut bool,
 ) -> Result<MouthAudioOutcome> {
@@ -3564,7 +4003,7 @@ fn play_continue_audio_frames_interruptible(
     frames: &[AudioFrame],
     source: &str,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<(u64, String)>,
+    pending: &mut VecDeque<PendingMouthSpeech>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     tts: &mut PiperTextToSpeech,
     paused: &mut bool,
@@ -3857,9 +4296,17 @@ struct SpeechEventDetector {
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContinueRuntimeEvent {
-    UtteranceCompleted { id: u64, content: String },
-    SpeechControl { command: SpeechControlCommand },
-    SourceCommand { command: SourceCommand },
+    UtteranceCompleted {
+        id: u64,
+        content: String,
+        interrupt: bool,
+    },
+    SpeechControl {
+        command: SpeechControlCommand,
+    },
+    SourceCommand {
+        command: SourceCommand,
+    },
 }
 
 #[cfg(any(
@@ -3896,9 +4343,13 @@ enum SourceCommand {
 impl ContinueRuntimeEvent {
     fn to_message(&self) -> String {
         match self {
-            Self::UtteranceCompleted { id, content } => {
+            Self::UtteranceCompleted {
+                id,
+                content,
+                interrupt,
+            } => {
                 format!(
-                    "utterance_completed: id={id}\ncontent:\n{}",
+                    "utterance_completed: id={id} interrupt={interrupt}\ncontent:\n{}",
                     sanitize_runtime_event_content(content)
                 )
             }
@@ -4303,14 +4754,14 @@ fn contains_template_token(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinuePromptFormat, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
-        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
-        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand,
-        build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        ContinueMouthCommand, ContinuePromptFormat, ContinueRuntimeEvent, HarmonyFinalFilter,
+        PromptPacket, RollingContextManager, SourceCommand, SpeechControlCommand,
+        SpeechEventDetector, TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS,
+        TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
-        next_time_event_interval, wrap_ear_event, wrap_live_input, wrap_mouth_event,
-        wrap_runtime_event, wrap_source_event, wrap_time_event,
+        mouth_command_for_runtime_event, next_time_event_interval, wrap_ear_event, wrap_live_input,
+        wrap_mouth_event, wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
     use listenbury::mind::llm::LlmEvent;
 
@@ -4387,10 +4838,13 @@ mod tests {
         assert!(prompt.contains("It is not spoken aloud"));
         assert!(prompt.contains("does not happen in the real world"));
         assert!(prompt.contains("The only way to affect the real world"));
+        assert!(prompt.contains("Speak sparingly"));
+        assert!(prompt.contains("Do not narrate every clock tick"));
         assert!(prompt.contains("do not speak just to fill silence"));
         assert!(prompt.contains("If you are bored, alone, or waiting"));
         assert!(prompt.contains("explore Pete's own source code"));
-        assert!(prompt.contains("say(text), shutup(), pause(), resume()"));
+        assert!(prompt.contains("say(text, options?), shutup(), pause(), resume()"));
+        assert!(prompt.contains("say(text, { interrupt: true })"));
         assert!(prompt.contains("run small TypeScript modules with <ts>code</ts>"));
         assert!(prompt.contains("internal module \"pete:will\""));
         assert!(prompt.contains("Import the builders you need from \"pete:will\""));
@@ -4418,6 +4872,12 @@ mod tests {
         assert!(prompt.starts_with("<|start|>system<|message|>"));
         assert!(prompt.contains("# Valid channels: analysis, final."));
         assert!(prompt.contains("<|start|>developer<|message|># Instructions"));
+        assert!(prompt.contains("Final channel content must be exactly one or more <ts>"));
+        assert!(prompt.contains("<ts>say(\"Hello, I can hear you.\")</ts>"));
+        assert!(prompt.contains("already available in scope"));
+        assert!(prompt.contains("leave room for the interlocutor"));
+        assert!(prompt.contains("Do not use say for clock ticks"));
+        assert!(prompt.contains("interrupt: true"));
         assert!(prompt.contains("<|start|>user<|message|>Pete context.<|end|>"));
         assert!(prompt.ends_with("<|start|>assistant"));
         assert!(stops.iter().any(|stop| stop == "<|return|>"));
@@ -4601,10 +5061,36 @@ mod tests {
                     pattern: "ContinueCommand".to_string(),
                     limit: 2
                 },
-                TypeScriptCommand::Say("check complete".to_string()),
+                TypeScriptCommand::Say {
+                    text: "check complete".to_string(),
+                    interrupt: false
+                },
                 TypeScriptCommand::Pause,
                 TypeScriptCommand::Resume,
                 TypeScriptCommand::Shutup
+            ]
+        );
+    }
+
+    #[test]
+    fn typescript_builders_are_available_without_explicit_import() {
+        let commands = execute_typescript_commands(
+            r#"[listFiles(), readSourceFile("src/main.rs"), say("I can hear you.")]"#,
+        )
+        .expect("default pete:will imports should be injected");
+
+        assert_eq!(
+            commands,
+            vec![
+                TypeScriptCommand::ListFiles,
+                TypeScriptCommand::ReadSourceFile {
+                    file: "src/main.rs".to_string(),
+                    page: 1
+                },
+                TypeScriptCommand::Say {
+                    text: "I can hear you.".to_string(),
+                    interrupt: false
+                }
             ]
         );
     }
@@ -4634,7 +5120,7 @@ grepSource("build_initial_prompt", 1)"#,
         assert_eq!(output.runtime_events.len(), 4);
         assert!(matches!(
             &output.runtime_events[0],
-            ContinueRuntimeEvent::UtteranceCompleted { content, .. } if content == "I can hear you."
+            ContinueRuntimeEvent::UtteranceCompleted { content, interrupt, .. } if content == "I can hear you." && !interrupt
         ));
         assert_eq!(
             output.runtime_events[1],
@@ -4653,6 +5139,53 @@ grepSource("build_initial_prompt", 1)"#,
             ContinueRuntimeEvent::SpeechControl {
                 command: SpeechControlCommand::Shutup
             }
+        );
+    }
+
+    #[test]
+    fn typescript_say_accepts_interrupt_option() {
+        let commands = execute_typescript_commands(r#"say("Hold on.", { interrupt: true })"#)
+            .expect("say interrupt option should execute");
+
+        assert_eq!(
+            commands,
+            vec![TypeScriptCommand::Say {
+                text: "Hold on.".to_string(),
+                interrupt: true
+            }]
+        );
+
+        let output = execute_typescript_source(r#"say("Hold on.", true)"#);
+        assert!(matches!(
+            &output.runtime_events[0],
+            ContinueRuntimeEvent::UtteranceCompleted { content, interrupt, .. }
+                if content == "Hold on." && *interrupt
+        ));
+    }
+
+    #[test]
+    fn say_runtime_event_maps_to_mouth_speak_command() {
+        assert_eq!(
+            mouth_command_for_runtime_event(&ContinueRuntimeEvent::UtteranceCompleted {
+                id: 42,
+                content: "I can hear you.".to_string(),
+                interrupt: false
+            }),
+            Some((
+                ContinueMouthCommand::Speak {
+                    id: 42,
+                    text: "I can hear you.".to_string(),
+                    interrupt: false
+                },
+                true
+            ))
+        );
+
+        assert_eq!(
+            mouth_command_for_runtime_event(&ContinueRuntimeEvent::SpeechControl {
+                command: SpeechControlCommand::Pause
+            }),
+            Some((ContinueMouthCommand::Pause, false))
         );
     }
 

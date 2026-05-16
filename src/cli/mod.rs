@@ -169,6 +169,12 @@ pub(crate) struct ContinueCommand {
     /// Number of recent listened/spoken turns to keep verbatim before summarizing older turns.
     #[arg(long, default_value_t = 8)]
     pub(crate) verbatim_turns: usize,
+    /// Continuous VAD speech duration before TTS auto-pauses while Pete is speaking.
+    #[arg(long, default_value_t = 120)]
+    pub(crate) tts_vad_pause_ms: u64,
+    /// Time to listen after an auto-pause before clearing or resuming TTS.
+    #[arg(long, default_value_t = 700)]
+    pub(crate) tts_vad_listen_ms: u64,
     /// Initial prompt text. If omitted, generation starts from Pete's continuous-awareness seed.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
@@ -761,6 +767,8 @@ mod tests {
         assert_eq!(command.max_tokens, None);
         assert_eq!(command.context_size, 8192);
         assert_eq!(command.verbatim_turns, 8);
+        assert_eq!(command.tts_vad_pause_ms, 120);
+        assert_eq!(command.tts_vad_listen_ms, 700);
         assert_eq!(command.prompt, ["seed", "prompt"]);
     }
 
@@ -811,6 +819,10 @@ mod tests {
             "models/ggml-base.en.bin",
             "--vad",
             "energy",
+            "--tts-vad-pause-ms",
+            "180",
+            "--tts-vad-listen-ms",
+            "900",
         ])
         .expect("dev continue should parse optional ear overrides");
 
@@ -825,6 +837,8 @@ mod tests {
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
         assert_eq!(command.vad, VadBackendOption::Energy);
+        assert_eq!(command.tts_vad_pause_ms, 180);
+        assert_eq!(command.tts_vad_listen_ms, 900);
     }
 
     #[test]
