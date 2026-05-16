@@ -454,6 +454,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut llm_paused_for_mouth = false;
     let mut mouth_playback_paused = false;
     let mut deferred_live_events = VecDeque::<PromptPacket>::new();
+    let mut prompt_gate = ContinuePromptGate::default();
     let mut tts_vad = DuplexTurnController::new(DuplexTurnControllerConfig {
         pause_after: Duration::from_millis(command.tts_vad_pause_ms),
         listen_for: Duration::from_millis(command.tts_vad_listen_ms),
@@ -477,6 +478,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             &mut deferred_live_events,
             &mut mouth,
             &mut tts_vad,
+            &mut prompt_gate,
         )?;
 
         if llm_paused_for_mouth && (pending_mouth_utterances == 0 || mouth_playback_paused) {
@@ -2294,6 +2296,7 @@ fn append_pending_live_events(
     deferred_live_events: &mut VecDeque<PromptPacket>,
     mouth: &mut ContinueMouth,
     tts_vad: &mut DuplexTurnController,
+    prompt_gate: &mut ContinuePromptGate,
 ) -> Result<()> {
     if !defer_live_events {
         flush_deferred_live_events(llm_session, deferred_live_events)?;
@@ -2344,7 +2347,7 @@ fn append_pending_live_events(
             | ContinueEarEvent::OverlapDetected { .. }
             | ContinueEarEvent::Error { .. } => {}
         }
-        if let Some(packet) = ear_event.prompt_packet() {
+        for packet in prompt_gate.consider_ear_event(&ear_event, Instant::now()) {
             append_or_defer_live_event(
                 llm_session,
                 packet,
@@ -2892,11 +2895,14 @@ enum ContinueEarEvent {
     },
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 impl ContinueEarEvent {
     #[allow(dead_code)]
@@ -2934,12 +2940,11 @@ impl ContinueEarEvent {
         }
     }
 
-    fn prompt_packet(&self) -> Option<PromptPacket> {
+    fn direct_prompt_packet(&self) -> Option<PromptPacket> {
         match self {
             Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
             Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
             Self::EnvironmentalSound { sound } => {
-                // TODO(#54): Route environmental observations through PromptGate/auditory-scene state instead of direct prompt append.
                 Some(PromptPacket::ear_observation(sound.description.clone()))
             }
             Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
@@ -2950,6 +2955,199 @@ impl ContinueEarEvent {
             | Self::SpeechStopped
             | Self::Error { .. } => None,
         }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy)]
+struct ContinuePromptGateConfig {
+    duplicate_suppression_window: Duration,
+    auditory_min_interval: Duration,
+    overlap_summary_threshold: usize,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl Default for ContinuePromptGateConfig {
+    fn default() -> Self {
+        Self {
+            duplicate_suppression_window: Duration::from_millis(1_500),
+            auditory_min_interval: Duration::from_millis(800),
+            overlap_summary_threshold: 2,
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+trait PromptGate {
+    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket>;
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug)]
+struct ContinuePromptGate {
+    config: ContinuePromptGateConfig,
+    last_emitted_packet: Option<String>,
+    last_emitted_at: Option<Instant>,
+    last_auditory_at: Option<Instant>,
+    pending_overlap_count: usize,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl Default for ContinuePromptGate {
+    fn default() -> Self {
+        Self::new(ContinuePromptGateConfig::default())
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl ContinuePromptGate {
+    fn new(config: ContinuePromptGateConfig) -> Self {
+        Self {
+            config,
+            last_emitted_packet: None,
+            last_emitted_at: None,
+            last_auditory_at: None,
+            pending_overlap_count: 0,
+        }
+    }
+
+    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket> {
+        <Self as PromptGate>::consider_ear_event(self, event, now)
+    }
+
+    fn flush_overlap_summary(&mut self, now: Instant) -> Option<PromptPacket> {
+        if self.pending_overlap_count == 0 {
+            return None;
+        }
+        self.pending_overlap_count = 0;
+        Some(PromptPacket::ear_observation(
+            "Pete heard overlapping speech while speaking.".to_string(),
+        ))
+        .and_then(|packet| self.filter_packet(packet, now))
+    }
+
+    fn filter_packet(&mut self, packet: PromptPacket, now: Instant) -> Option<PromptPacket> {
+        let is_important = matches!(packet.memory, PromptMemory::Listened(_));
+        if !is_important
+            && matches!(packet.memory, PromptMemory::AuditoryObservation(_))
+            && self.last_auditory_at.is_some_and(|last| {
+                now.saturating_duration_since(last) < self.config.auditory_min_interval
+            })
+        {
+            return None;
+        }
+
+        let signature = packet.text.clone();
+        if !is_important
+            && self.last_emitted_packet.as_deref() == Some(signature.as_str())
+            && self.last_emitted_at.is_some_and(|last| {
+                now.saturating_duration_since(last) < self.config.duplicate_suppression_window
+            })
+        {
+            return None;
+        }
+
+        if matches!(packet.memory, PromptMemory::AuditoryObservation(_)) {
+            self.last_auditory_at = Some(now);
+        }
+        self.last_emitted_packet = Some(signature);
+        self.last_emitted_at = Some(now);
+        Some(packet)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl PromptGate for ContinuePromptGate {
+    fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket> {
+        let mut packets = Vec::new();
+        if !matches!(
+            event,
+            ContinueEarEvent::OverlapDetected { .. } | ContinueEarEvent::SelfVoiceHeard { .. }
+        ) {
+            if let Some(packet) = self.flush_overlap_summary(now) {
+                packets.push(packet);
+            }
+        }
+
+        match event {
+            ContinueEarEvent::OverlapDetected { .. } => {
+                self.pending_overlap_count += 1;
+                if self.pending_overlap_count >= self.config.overlap_summary_threshold {
+                    if let Some(packet) = self.flush_overlap_summary(now) {
+                        packets.push(packet);
+                    }
+                }
+            }
+            ContinueEarEvent::SelfVoiceHeard { .. } => {
+                // Ignore raw self-hearing telemetry here; overlap summaries carry the salient signal.
+            }
+            _ => {
+                if let Some(packet) = event
+                    .direct_prompt_packet()
+                    .and_then(|packet| self.filter_packet(packet, now))
+                {
+                    packets.push(packet);
+                }
+            }
+        }
+
+        packets
     }
 }
 
@@ -5040,10 +5238,11 @@ fn contains_template_token(content: &str) -> bool {
 mod tests {
     use super::VadObservationKind;
     use super::{
-        ContinueMouthCommand, ContinuePromptFormat, ContinueRuntimeEvent, HarmonyFinalFilter,
-        PromptPacket, RollingContextManager, SourceCommand, SpeechControlCommand,
-        SpeechEventDetector, TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS,
-        TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat, ContinuePromptGate,
+        ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
+        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
+        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand,
+        build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
@@ -5092,6 +5291,116 @@ mod tests {
             packet.text,
             "\n\n--- LIVE EVENT: ear ---\nI heard silence for 160 ms.\n--- END LIVE EVENT ---\n\n"
         );
+    }
+
+    #[test]
+    fn prompt_gate_deduplicates_repeated_observations() {
+        let mut gate = ContinuePromptGate::new(ContinuePromptGateConfig {
+            duplicate_suppression_window: std::time::Duration::from_millis(500),
+            auditory_min_interval: std::time::Duration::from_millis(0),
+            overlap_summary_threshold: 3,
+        });
+        let now = std::time::Instant::now();
+        let event = ContinueEarEvent::AuditoryObservation {
+            text: "I heard silence for 160 ms.".to_string(),
+        };
+
+        assert_eq!(gate.consider_ear_event(&event, now).len(), 1);
+        assert!(
+            gate.consider_ear_event(&event, now + std::time::Duration::from_millis(100))
+                .is_empty()
+        );
+        assert_eq!(
+            gate.consider_ear_event(&event, now + std::time::Duration::from_millis(800))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn prompt_gate_suppresses_auditory_bursts() {
+        let mut gate = ContinuePromptGate::new(ContinuePromptGateConfig {
+            duplicate_suppression_window: std::time::Duration::from_millis(0),
+            auditory_min_interval: std::time::Duration::from_millis(1_000),
+            overlap_summary_threshold: 3,
+        });
+        let now = std::time::Instant::now();
+
+        let first = gate.consider_ear_event(
+            &ContinueEarEvent::AuditoryObservation {
+                text: "first".to_string(),
+            },
+            now,
+        );
+        let second = gate.consider_ear_event(
+            &ContinueEarEvent::AuditoryObservation {
+                text: "second".to_string(),
+            },
+            now + std::time::Duration::from_millis(50),
+        );
+
+        assert_eq!(first.len(), 1);
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn prompt_gate_coalesces_overlap_into_summary() {
+        let mut gate = ContinuePromptGate::new(ContinuePromptGateConfig {
+            duplicate_suppression_window: std::time::Duration::from_millis(0),
+            auditory_min_interval: std::time::Duration::from_millis(0),
+            overlap_summary_threshold: 2,
+        });
+        let now = std::time::Instant::now();
+
+        assert!(
+            gate.consider_ear_event(
+                &ContinueEarEvent::OverlapDetected {
+                    self_confidence: 0.8,
+                    external_confidence: 0.7,
+                    duration_ms: 90
+                },
+                now
+            )
+            .is_empty()
+        );
+
+        let packets = gate.consider_ear_event(
+            &ContinueEarEvent::OverlapDetected {
+                self_confidence: 0.82,
+                external_confidence: 0.72,
+                duration_ms: 92,
+            },
+            now + std::time::Duration::from_millis(10),
+        );
+
+        assert_eq!(packets.len(), 1);
+        assert!(
+            packets[0]
+                .text
+                .contains("Pete heard overlapping speech while speaking.")
+        );
+        assert!(!packets[0].text.contains("self_confidence"));
+    }
+
+    #[test]
+    fn prompt_gate_allows_transcript_passthrough() {
+        let mut gate = ContinuePromptGate::new(ContinuePromptGateConfig {
+            duplicate_suppression_window: std::time::Duration::from_secs(30),
+            auditory_min_interval: std::time::Duration::from_secs(30),
+            overlap_summary_threshold: 3,
+        });
+        let now = std::time::Instant::now();
+        let event = ContinueEarEvent::Transcript {
+            text: "hello".to_string(),
+        };
+
+        let first = gate.consider_ear_event(&event, now);
+        let second = gate.consider_ear_event(&event, now + std::time::Duration::from_millis(1));
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert!(first[0].text.contains("Heard: hello"));
+        assert!(second[0].text.contains("Heard: hello"));
     }
 
     #[test]
