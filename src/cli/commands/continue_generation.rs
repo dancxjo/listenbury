@@ -2458,7 +2458,6 @@ struct DuplexTurnController {
     config: DuplexTurnControllerConfig,
     external_speech_active: bool,
     external_speech_started_at: Option<Instant>,
-    external_speech_confidence: f32,
     paused_for_external_speech: bool,
     listen_deadline: Option<Instant>,
 }
@@ -2488,7 +2487,6 @@ impl DuplexTurnController {
             config,
             external_speech_active: false,
             external_speech_started_at: None,
-            external_speech_confidence: 0.0,
             paused_for_external_speech: false,
             listen_deadline: None,
         }
@@ -2509,8 +2507,9 @@ impl DuplexTurnController {
                 self.mark_external_speech_stopped(now);
             }
             ContinueEarEvent::Transcript { .. } => {
+                // A transcript means ASR already observed enough sustained external speech to
+                // produce text, so treat the pause grace window as already elapsed.
                 self.external_speech_active = true;
-                self.external_speech_confidence = 1.0;
                 self.external_speech_started_at =
                     Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
             }
@@ -2628,18 +2627,16 @@ impl DuplexTurnController {
         Ok(())
     }
 
-    fn mark_external_speech_started(&mut self, now: Instant, confidence: f32) {
+    fn mark_external_speech_started(&mut self, now: Instant, _confidence: f32) {
         if !self.external_speech_active {
             self.external_speech_started_at = Some(now);
         }
         self.external_speech_active = true;
-        self.external_speech_confidence = self.external_speech_confidence.max(confidence);
     }
 
     fn mark_external_speech_stopped(&mut self, now: Instant) {
         self.external_speech_active = false;
         self.external_speech_started_at = None;
-        self.external_speech_confidence = 0.0;
         if self.paused_for_external_speech {
             self.listen_deadline = Some(now + self.config.listen_for);
         }
