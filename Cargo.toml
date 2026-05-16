@@ -49,6 +49,7 @@ asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
 asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = []
+tts-piper-native = ["tts-piper", "dep:ort"]
 vision-webcam = []
 model-download = ["dep:ureq", "dep:dirs", "dep:inquire"]
 
@@ -90,3 +91,9 @@ features = ["rustls"]
 [dependencies.dirs]
 version = "6"
 optional = true
+
+[dependencies.ort]
+version = "=2.0.0-rc.12"
+optional = true
+default-features = false
+features = ["load-dynamic", "api-24"]
