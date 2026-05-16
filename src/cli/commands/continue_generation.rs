@@ -351,6 +351,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         command.llm_gpu_layers,
         DEFAULT_CONTINUE_LLAMA_GPU_LAYERS,
     )?;
+    let prompt_format = continue_prompt_format_for_model(&model_path, command.mode);
     let config = LlamaCppConfig {
         model_path,
         gpu_layers: llm_placement.gpu_layers,
@@ -363,7 +364,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
     let mut llm_session = ContinueLlmSession::start(
         llm,
-        command.mode,
+        prompt_format,
         system_prompt,
         max_tokens,
         command.context_size,
@@ -428,6 +429,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut next_time_event_at =
         Instant::now() + next_time_event_interval(&mut time_event_jitter_state);
     let mut speech_events = SpeechEventDetector::default();
+    let mut harmony_filter = llm_session.uses_harmony().then(HarmonyFinalFilter::default);
     let mut pending_mouth_utterances = 0usize;
     let mut llm_paused_for_mouth = false;
     let mut mouth_playback_paused = false;
@@ -484,11 +486,21 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         });
 
         for event in &events {
+            if let LlmEvent::Token { text } = event {
+                llm_session.record_generated_text(text);
+            }
+        }
+        let visible_events = if let Some(filter) = &mut harmony_filter {
+            filter.filter_events(&events)
+        } else {
+            events.clone()
+        };
+
+        for event in &visible_events {
             match event {
                 LlmEvent::Token { text } => {
                     print!("{text}");
                     std::io::stdout().flush()?;
-                    llm_session.record_generated_text(text);
                     for speech_event in speech_events.ingest(text) {
                         if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
                             &speech_event
@@ -540,6 +552,13 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             while pending_mouth_utterances > 0 {
                 drain_mouth_events_without_llm(&mouth_rx, &mut pending_mouth_utterances)?;
                 std::thread::sleep(Duration::from_millis(5));
+            }
+            if !cancelled {
+                llm_session
+                    .start_with_compact_prompt()
+                    .context("failed to restart continued llama.cpp generation")?;
+                harmony_filter = llm_session.uses_harmony().then(HarmonyFinalFilter::default);
+                continue;
             }
             break;
         }
@@ -685,6 +704,85 @@ fn next_time_event_interval(jitter_state: &mut u64) -> Duration {
     Duration::from_millis((TIME_EVENT_INTERVAL_BASE_MS as i64 + jitter) as u64)
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ContinuePromptFormat {
+    Legacy(crate::cli::PromptMode),
+    GptOssHarmony,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn continue_prompt_format_for_model(
+    model_path: &std::path::Path,
+    legacy_mode: crate::cli::PromptMode,
+) -> ContinuePromptFormat {
+    let filename = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if filename.contains("gpt-oss") {
+        ContinuePromptFormat::GptOssHarmony
+    } else {
+        ContinuePromptFormat::Legacy(legacy_mode)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn build_continue_prompt(format: ContinuePromptFormat, prompt_body: &str) -> (String, Vec<String>) {
+    match format {
+        ContinuePromptFormat::Legacy(mode) => build_prompt(mode, prompt_body),
+        ContinuePromptFormat::GptOssHarmony => (
+            format!(
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete Listenbury. Use the analysis channel for private internal monologue. Use the final channel only when you need to emit a real-world action, usually a <ts>...</ts> TypeScript command. Do not put Harmony template tokens in final channel content.<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
+            ),
+            harmony_continue_stops(),
+        ),
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn harmony_continue_stops() -> Vec<String> {
+    vec![
+        "<|return|>".to_string(),
+        "<|start|>user".to_string(),
+        "<|start|>system".to_string(),
+        "<|start|>developer".to_string(),
+    ]
+}
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -695,7 +793,7 @@ fn next_time_event_interval(jitter_state: &mut u64) -> Duration {
 struct ContinueLlmSession {
     llm: LlamaCppEngine,
     id: GenerationId,
-    mode: crate::cli::PromptMode,
+    prompt_format: ContinuePromptFormat,
     max_tokens: Option<usize>,
     rolling: RollingContextManager,
     paused: bool,
@@ -710,7 +808,7 @@ struct ContinueLlmSession {
 impl ContinueLlmSession {
     fn start(
         mut llm: LlamaCppEngine,
-        mode: crate::cli::PromptMode,
+        prompt_format: ContinuePromptFormat,
         system_prompt: String,
         max_tokens: Option<usize>,
         context_size: u32,
@@ -718,7 +816,7 @@ impl ContinueLlmSession {
     ) -> Result<Self> {
         let rolling =
             RollingContextManager::new(system_prompt, context_size, max_tokens, verbatim_turns);
-        let (prompt, stop) = build_prompt(mode, &rolling.prompt_body());
+        let (prompt, stop) = build_continue_prompt(prompt_format, &rolling.prompt_body());
         let id = llm.start(GenerationRequest {
             prompt: prompt.clone(),
             max_tokens,
@@ -727,7 +825,7 @@ impl ContinueLlmSession {
         let mut session = Self {
             llm,
             id,
-            mode,
+            prompt_format,
             max_tokens,
             rolling,
             paused: false,
@@ -760,17 +858,22 @@ impl ContinueLlmSession {
 
     fn append_prompt_packet(&mut self, packet: PromptPacket) -> Result<()> {
         let append_text = self.rolling.record_prompt_packet(packet);
-        if self.rolling.should_restart_before_append(&append_text) {
+        let formatted = self.format_live_append(&append_text);
+        if self.rolling.should_restart_before_append(&formatted) {
             self.restart_with_compact_prompt()
         } else {
-            self.rolling.note_appended_text(&append_text);
-            self.llm.append_prompt(self.id, append_text)
+            self.rolling.note_appended_text(&formatted);
+            self.llm.append_prompt(self.id, formatted)
         }
     }
 
     fn restart_with_compact_prompt(&mut self) -> Result<()> {
         self.cancel_current_generation()?;
-        let (prompt, stop) = build_prompt(self.mode, &self.rolling.prompt_body());
+        self.start_with_compact_prompt()
+    }
+
+    fn start_with_compact_prompt(&mut self) -> Result<()> {
+        let (prompt, stop) = build_continue_prompt(self.prompt_format, &self.rolling.prompt_body());
         self.id = self.llm.start(GenerationRequest {
             prompt: prompt.clone(),
             max_tokens: self.max_tokens,
@@ -781,6 +884,19 @@ impl ContinueLlmSession {
             self.llm.set_paused(self.id, true)?;
         }
         Ok(())
+    }
+
+    fn uses_harmony(&self) -> bool {
+        matches!(self.prompt_format, ContinuePromptFormat::GptOssHarmony)
+    }
+
+    fn format_live_append(&self, text: &str) -> String {
+        match self.prompt_format {
+            ContinuePromptFormat::GptOssHarmony => {
+                format!("<|end|><|start|>user<|message|>{text}<|end|><|start|>assistant")
+            }
+            ContinuePromptFormat::Legacy(_) => text.to_string(),
+        }
     }
 
     fn cancel_current_generation(&mut self) -> Result<()> {
@@ -3819,6 +3935,174 @@ impl SpeechControlCommand {
         feature = "tts-piper"
     )
 ))]
+#[derive(Debug, Default)]
+struct HarmonyFinalFilter {
+    pending: String,
+    in_final: bool,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl HarmonyFinalFilter {
+    fn filter_events(&mut self, events: &[LlmEvent]) -> Vec<LlmEvent> {
+        let mut filtered = Vec::new();
+        for event in events {
+            match event {
+                LlmEvent::Token { text } => {
+                    let text = self.push(text);
+                    if !text.is_empty() {
+                        filtered.push(LlmEvent::Token { text });
+                    }
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
+                    let text = self.finish();
+                    if !text.is_empty() {
+                        filtered.push(LlmEvent::Token { text });
+                    }
+                    filtered.push(event.clone());
+                }
+            }
+        }
+        filtered
+    }
+
+    fn push(&mut self, text: &str) -> String {
+        self.pending.push_str(text);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> String {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, completed: bool) -> String {
+        let mut visible = String::new();
+        loop {
+            if self.in_final {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_ENDS) {
+                    visible.push_str(&self.pending[..start]);
+                    self.pending.drain(..start + marker.len());
+                    self.in_final = false;
+                    continue;
+                }
+                let keep_from = if completed {
+                    self.pending.len()
+                } else {
+                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_ENDS)
+                };
+                visible.push_str(&self.pending[..keep_from]);
+                self.pending.drain(..keep_from);
+                break;
+            }
+
+            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_STARTS) {
+                self.pending.drain(..start + marker.len());
+                self.in_final = true;
+                continue;
+            }
+            if completed {
+                self.pending.clear();
+            } else {
+                keep_possible_marker_prefix(&mut self.pending, HARMONY_FINAL_STARTS);
+            }
+            break;
+        }
+        visible
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const HARMONY_FINAL_STARTS: &[&str] = &[
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|start|>"];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)> {
+    markers
+        .iter()
+        .filter_map(|marker| text.find(marker).map(|index| (index, *marker)))
+        .min_by_key(|(index, _)| *index)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn keep_possible_marker_prefix(text: &mut String, markers: &[&str]) {
+    let keep_from = possible_marker_prefix_start(text, markers);
+    text.drain(..keep_from);
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
+    (0..text.len())
+        .find(|&index| {
+            text.is_char_boundary(index)
+                && markers.iter().any(|marker| {
+                    let suffix = &text[index..];
+                    !suffix.is_empty() && suffix.len() < marker.len() && marker.starts_with(suffix)
+                })
+        })
+        .unwrap_or(text.len())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 impl SpeechEventDetector {
     fn defers_live_events(&self) -> bool {
         longest_marker_prefix_suffix_len(&self.pending) > 0
@@ -4019,14 +4303,16 @@ fn contains_template_token(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinueRuntimeEvent, PromptPacket, RollingContextManager, SourceCommand,
-        SpeechControlCommand, SpeechEventDetector, TIME_EVENT_INTERVAL_BASE_MS,
-        TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand, build_initial_prompt,
-        clean_spoken_content, current_time_message, execute_list_source_files,
+        ContinuePromptFormat, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
+        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
+        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand,
+        build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         next_time_event_interval, wrap_ear_event, wrap_live_input, wrap_mouth_event,
         wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
+    use listenbury::mind::llm::LlmEvent;
 
     #[test]
     fn stdin_append_is_wrapped_as_live_input() {
@@ -4115,6 +4401,47 @@ mod tests {
         assert!(!prompt.contains("<shutup/>"));
         assert!(!prompt.contains("<list_files/>"));
         assert!(!prompt.contains("--- SPEECH ---"));
+    }
+
+    #[test]
+    fn gpt_oss_continue_uses_harmony_prompt_format() {
+        assert_eq!(
+            continue_prompt_format_for_model(
+                std::path::Path::new("models/llama/gpt-oss-20b-mxfp4.gguf"),
+                crate::cli::PromptMode::Raw,
+            ),
+            ContinuePromptFormat::GptOssHarmony
+        );
+
+        let (prompt, stops) =
+            build_continue_prompt(ContinuePromptFormat::GptOssHarmony, "Pete context.");
+        assert!(prompt.starts_with("<|start|>system<|message|>"));
+        assert!(prompt.contains("# Valid channels: analysis, final."));
+        assert!(prompt.contains("<|start|>developer<|message|># Instructions"));
+        assert!(prompt.contains("<|start|>user<|message|>Pete context.<|end|>"));
+        assert!(prompt.ends_with("<|start|>assistant"));
+        assert!(stops.iter().any(|stop| stop == "<|return|>"));
+        assert!(!stops.iter().any(|stop| stop == "<|end|>"));
+    }
+
+    #[test]
+    fn harmony_filter_only_emits_final_channel() {
+        let mut filter = HarmonyFinalFilter::default();
+        let events = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "<|channel|>analysis<|message|>Think privately.".to_string(),
+            },
+            LlmEvent::Token {
+                text: "<|end|><|start|>assistant<|channel|>final<|message|><ts>import { say } from \"pete:will\"; say(\"Hi\")</ts>".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+
+        assert!(matches!(
+            events.as_slice(),
+            [LlmEvent::Token { text }, LlmEvent::Completed]
+                if text == "<ts>import { say } from \"pete:will\"; say(\"Hi\")</ts>"
+        ));
     }
 
     #[test]
