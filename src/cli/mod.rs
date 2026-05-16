@@ -275,6 +275,8 @@ pub(crate) struct LiveHalfDuplexCommand {
     /// Stop listening after this many seconds. By default, listen until Ctrl-C.
     #[arg(long)]
     pub(crate) seconds: Option<u64>,
+    #[arg(long)]
+    pub(crate) jsonl: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = ModelProfile::Tiny)]
     pub(crate) model_profile: ModelProfile,
     #[arg(long)]
@@ -660,6 +662,7 @@ mod tests {
             panic!("expected listen command");
         };
         assert_eq!(command.seconds, None);
+        assert!(command.jsonl.is_none());
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
@@ -672,6 +675,8 @@ mod tests {
             "listen",
             "--seconds",
             "12",
+            "--jsonl",
+            "out/live-trace.jsonl",
             "--model-profile",
             "tiny",
             "--no-backchannels",
@@ -682,6 +687,7 @@ mod tests {
             panic!("expected listen command");
         };
         assert_eq!(command.seconds, Some(12));
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/live-trace.jsonl")));
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);

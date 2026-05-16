@@ -102,6 +102,13 @@ use listenbury::hearing::vad::VadBackendKind;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceEvent, LiveTraceRecorder};
 #[cfg(any(
     test,
     all(
@@ -263,12 +270,21 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+type LiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 struct LiveHalfDuplexState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     self_hearing: SelfHearingState,
     controller: ConversationController,
+    trace: LiveTrace,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
 }
@@ -287,9 +303,43 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("active_groups", &self.active_groups)
             .field("self_hearing", &self.self_hearing)
             .field("controller", &self.controller)
+            .field("trace", &"live trace recorder")
             .field("frame_time_ms", &self.frame_time_ms)
             .field("last_vad_state", &self.last_vad_state)
             .finish()
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy)]
+struct LiveTurnTraceState {
+    turn: u64,
+    first_llm_token_emitted: bool,
+    first_safe_speech_unit_emitted: bool,
+    first_tts_audio_frame_emitted: bool,
+    playback_started: bool,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl LiveTurnTraceState {
+    fn new(turn: u64) -> Self {
+        Self {
+            turn,
+            first_llm_token_emitted: false,
+            first_safe_speech_unit_emitted: false,
+            first_tts_audio_frame_emitted: false,
+            playback_started: false,
+        }
     }
 }
 
@@ -335,6 +385,12 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         anyhow::ensure!(seconds > 0, "--seconds must be greater than zero");
     }
 
+    let trace_started_at = ExactTimestamp::now();
+    let trace_writer = command
+        .jsonl
+        .as_deref()
+        .map(JsonlTraceWriter::create)
+        .transpose()?;
     let paths = LiveHalfDuplexModelPaths::discover(&command)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
         .with_context(|| {
@@ -475,6 +531,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         .play()
         .with_context(|| format!("failed to start capture from {input_name}"))?;
 
+    let mut trace = LiveTraceRecorder::new(trace_started_at, trace_writer);
+    trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
+
     println!(
         "live-half-duplex listening on {input_name}: {} Hz, {} channel(s), vad={}.",
         input_sample_rate_hz,
@@ -499,6 +558,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         active_groups: HashMap::new(),
         self_hearing: SelfHearingState::default(),
         controller: ConversationController::default(),
+        trace,
         frame_time_ms: 0,
         last_vad_state: None,
     };
@@ -523,13 +583,28 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             &mut ring_tx,
             &dropped_in_ring,
         );
-        let closed_groups = process_ring_frames(&mut ring_rx, &mut state)?;
+        let turn_id = turns as u64 + 1;
+        let closed_groups = process_ring_frames(&mut ring_rx, &mut state, turn_id)?;
         for group_frames in closed_groups {
+            state
+                .trace
+                .buffer_now(turn_id, "asr_started", ExactTimestamp::now());
             let transcript = transcribe_group(&group_frames, &mut recognizer)?;
             let transcript = transcript.trim();
+            state
+                .trace
+                .buffer_now(turn_id, "asr_finished", ExactTimestamp::now());
             if transcript.is_empty() {
+                state.trace.discard_turn(turn_id);
                 continue;
             }
+            let mut transcript_event =
+                state
+                    .trace
+                    .event(turn_id, "transcript", ExactTimestamp::now());
+            transcript_event.text = Some(transcript.to_string());
+            state.trace.buffer(transcript_event);
+            state.trace.commit_turn(turn_id)?;
 
             println!("Heard: {transcript}");
             state
@@ -549,7 +624,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 command.no_backchannels,
                 &mut state.self_hearing,
                 &mut state.controller,
-                turns as u64 + 1,
+                &mut state.trace,
+                turn_id,
             )?;
             state.controller.apply_safe_boundary_updates();
             capture_enabled.store(true, Ordering::SeqCst);
@@ -559,6 +635,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     }
 
     drop(stream);
+    state.trace.maybe_end_suppression(ExactTimestamp::now())?;
 
     println!(
         "live-half-duplex finished: turns={}, callback_drops={}, ring_drops={}",
@@ -590,7 +667,9 @@ pub(crate) fn run_live_half_duplex(_command: LiveHalfDuplexCommand) -> Result<()
 fn process_live_frame(
     frame: AudioFrame,
     state: &mut LiveHalfDuplexState,
+    turn_id: u64,
 ) -> Result<Vec<Vec<AudioFrame>>> {
+    state.trace.maybe_end_suppression(frame.captured_at)?;
     if state
         .self_hearing
         .suppression_decision_at(frame.captured_at)
@@ -618,18 +697,34 @@ fn process_live_frame(
         match event {
             HearingEvent::SpeechStarted => {
                 state
+                    .trace
+                    .buffer_now(turn_id, "speech_started", frame.captured_at);
+                state
                     .controller
                     .record_runtime_packet(RuntimePacket::UserStartedSpeaking);
             }
-            HearingEvent::BreathGroupClosed { .. } => {
+            HearingEvent::BreathGroupClosed { id, reason } => {
+                let mut trace_event =
+                    state
+                        .trace
+                        .event(turn_id, "breath_group_closed", frame.captured_at);
+                trace_event.group_id = Some(format!("{id:?}"));
+                trace_event.reason = Some(format!("{reason:?}").to_ascii_lowercase());
+                state.trace.buffer(trace_event);
                 state
                     .controller
                     .record_runtime_packet(RuntimePacket::UserStoppedSpeaking);
                 state.controller.apply_safe_boundary_updates();
             }
-            HearingEvent::SpeechContinued { .. }
-            | HearingEvent::PauseStarted
-            | HearingEvent::BreathGroupOpened { .. } => {}
+            HearingEvent::SpeechContinued { .. } | HearingEvent::PauseStarted => {}
+            HearingEvent::BreathGroupOpened { id } => {
+                let mut trace_event =
+                    state
+                        .trace
+                        .event(turn_id, "breath_group_opened", frame.captured_at);
+                trace_event.group_id = Some(format!("{id:?}"));
+                state.trace.buffer(trace_event);
+            }
         }
         if let HearingEvent::BreathGroupOpened { id } = event {
             state.active_groups.entry(*id).or_default();
@@ -660,10 +755,11 @@ fn process_live_frame(
 fn process_ring_frames(
     ring_rx: &mut listenbury::audio::ring::AudioRingRx,
     state: &mut LiveHalfDuplexState,
+    turn_id: u64,
 ) -> Result<Vec<Vec<AudioFrame>>> {
     let mut closed_groups = Vec::new();
     while let Some(frame) = ring_rx.try_pop() {
-        closed_groups.extend(process_live_frame(frame, state)?);
+        closed_groups.extend(process_live_frame(frame, state, turn_id)?);
     }
     Ok(closed_groups)
 }
@@ -683,6 +779,7 @@ fn stream_speech_to_tts(
     no_backchannels: bool,
     self_hearing: &mut SelfHearingState,
     controller: &mut ConversationController,
+    trace: &mut LiveTrace,
     user_turn_id: u64,
 ) -> Result<()> {
     let prompt_format = prompt_format_for_model(llm_model_path);
@@ -695,6 +792,11 @@ fn stream_speech_to_tts(
             stop: live_half_duplex_stops(prompt_format),
         })
         .context("failed to start llama.cpp generation")?;
+    trace.emit_now(
+        user_turn_id,
+        "llm_generation_started",
+        ExactTimestamp::now(),
+    )?;
 
     let llm_started_at_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
     let llm_started_at = Instant::now();
@@ -708,6 +810,7 @@ fn stream_speech_to_tts(
     let mut main_llm_has_safe_speech_unit = false;
     let mut filler_attempted = false;
     let mut played_any_audio = false;
+    let mut trace_state = LiveTurnTraceState::new(user_turn_id);
     let mut harmony_filter =
         (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
     loop {
@@ -736,7 +839,14 @@ fn stream_speech_to_tts(
                     let filler_text = filler_plan.text().to_string();
                     current_spoken_text = filler_text.clone();
                     response_fragments.push(filler_text.clone());
+                    emit_speech_plan_trace(
+                        trace,
+                        user_turn_id,
+                        &filler_plan,
+                        ExactTimestamp::now(),
+                    )?;
                     tts.enqueue(filler_plan)?;
+                    trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
                         text: filler_text,
                     });
@@ -749,6 +859,8 @@ fn stream_speech_to_tts(
                 self_hearing,
                 "live-half-duplex response",
                 controller,
+                trace,
+                &mut trace_state,
             )?;
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -763,6 +875,10 @@ fn stream_speech_to_tts(
             .iter()
             .any(|event| matches!(event, LlmEvent::Token { .. }))
         {
+            if !trace_state.first_llm_token_emitted {
+                trace.emit_now(user_turn_id, "first_llm_token", ExactTimestamp::now())?;
+                trace_state.first_llm_token_emitted = true;
+            }
             main_llm_has_emitted_token = true;
         }
         let speech_events = if let Some(filter) = &mut harmony_filter {
@@ -777,18 +893,41 @@ fn stream_speech_to_tts(
                     current_spoken_text = text.clone();
                     response_fragments.push(text.clone());
                     main_llm_has_safe_speech_unit = true;
+                    if !trace_state.first_safe_speech_unit_emitted {
+                        let mut event = trace.event(
+                            user_turn_id,
+                            "first_safe_speech_unit_emitted",
+                            ExactTimestamp::now(),
+                        );
+                        event.text = Some(text.clone());
+                        event.unit_kind = Some(speech_unit_kind(plan.unit()).to_string());
+                        trace.emit(event)?;
+                        trace_state.first_safe_speech_unit_emitted = true;
+                    }
+                    emit_speech_plan_trace(trace, user_turn_id, &plan, ExactTimestamp::now())?;
                     tts.enqueue(plan)?;
+                    trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
                     controller.apply_safe_boundary_updates();
                 }
                 ExpressiveUnit::Face(command) => {
                     eprintln!("[live-half-duplex] face event: {command:?}");
-                    let emoji = match command {
-                        FaceCommand::SetEmoji(emoji) => emoji,
+                    let emoji = match &command {
+                        FaceCommand::SetEmoji(emoji) => emoji.clone(),
                         FaceCommand::Clear => String::new(),
                     };
-                    controller.record_runtime_packet(RuntimePacket::FaceChanged { emoji });
+                    let mut emitted =
+                        trace.event(user_turn_id, "face_event_emitted", ExactTimestamp::now());
+                    emitted.face = Some(emoji.clone());
+                    trace.emit(emitted)?;
+                    controller.record_runtime_packet(RuntimePacket::FaceChanged {
+                        emoji: emoji.clone(),
+                    });
                     controller.apply_safe_boundary_updates();
+                    let mut applied =
+                        trace.event(user_turn_id, "face_event_applied", ExactTimestamp::now());
+                    applied.face = Some(emoji);
+                    trace.emit(applied)?;
                 }
             }
         }
@@ -798,6 +937,8 @@ fn stream_speech_to_tts(
             self_hearing,
             "live-half-duplex response",
             controller,
+            trace,
+            &mut trace_state,
         )?;
 
         if events.iter().any(is_terminal_llm_event) {
@@ -813,14 +954,17 @@ fn stream_speech_to_tts(
         Duration::from_secs(30),
         played_any_audio,
         controller,
+        trace,
+        &mut trace_state,
     )?;
     played_any_audio |= flushed_audio;
     if !played_any_audio {
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         response_fragments.push(current_spoken_text.clone());
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
-            current_spoken_text.clone(),
-        )))?;
+        let fallback_plan = SpeechPlan::from(SpeechUnit::FullTurn(current_spoken_text.clone()));
+        emit_speech_plan_trace(trace, user_turn_id, &fallback_plan, ExactTimestamp::now())?;
+        tts.enqueue(fallback_plan)?;
+        trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
         let played_fallback = flush_tts_audio(
             tts,
             &current_spoken_text,
@@ -829,6 +973,8 @@ fn stream_speech_to_tts(
             Duration::from_secs(30),
             false,
             controller,
+            trace,
+            &mut trace_state,
         )?;
         anyhow::ensure!(
             played_fallback,
@@ -836,6 +982,7 @@ fn stream_speech_to_tts(
         );
     }
     self_hearing.mark_output_finished();
+    trace.emit_now(user_turn_id, "playback_finished", ExactTimestamp::now())?;
     controller.on_pete_speech_finished();
     controller.record_user_message(transcript);
     controller.record_pete_message(join_spoken_fragments(&response_fragments));
@@ -1137,16 +1284,60 @@ fn maybe_plan_cached_backchannel(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn emit_speech_plan_trace(
+    trace: &mut LiveTrace,
+    turn_id: u64,
+    plan: &SpeechPlan,
+    at: ExactTimestamp,
+) -> Result<()> {
+    let mut enqueue_started = trace.event(turn_id, "tts_enqueue_started", at);
+    enqueue_started.text = Some(plan.text().to_string());
+    enqueue_started.unit_kind = Some(speech_unit_kind(plan.unit()).to_string());
+    trace.emit(enqueue_started)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn speech_unit_kind(unit: &SpeechUnit) -> &'static str {
+    match unit {
+        SpeechUnit::Backchannel(_) => "backchannel",
+        SpeechUnit::DiscourseMarker(_) => "discourse_marker",
+        SpeechUnit::CompleteClause(_) => "complete_clause",
+        SpeechUnit::CompleteSentence(_) => "complete_sentence",
+        SpeechUnit::FullTurn(_) => "full_turn",
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn drain_ready_tts_audio(
     tts: &mut impl TextToSpeech,
     spoken_text: &str,
     self_hearing: &mut SelfHearingState,
     source: &str,
     controller: &mut ConversationController,
+    trace: &mut LiveTrace,
+    trace_state: &mut LiveTurnTraceState,
 ) -> Result<bool> {
     let frames = tts.poll_audio()?;
     if frames.is_empty() {
         return Ok(false);
+    }
+    if !trace_state.first_tts_audio_frame_emitted {
+        trace.emit_now(
+            trace_state.turn,
+            "first_tts_audio_frame_available",
+            ExactTimestamp::now(),
+        )?;
+        trace_state.first_tts_audio_frame_emitted = true;
     }
     let audio_dur = tts_audio_duration(&frames);
     controller.on_pete_speech_started();
@@ -1155,10 +1346,20 @@ fn drain_ready_tts_audio(
     });
     controller.apply_safe_boundary_updates();
     self_hearing.mark_output_started(spoken_text, audio_dur);
+    if let (Some(started_at), Some(expected_until)) = (
+        self_hearing.output_started_at,
+        self_hearing.output_expected_until,
+    ) {
+        trace.begin_suppression(trace_state.turn, started_at, expected_until)?;
+    }
     eprintln!(
         "[self-hearing] suppression window opened: utterance={:?} duration={audio_dur:?}",
         self_hearing.current_utterance_text.as_deref().unwrap_or("")
     );
+    if !trace_state.playback_started {
+        trace.emit_now(trace_state.turn, "playback_started", ExactTimestamp::now())?;
+        trace_state.playback_started = true;
+    }
     play_audio_frames(&frames, source)?;
     Ok(true)
 }
@@ -1177,6 +1378,8 @@ fn flush_tts_audio(
     timeout: Duration,
     prior_audio_played: bool,
     controller: &mut ConversationController,
+    trace: &mut LiveTrace,
+    trace_state: &mut LiveTurnTraceState,
 ) -> Result<bool> {
     let quiet_after_audio = Duration::from_millis(AUDIO_DRAIN_QUIET_THRESHOLD_MS);
     let post_playback_grace = Duration::from_millis(POST_PLAYBACK_TTS_GRACE_MS);
@@ -1185,7 +1388,15 @@ fn flush_tts_audio(
     let mut last_audio_at = prior_audio_played.then(Instant::now);
 
     while Instant::now() < deadline {
-        if drain_ready_tts_audio(tts, spoken_text, self_hearing, source, controller)? {
+        if drain_ready_tts_audio(
+            tts,
+            spoken_text,
+            self_hearing,
+            source,
+            controller,
+            trace,
+            trace_state,
+        )? {
             played_any_audio = true;
             last_audio_at = Some(Instant::now());
             continue;
