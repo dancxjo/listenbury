@@ -316,6 +316,79 @@ just cuda ask "Can you hear me?"
 just cuda listen
 ```
 
+## Browser transcript player demo
+
+The repository now includes a static browser viewer for multi-lane
+`TimedWordStream` inspection:
+
+```text
+examples/browser-transcript-player/
+```
+
+Launch it from the repository root with a simple local server:
+
+```bash
+cd /path/to/listenbury
+python -m http.server 8000
+```
+
+Then open:
+
+```text
+http://localhost:8000/examples/browser-transcript-player/
+```
+
+Use **Load bundled demo** to inspect the included sample payload wired to
+`welcome.wav`, or choose your own local JSON/audio files with the file pickers.
+The viewer renders multiple streams vertically, highlights the active word
+during playback, and lets you click a word chip to seek the shared audio
+timeline.
+
+### Browser transcript player JSON format
+
+The viewer accepts any of the following:
+
+- a single `TimedWordStream`
+- an array of `TimedWordStream`s
+- an object with a `streams` array
+
+The bundled demo uses the richer object form:
+
+```json
+{
+  "title": "Listenbury TimedWordStream Demo",
+  "audio": {
+    "url": "../../welcome.wav",
+    "duration_ms": 2081
+  },
+  "streams": [
+    {
+      "label": "User transcript",
+      "stream": {
+        "id": 1,
+        "source": "RecordedAudio",
+        "words": [
+          {
+            "id": 1,
+            "text": "welcome",
+            "timing": { "start_ms": 0, "end_ms": 720 },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "lexical_span": { "start": 0, "end": 7 },
+            "audio_ref": null
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Each `stream` payload is the shared Rust `TimedWordStream` model serialized
+through `serde`, so the viewer consumes the same substrate used by ASR and TTS
+export paths.
+
 Model utilities:
 
 ```bash
