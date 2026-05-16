@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{bail, ensure, Context, Result};
 use ort::session::Session;
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
@@ -8,6 +8,10 @@ use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 
 use super::{PiperIdSequence, PiperVoiceConfig};
+
+const NATIVE_PIPER_FRAME_SAMPLES: usize = 1024;
+// Piper ONNX vits output is a single waveform tensor for one speaker stream.
+const NATIVE_PIPER_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperModelContract {
@@ -242,6 +246,11 @@ impl NativePiperBackend {
             sample_rate_hz,
             samples: samples.to_vec(),
         })
+    }
+
+    pub fn synthesize_id_frames(&mut self, ids: &PiperIdSequence) -> Result<Vec<AudioFrame>> {
+        let pcm = self.synthesize_ids(ids)?;
+        Ok(native_pcm_to_audio_frames(pcm, NATIVE_PIPER_FRAME_SAMPLES))
     }
 
     #[cfg(test)]
@@ -506,6 +515,26 @@ fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
     ]
 }
 
+fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<AudioFrame> {
+    assert!(frame_samples > 0, "frame_samples must be greater than zero");
+    if pcm.samples.is_empty() {
+        return Vec::new();
+    }
+
+    pcm.samples
+        .chunks(frame_samples)
+        .map(|chunk| AudioFrame {
+            captured_at: crate::time::ExactTimestamp::now(),
+            sample_rate_hz: pcm.sample_rate_hz,
+            channels: NATIVE_PIPER_CHANNELS,
+            samples: chunk
+                .iter()
+                .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
+                .collect(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -632,6 +661,17 @@ mod tests {
     }
 
     #[test]
+    fn synthesize_id_frames_requires_loaded_session() {
+        let model_path = unique_path("unloaded-session-frames");
+        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+
+        let error = backend
+            .synthesize_id_frames(&PiperIdSequence { ids: vec![1, 2, 3] })
+            .expect_err("unloaded session should fail");
+        assert_eq!(error.to_string(), "Piper ONNX session has not been loaded");
+    }
+
+    #[test]
     fn resolve_contract_rejects_unknown_required_inputs() {
         let error = resolve_inference_contract(
             &[input("tokens", TensorElementType::Int64)],
@@ -694,5 +734,65 @@ mod tests {
                 .contains("multi-speaker inference is not supported yet"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn native_pcm_to_audio_frames_returns_empty_for_empty_pcm() {
+        let frames = native_pcm_to_audio_frames(
+            NativePiperPcm {
+                sample_rate_hz: 22_050,
+                samples: Vec::new(),
+            },
+            1024,
+        );
+
+        assert!(frames.is_empty(), "expected empty frame list for empty PCM");
+    }
+
+    #[test]
+    fn native_pcm_to_audio_frames_coerces_non_finite_samples() {
+        let frames = native_pcm_to_audio_frames(
+            NativePiperPcm {
+                sample_rate_hz: 22_050,
+                samples: vec![0.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.2],
+            },
+            16,
+        );
+
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].samples.iter().all(|sample| sample.is_finite()));
+        assert_eq!(frames[0].samples, vec![0.1, 0.0, 0.0, 0.0, -0.2]);
+    }
+
+    #[test]
+    fn native_pcm_to_audio_frames_preserves_sample_rate_and_mono_channel() {
+        let frames = native_pcm_to_audio_frames(
+            NativePiperPcm {
+                sample_rate_hz: 16_000,
+                samples: vec![0.1, 0.2, 0.3],
+            },
+            2,
+        );
+
+        assert_eq!(frames.len(), 2);
+        assert!(frames.iter().all(|frame| frame.sample_rate_hz == 16_000));
+        assert!(frames.iter().all(|frame| frame.channels == 1));
+    }
+
+    #[test]
+    fn native_pcm_to_audio_frames_chunks_using_requested_frame_size() {
+        let frames = native_pcm_to_audio_frames(
+            NativePiperPcm {
+                sample_rate_hz: 22_050,
+                samples: vec![0.0, 0.1, 0.2, 0.3, 0.4],
+            },
+            2,
+        );
+
+        let chunk_sizes = frames
+            .iter()
+            .map(|frame| frame.samples.len())
+            .collect::<Vec<_>>();
+        assert_eq!(chunk_sizes, vec![2, 2, 1]);
     }
 }
