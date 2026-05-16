@@ -245,7 +245,7 @@ Run these commands from the repository root so relative volume paths resolve cor
 cp .env.example .env
 ```
 
-Then edit `.env` and set a secure `NEO4J_PASS`.
+Then edit `.env`, set a secure `NEO4J_PASS`, and review the other values (for example `NEO4J_USER`) for your environment.
 
 2. Start the cold-memory services:
 
