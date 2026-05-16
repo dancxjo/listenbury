@@ -7,7 +7,9 @@ pub mod mind;
 pub mod models;
 pub mod mouth;
 pub mod runtime;
+pub mod speculative;
 pub mod speech;
+pub mod text_stability;
 pub mod time;
 pub mod vision;
 
@@ -48,7 +50,13 @@ pub use mouth::planner::{
 };
 pub use mouth::tts::TextToSpeech;
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
+pub use speculative::{
+    Candidate, CandidateId, CandidateIdGenerator, CandidateStage, FallbackKind, FallbackMetadata,
+    StableHeadDecision, can_reuse_buffer, head_changed_requires_restart, is_pure_extension,
+    shares_stable_prefix, stable_head_decision,
+};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
+pub use text_stability::{shared_prefix_len, stable_prefix_len};
 pub use time::{ExactTimestamp, Timed};
