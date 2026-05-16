@@ -164,8 +164,11 @@ pub(crate) struct ContinueCommand {
     #[arg(long)]
     pub(crate) max_tokens: Option<u32>,
     /// llama.cpp context size for the live session.
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = 8192)]
     pub(crate) context_size: u32,
+    /// Number of recent listened/spoken turns to keep verbatim before summarizing older turns.
+    #[arg(long, default_value_t = 8)]
+    pub(crate) verbatim_turns: usize,
     /// Initial prompt text. If omitted, generation starts from Pete's continuous-awareness seed.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
@@ -756,7 +759,8 @@ mod tests {
         assert_eq!(command.vad, VadBackendOption::WebRtc);
         assert_eq!(command.mode, PromptMode::Raw);
         assert_eq!(command.max_tokens, None);
-        assert_eq!(command.context_size, 4096);
+        assert_eq!(command.context_size, 8192);
+        assert_eq!(command.verbatim_turns, 8);
         assert_eq!(command.prompt, ["seed", "prompt"]);
     }
 

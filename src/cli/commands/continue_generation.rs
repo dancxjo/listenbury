@@ -376,16 +376,17 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         ..Default::default()
     };
 
-    let initial_prompt = build_initial_prompt(&command.prompt);
-    let (prompt, stop) = build_prompt(command.mode, &initial_prompt);
-    let mut llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
-    let id = llm
-        .start(GenerationRequest {
-            prompt,
-            max_tokens,
-            stop,
-        })
-        .context("failed to start continued llama.cpp generation")?;
+    let system_prompt = build_initial_prompt(&command.prompt);
+    let llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
+    let mut llm_session = ContinueLlmSession::start(
+        llm,
+        command.mode,
+        system_prompt,
+        max_tokens,
+        command.context_size,
+        command.verbatim_turns,
+    )
+    .context("failed to start continued llama.cpp generation")?;
     let piper_bin = resolve_piper_bin(command.piper_bin)?;
     let piper_voice = resolve_piper_voice(command.piper_voice)?;
     let whisper_model = resolve_whisper_model(command.whisper_model)?;
@@ -445,16 +446,15 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut pending_mouth_utterances = 0usize;
     let mut llm_paused_for_mouth = false;
     let mut mouth_playback_paused = false;
-    let mut deferred_live_events = VecDeque::<String>::new();
+    let mut deferred_live_events = VecDeque::<PromptPacket>::new();
     loop {
         if interrupted.load(Ordering::Relaxed) && !cancelled {
-            llm.cancel(id)?;
+            llm_session.cancel()?;
             cancelled = true;
         }
 
         append_pending_live_events(
-            &mut llm,
-            id,
+            &mut llm_session,
             &stdin_rx,
             &ear_rx,
             &mouth_rx,
@@ -466,29 +466,15 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         )?;
 
         if llm_paused_for_mouth && (pending_mouth_utterances == 0 || mouth_playback_paused) {
-            append_or_defer_live_event(
-                &mut llm,
-                id,
-                wrap_runtime_event("speech_throttle_stopped"),
-                speech_events.defers_live_events(),
-                &mut deferred_live_events,
-                "failed to append speech throttle stop event to live generation",
-            )?;
-            llm.set_paused(id, false)
+            llm_session
+                .set_paused(false)
                 .context("failed to resume continued llama.cpp generation")?;
             llm_paused_for_mouth = false;
         }
 
         if !llm_paused_for_mouth && pending_mouth_utterances > 0 && !mouth_playback_paused {
-            append_or_defer_live_event(
-                &mut llm,
-                id,
-                wrap_runtime_event("speech_throttle_started"),
-                speech_events.defers_live_events(),
-                &mut deferred_live_events,
-                "failed to append speech throttle start event to live generation",
-            )?;
-            llm.set_paused(id, true)
+            llm_session
+                .set_paused(true)
                 .context("failed to throttle continued llama.cpp generation")?;
             llm_paused_for_mouth = true;
         }
@@ -498,7 +484,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             continue;
         }
 
-        let events = llm.poll(id)?;
+        let events = llm_session.poll()?;
         if events.is_empty() {
             std::thread::sleep(Duration::from_millis(5));
             continue;
@@ -516,24 +502,19 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                 LlmEvent::Token { text } => {
                     print!("{text}");
                     std::io::stdout().flush()?;
+                    llm_session.record_generated_text(text);
                     for speech_event in speech_events.ingest(text) {
-                        if !generation_terminal {
-                            append_or_defer_live_event(
-                                &mut llm,
-                                id,
-                                wrap_runtime_event(&speech_event.to_message()),
-                                speech_events.defers_live_events(),
-                                &mut deferred_live_events,
-                                "failed to append runtime speech event to live generation",
-                            )?;
+                        if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
+                            &speech_event
+                        {
+                            llm_session.remember_spoken(content);
                         }
                         if let ContinueRuntimeEvent::SourceCommand { command } = &speech_event {
                             let source_result = execute_source_command(command);
                             if !generation_terminal {
                                 append_or_defer_live_event(
-                                    &mut llm,
-                                    id,
-                                    wrap_source_event(&source_result),
+                                    &mut llm_session,
+                                    PromptPacket::source(source_result),
                                     speech_events.defers_live_events(),
                                     &mut deferred_live_events,
                                     "failed to append source event to live generation",
@@ -619,28 +600,12 @@ fn wrap_ear_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: ear ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 fn wrap_mouth_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: mouth ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 fn wrap_runtime_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: runtime ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
@@ -673,6 +638,643 @@ fn current_time_message() -> String {
         now.as_secs(),
         now.subsec_millis()
     )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug)]
+struct ContinueLlmSession {
+    llm: LlamaCppEngine,
+    id: GenerationId,
+    mode: crate::cli::PromptMode,
+    max_tokens: Option<usize>,
+    rolling: RollingContextManager,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl ContinueLlmSession {
+    fn start(
+        mut llm: LlamaCppEngine,
+        mode: crate::cli::PromptMode,
+        system_prompt: String,
+        max_tokens: Option<usize>,
+        context_size: u32,
+        verbatim_turns: usize,
+    ) -> Result<Self> {
+        let rolling =
+            RollingContextManager::new(system_prompt, context_size, max_tokens, verbatim_turns);
+        let (prompt, stop) = build_prompt(mode, &rolling.prompt_body());
+        let id = llm.start(GenerationRequest {
+            prompt: prompt.clone(),
+            max_tokens,
+            stop,
+        })?;
+        let mut session = Self {
+            llm,
+            id,
+            mode,
+            max_tokens,
+            rolling,
+        };
+        session.rolling.note_context_loaded(&prompt);
+        Ok(session)
+    }
+
+    fn poll(&mut self) -> Result<Vec<LlmEvent>> {
+        self.llm.poll(self.id)
+    }
+
+    fn cancel(&mut self) -> Result<()> {
+        self.llm.cancel(self.id)
+    }
+
+    fn set_paused(&mut self, paused: bool) -> Result<()> {
+        self.llm.set_paused(self.id, paused)
+    }
+
+    fn record_generated_text(&mut self, text: &str) {
+        self.rolling.record_generated_text(text);
+    }
+
+    fn remember_spoken(&mut self, text: &str) {
+        self.rolling.remember_spoken(text);
+    }
+
+    fn append_prompt_packet(&mut self, packet: PromptPacket) -> Result<()> {
+        let append_text = self.rolling.record_prompt_packet(packet);
+        if self.rolling.should_restart_before_append(&append_text) {
+            self.restart_with_compact_prompt()
+        } else {
+            self.rolling.note_appended_text(&append_text);
+            self.llm.append_prompt(self.id, append_text)
+        }
+    }
+
+    fn restart_with_compact_prompt(&mut self) -> Result<()> {
+        self.cancel_current_generation()?;
+        let (prompt, stop) = build_prompt(self.mode, &self.rolling.prompt_body());
+        self.id = self.llm.start(GenerationRequest {
+            prompt: prompt.clone(),
+            max_tokens: self.max_tokens,
+            stop,
+        })?;
+        self.rolling.note_context_loaded(&prompt);
+        Ok(())
+    }
+
+    fn cancel_current_generation(&mut self) -> Result<()> {
+        self.llm.cancel(self.id)?;
+        loop {
+            let events = self.llm.poll(self.id)?;
+            if events.iter().any(|event| {
+                matches!(
+                    event,
+                    LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
+                )
+            }) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone)]
+struct PromptPacket {
+    text: String,
+    memory: PromptMemory,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl PromptPacket {
+    fn listened(text: String) -> Self {
+        let trimmed = text.trim().to_string();
+        Self {
+            text: wrap_live_input(&trimmed),
+            memory: PromptMemory::Listened(trimmed),
+        }
+    }
+
+    fn heard(text: String) -> Self {
+        let trimmed = text.trim().to_string();
+        Self {
+            text: wrap_ear_event(&format!("Heard: {trimmed}")),
+            memory: PromptMemory::Listened(trimmed),
+        }
+    }
+
+    fn spoken(text: String) -> Self {
+        Self {
+            text: String::new(),
+            memory: PromptMemory::Spoken(text.trim().to_string()),
+        }
+    }
+
+    fn clock(message: String) -> Self {
+        Self {
+            text: wrap_time_event(&message),
+            memory: PromptMemory::Clock(message),
+        }
+    }
+
+    fn source(message: String) -> Self {
+        Self {
+            text: wrap_source_event(&message),
+            memory: PromptMemory::Source(message),
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone)]
+enum PromptMemory {
+    Listened(String),
+    Spoken(String),
+    Clock(String),
+    Source(String),
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CognitivePage {
+    kind: PageKind,
+    summary: Option<String>,
+    events: Vec<String>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageKind {
+    Persona,
+    Conversation,
+    AuditoryScene,
+    Intention,
+    Scratch,
+    Memory,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConversationTurnKind {
+    Listened,
+    Spoken,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl ConversationTurnKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Listened => "Listened",
+            Self::Spoken => "Spoken",
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConversationTurn {
+    kind: ConversationTurnKind,
+    text: String,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug)]
+struct RollingContextManager {
+    persona: CognitivePage,
+    memory: CognitivePage,
+    auditory_scene: CognitivePage,
+    intention: CognitivePage,
+    scratch: CognitivePage,
+    recent_turns: std::collections::VecDeque<ConversationTurn>,
+    verbatim_turns: usize,
+    token_budget: usize,
+    active_estimated_tokens: usize,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl RollingContextManager {
+    fn new(
+        system_prompt: String,
+        context_size: u32,
+        max_tokens: Option<usize>,
+        verbatim_turns: usize,
+    ) -> Self {
+        let token_budget = rolling_prompt_token_budget(context_size, max_tokens);
+        Self {
+            persona: CognitivePage {
+                kind: PageKind::Persona,
+                summary: Some(system_prompt),
+                events: Vec::new(),
+            },
+            memory: CognitivePage {
+                kind: PageKind::Memory,
+                summary: None,
+                events: Vec::new(),
+            },
+            auditory_scene: CognitivePage {
+                kind: PageKind::AuditoryScene,
+                summary: None,
+                events: Vec::new(),
+            },
+            intention: CognitivePage {
+                kind: PageKind::Intention,
+                summary: Some(
+                    "Continue naturally. Do not mention internal page management unless relevant."
+                        .to_string(),
+                ),
+                events: Vec::new(),
+            },
+            scratch: CognitivePage {
+                kind: PageKind::Scratch,
+                summary: None,
+                events: Vec::new(),
+            },
+            recent_turns: std::collections::VecDeque::new(),
+            verbatim_turns,
+            token_budget,
+            active_estimated_tokens: 0,
+        }
+    }
+
+    fn prompt_body(&self) -> String {
+        let persona = self.persona.summary.as_deref().unwrap_or_default();
+        let working_memory = self
+            .memory
+            .summary
+            .as_deref()
+            .unwrap_or("No older conversation has been summarized yet.");
+        let auditory_scene = if self.auditory_scene.events.is_empty() {
+            "No current prompt-worthy auditory scene events.".to_string()
+        } else {
+            self.auditory_scene.events.join("\n")
+        };
+        let scratch = if self.scratch.events.is_empty() {
+            "No source or scratch observations are loaded.".to_string()
+        } else {
+            self.scratch.events.join("\n")
+        };
+        let recent_verbatim = if self.recent_turns.is_empty() {
+            "No listened/spoken turns yet.".to_string()
+        } else {
+            self.recent_turns
+                .iter()
+                .map(|turn| {
+                    format!(
+                        "{}: {}",
+                        turn.kind.label(),
+                        compact_prompt_line(&turn.text, MAX_VERBATIM_TURN_CHARS)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let next_action = self.intention.summary.as_deref().unwrap_or_default();
+
+        format!(
+            "{persona}\n\n\
+             <working_memory>\n{working_memory}\n</working_memory>\n\n\
+             <auditory_scene>\n{auditory_scene}\n</auditory_scene>\n\n\
+             <recent_verbatim>\n{recent_verbatim}\n</recent_verbatim>\n\n\
+             <scratch>\n{scratch}\n</scratch>\n\n\
+             <next_action>\n{next_action}\n</next_action>\n"
+        )
+    }
+
+    fn record_prompt_packet(&mut self, packet: PromptPacket) -> String {
+        let PromptPacket { text, memory } = packet;
+        match memory {
+            PromptMemory::Listened(text) => self.push_turn(ConversationTurnKind::Listened, text),
+            PromptMemory::Spoken(text) => self.push_turn(ConversationTurnKind::Spoken, text),
+            PromptMemory::Clock(message) => self.set_auditory_scene(message),
+            PromptMemory::Source(message) => self.push_scratch(message),
+        }
+        self.compact_until_within_budget();
+        text
+    }
+
+    fn remember_spoken(&mut self, text: &str) {
+        let packet = PromptPacket::spoken(text.to_string());
+        let _ = self.record_prompt_packet(packet);
+    }
+
+    fn record_generated_text(&mut self, text: &str) {
+        self.active_estimated_tokens = self
+            .active_estimated_tokens
+            .saturating_add(estimate_prompt_tokens(text));
+    }
+
+    fn note_context_loaded(&mut self, prompt: &str) {
+        self.active_estimated_tokens = estimate_prompt_tokens(prompt);
+    }
+
+    fn note_appended_text(&mut self, text: &str) {
+        self.active_estimated_tokens = self
+            .active_estimated_tokens
+            .saturating_add(estimate_prompt_tokens(text));
+    }
+
+    fn should_restart_before_append(&mut self, text: &str) -> bool {
+        self.compact_until_within_budget();
+        self.active_estimated_tokens
+            .saturating_add(estimate_prompt_tokens(text))
+            > self.token_budget
+    }
+
+    fn push_turn(&mut self, kind: ConversationTurnKind, text: String) {
+        let text = compact_prompt_line(&text, MAX_VERBATIM_TURN_CHARS);
+        if text.is_empty() {
+            return;
+        }
+        self.recent_turns.push_back(ConversationTurn { kind, text });
+        while self.recent_turns.len() > self.verbatim_turns {
+            self.retire_oldest_turn();
+        }
+    }
+
+    fn set_auditory_scene(&mut self, message: String) {
+        self.auditory_scene.events.clear();
+        self.auditory_scene.events.push(format!(
+            "Clock: {}",
+            compact_prompt_line(&message, MAX_SCRATCH_EVENT_CHARS)
+        ));
+    }
+
+    fn push_scratch(&mut self, message: String) {
+        let line = compact_prompt_line(&message, MAX_SCRATCH_EVENT_CHARS);
+        if line.is_empty() {
+            return;
+        }
+        self.scratch.events.push(format!("Source: {line}"));
+        while self.scratch.events.len() > MAX_SCRATCH_EVENTS {
+            self.scratch.events.remove(0);
+        }
+    }
+
+    fn compact_until_within_budget(&mut self) {
+        while estimate_prompt_tokens(&self.prompt_body()) > self.token_budget {
+            if !self.recent_turns.is_empty() {
+                self.retire_oldest_turn();
+                continue;
+            }
+            if !self.scratch.events.is_empty() {
+                self.scratch.events.remove(0);
+                continue;
+            }
+            self.truncate_memory_summary();
+            break;
+        }
+    }
+
+    fn retire_oldest_turn(&mut self) {
+        let Some(turn) = self.recent_turns.pop_front() else {
+            return;
+        };
+        let line = format!(
+            "- {}: {}",
+            turn.kind.label(),
+            compact_prompt_line(&turn.text, MAX_SUMMARY_TURN_CHARS)
+        );
+        let summary = self.memory.summary.get_or_insert_with(String::new);
+        if !summary.is_empty() {
+            summary.push('\n');
+        }
+        summary.push_str(&line);
+        if summary.len() > MAX_WORKING_MEMORY_CHARS {
+            let keep_from = summary.len() - MAX_WORKING_MEMORY_CHARS;
+            let keep_from = next_char_boundary(summary, keep_from);
+            *summary = format!("[older memory compressed]\n{}", &summary[keep_from..]);
+        }
+    }
+
+    fn truncate_memory_summary(&mut self) {
+        let Some(summary) = self.memory.summary.as_mut() else {
+            return;
+        };
+        if summary.len() <= MIN_WORKING_MEMORY_CHARS {
+            return;
+        }
+        let keep_from = summary.len() - MIN_WORKING_MEMORY_CHARS;
+        let keep_from = next_char_boundary(summary, keep_from);
+        *summary = format!("[older memory compressed]\n{}", &summary[keep_from..]);
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MAX_VERBATIM_TURN_CHARS: usize = 1_200;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MAX_SUMMARY_TURN_CHARS: usize = 220;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MAX_WORKING_MEMORY_CHARS: usize = 2_400;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MIN_WORKING_MEMORY_CHARS: usize = 1_200;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MAX_SCRATCH_EVENTS: usize = 3;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const MAX_SCRATCH_EVENT_CHARS: usize = 1_000;
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn rolling_prompt_token_budget(context_size: u32, max_tokens: Option<usize>) -> usize {
+    let context_size = usize::try_from(context_size).unwrap_or(usize::MAX);
+    let reserved_generation = max_tokens.unwrap_or(512).max(256);
+    context_size
+        .saturating_sub(reserved_generation)
+        .saturating_mul(3)
+        / 4
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn estimate_prompt_tokens(text: &str) -> usize {
+    text.chars().count().saturating_add(3) / 4
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn compact_prompt_line(text: &str, max_chars: usize) -> String {
+    let mut line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= max_chars {
+        return line;
+    }
+    line = line.chars().take(max_chars.saturating_sub(3)).collect();
+    line.push_str("...");
+    line
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn next_char_boundary(text: &str, mut index: usize) -> usize {
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
 }
 
 #[cfg(any(
@@ -787,8 +1389,7 @@ fn source_bundle() -> &'static std::collections::HashMap<String, String> {
     feature = "tts-piper"
 ))]
 fn append_pending_live_events(
-    llm: &mut LlamaCppEngine,
-    id: GenerationId,
+    llm_session: &mut ContinueLlmSession,
     stdin_rx: &crossbeam_channel::Receiver<std::result::Result<String, String>>,
     ear_rx: &crossbeam_channel::Receiver<ContinueEarEvent>,
     mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
@@ -796,18 +1397,17 @@ fn append_pending_live_events(
     mouth_playback_paused: &mut bool,
     next_time_event_at: &mut Instant,
     defer_live_events: bool,
-    deferred_live_events: &mut VecDeque<String>,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
 ) -> Result<()> {
     if !defer_live_events {
-        flush_deferred_live_events(llm, id, deferred_live_events)?;
+        flush_deferred_live_events(llm_session, deferred_live_events)?;
     }
 
     let now = Instant::now();
     if now >= *next_time_event_at {
         append_or_defer_live_event(
-            llm,
-            id,
-            wrap_time_event(&current_time_message()),
+            llm_session,
+            PromptPacket::clock(current_time_message()),
             defer_live_events,
             deferred_live_events,
             "failed to append time event to live generation",
@@ -818,9 +1418,8 @@ fn append_pending_live_events(
     for stdin_event in stdin_rx.try_iter() {
         match stdin_event {
             Ok(text) => append_or_defer_live_event(
-                llm,
-                id,
-                wrap_live_input(&text),
+                llm_session,
+                PromptPacket::listened(text),
                 defer_live_events,
                 deferred_live_events,
                 "failed to append stdin text to live generation",
@@ -837,22 +1436,22 @@ fn append_pending_live_events(
             | ContinueEarEvent::SpeechStopped
             | ContinueEarEvent::Error { .. } => {}
         }
-        append_or_defer_live_event(
-            llm,
-            id,
-            wrap_ear_event(&ear_event.to_message()),
-            defer_live_events,
-            deferred_live_events,
-            "failed to append ear event to live generation",
-        )?;
+        if let Some(packet) = ear_event.prompt_packet() {
+            append_or_defer_live_event(
+                llm_session,
+                packet,
+                defer_live_events,
+                deferred_live_events,
+                "failed to append ear event to live generation",
+            )?;
+        }
         if let ContinueEarEvent::Error { message } = ear_event {
             anyhow::bail!("dev continue ear failed: {message}");
         }
     }
 
     drain_mouth_events_into_llm(
-        llm,
-        id,
+        llm_session,
         mouth_rx,
         pending_mouth_utterances,
         mouth_playback_paused,
@@ -870,11 +1469,10 @@ fn append_pending_live_events(
     feature = "tts-piper"
 ))]
 fn append_or_defer_live_event(
-    llm: &mut LlamaCppEngine,
-    id: GenerationId,
-    packet: String,
+    llm_session: &mut ContinueLlmSession,
+    packet: PromptPacket,
     defer_live_events: bool,
-    deferred_live_events: &mut VecDeque<String>,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
     context: &'static str,
 ) -> Result<()> {
     if defer_live_events {
@@ -882,8 +1480,8 @@ fn append_or_defer_live_event(
         return Ok(());
     }
 
-    flush_deferred_live_events(llm, id, deferred_live_events)?;
-    llm.append_prompt(id, packet).context(context)
+    flush_deferred_live_events(llm_session, deferred_live_events)?;
+    llm_session.append_prompt_packet(packet).context(context)
 }
 
 #[cfg(all(
@@ -893,12 +1491,12 @@ fn append_or_defer_live_event(
     feature = "tts-piper"
 ))]
 fn flush_deferred_live_events(
-    llm: &mut LlamaCppEngine,
-    id: GenerationId,
-    deferred_live_events: &mut VecDeque<String>,
+    llm_session: &mut ContinueLlmSession,
+    deferred_live_events: &mut VecDeque<PromptPacket>,
 ) -> Result<()> {
     while let Some(packet) = deferred_live_events.pop_front() {
-        llm.append_prompt(id, packet)
+        llm_session
+            .append_prompt_packet(packet)
             .context("failed to append deferred live event to live generation")?;
     }
     Ok(())
@@ -911,13 +1509,12 @@ fn flush_deferred_live_events(
     feature = "tts-piper"
 ))]
 fn drain_mouth_events_into_llm(
-    llm: &mut LlamaCppEngine,
-    id: GenerationId,
+    _llm_session: &mut ContinueLlmSession,
     mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
     pending_mouth_utterances: &mut usize,
     mouth_playback_paused: &mut bool,
-    defer_live_events: bool,
-    deferred_live_events: &mut VecDeque<String>,
+    _defer_live_events: bool,
+    _deferred_live_events: &mut VecDeque<PromptPacket>,
 ) -> Result<()> {
     loop {
         match mouth_rx.try_recv() {
@@ -925,14 +1522,6 @@ fn drain_mouth_events_into_llm(
                 *pending_mouth_utterances = pending_mouth_utterances
                     .saturating_sub(mouth_event.completed_pending_speech_count());
                 mouth_event.apply_playback_state(mouth_playback_paused);
-                append_or_defer_live_event(
-                    llm,
-                    id,
-                    wrap_mouth_event(&mouth_event.to_message()),
-                    defer_live_events,
-                    deferred_live_events,
-                    "failed to append mouth event to live generation",
-                )?;
                 match mouth_event {
                     ContinueMouthEvent::WorkerStarted => {}
                     ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
@@ -1022,6 +1611,7 @@ struct ContinueEarConfig {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(dead_code)]
 enum ContinueEarEvent {
     ListeningStarted {
         device: String,
@@ -1046,6 +1636,7 @@ enum ContinueEarEvent {
     feature = "tts-piper"
 ))]
 impl ContinueEarEvent {
+    #[allow(dead_code)]
     fn to_message(&self) -> String {
         match self {
             Self::ListeningStarted {
@@ -1061,6 +1652,16 @@ impl ContinueEarEvent {
             Self::SpeechStopped => "speech_stopped".to_string(),
             Self::Transcript { text } => format!("Heard: {}", text.trim()),
             Self::Error { message } => format!("error: {message}"),
+        }
+    }
+
+    fn prompt_packet(&self) -> Option<PromptPacket> {
+        match self {
+            Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
+            Self::ListeningStarted { .. }
+            | Self::SpeechStarted
+            | Self::SpeechStopped
+            | Self::Error { .. } => None,
         }
     }
 }
@@ -1746,6 +2347,7 @@ enum ContinueMouthCommand {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(dead_code)]
 enum ContinueMouthEvent {
     WorkerStarted,
     SpeechQueued { id: u64, text: String },
@@ -1766,6 +2368,7 @@ enum ContinueMouthEvent {
     feature = "tts-piper"
 ))]
 impl ContinueMouthEvent {
+    #[allow(dead_code)]
     fn to_message(&self) -> String {
         match self {
             Self::WorkerStarted => "worker_started".to_string(),
@@ -2520,15 +3123,7 @@ enum SourceCommand {
     ViewFile { path: String, page: usize },
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 impl ContinueRuntimeEvent {
     fn to_message(&self) -> String {
         match self {
@@ -2555,15 +3150,7 @@ impl ContinueRuntimeEvent {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 impl SpeechControlCommand {
     fn as_str(self) -> &'static str {
         match self {
@@ -3079,6 +3666,7 @@ fn seams_sentence_end(text: &str) -> Option<usize> {
         feature = "tts-piper"
     )
 ))]
+#[allow(dead_code)]
 fn sanitize_runtime_event_content(content: &str) -> String {
     content
         .replace("--- END LIVE EVENT ---", "[end live event]")
@@ -3088,9 +3676,10 @@ fn sanitize_runtime_event_content(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContinueRuntimeEvent, SourceCommand, SpeechControlCommand, SpeechEventDetector,
-        build_initial_prompt, execute_list_source_files, execute_view_source_file, wrap_ear_event,
-        wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event, wrap_time_event,
+        ContinueRuntimeEvent, PromptPacket, RollingContextManager, SourceCommand,
+        SpeechControlCommand, SpeechEventDetector, build_initial_prompt, execute_list_source_files,
+        execute_view_source_file, wrap_ear_event, wrap_live_input, wrap_mouth_event,
+        wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
 
     #[test]
@@ -3162,6 +3751,44 @@ mod tests {
         assert!(prompt.contains("<view_file path=\"src/main.rs\" page=\"1\"/>"));
         assert!(!prompt.contains("--- SPEECH ---"));
         assert!(prompt.contains("Emoji inside speech tags are instructions to your countenance"));
+    }
+
+    #[test]
+    fn rolling_context_keeps_persona_top_and_recent_turns_verbatim() {
+        let mut context =
+            RollingContextManager::new("Identity and rules.".to_string(), 4096, None, 2);
+
+        context.record_prompt_packet(PromptPacket::listened("first heard turn".to_string()));
+        context.record_prompt_packet(PromptPacket::spoken("first spoken turn".to_string()));
+        context.record_prompt_packet(PromptPacket::listened("latest heard turn".to_string()));
+
+        let prompt = context.prompt_body();
+        assert!(prompt.starts_with("Identity and rules."));
+        assert!(prompt.contains("<working_memory>"));
+        assert!(prompt.contains("first heard turn"));
+        assert!(prompt.contains("<recent_verbatim>"));
+        let recent = prompt
+            .split("<recent_verbatim>")
+            .nth(1)
+            .and_then(|text| text.split("</recent_verbatim>").next())
+            .expect("recent verbatim page should be present");
+        assert!(!recent.contains("Listened: first heard turn"));
+        assert!(prompt.contains("Spoken: first spoken turn"));
+        assert!(prompt.contains("Listened: latest heard turn"));
+    }
+
+    #[test]
+    fn rolling_context_tracks_clock_as_scene_not_verbatim_turn() {
+        let mut context = RollingContextManager::new("Identity.".to_string(), 4096, None, 4);
+
+        context.record_prompt_packet(PromptPacket::clock(
+            "The current Unix time is 42.000 seconds.".to_string(),
+        ));
+
+        let prompt = context.prompt_body();
+        assert!(prompt.contains("<auditory_scene>"));
+        assert!(prompt.contains("Clock: The current Unix time is 42.000 seconds."));
+        assert!(prompt.contains("No listened/spoken turns yet."));
     }
 
     #[test]
