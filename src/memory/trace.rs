@@ -64,3 +64,31 @@ pub enum MemoryTrace {
         occurred_at: ExactTimestamp,
     },
 }
+
+impl MemoryTrace {
+    /// Return the stable snake_case discriminator for this trace.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::ConversationTurnFinalized { .. } => "conversation_turn_finalized",
+            Self::TimedWordStreamFinalized { .. } => "timed_word_stream_finalized",
+            Self::MouthPlaybackStarted { .. } => "mouth_playback_started",
+            Self::MouthPlaybackCompleted { .. } => "mouth_playback_completed",
+            Self::AuditorySceneObservation { .. } => "auditory_scene_observation",
+            Self::OverlapDetected { .. } => "overlap_detected",
+            Self::RecallResultUsed { .. } => "recall_result_used",
+        }
+    }
+
+    /// Return the timestamp at which the runtime observed this trace.
+    pub fn occurred_at(&self) -> ExactTimestamp {
+        match self {
+            Self::ConversationTurnFinalized { occurred_at, .. }
+            | Self::TimedWordStreamFinalized { occurred_at, .. }
+            | Self::MouthPlaybackStarted { occurred_at, .. }
+            | Self::MouthPlaybackCompleted { occurred_at, .. }
+            | Self::AuditorySceneObservation { occurred_at, .. }
+            | Self::OverlapDetected { occurred_at, .. }
+            | Self::RecallResultUsed { occurred_at, .. } => *occurred_at,
+        }
+    }
+}
