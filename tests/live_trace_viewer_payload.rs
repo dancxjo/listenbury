@@ -4,7 +4,7 @@ use serde_json::Value;
 #[test]
 fn sample_live_trace_jsonl_converts_to_mixed_word_and_event_lanes() {
     let payload = live_trace_jsonl_to_viewer_payload(include_str!(
-        "../examples/browser-transcript-player/live-trace.sample.jsonl"
+        "../web/browser-transcript-player/live-trace.sample.jsonl"
     ))
     .expect("sample live trace JSONL should convert");
 
@@ -90,7 +90,7 @@ fn sample_live_trace_jsonl_converts_to_mixed_word_and_event_lanes() {
 #[test]
 fn sample_live_trace_viewer_json_has_word_and_event_lanes() {
     let payload: Value = serde_json::from_str(include_str!(
-        "../examples/browser-transcript-player/live-trace.sample.viewer.json"
+        "../web/browser-transcript-player/live-trace.sample.viewer.json"
     ))
     .expect("sample viewer payload JSON should parse");
 

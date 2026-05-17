@@ -100,4 +100,4 @@ Expected reference decisions include:
 
 ---
 
-If you want one-command execution, use `examples/irl-duplex-smoke-test.sh`.
+If you want one-command execution, use `scripts/irl-duplex-smoke-test.sh`.

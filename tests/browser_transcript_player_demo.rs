@@ -48,14 +48,11 @@ struct BrowserTranscriptPlayerMarker {
 #[test]
 fn browser_transcript_player_demo_json_deserializes() {
     let payload: BrowserTranscriptPlayerPayload = serde_json::from_str(include_str!(
-        "../examples/browser-transcript-player/demo.json"
+        "../web/browser-transcript-player/demo.json"
     ))
     .expect("demo JSON should deserialize");
 
-    assert_eq!(
-        payload.title.as_deref(),
-        Some("Listenbury WaveDeck Demo")
-    );
+    assert_eq!(payload.title.as_deref(), Some("Listenbury WaveDeck Demo"));
 
     let audio = payload.audio.expect("demo should provide audio metadata");
     assert!(audio.url.ends_with("welcome.wav"));
@@ -346,17 +343,21 @@ fn browser_transcript_player_demo_json_deserializes() {
 
 #[test]
 fn browser_transcript_player_assets_include_timeline_zoom_controls() {
-    let html = include_str!("../examples/browser-transcript-player/index.html");
-    let js = include_str!("../examples/browser-transcript-player/app.js");
+    let html = include_str!("../web/browser-transcript-player/index.html");
+    let js = include_str!("../web/browser-transcript-player/app.js");
 
     assert!(html.contains("id=\"zoom-in\""));
     assert!(html.contains("id=\"zoom-out\""));
     assert!(!html.contains("id=\"zoom-selection\""));
     assert!(js.contains("function zoomTimeline"));
+    assert!(js.contains("function zoomTimelineFromWheel"));
     assert!(!js.contains("function zoomToSelection"));
     assert!(js.contains("function startTimeRangeSelection"));
     assert!(js.contains("function appendTimeRangeSelection"));
     assert!(js.contains("function zoomToTimeSelection"));
+    assert!(js.contains("function captureViewportSnapshot"));
+    assert!(js.contains("function restoreViewportSnapshot"));
     assert!(js.contains("RANGE_SELECTION_DRAG_THRESHOLD_PX"));
+    assert!(js.contains("WHEEL_ZOOM_FACTOR"));
     assert!(js.contains("msToViewportPercent"));
 }
