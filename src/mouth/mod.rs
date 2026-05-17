@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod cache;
+pub mod read_aloud;
 #[cfg(feature = "tts-piper")]
 pub mod piper;
 #[cfg(feature = "tts-piper")]
