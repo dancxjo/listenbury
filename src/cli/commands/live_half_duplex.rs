@@ -108,7 +108,7 @@ use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceEvent, LiveTraceRecorder};
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder};
 #[cfg(any(
     test,
     all(

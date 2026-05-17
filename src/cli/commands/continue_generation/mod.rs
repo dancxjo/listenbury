@@ -210,7 +210,7 @@ use listenbury::word::{TranscriptWord, transcript_to_word_stream};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{AudioFrame, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(any(
     test,
     all(
@@ -345,6 +345,7 @@ use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
         feature = "tts-piper"
     )
 ))]
+#[cfg(test)]
 use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
 #[cfg(any(
     test,
@@ -567,6 +568,25 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         command.context_size > 0,
         "context_size must be greater than zero"
     );
+    if let Some(scenario) = command.duplex_trace_scenario {
+        let jsonl_path = command
+            .jsonl
+            .as_deref()
+            .context("--jsonl is required when --duplex-trace-scenario is enabled")?;
+        let events = build_duplex_trace_scenario_events(
+            scenario,
+            Duration::from_millis(command.tts_vad_pause_ms),
+            Duration::from_millis(command.tts_vad_listen_ms),
+        );
+        write_duplex_trace_scenario_jsonl(jsonl_path, &events)?;
+        eprintln!(
+            "dev continue duplex trace scenario {:?} wrote {} events to {}",
+            scenario,
+            events.len(),
+            jsonl_path.display()
+        );
+        return Ok(());
+    }
 
     let model_path = resolve_llm_model(command.llm_model)?;
     let llm_placement = llm_runtime_placement(
@@ -2345,6 +2365,263 @@ fn flush_deferred_live_events(
             .context("failed to append deferred live event to live generation")?;
     }
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -> Result<()> {
+    let mut writer = JsonlTraceWriter::create(path)?;
+    for event in events {
+        writer.write(event)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_duplex_trace_scenario_events(
+    scenario: crate::cli::DuplexTraceScenarioOption,
+    pause_after: Duration,
+    listen_for: Duration,
+) -> Vec<Value> {
+    match scenario {
+        crate::cli::DuplexTraceScenarioOption::OverlapYield => {
+            build_duplex_overlap_yield_trace_events(pause_after, listen_for)
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_duplex_overlap_yield_trace_events(
+    pause_after: Duration,
+    listen_for: Duration,
+) -> Vec<Value> {
+    let started_at = Instant::now();
+    let mut controller = DuplexTurnController::new(DuplexTurnControllerConfig {
+        pause_after,
+        listen_for,
+    });
+    let mut prompt_gate = ContinuePromptGate::default();
+    let mut events = Vec::new();
+    let pending_mouth_utterances = 2usize;
+
+    let mut push = |kind: &'static str, t_ms: u64, details: Value| {
+        events.push(json!({
+            "scenario": "overlap-yield",
+            "kind": kind,
+            "t_ms": t_ms,
+            "details": details
+        }));
+    };
+    push(
+        "playback_started",
+        0,
+        json!({
+            "speaker": "pete",
+            "utterance": "Synthetic overlap/yield diagnostic"
+        }),
+    );
+
+    push(
+        "routing_decision",
+        120,
+        json!({
+            "case": "short_overlap_blip",
+            "routing": "MixedSelfAndExternal",
+            "self_correlation": 0.62,
+            "residual_ratio": 0.41,
+            "estimated_delay_ms": 47,
+            "decision": "route_residual_to_vad_asr",
+        }),
+    );
+    let short_overlap = ContinueEarEvent::OverlapDetected {
+        self_confidence: 0.66,
+        external_confidence: 0.82,
+        duration_ms: 45,
+    };
+    let short_overlap_at = started_at + Duration::from_millis(120);
+    controller.observe_ear_event(&short_overlap, short_overlap_at);
+    for packet in prompt_gate.consider_ear_event(&short_overlap, short_overlap_at) {
+        push(
+            "prompt_gate_output",
+            120,
+            json!({
+                "source": "overlap_detected",
+                "summary": packet.text,
+            }),
+        );
+    }
+    let short_action = controller.next_action(
+        started_at
+            + Duration::from_millis(120)
+            + pause_after.saturating_sub(Duration::from_millis(1)),
+        pending_mouth_utterances,
+    );
+    push(
+        "controller_decision",
+        120 + pause_after
+            .saturating_sub(Duration::from_millis(1))
+            .as_millis() as u64,
+        json!({
+            "case": "short_overlap_blip",
+            "decision": "continue",
+            "raw_action": short_action.map(|action| format!("{action:?}")),
+        }),
+    );
+
+    push(
+        "routing_decision",
+        1_000,
+        json!({
+            "case": "sustained_overlap",
+            "routing": "ExternalSpeechCandidate",
+            "self_correlation": 0.22,
+            "residual_ratio": 0.91,
+            "estimated_delay_ms": 0,
+            "decision": "route_external_to_vad_asr",
+        }),
+    );
+    let sustained_overlap_a = ContinueEarEvent::OverlapDetected {
+        self_confidence: 0.35,
+        external_confidence: 0.93,
+        duration_ms: 400,
+    };
+    let sustained_overlap_a_at = started_at + Duration::from_millis(1_000);
+    controller.observe_ear_event(&sustained_overlap_a, sustained_overlap_a_at);
+    for packet in prompt_gate.consider_ear_event(&sustained_overlap_a, sustained_overlap_a_at) {
+        push(
+            "prompt_gate_output",
+            1_000,
+            json!({
+                "source": "overlap_detected",
+                "summary": packet.text,
+            }),
+        );
+    }
+    let sustained_overlap_b = ContinueEarEvent::OverlapDetected {
+        self_confidence: 0.31,
+        external_confidence: 0.90,
+        duration_ms: 380,
+    };
+    let sustained_overlap_b_at = started_at + Duration::from_millis(1_080);
+    controller.observe_ear_event(&sustained_overlap_b, sustained_overlap_b_at);
+    for packet in prompt_gate.consider_ear_event(&sustained_overlap_b, sustained_overlap_b_at) {
+        push(
+            "prompt_gate_output",
+            1_080,
+            json!({
+                "source": "overlap_detected",
+                "summary": packet.text,
+            }),
+        );
+    }
+    let pause_at = 1_000 + pause_after.as_millis() as u64 + 1;
+    let pause_action = controller.next_action(
+        started_at + Duration::from_millis(pause_at),
+        pending_mouth_utterances,
+    );
+    push(
+        "controller_decision",
+        pause_at,
+        json!({
+            "case": "sustained_overlap",
+            "decision": "yield_pause",
+            "raw_action": pause_action.map(|action| format!("{action:?}")),
+            "mouth_command": "pause",
+        }),
+    );
+    let clear_at = pause_at + listen_for.as_millis() as u64 + 1;
+    let clear_action = controller.next_action(
+        started_at + Duration::from_millis(clear_at),
+        pending_mouth_utterances,
+    );
+    push(
+        "controller_decision",
+        clear_at,
+        json!({
+            "case": "sustained_overlap",
+            "decision": "yield_clear_queue",
+            "raw_action": clear_action.map(|action| format!("{action:?}")),
+            "mouth_command": "shutup",
+            "generation_restart": true,
+        }),
+    );
+
+    push(
+        "routing_decision",
+        2_100,
+        json!({
+            "case": "mixed_echo_and_user_speech",
+            "routing": "MixedSelfAndExternal",
+            "self_correlation": 0.71,
+            "residual_ratio": 0.53,
+            "estimated_delay_ms": 55,
+            "decision": "route_residual_to_vad_asr",
+        }),
+    );
+    push(
+        "vad_decision",
+        2_130,
+        json!({
+            "input": "residual_external",
+            "speech": true,
+            "confidence": 0.87,
+        }),
+    );
+    push(
+        "asr_result",
+        2_260,
+        json!({
+            "source": "residual_external",
+            "transcript": "sorry Pete, one sec",
+        }),
+    );
+
+    push(
+        "routing_decision",
+        3_000,
+        json!({
+            "case": "echo_only_return",
+            "routing": "EchoOnly",
+            "self_correlation": 0.96,
+            "residual_ratio": 0.03,
+            "estimated_delay_ms": 48,
+            "decision": "suppress_asr",
+        }),
+    );
+    push(
+        "vad_decision",
+        3_010,
+        json!({
+            "input": "speaker_echo",
+            "speech": false,
+            "suppressed": true,
+            "false_interruption": false,
+        }),
+    );
+    push(
+        "playback_finished",
+        3_400,
+        json!({
+            "speaker": "pete",
+            "status": "diagnostic_complete"
+        }),
+    );
+
+    events
 }
 
 #[cfg(all(
@@ -5714,6 +5991,67 @@ grepSource("build_initial_prompt", 1)"#,
                 interrupt: true,
             }),
             Some(super::DuplexTurnAction::Resume)
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_trace_scenario_records_short_overlap_without_yielding() {
+        let events = super::build_duplex_trace_scenario_events(
+            crate::cli::DuplexTraceScenarioOption::OverlapYield,
+            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(300),
+        );
+
+        let short = events.iter().find(|event| {
+            event["kind"] == "controller_decision"
+                && event["details"]["case"] == "short_overlap_blip"
+        });
+        assert!(short.is_some());
+        let short = short.unwrap();
+        assert_eq!(short["details"]["decision"], "continue");
+        assert!(short["details"]["raw_action"].is_null());
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_trace_scenario_records_sustained_overlap_as_yield_and_clear() {
+        let events = super::build_duplex_trace_scenario_events(
+            crate::cli::DuplexTraceScenarioOption::OverlapYield,
+            std::time::Duration::from_millis(150),
+            std::time::Duration::from_millis(300),
+        );
+
+        let sustained_pause = events.iter().find(|event| {
+            event["kind"] == "controller_decision"
+                && event["details"]["case"] == "sustained_overlap"
+                && event["details"]["decision"] == "yield_pause"
+        });
+        assert!(sustained_pause.is_some());
+        assert_eq!(
+            sustained_pause.unwrap()["details"]["raw_action"],
+            serde_json::Value::String("Pause".to_string())
+        );
+
+        let sustained_clear = events.iter().find(|event| {
+            event["kind"] == "controller_decision"
+                && event["details"]["case"] == "sustained_overlap"
+                && event["details"]["decision"] == "yield_clear_queue"
+        });
+        assert!(sustained_clear.is_some());
+        assert_eq!(
+            sustained_clear.unwrap()["details"]["raw_action"],
+            serde_json::Value::String("Clear".to_string())
         );
     }
 }
