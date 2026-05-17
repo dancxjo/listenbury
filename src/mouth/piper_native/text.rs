@@ -5,6 +5,7 @@ pub struct NormalizedText {
     pub tokens: Vec<NormalizedToken>,
     pub boundary: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
+    pub punctuation_commitment: PunctuationCommitmentState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,72 @@ pub enum ProsodyCommitment {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PunctuationCommitmentState {
+    SafeToPrepare,
+    SafeToPlay,
+    FinalCadence,
+}
+
+pub trait PunctuationCommitmentClassifier {
+    fn classify(&self, input: &str) -> PunctuationCommitmentState;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HeuristicPunctuationCommitmentClassifier;
+
+impl PunctuationCommitmentClassifier for HeuristicPunctuationCommitmentClassifier {
+    fn classify(&self, input: &str) -> PunctuationCommitmentState {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if trimmed.ends_with("...") {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        let mut chars = trimmed.chars();
+        let Some(last) = chars.next_back() else {
+            return PunctuationCommitmentState::SafeToPrepare;
+        };
+
+        match last {
+            '!' | '?' => return PunctuationCommitmentState::SafeToPlay,
+            '.' => {}
+            _ => return PunctuationCommitmentState::SafeToPrepare,
+        }
+
+        let stem = trimmed[..trimmed.len() - last.len_utf8()].trim_end();
+        let last_token = stem.split_ascii_whitespace().next_back().unwrap_or_default();
+        if last_token.is_empty() {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if last_token.len() == 1 && last_token.chars().all(|ch| ch.is_ascii_alphabetic()) {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if last_token.chars().all(|ch| ch.is_ascii_digit()) {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if is_decimal_fragment(last_token) {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if looks_like_url_or_email(last_token) {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        if is_title_case_honorific(last_token) {
+            return PunctuationCommitmentState::SafeToPrepare;
+        }
+
+        PunctuationCommitmentState::SafeToPlay
+    }
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum TextNormalizationError {
     #[error("cannot normalize empty text")]
@@ -52,28 +119,39 @@ impl TextNormalizer {
         let mut tokens = Vec::new();
         let mut current = String::new();
         let mut saw_phrase_break = false;
-        let mut saw_sentence_terminal = false;
-
-        for (byte_offset, ch) in trimmed.char_indices() {
-            if ch.is_ascii_alphabetic() {
+        let punctuation_commitment = HeuristicPunctuationCommitmentClassifier.classify(trimmed);
+        let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
+        for (index, (byte_offset, ch)) in chars.iter().copied().enumerate() {
+            let next = chars.get(index + 1).map(|(_, next)| *next);
+            if ch.is_ascii_alphanumeric() || matches!(ch, '@' | '/' | '_') {
                 current.push(ch);
                 continue;
             }
 
             match ch {
-                '\'' | '-' | '0'..='9' => {
+                '\'' => {
                     return Err(TextNormalizationError::UnsupportedCharacter { ch, byte_offset });
                 }
                 '.' => {
-                    if finalize_period_token(&mut tokens, &mut current) {
-                        saw_sentence_terminal = true;
+                    if next.is_some_and(|next| should_treat_as_internal_dot(&current, next)) {
+                        current.push(ch);
+                        continue;
                     }
+                    finalize_period_token(&mut tokens, &mut current);
                 }
                 '!' | '?' => {
                     push_word_token(&mut tokens, &mut current);
-                    saw_sentence_terminal = true;
                 }
-                ',' | ';' | ':' => {
+                ':' => {
+                    if next.is_some_and(|next| next == '/') && looks_like_url_prefix(&current) {
+                        current.push(':');
+                        continue;
+                    }
+                    push_word_token(&mut tokens, &mut current);
+                    push_phrase_break(&mut tokens);
+                    saw_phrase_break = true;
+                }
+                ',' | ';' => {
                     push_word_token(&mut tokens, &mut current);
                     push_phrase_break(&mut tokens);
                     saw_phrase_break = true;
@@ -94,7 +172,8 @@ impl TextNormalizer {
             return Err(TextNormalizationError::EmptyInput);
         }
 
-        let boundary = if saw_sentence_terminal {
+        let boundary = if matches!(punctuation_commitment, PunctuationCommitmentState::SafeToPlay)
+        {
             ProsodyBoundaryHint::PossibleSentenceEnd
         } else if saw_phrase_break {
             ProsodyBoundaryHint::PhraseBreak
@@ -106,16 +185,17 @@ impl TextNormalizer {
             tokens,
             boundary,
             commitment: ProsodyCommitment::Provisional,
+            punctuation_commitment,
         })
     }
 }
 
-fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String) -> bool {
+fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String) {
     if current.is_empty() {
-        return false;
+        return;
     }
 
-    if current.len() == 1 {
+    if current.len() == 1 && current.chars().all(|ch| ch.is_ascii_alphabetic()) {
         let initial = current
             .chars()
             .next()
@@ -123,18 +203,20 @@ fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String
             .to_ascii_lowercase();
         tokens.push(NormalizedToken::Initial(initial));
         current.clear();
-        return false;
+        return;
     }
 
+    let original = current.clone();
     let lower = current.to_ascii_lowercase();
     current.clear();
-    if let Some(expanded) = expand_known_abbreviation(&lower) {
+    if is_title_case_honorific(&original)
+        && let Some(expanded) = expand_known_abbreviation(&lower)
+    {
         tokens.push(NormalizedToken::Word(expanded.to_string()));
-        return false;
+        return;
     }
 
     tokens.push(NormalizedToken::Word(lower));
-    true
 }
 
 fn push_word_token(tokens: &mut Vec<NormalizedToken>, current: &mut String) {
@@ -164,6 +246,34 @@ fn expand_known_abbreviation(token: &str) -> Option<&'static str> {
     }
 }
 
+fn is_title_case_honorific(token: &str) -> bool {
+    token.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+        && expand_known_abbreviation(&token.to_ascii_lowercase()).is_some()
+}
+
+fn looks_like_url_or_email(token: &str) -> bool {
+    token.contains('@') || token.contains("://") || token.contains("www.") || looks_like_url_prefix(token)
+}
+
+fn looks_like_url_prefix(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    lower.starts_with("http") || lower.starts_with("www")
+}
+
+fn is_decimal_fragment(token: &str) -> bool {
+    token.split_once('.').is_some_and(|(left, right)| {
+        !left.is_empty()
+            && !right.is_empty()
+            && left.chars().all(|ch| ch.is_ascii_digit())
+            && right.chars().all(|ch| ch.is_ascii_digit())
+    })
+}
+
+fn should_treat_as_internal_dot(current: &str, next: char) -> bool {
+    (current.chars().last().is_some_and(|ch| ch.is_ascii_digit()) && next.is_ascii_digit())
+        || (next.is_ascii_alphanumeric() && looks_like_url_or_email(current))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +293,10 @@ mod tests {
             ProsodyBoundaryHint::PossibleSentenceEnd
         );
         assert_eq!(normalized.commitment, ProsodyCommitment::Provisional);
+        assert_eq!(
+            normalized.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPlay
+        );
     }
 
     #[test]
@@ -201,6 +315,69 @@ mod tests {
             ]
         );
         assert_eq!(normalized.boundary, ProsodyBoundaryHint::PhraseBreak);
+    }
+
+    #[test]
+    fn keeps_decimal_without_sentence_commitment() {
+        let normalized = TextNormalizer.normalize("3.14").expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![NormalizedToken::Word("3.14".to_string())]
+        );
+        assert_eq!(normalized.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(
+            normalized.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPrepare
+        );
+    }
+
+    #[test]
+    fn lowercase_honorific_stays_sentence_ending_candidate() {
+        let normalized = TextNormalizer.normalize("dr.").expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![NormalizedToken::Word("dr".to_string())]
+        );
+        assert_eq!(normalized.boundary, ProsodyBoundaryHint::PossibleSentenceEnd);
+        assert_eq!(
+            normalized.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPlay
+        );
+    }
+
+    #[test]
+    fn keeps_ellipsis_provisional() {
+        let normalized = TextNormalizer.normalize("Wait...").expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![NormalizedToken::Word("wait".to_string())]
+        );
+        assert_eq!(normalized.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(
+            normalized.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPrepare
+        );
+    }
+
+    #[test]
+    fn keeps_url_and_email_periods_provisional() {
+        let url = TextNormalizer
+            .normalize("go to https://example.com")
+            .expect("normalize");
+        assert_eq!(url.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(
+            url.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPrepare
+        );
+
+        let email = TextNormalizer
+            .normalize("me@example.com")
+            .expect("normalize");
+        assert_eq!(email.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(
+            email.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPrepare
+        );
     }
 
     #[test]

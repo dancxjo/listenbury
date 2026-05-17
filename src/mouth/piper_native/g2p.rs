@@ -3,7 +3,8 @@ use thiserror::Error;
 
 use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
-    NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, TextNormalizationError, TextNormalizer,
+    NormalizedToken, PunctuationCommitmentState, ProsodyBoundaryHint, ProsodyCommitment,
+    TextNormalizationError, TextNormalizer,
 };
 use crate::text_stability::stable_prefix_len;
 
@@ -20,6 +21,7 @@ pub struct PhonemizedUnit {
     pub length_hints: Vec<PhoneLengthHint>,
     pub boundary: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
+    pub punctuation_commitment: PunctuationCommitmentState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +68,7 @@ pub struct PhonemeProsodyCandidate {
     pub word_hints: Vec<WordTimingHint>,
     pub boundary_hint: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
+    pub punctuation_commitment: PunctuationCommitmentState,
     pub stable_prefix_len: usize,
 }
 
@@ -85,6 +88,7 @@ impl PhonemeProsodyCandidate {
     pub fn mark_committed(&mut self) {
         if !matches!(self.commitment, ProsodyCommitment::Cancelled) {
             self.commitment = ProsodyCommitment::Committed;
+            self.punctuation_commitment = PunctuationCommitmentState::FinalCadence;
             if matches!(self.boundary_hint, ProsodyBoundaryHint::PossibleSentenceEnd) {
                 self.boundary_hint = ProsodyBoundaryHint::FinalSentenceEnd;
             }
@@ -196,6 +200,7 @@ impl SimpleEnglishG2p {
             length_hints,
             boundary: normalized.boundary,
             commitment: normalized.commitment,
+            punctuation_commitment: normalized.punctuation_commitment,
         })
     }
 }
@@ -334,6 +339,7 @@ fn build_candidate(
         word_hints,
         boundary_hint: phonemized.boundary,
         commitment: ProsodyCommitment::Provisional,
+        punctuation_commitment: phonemized.punctuation_commitment,
         stable_prefix_len,
     }
 }
@@ -375,6 +381,10 @@ mod tests {
         assert_eq!(symbols(&unit.phonemes), vec!["OW", "K", "EY", "|"]);
         assert_eq!(unit.boundary, ProsodyBoundaryHint::PossibleSentenceEnd);
         assert_eq!(unit.commitment, ProsodyCommitment::Provisional);
+        assert_eq!(
+            unit.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPlay
+        );
     }
 
     #[test]
@@ -455,6 +465,10 @@ mod tests {
             committed.boundary_hint,
             ProsodyBoundaryHint::FinalSentenceEnd
         );
+        assert_eq!(
+            committed.punctuation_commitment,
+            PunctuationCommitmentState::FinalCadence
+        );
     }
 
     #[test]
@@ -467,6 +481,10 @@ mod tests {
         };
         assert_eq!(first_candidate.boundary_hint, ProsodyBoundaryHint::None);
         assert_eq!(first_candidate.commitment, ProsodyCommitment::Provisional);
+        assert_eq!(
+            first_candidate.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPrepare
+        );
 
         let second = tracker
             .ingest_text("F. Scott Fitzgerald.")
@@ -479,6 +497,10 @@ mod tests {
         assert_eq!(
             second_candidate.boundary_hint,
             ProsodyBoundaryHint::PossibleSentenceEnd
+        );
+        assert_eq!(
+            second_candidate.punctuation_commitment,
+            PunctuationCommitmentState::SafeToPlay
         );
     }
 
