@@ -1,4 +1,4 @@
-import { h, render as preactRender } from "https://esm.sh/preact@10.26.9";
+import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -18,6 +18,9 @@ const DEFAULT_ZOOM_PX_PER_SECOND = 80;
 const MIN_ZOOM_PX_PER_SECOND = 4;
 const MAX_ZOOM_PX_PER_SECOND = 4000;
 const ZOOM_STEP_FACTOR = 1.3;
+const WHEEL_ZOOM_SENSITIVITY = 0.002;
+const WHEEL_ZOOM_MIN_FACTOR = 0.5;
+const WHEEL_ZOOM_MAX_FACTOR = 2;
 const ZOOM_SELECTION_PADDING_FACTOR = 0.3;
 const ZOOM_SELECTION_PADDING_MIN_MS = 250;
 const ZOOM_LATEST_WINDOW_MS = 30_000;
@@ -126,7 +129,7 @@ function RibbonToken({ token }) {
 
 function ConnectionChrome({ projection }) {
   return h(
-    h.Fragment,
+    Fragment,
     null,
     h(
       "div",
@@ -206,7 +209,7 @@ function TranscriptRibbonPane({ projection }) {
 
 function InspectorPane({ projection }) {
   return h(
-    h.Fragment,
+    Fragment,
     null,
     h("h2", null, "Inspector"),
     h(
@@ -397,7 +400,10 @@ function addLiveEvent(traceEvent) {
 //   { turns: Map<turnId, LiveTurn>, openSpans, viewerEvents, viewerMarkers, debugLog, maxElapsedMs }
 //
 // LiveTurn shape:
-//   { id, transcriptCandidate, finalTranscript, latestWordStream, wordRevisions }
+//   { id, transcriptCandidate, finalTranscript, latestWordStream, wordStreamTimeOffsetMs, wordRevisions }
+
+const RELATIVE_WORD_START_THRESHOLD_MS = 250;
+const RELATIVE_WORD_END_GRACE_MS = 250;
 
 function createLiveSession() {
   return {
@@ -417,6 +423,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       transcriptCandidate: null,
       finalTranscript: null,
       latestWordStream: null,
+      wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
     });
   }
@@ -462,6 +469,49 @@ function matchWordAcrossStreams(prevWords, newWord, newIndex) {
     return { word: prevWords[newIndex], approximate: true };
   }
   return null;
+}
+
+function measuredWordTimingBounds(words) {
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (const word of words ?? []) {
+    const start = word.timing?.start_ms;
+    const end = word.timing?.end_ms;
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      minStart = Math.min(minStart, start);
+      maxEnd = Math.max(maxEnd, end);
+    }
+  }
+  return Number.isFinite(minStart) && Number.isFinite(maxEnd) ? { minStart, maxEnd } : null;
+}
+
+function inferWordStreamTimeOffsetMs(words, observedAtMs, previousOffsetMs) {
+  if (previousOffsetMs != null) {
+    return previousOffsetMs;
+  }
+
+  const bounds = measuredWordTimingBounds(words);
+  if (!bounds) {
+    return 0;
+  }
+
+  const startsNearZero = bounds.minStart <= RELATIVE_WORD_START_THRESHOLD_MS;
+  const endsBeforeObservedEvent = bounds.maxEnd + RELATIVE_WORD_END_GRACE_MS < observedAtMs;
+  return startsNearZero && endsBeforeObservedEvent ? Math.max(0, observedAtMs - bounds.maxEnd) : 0;
+}
+
+function wordWithTimeOffset(word, offsetMs) {
+  if (!offsetMs || !word.timing) {
+    return word;
+  }
+  return {
+    ...word,
+    timing: {
+      ...word.timing,
+      start_ms: word.timing.start_ms + offsetMs,
+      end_ms: word.timing.end_ms + offsetMs,
+    },
+  };
 }
 
 // Reduce one LiveTraceEvent into the session.  All state mutations happen
@@ -514,6 +564,11 @@ function reduceLiveEvent(session, event) {
       return revs?.length ? { ...word, _revisions: revs } : word;
     });
     liveTurn.latestWordStream = { ...event.artifact, words: annotatedWords };
+    liveTurn.wordStreamTimeOffsetMs = inferWordStreamTimeOffsetMs(
+      annotatedWords,
+      event.elapsed_ms,
+      liveTurn.wordStreamTimeOffsetMs,
+    );
     return;
   }
 
@@ -637,20 +692,37 @@ function liveSessionToViewerPayload(session) {
     });
   }
 
-  // Per-turn word stream lanes (sorted by turn id for stable ordering).
-  const wordStreamLanes = [];
+  // Live duplex ASR is one continuous timeline.  Keep reducer state per turn
+  // for revision tracking, but project the latest ASR words onto one lane.
+  const asrWords = [];
+  let nextWordId = 1;
   for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
     if (liveTurn.latestWordStream?.words?.length > 0) {
-      wordStreamLanes.push({
-        label: `ASR turn ${turnId}`,
-        stream: {
-          id: turnId,
-          source: "LiveAsr",
-          words: liveTurn.latestWordStream.words,
-        },
-      });
+      const offsetMs = liveTurn.wordStreamTimeOffsetMs ?? 0;
+      for (const word of liveTurn.latestWordStream.words) {
+        asrWords.push({
+          ...wordWithTimeOffset(word, offsetMs),
+          id: nextWordId++,
+          _turn: turnId,
+        });
+      }
     }
   }
+  asrWords.sort((left, right) => {
+    const leftStart = left.timing?.start_ms ?? Number.MAX_SAFE_INTEGER;
+    const rightStart = right.timing?.start_ms ?? Number.MAX_SAFE_INTEGER;
+    return leftStart - rightStart || (left._turn ?? 0) - (right._turn ?? 0);
+  });
+  const wordStreamLanes = asrWords.length > 0
+    ? [{
+        label: "ASR",
+        stream: {
+          id: 1,
+          source: "LiveAsr",
+          words: asrWords,
+        },
+      }]
+    : [];
 
   return {
     title: "Live — Listenbury",
@@ -1060,6 +1132,7 @@ function ensureCustomTimeline() {
   viewer.append(host);
 
   tracksCol.addEventListener("scroll", onTracksScroll, { passive: true });
+  tracksCol.addEventListener("wheel", onTimelineWheel, { passive: false });
   tracksCol.addEventListener("click", onTimelineClick);
   tracksCol.addEventListener("pointerdown", startTimeRangeSelection);
   tracksCol.addEventListener("pointermove", moveTimeRangeSelection);
@@ -1289,6 +1362,52 @@ function onTracksScroll() {
     state.followLatest = false;
     renderShell();
   }
+}
+
+function onTimelineWheel(event) {
+  if (!state.lanes.length || event.deltaY === 0) return;
+
+  const col = getScrollContainer();
+  if (!col) return;
+
+  const rect = col.getBoundingClientRect();
+  if (!rect.width) return;
+
+  event.preventDefault();
+
+  const xInViewport = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+  const anchorMs = msForPx(col.scrollLeft + xInViewport);
+  const deltaY = normalizeWheelDeltaY(event);
+  const factor = Math.max(
+    WHEEL_ZOOM_MIN_FACTOR,
+    Math.min(WHEEL_ZOOM_MAX_FACTOR, Math.exp(-deltaY * WHEEL_ZOOM_SENSITIVITY)),
+  );
+  const nextZoom = clampZoom(state.zoomPxPerSecond * factor);
+  if (nextZoom === state.zoomPxPerSecond) return;
+
+  state.zoomPxPerSecond = nextZoom;
+  if (state.followLatest) {
+    state.followLatest = false;
+  }
+  renderCustomTimeline();
+
+  _programmaticScroll = true;
+  const maxScrollLeft = Math.max(0, col.scrollWidth - col.clientWidth);
+  col.scrollLeft = Math.max(0, Math.min(maxScrollLeft, pxForMs(anchorMs) - xInViewport));
+  requestAnimationFrame(() => {
+    _programmaticScroll = false;
+  });
+  updateZoomControls();
+}
+
+function normalizeWheelDeltaY(event) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return event.deltaY * 16;
+  }
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return event.deltaY * window.innerHeight;
+  }
+  return event.deltaY;
 }
 
 function onTimelineClick(event) {

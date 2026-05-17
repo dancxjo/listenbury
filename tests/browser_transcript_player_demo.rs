@@ -345,21 +345,21 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
     let html = include_str!("../web/browser-transcript-player/index.html");
     let js = include_str!("../web/browser-transcript-player/app.js");
 
-    assert!(html.contains("id=\"zoom-in\""));
-    assert!(html.contains("id=\"zoom-out\""));
+    assert!(html.contains("id=\"viewer\""));
+    assert!(js.contains("id: \"zoom-in\""));
+    assert!(js.contains("id: \"zoom-out\""));
+    assert!(js.contains("import { Fragment, h, render as preactRender }"));
+    assert!(!js.contains("h.Fragment"));
     assert!(!html.contains("id=\"zoom-selection\""));
     assert!(js.contains("function zoomTimelineIn"));
     assert!(js.contains("function zoomTimelineOut"));
-    assert!(js.contains("zoomKey: \"ctrlKey\""));
-    assert!(js.contains("horizontalScroll: true"));
-    assert!(!js.contains("function zoomTimelineFromWheel"));
-    assert!(!js.contains("function zoomToSelection"));
+    assert!(js.contains("tracksCol.addEventListener(\"wheel\", onTimelineWheel, { passive: false })"));
+    assert!(js.contains("function onTimelineWheel"));
+    assert!(js.contains("function normalizeWheelDeltaY"));
+    assert!(js.contains("function zoomToSelection"));
     assert!(js.contains("function startTimeRangeSelection"));
-    assert!(js.contains("function appendTimeRangeSelection"));
+    assert!(js.contains("function updateTimeRangeSelectionOverlays"));
     assert!(js.contains("function zoomToTimeSelection"));
-    assert!(js.contains("function captureViewportSnapshot"));
-    assert!(js.contains("function restoreViewportSnapshot"));
     assert!(js.contains("RANGE_SELECTION_DRAG_THRESHOLD_PX"));
-    assert!(js.contains("WHEEL_ZOOM_FACTOR"));
-    assert!(js.contains("msToViewportPercent"));
+    assert!(js.contains("WHEEL_ZOOM_SENSITIVITY"));
 }

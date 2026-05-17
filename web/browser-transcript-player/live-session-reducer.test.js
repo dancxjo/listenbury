@@ -32,6 +32,9 @@ const END_TO_START = Object.fromEntries(
   Object.entries(SPAN_PAIRS).map(([startKind, info]) => [info.end, { startKind, lane: info.lane }]),
 );
 
+const RELATIVE_WORD_START_THRESHOLD_MS = 250;
+const RELATIVE_WORD_END_GRACE_MS = 250;
+
 function openSpanKey(lane, turn, startKind) {
   return JSON.stringify([lane, turn ?? null, startKind]);
 }
@@ -54,6 +57,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       transcriptCandidate: null,
       finalTranscript: null,
       latestWordStream: null,
+      wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(),
     });
   }
@@ -82,6 +86,49 @@ function matchWordAcrossStreams(prevWords, newWord, newIndex) {
   }
   if (newIndex < prevWords.length) return { word: prevWords[newIndex], approximate: true };
   return null;
+}
+
+function measuredWordTimingBounds(words) {
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  for (const word of words ?? []) {
+    const start = word.timing?.start_ms;
+    const end = word.timing?.end_ms;
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      minStart = Math.min(minStart, start);
+      maxEnd = Math.max(maxEnd, end);
+    }
+  }
+  return Number.isFinite(minStart) && Number.isFinite(maxEnd) ? { minStart, maxEnd } : null;
+}
+
+function inferWordStreamTimeOffsetMs(words, observedAtMs, previousOffsetMs) {
+  if (previousOffsetMs != null) {
+    return previousOffsetMs;
+  }
+
+  const bounds = measuredWordTimingBounds(words);
+  if (!bounds) {
+    return 0;
+  }
+
+  const startsNearZero = bounds.minStart <= RELATIVE_WORD_START_THRESHOLD_MS;
+  const endsBeforeObservedEvent = bounds.maxEnd + RELATIVE_WORD_END_GRACE_MS < observedAtMs;
+  return startsNearZero && endsBeforeObservedEvent ? Math.max(0, observedAtMs - bounds.maxEnd) : 0;
+}
+
+function wordWithTimeOffset(word, offsetMs) {
+  if (!offsetMs || !word.timing) {
+    return word;
+  }
+  return {
+    ...word,
+    timing: {
+      ...word.timing,
+      start_ms: word.timing.start_ms + offsetMs,
+      end_ms: word.timing.end_ms + offsetMs,
+    },
+  };
 }
 
 function labelForKind(kind) {
@@ -128,6 +175,11 @@ function reduceLiveEvent(session, event) {
       return revs?.length ? { ...word, _revisions: revs } : word;
     });
     liveTurn.latestWordStream = { ...event.artifact, words: annotatedWords };
+    liveTurn.wordStreamTimeOffsetMs = inferWordStreamTimeOffsetMs(
+      annotatedWords,
+      event.elapsed_ms,
+      liveTurn.wordStreamTimeOffsetMs,
+    );
     return;
   }
 
@@ -234,15 +286,31 @@ function liveSessionToViewerPayload(session) {
     });
   }
 
-  const wordStreamLanes = [];
+  const asrWords = [];
+  let nextWordId = 1;
   for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
     if (liveTurn.latestWordStream?.words?.length > 0) {
-      wordStreamLanes.push({
-        label: `ASR turn ${turnId}`,
-        stream: { id: turnId, source: "LiveAsr", words: liveTurn.latestWordStream.words },
-      });
+      const offsetMs = liveTurn.wordStreamTimeOffsetMs ?? 0;
+      for (const word of liveTurn.latestWordStream.words) {
+        asrWords.push({
+          ...wordWithTimeOffset(word, offsetMs),
+          id: nextWordId++,
+          _turn: turnId,
+        });
+      }
     }
   }
+  asrWords.sort((left, right) => {
+    const leftStart = left.timing?.start_ms ?? Number.MAX_SAFE_INTEGER;
+    const rightStart = right.timing?.start_ms ?? Number.MAX_SAFE_INTEGER;
+    return leftStart - rightStart || (left._turn ?? 0) - (right._turn ?? 0);
+  });
+  const wordStreamLanes = asrWords.length > 0
+    ? [{
+        label: "ASR",
+        stream: { id: 1, source: "LiveAsr", words: asrWords },
+      }]
+    : [];
 
   return {
     title: "Live — Listenbury",
@@ -510,6 +578,27 @@ console.log("\n── Scenario 9: liveSessionToViewerPayload is pure ──");
     JSON.stringify(payload2),
     "projection is deterministic for same session state",
   );
+}
+
+console.log("\n── Scenario 10: duplex ASR projects to one shared timeline lane ──");
+{
+  const s = createLiveSession();
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 1200, {
+    artifact: { words: [
+      { id: 1, text: "first", timing: { start_ms: 0, end_ms: 300 }, commitment: "Final" },
+    ]},
+  }));
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 2, 2200, {
+    artifact: { words: [
+      { id: 1, text: "second", timing: { start_ms: 0, end_ms: 400 }, commitment: "Final" },
+    ]},
+  }));
+
+  const payload = liveSessionToViewerPayload(s);
+  assertEqual(payload.streams.length, 1, "ASR has one word lane");
+  assertEqual(payload.streams[0].label, "ASR", "ASR lane is not labelled per turn");
+  assertEqual(payload.streams[0].stream.words[0].timing.start_ms, 900, "turn 1 relative timing offset onto timeline");
+  assertEqual(payload.streams[0].stream.words[1].timing.start_ms, 1800, "turn 2 relative timing offset onto timeline");
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────
