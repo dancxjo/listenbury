@@ -467,7 +467,7 @@ fn read_piper_sample_rate_hz(path: &std::path::Path) -> Result<Option<u32>> {
 }
 
 fn prepare_piper_model_path(piper_bin: &Path, model_path: PathBuf) -> Result<PathBuf> {
-    if !uses_snap_piper(piper_bin) || !has_hidden_component(&model_path) {
+    if !piper_model_needs_snap_copy(piper_bin, &model_path) {
         return Ok(model_path);
     }
 
@@ -490,6 +490,17 @@ fn prepare_piper_model_path(piper_bin: &Path, model_path: PathBuf) -> Result<Pat
     }
 
     Ok(copied_model_path)
+}
+
+fn piper_model_needs_snap_copy(piper_bin: &Path, model_path: &Path) -> bool {
+    if !uses_snap_piper(piper_bin) {
+        return false;
+    }
+
+    has_hidden_component(model_path)
+        || model_path
+            .canonicalize()
+            .is_ok_and(|path| has_hidden_component(&path))
 }
 
 fn uses_snap_piper(piper_bin: &Path) -> bool {
@@ -608,6 +619,35 @@ mod tests {
         .expect("words should parse");
 
         assert_eq!(args.text, "Okay. Again.");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn snap_piper_copy_check_follows_symlink_to_hidden_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "listenbury-piper-symlink-test-{}",
+            std::process::id()
+        ));
+        let hidden_dir = root.join(".models");
+        let visible_dir = root.join("voices");
+        std::fs::create_dir_all(&hidden_dir).expect("create hidden model directory");
+        std::fs::create_dir_all(&visible_dir).expect("create visible voice directory");
+
+        let hidden_model = hidden_dir.join("ryan.onnx");
+        std::fs::write(&hidden_model, b"model").expect("write hidden model");
+        let visible_model = visible_dir.join("ryan.onnx");
+        std::os::unix::fs::symlink(&hidden_model, &visible_model).expect("create model symlink");
+
+        assert!(piper_model_needs_snap_copy(
+            Path::new("/snap/bin/piper-tts.piper-cli"),
+            &visible_model,
+        ));
+        assert!(!piper_model_needs_snap_copy(
+            Path::new("/usr/bin/piper"),
+            &visible_model,
+        ));
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 
     #[test]
