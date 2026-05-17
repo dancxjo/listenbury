@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use ort::session::Session;
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 
-use super::{PiperIdSequence, PiperVoiceConfig};
+use super::{GraphemeToPhoneme, PiperIdSequence, PiperVoiceConfig, SimpleEnglishG2p};
 
 const NATIVE_PIPER_FRAME_SAMPLES: usize = 1024;
 // Piper ONNX vits output is a single waveform tensor for one speaker stream.
@@ -264,11 +264,23 @@ impl NativePiperBackend {
 }
 
 impl TtsBackend for NativePiperBackend {
-    fn synthesize(&mut self, _text: &str) -> Result<Vec<AudioFrame>> {
-        bail!(
-            "Native Piper synthesis is not implemented yet for {}",
-            self.model_path.display()
-        );
+    fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
+        let g2p = SimpleEnglishG2p::default();
+        let phonemes = g2p
+            .phonemize(text)
+            .with_context(|| format!("failed to phonemize text `{text}` for native Piper"))?;
+        let ids = phonemes.to_piper_ids(&self.config).with_context(|| {
+            format!(
+                "failed to map phonemes to IDs for native Piper model {}",
+                self.model_path.display()
+            )
+        })?;
+        self.synthesize_id_frames(&ids).with_context(|| {
+            format!(
+                "native Piper ONNX synthesis failed for model {}",
+                self.model_path.display()
+            )
+        })
     }
 }
 
@@ -604,20 +616,26 @@ mod tests {
     }
 
     #[test]
-    fn synthesize_returns_clear_unimplemented_error() {
+    fn synthesize_surfaces_clear_g2p_error_for_unsupported_words() {
         let model_path = unique_path("unimplemented");
         let mut backend =
             NativePiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
 
         let error = backend
-            .synthesize("hello")
-            .expect_err("native synthesis is not implemented");
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "Native Piper synthesis is not implemented yet for {}",
-                model_path.display()
-            )
+            .synthesize("xyzzy")
+            .expect_err("unsupported text should fail before ONNX inference");
+        let rendered = format!("{error:#}");
+        assert!(
+            rendered.contains("failed to phonemize text `xyzzy` for native Piper"),
+            "expected phonemize context, got: {rendered}"
+        );
+        assert!(
+            rendered.contains("unsupported word `xyzzy`"),
+            "expected unsupported-word detail, got: {rendered}"
+        );
+        assert!(
+            !rendered.contains(model_path.to_string_lossy().as_ref()),
+            "unsupported text path should fail before model access"
         );
     }
 
