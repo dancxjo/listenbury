@@ -897,6 +897,7 @@ function ensureTimeline() {
 }
 
 function liveSessionToTimelineGroups(_session) {
+  // Keep the session parameter in the signature to match the reducer→projection contract.
   return TIMELINE_GROUP_IDS.map((id) => ({ id, content: id }));
 }
 
