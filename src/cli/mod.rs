@@ -577,7 +577,8 @@ mod tests {
             "out/process.wav",
             "--native-output-wav",
             "out/native.wav",
-            "Okay.",
+            "I",
+            "see.",
         ])
         .expect("piper-compare should parse text and optional output paths");
 
@@ -592,7 +593,7 @@ mod tests {
             command.native_output_wav,
             Some(PathBuf::from("out/native.wav"))
         );
-        assert_eq!(command.words, ["Okay."]);
+        assert_eq!(command.words, ["I", "see."]);
     }
 
     #[test]

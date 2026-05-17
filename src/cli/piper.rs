@@ -108,12 +108,12 @@ impl PiperCompareArgs {
     fn from_command(command: PiperCompareCommand) -> Result<Self> {
         anyhow::ensure!(
             !command.words.is_empty(),
-            "missing text to compare; try `listenbury piper-compare \"Okay.\"`"
+            "missing text to compare; try `listenbury piper-compare \"I see.\"`"
         );
         let text = command.words.join(" ");
         anyhow::ensure!(
             !text.trim().is_empty(),
-            "missing text to compare; try `listenbury piper-compare \"Okay.\"`"
+            "missing text to compare; try `listenbury piper-compare \"I see.\"`"
         );
 
         Ok(Self {
