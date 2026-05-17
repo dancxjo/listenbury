@@ -118,7 +118,7 @@ function RibbonToken({ token }) {
     "span",
     {
       className: token.className,
-      title: token.title ?? undefined,
+      title: token.title,
     },
     token.text,
   );
@@ -676,7 +676,7 @@ function transcriptTokensFromSession(session) {
           tokens.push({
             className: `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`,
             text: word.text,
-            title: formatRevisionTooltip(word),
+            title: formatRevisionTooltip(word) || null,
           });
         }
       } else {
