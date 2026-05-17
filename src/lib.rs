@@ -41,6 +41,10 @@ pub use mouth::planner::{
     SpeechUnit, strip_emoji,
 };
 pub use mouth::player::{PlaybackEvent, PlaybackUnitId, Player, SequentialPlayer};
+pub use mouth::read_aloud::{
+    ReadAloudAudioPreparer, ReadAloudCandidate, ReadAloudCandidateEvent, ReadAloudCandidateTracker,
+    SpeechCandidateCommitment, SpeechCandidateId,
+};
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
