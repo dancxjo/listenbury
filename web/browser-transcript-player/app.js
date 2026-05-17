@@ -1985,3 +1985,29 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+/**
+ * Build an HTML fragment for the revision history of a word span.
+ * Returns an empty string when there are no revisions.
+ */
+function buildRevisionHistoryHtml(word) {
+  const revisions = word._revisions;
+  if (!revisions?.length) {
+    return "";
+  }
+  const rows = revisions
+    .map((rev) => {
+      const reason = rev.reason ? `<div class="inspector-revision-reason">${escapeHtml(rev.reason)}</div>` : "";
+      return `<div class="inspector-revision-entry">
+        <span>at ${rev.at_ms}ms:</span>
+        <del>${escapeHtml(rev.fromText)}</del>
+        <span>→</span>
+        <span class="revision-new">${escapeHtml(word.text)}</span>
+        ${reason}
+      </div>`;
+    })
+    .join("");
+  return `<div class="inspector-revision-history">
+    <strong>↩ Retroactive revision</strong>
+    ${rows}
+  </div>`;
+}

@@ -348,8 +348,11 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
     assert!(html.contains("id=\"zoom-in\""));
     assert!(html.contains("id=\"zoom-out\""));
     assert!(!html.contains("id=\"zoom-selection\""));
-    assert!(js.contains("function zoomTimeline"));
-    assert!(js.contains("function zoomTimelineFromWheel"));
+    assert!(js.contains("function zoomTimelineIn"));
+    assert!(js.contains("function zoomTimelineOut"));
+    assert!(js.contains("zoomKey: \"ctrlKey\""));
+    assert!(js.contains("horizontalScroll: true"));
+    assert!(!js.contains("function zoomTimelineFromWheel"));
     assert!(!js.contains("function zoomToSelection"));
     assert!(js.contains("function startTimeRangeSelection"));
     assert!(js.contains("function appendTimeRangeSelection"));
