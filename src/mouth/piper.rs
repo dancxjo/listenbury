@@ -10,6 +10,10 @@ use tracing::debug;
 
 use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
+#[cfg(feature = "tts-piper-native")]
+use crate::mouth::piper_native::{
+    GraphemeToPhoneme, NativePiperBackend, PiperVoiceConfig, SimpleEnglishG2p,
+};
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
@@ -60,12 +64,201 @@ impl TtsBackend for ProcessPiperBackend {
         let samples = synthesize_process(&self.config, text)?;
         let elapsed = t0.elapsed();
         debug!(
+            backend = "process",
             chars = text.len(),
             elapsed_ms = elapsed.as_millis(),
             "ProcessPiperBackend synthesis complete"
         );
         Ok(frames_from_samples(&self.config, samples))
     }
+}
+
+#[cfg(feature = "tts-piper-native")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PiperBackendPreference {
+    Process,
+    Native,
+    NativeWithProcessFallback,
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl PiperBackendPreference {
+    fn from_env() -> Self {
+        match std::env::var("LISTENBURY_PIPER_BACKEND")
+            .ok()
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref()
+        {
+            None | Some("") | Some("process") => Self::Process,
+            Some("native") => Self::Native,
+            Some("native-fallback") => Self::NativeWithProcessFallback,
+            Some(other) => {
+                tracing::warn!(
+                    backend_env = other,
+                    "unknown LISTENBURY_PIPER_BACKEND value; falling back to process backend"
+                );
+                Self::Process
+            }
+        }
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+#[derive(Debug)]
+struct NativeTextPiperBackend {
+    backend: NativePiperBackend,
+    g2p: SimpleEnglishG2p,
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl NativeTextPiperBackend {
+    fn load(config: &PiperConfig) -> Result<Self> {
+        let config_path = native_config_path(config).with_context(|| {
+            format!(
+                "native Piper backend requested but no voice config path was provided and no inferred config exists for model {}",
+                config.model_path.display()
+            )
+        })?;
+        let voice_config_json = std::fs::read_to_string(&config_path).with_context(|| {
+            format!(
+                "failed to read native Piper voice config at {}",
+                config_path.display()
+            )
+        })?;
+        let voice_config =
+            PiperVoiceConfig::from_json_str(&voice_config_json).with_context(|| {
+                format!(
+                    "failed to parse native Piper voice config JSON at {}",
+                    config_path.display()
+                )
+            })?;
+        let backend =
+            NativePiperBackend::load(&config.model_path, voice_config).with_context(|| {
+                format!(
+                    "failed to initialize native Piper backend for model {}",
+                    config.model_path.display()
+                )
+            })?;
+        Ok(Self {
+            backend,
+            g2p: SimpleEnglishG2p::default(),
+        })
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl TtsBackend for NativeTextPiperBackend {
+    fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
+        let t0 = Instant::now();
+        let phonemes = self
+            .g2p
+            .phonemize(text)
+            .with_context(|| format!("failed to phonemize text `{text}` for native Piper"))?;
+        let ids = phonemes
+            .to_piper_ids(self.backend.config())
+            .with_context(|| {
+                format!(
+                    "failed to map phonemes to IDs for native Piper model {}",
+                    self.backend.model_path().display()
+                )
+            })?;
+        let frames = self
+            .backend
+            .synthesize_id_frames(&ids)
+            .with_context(|| format!("native Piper synthesis failed for text `{text}`"))?;
+        debug!(
+            backend = "native",
+            chars = text.len(),
+            elapsed_ms = t0.elapsed().as_millis(),
+            "NativeTextPiperBackend synthesis complete"
+        );
+        Ok(frames)
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+struct NativePreferredPiperBackend<P, N> {
+    process: P,
+    native: Option<N>,
+    preference: PiperBackendPreference,
+    native_init_error: Option<String>,
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl<P, N> NativePreferredPiperBackend<P, N> {
+    fn new(
+        process: P,
+        native: Option<N>,
+        preference: PiperBackendPreference,
+        native_init_error: Option<String>,
+    ) -> Self {
+        Self {
+            process,
+            native,
+            preference,
+            native_init_error,
+        }
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl<P: TtsBackend, N: TtsBackend> TtsBackend for NativePreferredPiperBackend<P, N> {
+    fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
+        if self.preference == PiperBackendPreference::Process {
+            return self.process.synthesize(text);
+        }
+
+        let native = match self.native.as_mut() {
+            Some(native) => native,
+            None => {
+                let detail = self
+                    .native_init_error
+                    .as_deref()
+                    .unwrap_or("native backend is unavailable for an unknown reason");
+                if self.preference == PiperBackendPreference::NativeWithProcessFallback {
+                    tracing::warn!(
+                        error = detail,
+                        "native Piper unavailable; falling back to process backend"
+                    );
+                    return self.process.synthesize(text);
+                }
+                anyhow::bail!("native Piper backend is unavailable: {detail}");
+            }
+        };
+
+        match native.synthesize(text) {
+            Ok(frames) => Ok(frames),
+            Err(error) => {
+                if self.preference == PiperBackendPreference::NativeWithProcessFallback {
+                    tracing::warn!(error = %error, "native Piper synthesis failed; falling back to process backend");
+                    self.process.synthesize(text)
+                } else {
+                    Err(error.context("native Piper synthesis failed (process fallback disabled)"))
+                }
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        self.process.stop()?;
+        if let Some(native) = self.native.as_mut() {
+            native.stop()?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn native_config_path(config: &PiperConfig) -> Option<PathBuf> {
+    config
+        .config_path
+        .as_ref()
+        .filter(|path| path.is_file())
+        .cloned()
+        .or_else(|| {
+            let inferred = config.model_path.with_extension("onnx.json");
+            inferred.is_file().then_some(inferred)
+        })
 }
 
 pub struct PiperTextToSpeech {
@@ -79,7 +272,7 @@ impl PiperTextToSpeech {
     /// Create a `PiperTextToSpeech` that uses the default
     /// [`ProcessPiperBackend`] for synthesis.
     pub fn new(config: PiperConfig) -> Self {
-        Self::with_backend(ProcessPiperBackend::new(config))
+        Self::with_boxed_backend(default_piper_backend(config))
     }
 
     /// Create a `PiperTextToSpeech` backed by any [`TtsBackend`] implementor.
@@ -87,6 +280,10 @@ impl PiperTextToSpeech {
     /// Use this constructor to substitute a custom backend (e.g. a persistent
     /// worker or a mock for testing).
     pub fn with_backend(backend: impl TtsBackend + 'static) -> Self {
+        Self::with_boxed_backend(Box::new(backend))
+    }
+
+    fn with_boxed_backend(backend: Box<dyn TtsBackend>) -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
         let (tx_audio, rx_audio) = crossbeam_channel::unbounded();
         let (tx_error, rx_error) = crossbeam_channel::unbounded();
@@ -99,6 +296,37 @@ impl PiperTextToSpeech {
             rx_error,
             worker: Some(worker),
         }
+    }
+}
+
+fn default_piper_backend(config: PiperConfig) -> Box<dyn TtsBackend> {
+    #[cfg(feature = "tts-piper-native")]
+    {
+        let preference = PiperBackendPreference::from_env();
+        if preference == PiperBackendPreference::Process {
+            return Box::new(ProcessPiperBackend::new(config));
+        }
+
+        let process = ProcessPiperBackend::new(config.clone());
+        match NativeTextPiperBackend::load(&config) {
+            Ok(native) => Box::new(NativePreferredPiperBackend::new(
+                process,
+                Some(native),
+                preference,
+                None,
+            )),
+            Err(error) => Box::new(NativePreferredPiperBackend::new(
+                process,
+                None::<NativeTextPiperBackend>,
+                preference,
+                Some(error.to_string()),
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "tts-piper-native"))]
+    {
+        Box::new(ProcessPiperBackend::new(config))
     }
 }
 
@@ -146,7 +374,7 @@ enum PiperCommand {
 }
 
 fn run_piper_worker(
-    mut backend: impl TtsBackend,
+    mut backend: Box<dyn TtsBackend>,
     rx: Receiver<PiperCommand>,
     tx_audio: Sender<Vec<AudioFrame>>,
     tx_error: Sender<anyhow::Error>,
@@ -344,5 +572,103 @@ mod tests {
 
         let frames = collect_audio(&mut tts, Duration::from_secs(2));
         assert!(!frames.is_empty(), "expected audio after stop+enqueue");
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    struct AlwaysFailBackend {
+        calls: usize,
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    impl TtsBackend for AlwaysFailBackend {
+        fn synthesize(&mut self, _text: &str) -> Result<Vec<AudioFrame>> {
+            self.calls += 1;
+            anyhow::bail!("native boom");
+        }
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    #[test]
+    fn native_backend_preference_uses_native_when_it_succeeds() {
+        let process = MockTtsBackend::new();
+        let native = MockTtsBackend::new();
+        let mut backend = NativePreferredPiperBackend::new(
+            process,
+            Some(native),
+            PiperBackendPreference::Native,
+            None,
+        );
+
+        let frames = backend.synthesize("hello").expect("native synthesize");
+        assert!(!frames.is_empty(), "expected frames from native backend");
+        assert_eq!(backend.process.synthesize_calls.len(), 0);
+        assert_eq!(
+            backend
+                .native
+                .as_ref()
+                .expect("native backend")
+                .synthesize_calls
+                .len(),
+            1
+        );
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    #[test]
+    fn native_fallback_mode_uses_process_when_native_fails() {
+        let process = MockTtsBackend::new();
+        let native = AlwaysFailBackend { calls: 0 };
+        let mut backend = NativePreferredPiperBackend::new(
+            process,
+            Some(native),
+            PiperBackendPreference::NativeWithProcessFallback,
+            None,
+        );
+
+        let frames = backend.synthesize("hello").expect("fallback to process");
+        assert!(!frames.is_empty(), "expected process fallback frames");
+        assert_eq!(backend.process.synthesize_calls.len(), 1);
+        assert_eq!(backend.native.as_ref().expect("native").calls, 1);
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    #[test]
+    fn native_mode_returns_clear_error_when_native_is_unavailable() {
+        let process = MockTtsBackend::new();
+        let mut backend = NativePreferredPiperBackend::<MockTtsBackend, AlwaysFailBackend>::new(
+            process,
+            None,
+            PiperBackendPreference::Native,
+            Some("missing native config".to_string()),
+        );
+
+        let error = backend
+            .synthesize("hello")
+            .expect_err("native mode should fail without native backend");
+        assert!(
+            error
+                .to_string()
+                .contains("native Piper backend is unavailable")
+        );
+        assert!(error.to_string().contains("missing native config"));
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    #[test]
+    fn native_text_backend_reports_missing_config_path_clearly() {
+        let mut config = PiperConfig::new(
+            "/tmp/piper",
+            "/tmp/listenbury-native-missing-config/model.onnx",
+        );
+        config.config_path = None;
+
+        let error = NativeTextPiperBackend::load(&config)
+            .expect_err("missing config should be reported clearly");
+        assert!(
+            error
+                .to_string()
+                .contains("native Piper backend requested but no voice config path was provided"),
+            "unexpected error: {error}"
+        );
     }
 }

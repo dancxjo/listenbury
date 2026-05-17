@@ -543,6 +543,7 @@ LISTENBURY_WHISPER_MODEL=/path/to/model.bin
 LISTENBURY_LLM_MODEL=/path/to/model.gguf
 LISTENBURY_PIPER_BIN=/path/to/piper
 LISTENBURY_PIPER_VOICE=/path/to/voice.onnx
+LISTENBURY_PIPER_BACKEND=process # process|native|native-fallback
 PETE_LLM=gpt-oss
 PETE_VOICE=Amy
 ```
