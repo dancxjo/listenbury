@@ -274,7 +274,7 @@ impl<P: PhonemeProsodyPhonemizer> PhonemeProsodyCandidateTracker<P> {
         } else {
             let id = self.next_id();
             events.push(PhonemeProsodyCandidateEvent::CandidateStarted { id });
-            (id, text.len())
+            (id, 0)
         };
 
         let phonemized = self.phonemizer.phonemize_unit(&text)?;
@@ -287,6 +287,7 @@ impl<P: PhonemeProsodyPhonemizer> PhonemeProsodyCandidateTracker<P> {
 
 impl<P> PhonemeProsodyCandidateTracker<P> {
     fn next_id(&mut self) -> SpeechCandidateId {
+        // IDs intentionally start at 1 to align with existing candidate trackers.
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -441,6 +442,7 @@ mod tests {
             candidate.boundary_hint,
             ProsodyBoundaryHint::PossibleSentenceEnd
         );
+        assert_eq!(candidate.stable_prefix_len, 0);
         assert!(!candidate.phone_hints.is_empty());
         assert_eq!(candidate.word_hints.len(), 1);
 
