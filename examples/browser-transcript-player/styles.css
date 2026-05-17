@@ -50,6 +50,15 @@ button:hover {
   border-color: var(--accent);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button:disabled:hover {
+  border-color: var(--line);
+}
+
 button:focus-visible,
 input:focus-visible {
   outline: 2px solid var(--accent);
@@ -115,6 +124,14 @@ h1 {
   min-width: 5.25rem;
   padding: 0 0.78rem;
   white-space: nowrap;
+}
+
+.zoom-toolbar {
+  grid-column: 1 / -1;
+}
+
+.zoom-toolbar button {
+  min-width: 4.75rem;
 }
 
 .file-picker {
@@ -219,6 +236,7 @@ h1 {
   background:
     linear-gradient(90deg, rgba(255, 255, 255, 0.052) 1px, transparent 1px) 0 0 / 10% 100%,
     rgba(12, 15, 19, 0.96);
+  cursor: pointer;
   overflow: hidden;
 }
 

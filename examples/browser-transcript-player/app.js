@@ -11,12 +11,18 @@ const playPauseButton = document.getElementById("play-pause");
 const jumpPrevButton = document.getElementById("jump-prev");
 const jumpNextButton = document.getElementById("jump-next");
 const playSelectionClipButton = document.getElementById("play-selection-clip");
+const zoomOutButton = document.getElementById("zoom-out");
+const zoomInButton = document.getElementById("zoom-in");
+const zoomSelectionButton = document.getElementById("zoom-selection");
 const audio = document.getElementById("audio");
 const liveBanner = document.getElementById("live-banner");
 const liveEventCount = document.getElementById("live-event-count");
 const liveConnectionStatus = document.getElementById("live-connection-status");
 const queryParams = new URLSearchParams(window.location.search);
 const VIEWER_NAME = "WaveDeck";
+const MIN_VIEW_DURATION_MS = 100;
+const MIN_SELECTION_VIEW_MS = 500;
+const ZOOM_FACTOR = 1.8;
 
 // Live mode is activated by ?live=1 in the URL.
 const isLiveMode = queryParams.get("live") === "1";
@@ -56,6 +62,8 @@ const state = {
   selectedItem: null,
   maxDurationMs: 1000,
   stopAtMs: null,
+  viewStartMs: null,
+  viewEndMs: null,
 };
 
 const sourceLabels = {
@@ -72,6 +80,9 @@ playPauseButton.addEventListener("click", () => togglePlayback());
 jumpPrevButton.addEventListener("click", () => jumpSelectedWord(-1));
 jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
 playSelectionClipButton.addEventListener("click", () => playSelectedClip());
+zoomOutButton.addEventListener("click", () => zoomTimeline(1 / ZOOM_FACTOR));
+zoomInButton.addEventListener("click", () => zoomTimeline(ZOOM_FACTOR));
+zoomSelectionButton.addEventListener("click", () => zoomToSelection());
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
@@ -169,7 +180,7 @@ function addLiveEvent(traceEvent) {
 
 function applyLiveEvents() {
   const payload = buildLivePayload(liveEvents);
-  applyPayload(payload);
+  applyPayload(payload, { preserveSelection: true, preserveViewport: true });
   viewerTitle.textContent = "Live — Listenbury";
 }
 
@@ -352,7 +363,13 @@ function jumpSelectedWord(delta) {
   selectWord(words[index].laneIndex, words[index].wordIndex, true);
 }
 
-function applyPayload(rawPayload) {
+function applyPayload(rawPayload, options = {}) {
+  const previousSelection = options.preserveSelection ? state.selectedItem : null;
+  if (!options.preserveViewport) {
+    state.viewStartMs = null;
+    state.viewEndMs = null;
+  }
+
   const normalized = normalizePayload(rawPayload);
   const wordLanes = normalized.streams.map((lane) => normalizeWordLane(lane));
   const eventLanes = normalizeEventLanes(normalized.events);
@@ -371,7 +388,7 @@ function applyPayload(rawPayload) {
       events: lane.events.map((event, eventIndex) => ({ ...event, laneIndex, eventIndex })),
     };
   });
-  state.selectedItem = firstItemSelection();
+  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
   clearPlaybackStop();
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
@@ -546,12 +563,14 @@ function syncMaxDurationWithAudio() {
   );
   const fromAudio = Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0;
   state.maxDurationMs = Math.max(fromPayload, fromStreams, fromEvents, fromAudio, 1000);
+  clampViewport();
 }
 
 function render() {
   viewerTitle.textContent = state.payload?.title ?? "No stream loaded";
   playbackTime.textContent = formatPlaybackTime();
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
+  updateZoomControls();
 
   if (!state.lanes.length) {
     viewer.className = "viewer empty";
@@ -571,18 +590,19 @@ function renderLane(lane) {
 }
 
 function renderTimelineRuler() {
+  const viewport = getViewport();
   const ruler = document.createElement("div");
   ruler.className = "timeline-ruler";
 
-  const ticks = buildRulerTicks(state.maxDurationMs);
+  const ticks = buildRulerTicks(viewport);
   ticks.forEach((tickMs) => {
     const tick = document.createElement("span");
     tick.className = "ruler-tick";
-    tick.style.left = `${(tickMs / state.maxDurationMs) * 100}%`;
+    tick.style.left = `${msToViewportPercent(tickMs, viewport)}%`;
 
     const label = document.createElement("span");
     label.className = "ruler-label";
-    label.style.left = `${(tickMs / state.maxDurationMs) * 100}%`;
+    label.style.left = `${msToViewportPercent(tickMs, viewport)}%`;
     label.textContent = formatRulerLabel(tickMs);
 
     ruler.append(tick, label);
@@ -594,7 +614,7 @@ function renderTimelineRuler() {
     }
     const rect = ruler.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    audio.currentTime = (ratio * state.maxDurationMs) / 1000;
+    audio.currentTime = (viewport.startMs + ratio * viewport.durationMs) / 1000;
     refreshPlaybackState();
   });
 
@@ -602,6 +622,7 @@ function renderTimelineRuler() {
 }
 
 function renderWordLane(lane) {
+  const viewport = getViewport();
   const section = document.createElement("section");
   section.className = "lane";
 
@@ -622,6 +643,15 @@ function renderWordLane(lane) {
   track.className = "lane-track";
 
   lane.words.forEach((word) => {
+    const visibleRange = visibleItemRange(
+      word.resolvedTiming.start_ms,
+      word.resolvedTiming.end_ms,
+      viewport,
+    );
+    if (!visibleRange) {
+      return;
+    }
+
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "timeline-chip word-chip";
@@ -635,16 +665,15 @@ function renderWordLane(lane) {
     chip.textContent = word.text;
     chip.title = `${word.text} (${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms) · ${word.timingSourceDetail}`;
 
-    const left = (word.resolvedTiming.start_ms / state.maxDurationMs) * 100;
+    const left = msToViewportPercent(visibleRange.startMs, viewport);
     const width = Math.max(
       6,
-      ((Math.max(word.resolvedTiming.end_ms, word.resolvedTiming.start_ms + 1) - word.resolvedTiming.start_ms) /
-        state.maxDurationMs) *
-        100,
+      durationToViewportPercent(visibleRange.endMs - visibleRange.startMs, viewport),
     );
 
-    chip.style.left = `${Math.min(left, 96)}%`;
-    chip.style.width = `${Math.min(width, 100 - left)}%`;
+    const clampedLeft = Math.min(left, 99);
+    chip.style.left = `${clampedLeft}%`;
+    chip.style.width = `${Math.min(width, 100 - clampedLeft)}%`;
     chip.addEventListener("click", () => selectWord(word.laneIndex, word.wordIndex, true));
     track.append(chip);
   });
@@ -654,6 +683,7 @@ function renderWordLane(lane) {
 }
 
 function renderEventLane(lane) {
+  const viewport = getViewport();
   const section = document.createElement("section");
   section.className = "lane event-lane";
 
@@ -674,6 +704,11 @@ function renderEventLane(lane) {
   track.className = "lane-track event-track";
 
   lane.events.forEach((event) => {
+    const visibleRange = visibleItemRange(event.start_ms, event.end_ms, viewport);
+    if (!visibleRange) {
+      return;
+    }
+
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = `timeline-chip event-chip ${event.style} kind-${classToken(event.kind)}`;
@@ -684,14 +719,15 @@ function renderEventLane(lane) {
     chip.textContent = event.label;
     chip.title = `${event.kind} (${event.start_ms}–${event.end_ms} ms)`;
 
-    const left = (event.start_ms / state.maxDurationMs) * 100;
+    const left = msToViewportPercent(visibleRange.startMs, viewport);
     const width =
       event.style === "marker"
         ? 2
-        : Math.max(3, ((Math.max(event.end_ms, event.start_ms + 1) - event.start_ms) / state.maxDurationMs) * 100);
+        : Math.max(3, durationToViewportPercent(visibleRange.endMs - visibleRange.startMs, viewport));
 
-    chip.style.left = `${Math.min(left, 99)}%`;
-    chip.style.width = `${Math.min(width, 100 - left)}%`;
+    const clampedLeft = Math.min(left, 99);
+    chip.style.left = `${clampedLeft}%`;
+    chip.style.width = `${Math.min(width, 100 - clampedLeft)}%`;
     chip.addEventListener("click", () => selectEvent(event.laneIndex, event.eventIndex, true));
     track.append(chip);
   });
@@ -721,6 +757,7 @@ function refreshPlaybackState() {
 }
 
 function renderSelection() {
+  updateZoomControls();
   playSelectionClipButton.disabled = true;
   playSelectionClipButton.textContent = "Play selected clip";
   if (!state.selectedItem) {
@@ -843,6 +880,154 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   renderSelection();
 }
 
+function zoomTimeline(factor) {
+  if (!state.lanes.length) {
+    return;
+  }
+
+  const viewport = getViewport();
+  const focusMs = viewportFocusMs(viewport);
+  const nextDuration = viewport.durationMs / factor;
+  setViewportAround(focusMs, nextDuration);
+  render();
+}
+
+function zoomToSelection() {
+  const timing = selectedItemTiming();
+  if (!timing) {
+    return;
+  }
+
+  const selectionDuration = Math.max(MIN_SELECTION_VIEW_MS, timing.endMs - timing.startMs);
+  const paddedDuration = Math.min(state.maxDurationMs, selectionDuration * 1.35);
+  setViewportAround((timing.startMs + timing.endMs) / 2, paddedDuration);
+  render();
+}
+
+function selectedItemTiming() {
+  if (!state.selectedItem) {
+    return null;
+  }
+
+  const lane = state.lanes[state.selectedItem.laneIndex];
+  if (state.selectedItem.type === "event") {
+    const event = lane?.events?.[state.selectedItem.itemIndex];
+    if (!event) {
+      return null;
+    }
+    return {
+      startMs: event.start_ms,
+      endMs: Math.max(event.end_ms, event.start_ms + 1),
+    };
+  }
+
+  const word = lane?.words?.[state.selectedItem.itemIndex];
+  if (!word) {
+    return null;
+  }
+  return {
+    startMs: word.resolvedTiming.start_ms,
+    endMs: Math.max(word.resolvedTiming.end_ms, word.resolvedTiming.start_ms + 1),
+  };
+}
+
+function viewportFocusMs(viewport) {
+  const selection = selectedItemTiming();
+  if (selection) {
+    const selectionCenter = (selection.startMs + selection.endMs) / 2;
+    if (selectionCenter >= viewport.startMs && selectionCenter <= viewport.endMs) {
+      return selectionCenter;
+    }
+  }
+
+  const playheadMs = audio.currentTime * 1000;
+  if (Number.isFinite(playheadMs) && playheadMs >= viewport.startMs && playheadMs <= viewport.endMs) {
+    return playheadMs;
+  }
+
+  return viewport.startMs + viewport.durationMs / 2;
+}
+
+function setViewportAround(focusMs, requestedDurationMs) {
+  const nextDuration = Math.max(
+    MIN_VIEW_DURATION_MS,
+    Math.min(state.maxDurationMs, requestedDurationMs),
+  );
+
+  if (nextDuration >= state.maxDurationMs) {
+    state.viewStartMs = null;
+    state.viewEndMs = null;
+    return;
+  }
+
+  const unclampedStart = focusMs - nextDuration / 2;
+  const startMs = Math.max(0, Math.min(state.maxDurationMs - nextDuration, unclampedStart));
+  state.viewStartMs = startMs;
+  state.viewEndMs = startMs + nextDuration;
+}
+
+function clampViewport() {
+  if (state.viewStartMs === null || state.viewEndMs === null) {
+    state.viewStartMs = null;
+    state.viewEndMs = null;
+    return;
+  }
+
+  const durationMs = state.viewEndMs - state.viewStartMs;
+  if (durationMs >= state.maxDurationMs || durationMs < MIN_VIEW_DURATION_MS) {
+    state.viewStartMs = null;
+    state.viewEndMs = null;
+    return;
+  }
+
+  const startMs = Math.max(0, Math.min(state.maxDurationMs - durationMs, state.viewStartMs));
+  state.viewStartMs = startMs;
+  state.viewEndMs = startMs + durationMs;
+}
+
+function getViewport() {
+  const hasCustomViewport =
+    state.viewStartMs !== null &&
+    state.viewEndMs !== null &&
+    state.viewEndMs > state.viewStartMs;
+  const startMs = hasCustomViewport ? state.viewStartMs : 0;
+  const endMs = hasCustomViewport ? state.viewEndMs : state.maxDurationMs;
+  return {
+    startMs,
+    endMs,
+    durationMs: Math.max(MIN_VIEW_DURATION_MS, endMs - startMs),
+    isFullTimeline: !hasCustomViewport,
+  };
+}
+
+function visibleItemRange(startMs, endMs, viewport) {
+  const itemStartMs = Math.max(0, startMs);
+  const itemEndMs = Math.max(itemStartMs + 1, endMs);
+  if (itemEndMs < viewport.startMs || itemStartMs > viewport.endMs) {
+    return null;
+  }
+  return {
+    startMs: Math.max(itemStartMs, viewport.startMs),
+    endMs: Math.min(itemEndMs, viewport.endMs),
+  };
+}
+
+function msToViewportPercent(ms, viewport) {
+  return ((ms - viewport.startMs) / viewport.durationMs) * 100;
+}
+
+function durationToViewportPercent(durationMs, viewport) {
+  return (durationMs / viewport.durationMs) * 100;
+}
+
+function updateZoomControls() {
+  const viewport = getViewport();
+  const canZoom = state.lanes.length > 0;
+  zoomInButton.disabled = !canZoom || viewport.durationMs <= MIN_VIEW_DURATION_MS;
+  zoomOutButton.disabled = !canZoom || viewport.isFullTimeline;
+  zoomSelectionButton.disabled = !canZoom || !selectedItemTiming();
+}
+
 function firstItemSelection() {
   const firstWordLane = state.lanes.find((lane) => lane.type === "word" && lane.words.length > 0);
   if (firstWordLane) {
@@ -855,6 +1040,17 @@ function firstItemSelection() {
   }
 
   return null;
+}
+
+function validSelection(selection) {
+  if (!selection) {
+    return false;
+  }
+  const lane = state.lanes[selection.laneIndex];
+  if (selection.type === "word") {
+    return Boolean(lane?.type === "word" && lane.words[selection.itemIndex]);
+  }
+  return Boolean(lane?.type === "event" && lane.events[selection.itemIndex]);
 }
 
 function flattenWords() {
@@ -993,20 +1189,24 @@ function clearPlaybackStop() {
   state.stopAtMs = null;
 }
 
-function buildRulerTicks(durationMs) {
-  const safeDuration = Math.max(1000, durationMs);
+function buildRulerTicks(viewport) {
+  const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewport.durationMs);
   const targetSegments = 10;
-  const preferredSteps = [250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000];
+  const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000];
   const desiredStep = safeDuration / targetSegments;
   const stepMs = preferredSteps.find((step) => step >= desiredStep) ?? 120_000;
   const ticks = [];
-  for (let at = 0; at <= safeDuration; at += stepMs) {
+  const firstTick = Math.ceil(viewport.startMs / stepMs) * stepMs;
+  if (viewport.startMs > 0) {
+    ticks.push(viewport.startMs);
+  }
+  for (let at = firstTick; at <= viewport.endMs; at += stepMs) {
     ticks.push(at);
   }
-  if (ticks[ticks.length - 1] !== safeDuration) {
-    ticks.push(safeDuration);
+  if (ticks[ticks.length - 1] !== viewport.endMs) {
+    ticks.push(viewport.endMs);
   }
-  return ticks;
+  return [...new Set(ticks)];
 }
 
 function formatRulerLabel(ms) {

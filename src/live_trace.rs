@@ -286,18 +286,34 @@ where
 #[derive(Clone, Debug)]
 pub struct SseBroadcaster {
     senders: Arc<Mutex<Vec<crossbeam_channel::Sender<LiveTraceEvent>>>>,
+    history: Arc<Mutex<Vec<LiveTraceEvent>>>,
 }
 
 impl SseBroadcaster {
     pub fn new() -> Self {
         Self {
             senders: Arc::new(Mutex::new(Vec::new())),
+            history: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    /// Create a new receiver that will receive all future broadcast events.
+    /// Create a new receiver that will receive the session history and future events.
     pub fn subscribe(&self) -> crossbeam_channel::Receiver<LiveTraceEvent> {
         let (tx, rx) = crossbeam_channel::unbounded();
+        match self.history.lock() {
+            Ok(history) => {
+                for event in history.iter().cloned() {
+                    if tx.send(event).is_err() {
+                        return rx;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::error!(
+                    "SseBroadcaster history mutex poisoned in subscribe; receiver will not get replayed events: {error}"
+                );
+            }
+        }
         match self.senders.lock() {
             Ok(mut senders) => {
                 senders.push(tx);
@@ -320,6 +336,16 @@ impl Default for SseBroadcaster {
 
 impl LiveTraceSink for SseBroadcaster {
     fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+        match self.history.lock() {
+            Ok(mut history) => {
+                history.push(event.clone());
+            }
+            Err(error) => {
+                tracing::error!(
+                    "SseBroadcaster history mutex poisoned in emit; event will not be replayed to future subscribers: {error}"
+                );
+            }
+        }
         match self.senders.lock() {
             Ok(mut senders) => {
                 senders.retain(|tx| tx.send(event.clone()).is_ok());
@@ -379,6 +405,36 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn sse_broadcaster_replays_history_to_new_subscribers() {
+        let mut broadcaster = SseBroadcaster::new();
+        broadcaster
+            .emit(LiveTraceEvent::new(
+                0,
+                "capture_started",
+                ts(1_000),
+                ts(1_000),
+            ))
+            .unwrap();
+
+        let rx = broadcaster.subscribe();
+        let replayed = rx.try_recv().expect("subscriber should receive history");
+        assert_eq!(replayed.kind, "capture_started");
+
+        broadcaster
+            .emit(LiveTraceEvent::new(
+                1,
+                "speech_started",
+                ts(1_100),
+                ts(1_000),
+            ))
+            .unwrap();
+        let live = rx
+            .try_recv()
+            .expect("subscriber should receive future event");
+        assert_eq!(live.kind, "speech_started");
     }
 
     #[test]

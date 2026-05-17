@@ -180,6 +180,15 @@ pub(crate) struct ContinueCommand {
     /// Time to listen after an auto-pause before clearing or resuming TTS.
     #[arg(long, default_value_t = 700)]
     pub(crate) tts_vad_listen_ms: u64,
+    /// Start the WaveDeck browser viewer alongside the continuous duplex loop (live events streamed via SSE).
+    #[arg(long)]
+    pub(crate) web: bool,
+    /// Host for the embedded web viewer (requires --web).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) web_host: String,
+    /// Port for the embedded web viewer (requires --web).
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) web_port: u16,
     /// Run a synthetic duplex diagnostic scenario instead of the live mic/speaker loop.
     #[arg(long, value_enum)]
     pub(crate) duplex_trace_scenario: Option<DuplexTraceScenarioOption>,
@@ -350,6 +359,9 @@ pub(crate) struct LiveHalfDuplexCommand {
     /// Start the WaveDeck browser viewer alongside the listen loop (live events streamed via SSE).
     #[arg(long)]
     pub(crate) web: bool,
+    /// Run the continuous duplex development pipeline instead of the half-duplex loop.
+    #[arg(long)]
+    pub(crate) duplex: bool,
     /// Host for the embedded web viewer (requires --web).
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) web_host: String,
@@ -443,13 +455,22 @@ pub(crate) fn run() -> Result<()> {
         return Ok(());
     };
 
-    listenbury::set_developer_diagnostics_enabled(matches!(&command, Command::Dev { .. }));
+    listenbury::set_developer_diagnostics_enabled(matches!(
+        &command,
+        Command::Dev { .. } | Command::Listen(LiveHalfDuplexCommand { duplex: true, .. })
+    ));
 
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
         Command::PiperCompare(cmd) => commands::run_piper_compare(cmd),
-        Command::Listen(cmd) => commands::run_live_half_duplex(cmd),
+        Command::Listen(cmd) => {
+            if cmd.duplex {
+                commands::run_continue(continue_command_from_listen_command(cmd))
+            } else {
+                commands::run_live_half_duplex(cmd)
+            }
+        }
         Command::Ask(cmd) => commands::run_llama_turn(cmd),
         Command::Complete(mut cmd) => {
             cmd.mode = PromptMode::Raw;
@@ -459,6 +480,29 @@ pub(crate) fn run() -> Result<()> {
         Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::Dev { command } => run_dev(command),
+    }
+}
+
+fn continue_command_from_listen_command(command: LiveHalfDuplexCommand) -> ContinueCommand {
+    ContinueCommand {
+        llm_model: command.llm_model,
+        llm_gpu_layers: command.llm_gpu_layers,
+        piper_bin: command.piper_bin,
+        piper_voice: command.piper_voice,
+        whisper_model: command.whisper_model,
+        vad: command.vad,
+        mode: PromptMode::Raw,
+        max_tokens: None,
+        context_size: 8192,
+        verbatim_turns: 8,
+        tts_vad_pause_ms: 250,
+        tts_vad_listen_ms: 700,
+        web: command.web,
+        web_host: command.web_host,
+        web_port: command.web_port,
+        duplex_trace_scenario: None,
+        jsonl: command.jsonl,
+        prompt: Vec::new(),
     }
 }
 
@@ -475,7 +519,13 @@ fn run_dev(command: DevCommand) -> Result<()> {
         DevCommand::Continue(cmd) => commands::run_continue(cmd),
         DevCommand::TraceViewerExport(cmd) => commands::run_trace_viewer_export(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
-        DevCommand::LiveHalfDuplex(cmd) => commands::run_live_half_duplex(cmd),
+        DevCommand::LiveHalfDuplex(cmd) => {
+            if cmd.duplex {
+                commands::run_continue(continue_command_from_listen_command(cmd))
+            } else {
+                commands::run_live_half_duplex(cmd)
+            }
+        }
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
     }
@@ -766,6 +816,7 @@ mod tests {
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
         assert!(!command.web);
+        assert!(!command.duplex);
         assert_eq!(command.web_host, "127.0.0.1");
         assert_eq!(command.web_port, 8787);
     }
@@ -789,6 +840,68 @@ mod tests {
         assert!(command.web);
         assert_eq!(command.web_host, "0.0.0.0");
         assert_eq!(command.web_port, 9000);
+    }
+
+    #[test]
+    fn listen_parses_duplex_web_flag() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--web",
+            "--duplex",
+            "--jsonl",
+            "out/duplex-live.jsonl",
+            "--llm-model",
+            "models/pete.gguf",
+        ])
+        .expect("listen should parse --web --duplex");
+
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
+        };
+        assert!(command.web);
+        assert!(command.duplex);
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/duplex-live.jsonl")));
+        assert_eq!(command.llm_model, Some(PathBuf::from("models/pete.gguf")));
+    }
+
+    #[test]
+    fn listen_duplex_maps_to_continue_pipeline_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--web",
+            "--duplex",
+            "--web-host",
+            "0.0.0.0",
+            "--web-port",
+            "9000",
+            "--jsonl",
+            "out/duplex-live.jsonl",
+            "--whisper-model",
+            "models/ggml-base.en.bin",
+            "--piper-voice",
+            "voices/pete.onnx",
+            "--vad",
+            "energy",
+        ])
+        .expect("listen should parse duplex pipeline options");
+
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
+        };
+        let command = continue_command_from_listen_command(command);
+        assert!(command.web);
+        assert_eq!(command.web_host, "0.0.0.0");
+        assert_eq!(command.web_port, 9000);
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/duplex-live.jsonl")));
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
+        assert_eq!(command.piper_voice, Some(PathBuf::from("voices/pete.onnx")));
+        assert_eq!(command.vad, VadBackendOption::Energy);
+        assert!(command.duplex_trace_scenario.is_none());
     }
 
     #[test]
@@ -898,6 +1011,9 @@ mod tests {
         assert_eq!(command.verbatim_turns, 8);
         assert_eq!(command.tts_vad_pause_ms, 250);
         assert_eq!(command.tts_vad_listen_ms, 700);
+        assert!(!command.web);
+        assert_eq!(command.web_host, "127.0.0.1");
+        assert_eq!(command.web_port, 8787);
         assert!(command.duplex_trace_scenario.is_none());
         assert!(command.jsonl.is_none());
         assert_eq!(command.prompt, ["seed", "prompt"]);
@@ -915,6 +1031,31 @@ mod tests {
             panic!("expected continue command");
         };
         assert_eq!(command.max_tokens, Some(64));
+    }
+
+    #[test]
+    fn dev_continue_accepts_web_flags() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "continue",
+            "--web",
+            "--web-host",
+            "0.0.0.0",
+            "--web-port",
+            "9000",
+        ])
+        .expect("dev continue should parse web flags");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert!(command.web);
+        assert_eq!(command.web_host, "0.0.0.0");
+        assert_eq!(command.web_port, 9000);
     }
 
     #[test]

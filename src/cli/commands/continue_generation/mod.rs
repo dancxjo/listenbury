@@ -145,7 +145,7 @@ use listenbury::hearing::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder};
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder, SseBroadcaster, TeeSink};
 #[cfg(any(
     test,
     all(
@@ -508,7 +508,30 @@ const DEFAULT_CONTINUE_LLAMA_GPU_LAYERS: Option<u32> = None;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-type ContinueLiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
+type ContinueLiveTrace =
+    LiveTraceRecorder<TeeSink<Option<JsonlTraceWriter>, Option<SseBroadcaster>>>;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn browser_host_for_bind_host(bind_host: &str) -> String {
+    match bind_host {
+        "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" => "[::1]".to_string(),
+        _ => {
+            let looks_like_ipv6 =
+                bind_host.contains(':') && !bind_host.starts_with('[') && !bind_host.ends_with(']');
+            if looks_like_ipv6 {
+                format!("[{bind_host}]")
+            } else {
+                bind_host.to_string()
+            }
+        }
+    }
+}
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -685,7 +708,31 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         .map(JsonlTraceWriter::create)
         .transpose()
         .context("failed to create dev continue live trace writer")?;
-    let mut live_trace = LiveTraceRecorder::new(trace_started_at, trace_writer);
+    let broadcaster = if command.web {
+        let bc = SseBroadcaster::new();
+        let server_bc = bc.clone();
+        let bind_host = command.web_host.clone();
+        let web_port = command.web_port;
+        let browser_host = browser_host_for_bind_host(&bind_host);
+        let url = format!("http://{}:{}/", browser_host, web_port);
+        std::thread::spawn(move || {
+            if let Err(e) = listenbury::web::serve(listenbury::web::ServeConfig {
+                host: bind_host,
+                port: web_port,
+                payload: None,
+                trace: None,
+                broadcaster: Some(server_bc),
+            }) {
+                eprintln!("embedded web server error: {e:#}");
+            }
+        });
+        println!("Listenbury web viewer available at {url}?live=1");
+        Some(bc)
+    } else {
+        None
+    };
+    let mut live_trace =
+        LiveTraceRecorder::new(trace_started_at, TeeSink(trace_writer, broadcaster));
     let mut live_trace_turn = 0u64;
     live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(

@@ -187,7 +187,8 @@ fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) ->
     }
 
     let Some(broadcaster) = &state.broadcaster else {
-        let response = HttpResponse::not_found("live events not available: no active listen session\n");
+        let response =
+            HttpResponse::not_found("live events not available: no active listen session\n");
         return write_response(stream, &response, false);
     };
 
@@ -247,6 +248,9 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
 
     let path = target.split('?').next().unwrap_or("/");
     match path {
+        "/" if state.broadcaster.is_some() && !target.contains('?') => {
+            HttpResponse::redirect("/?live=1")
+        }
         "/" => HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML),
         "/healthz" => HttpResponse::ok("text/plain; charset=utf-8", "ok\n"),
         "/demo" => HttpResponse::redirect("/?payload=demo"),
@@ -348,6 +352,14 @@ mod tests {
         })
     }
 
+    fn live_state() -> Arc<ServerState> {
+        Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: Some(SseBroadcaster::new()),
+        })
+    }
+
     fn temp_path(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -427,6 +439,25 @@ mod tests {
                 .iter()
                 .any(|(name, value)| *name == "Location" && value == "/?payload=demo")
         );
+    }
+
+    #[test]
+    fn live_server_root_redirects_to_live_mode() {
+        let response = route_request("GET", "/", &live_state());
+        assert_eq!(response.status, 302);
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| *name == "Location" && value == "/?live=1")
+        );
+    }
+
+    #[test]
+    fn live_server_serves_index_when_live_query_is_present() {
+        let response = route_request("GET", "/?live=1", &live_state());
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "text/html; charset=utf-8");
     }
 
     #[test]

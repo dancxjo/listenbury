@@ -383,7 +383,8 @@ Use **Load bundled demo** to inspect the included sample payload wired to
 `welcome.wav`, or choose your own local JSON/audio files with the file pickers.
 The viewer renders multiple streams vertically with a shared ruler, highlights
 the active word during playback, and lets you click chips/ruler positions to
-seek the shared audio timeline. It is a debug timeline workstation for
+seek the shared audio timeline. Use the zoom toolbar to zoom in, zoom out, or
+focus the timeline around the selected word/event. It is a debug timeline workstation for
 inspecting recorded, generated, and playback speech lanes.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
@@ -534,12 +535,21 @@ listenbury listen
 
 The current loop listens for speech, transcribes a completed segment, generates a response, synthesizes it, plays it, and returns to listening. It is intentionally simple and serves as the baseline for future duplex and interruption-aware behavior.
 
+Pass `--duplex` to run the continuous duplex development pipeline through the
+public listen command. It uses the same mic, ASR, LLM, TTS, VAD, and JSONL model
+flags as `listen`, but routes execution through `listenbury dev continue`.
+
+```bash
+listenbury listen --duplex
+```
+
 #### Live browser viewer
 
 Pass `--web` to start the embedded WaveDeck browser viewer alongside the listen loop. Events (mic activity, ASR results, LLM turns, speaker activity) are streamed live to the browser via Server-Sent Events.
 
 ```bash
 listenbury listen --web
+listenbury listen --web --duplex
 # or via justfile:
 just run listen --web
 ```
@@ -560,7 +570,7 @@ Optional web flags:
 listenbury listen --web --web-host 0.0.0.0 --web-port 9000
 ```
 
-The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Event kinds are grouped into timeline lanes:
+The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Playback and timeline zoom controls stay available so you can focus on a selected live event as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
 
 | Lane | Events |
 |---|---|
