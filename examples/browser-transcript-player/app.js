@@ -13,6 +13,7 @@ const jumpNextButton = document.getElementById("jump-next");
 const playSelectionClipButton = document.getElementById("play-selection-clip");
 const audio = document.getElementById("audio");
 const queryParams = new URLSearchParams(window.location.search);
+const VIEWER_NAME = "WaveDeck";
 
 const state = {
   payload: null,
@@ -190,7 +191,7 @@ function applyPayload(rawPayload) {
 function normalizePayload(rawPayload) {
   if (isTimedWordStream(rawPayload)) {
     return {
-      title: "TimedWordStream viewer",
+      title: VIEWER_NAME,
       audio: null,
       streams: [{ label: defaultLaneLabel(rawPayload, 0), stream: rawPayload }],
       events: [],
@@ -199,7 +200,7 @@ function normalizePayload(rawPayload) {
 
   if (Array.isArray(rawPayload)) {
     return {
-      title: "TimedWordStream viewer",
+      title: VIEWER_NAME,
       audio: null,
       streams: rawPayload.map((stream, index) => ({
         label: defaultLaneLabel(stream, index),
@@ -226,7 +227,7 @@ function normalizePayload(rawPayload) {
       : [];
 
     return {
-      title: rawPayload.title ?? "TimedWordStream viewer",
+      title: rawPayload.title ?? VIEWER_NAME,
       audio: rawPayload.audio ?? null,
       streams,
       events: normalizeEvents(rawPayload.events ?? [], rawPayload.markers ?? []),
@@ -359,7 +360,7 @@ function syncMaxDurationWithAudio() {
 
 function render() {
   viewerTitle.textContent = state.payload?.title ?? "No stream loaded";
-  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s`;
+  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
 
   if (!state.lanes.length) {
@@ -370,13 +371,44 @@ function render() {
   }
 
   viewer.className = "viewer";
-  viewer.replaceChildren(...state.lanes.map(renderLane));
+  viewer.replaceChildren(renderTimelineRuler(), ...state.lanes.map(renderLane));
   refreshPlaybackState();
   renderSelection();
 }
 
 function renderLane(lane) {
   return lane.type === "event" ? renderEventLane(lane) : renderWordLane(lane);
+}
+
+function renderTimelineRuler() {
+  const ruler = document.createElement("div");
+  ruler.className = "timeline-ruler";
+
+  const ticks = buildRulerTicks(state.maxDurationMs);
+  ticks.forEach((tickMs) => {
+    const tick = document.createElement("span");
+    tick.className = "ruler-tick";
+    tick.style.left = `${(tickMs / state.maxDurationMs) * 100}%`;
+
+    const label = document.createElement("span");
+    label.className = "ruler-label";
+    label.style.left = `${(tickMs / state.maxDurationMs) * 100}%`;
+    label.textContent = formatRulerLabel(tickMs);
+
+    ruler.append(tick, label);
+  });
+
+  ruler.addEventListener("click", (event) => {
+    if (!audio.src) {
+      return;
+    }
+    const rect = ruler.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    audio.currentTime = (ratio * state.maxDurationMs) / 1000;
+    refreshPlaybackState();
+  });
+
+  return ruler;
 }
 
 function renderWordLane(lane) {
@@ -479,7 +511,7 @@ function renderEventLane(lane) {
 }
 
 function refreshPlaybackState() {
-  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s`;
+  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
   const nowMs = Math.round(audio.currentTime * 1000);
 
@@ -769,6 +801,36 @@ function setPlaybackStop(startMs, endMs) {
 
 function clearPlaybackStop() {
   state.stopAtMs = null;
+}
+
+function buildRulerTicks(durationMs) {
+  const safeDuration = Math.max(1000, durationMs);
+  const targetSegments = 10;
+  const preferredSteps = [250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000];
+  const desiredStep = safeDuration / targetSegments;
+  const stepMs = preferredSteps.find((step) => step >= desiredStep) ?? 120_000;
+  const ticks = [];
+  for (let at = 0; at <= safeDuration; at += stepMs) {
+    ticks.push(at);
+  }
+  if (ticks[ticks.length - 1] !== safeDuration) {
+    ticks.push(safeDuration);
+  }
+  return ticks;
+}
+
+function formatRulerLabel(ms) {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  const [secondPart, decimalPart] = seconds.toFixed(1).split(".");
+  return `${minutes}:${secondPart.padStart(2, "0")}.${decimalPart}`;
 }
 
 function coerceMs(value, label) {

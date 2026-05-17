@@ -316,9 +316,9 @@ just cuda ask "Can you hear me?"
 just cuda listen
 ```
 
-## Browser transcript player demo
+## WaveDeck browser timeline demo
 
-The repository now includes a static debug viewer for serialized
+The repository now includes WaveDeck, a static full-width timeline viewer for serialized
 `TimedWordStream` payloads:
 
 ```text
@@ -375,10 +375,10 @@ http://localhost:8000/examples/browser-transcript-player/
 
 Use **Load bundled demo** to inspect the included sample payload wired to
 `welcome.wav`, or choose your own local JSON/audio files with the file pickers.
-The viewer renders multiple streams vertically, highlights the active word
-during playback, and lets you click a word chip to seek the shared audio
-timeline. This is an early local oscilloscope for inspecting recorded,
-generated, and playback speech lanes, not a final browser transcript product.
+The viewer renders multiple streams vertically with a shared ruler, highlights
+the active word during playback, and lets you click chips/ruler positions to
+seek the shared audio timeline. It is a debug timeline workstation for
+inspecting recorded, generated, and playback speech lanes.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
 
@@ -428,7 +428,7 @@ The bundled demo uses the richer object form:
 
 ```json
 {
-  "title": "Listenbury TimedWordStream Demo",
+  "title": "Listenbury WaveDeck Demo",
   "audio": {
     "url": "../../welcome.wav",
     "duration_ms": 2081

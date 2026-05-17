@@ -317,7 +317,7 @@ mod tests {
         let response = route_request("GET", "/api/demo-payload", &empty_state());
         assert_eq!(response.status, 200);
         let body = String::from_utf8(response.body).expect("utf8");
-        assert!(body.contains("\"Listenbury TimedWordStream Demo\""));
+        assert!(body.contains("\"Listenbury WaveDeck Demo\""));
     }
 
     #[test]

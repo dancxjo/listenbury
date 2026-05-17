@@ -3,6 +3,7 @@ pub mod backend;
 pub mod config;
 pub mod g2p;
 pub mod phoneme;
+pub mod prosody_planner;
 pub mod text;
 
 #[cfg(feature = "tts-piper-native")]
@@ -16,6 +17,11 @@ pub use g2p::{
 };
 pub use phoneme::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeIdConversionError, PiperPhonemeSequence,
+};
+pub use prosody_planner::{
+    BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner, PauseOp,
+    ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyList, ProsodyOp, ProsodyOperation,
+    ProsodyOverlay, ProsodyOverlaySource, ProsodyTarget,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,
