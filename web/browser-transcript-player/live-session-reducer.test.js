@@ -4,7 +4,7 @@
  * Lightweight Node.js tests for the pure reducer functions extracted from
  * app.js.  Run with:
  *
- *   node examples/browser-transcript-player/live-session-reducer.test.js
+ *   node web/browser-transcript-player/live-session-reducer.test.js
  *
  * These tests cover the required scenarios from the issue:
  *   - transcript candidate starts, updates, and finalizes
