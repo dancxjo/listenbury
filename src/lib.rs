@@ -47,7 +47,10 @@ pub use mouth::read_aloud::{
     SpeechCandidateCommitment, SpeechCandidateId,
 };
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
-pub use span::{Cursor, Modality, Span, SpanId, SpanRevision, SpanState, Text, TextId};
+pub use span::{
+    Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
+    SpanRevision, SpanState, Text, TextId,
+};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;

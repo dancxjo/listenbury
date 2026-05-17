@@ -1,6 +1,7 @@
 //! Generic span model shared across listening/speaking/memory modalities.
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::time::ExactTimestamp;
 
@@ -73,6 +74,152 @@ pub struct Span<T> {
     pub confidence: f32,
     pub stability: f32,
     pub revisions: Vec<SpanRevision<T>>,
+}
+
+/// Cursor offsets of an aligned sub-span within a larger span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlignmentOffset {
+    pub start: Cursor,
+    pub end: Option<Cursor>,
+}
+
+/// Semantic relationship between two aligned spans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AlignmentKind {
+    Equivalent,
+    Contains,
+    Overlaps,
+    Derived,
+}
+
+/// Cross-modal edge between two spans.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Alignment {
+    pub source: SpanId,
+    pub target: SpanId,
+    pub confidence: f32,
+    pub relation: AlignmentKind,
+    pub source_offset: Option<AlignmentOffset>,
+    pub target_offset: Option<AlignmentOffset>,
+}
+
+impl Alignment {
+    pub fn new(source: SpanId, target: SpanId, confidence: f32, relation: AlignmentKind) -> Self {
+        Self {
+            source,
+            target,
+            confidence,
+            relation,
+            source_offset: None,
+            target_offset: None,
+        }
+    }
+
+    pub fn with_offsets(
+        mut self,
+        source_offset: Option<AlignmentOffset>,
+        target_offset: Option<AlignmentOffset>,
+    ) -> Self {
+        self.source_offset = source_offset;
+        self.target_offset = target_offset;
+        self
+    }
+}
+
+/// Many-to-many span alignment graph with directional edges and bidirectional traversal.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AlignmentGraph {
+    pub alignments: Vec<Alignment>,
+    outgoing: HashMap<SpanId, Vec<usize>>,
+    incoming: HashMap<SpanId, Vec<usize>>,
+}
+
+impl AlignmentGraph {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn add_alignment(&mut self, alignment: Alignment) {
+        let index = self.alignments.len();
+        self.outgoing
+            .entry(alignment.source)
+            .or_default()
+            .push(index);
+        self.incoming.entry(alignment.target).or_default().push(index);
+        self.alignments.push(alignment);
+    }
+
+    pub fn alignments_from(&self, span_id: SpanId) -> Vec<&Alignment> {
+        self.outgoing
+            .get(&span_id)
+            .map(|indices| indices.iter().map(|&i| &self.alignments[i]).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn alignments_to(&self, span_id: SpanId) -> Vec<&Alignment> {
+        self.incoming
+            .get(&span_id)
+            .map(|indices| indices.iter().map(|&i| &self.alignments[i]).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn aligned_targets(&self, span_id: SpanId) -> Vec<SpanId> {
+        self.alignments_from(span_id)
+            .into_iter()
+            .map(|alignment| alignment.target)
+            .collect()
+    }
+
+    pub fn aligned_sources(&self, span_id: SpanId) -> Vec<SpanId> {
+        self.alignments_to(span_id)
+            .into_iter()
+            .map(|alignment| alignment.source)
+            .collect()
+    }
+
+    pub fn neighbors_bidirectional(&self, span_id: SpanId) -> Vec<SpanId> {
+        let mut seen = HashSet::new();
+        self.aligned_targets(span_id)
+            .into_iter()
+            .chain(self.aligned_sources(span_id))
+            .filter(|neighbor| seen.insert(*neighbor))
+            .collect()
+    }
+
+    pub fn reconstruct_path(&self, start: SpanId, end: SpanId) -> Option<Vec<SpanId>> {
+        if start == end {
+            return Some(vec![start]);
+        }
+
+        let mut queue = VecDeque::from([start]);
+        let mut parent: HashMap<SpanId, SpanId> = HashMap::new();
+        let mut seen = HashSet::from([start]);
+
+        while let Some(current) = queue.pop_front() {
+            for neighbor in self.neighbors_bidirectional(current) {
+                if !seen.insert(neighbor) {
+                    continue;
+                }
+                parent.insert(neighbor, current);
+                if neighbor == end {
+                    let mut path = vec![end];
+                    let mut step = end;
+                    while let Some(prev) = parent.get(&step) {
+                        path.push(*prev);
+                        if *prev == start {
+                            break;
+                        }
+                        step = *prev;
+                    }
+                    path.reverse();
+                    return Some(path);
+                }
+                queue.push_back(neighbor);
+            }
+        }
+
+        None
+    }
 }
 
 impl<T: Clone> Span<T> {
@@ -336,5 +483,61 @@ mod tests {
 
         assert!(outer.contains_span(&bounded_inner));
         assert!(outer.contains_span(&open_inner));
+    }
+
+    #[test]
+    fn alignment_graph_supports_many_to_many_and_ambiguous_edges() {
+        let p1 = SpanId(100);
+        let p2 = SpanId(101);
+        let w1 = SpanId(200);
+        let w2 = SpanId(201);
+
+        let mut graph = AlignmentGraph::new();
+        graph.add_alignment(Alignment::new(p1, w1, 0.95, AlignmentKind::Equivalent));
+        graph.add_alignment(Alignment::new(p1, w2, 0.51, AlignmentKind::Overlaps));
+        graph.add_alignment(Alignment::new(p2, w1, 0.88, AlignmentKind::Equivalent));
+
+        assert_eq!(graph.alignments_from(p1).len(), 2);
+        assert_eq!(graph.alignments_to(w1).len(), 2);
+        assert_eq!(graph.aligned_targets(p1), vec![w1, w2]);
+    }
+
+    #[test]
+    fn alignment_offsets_are_preserved() {
+        let source_offset = AlignmentOffset {
+            start: Cursor(120),
+            end: Some(Cursor(240)),
+        };
+        let target_offset = AlignmentOffset {
+            start: Cursor(8),
+            end: Some(Cursor(14)),
+        };
+
+        let mut graph = AlignmentGraph::new();
+        graph.add_alignment(
+            Alignment::new(SpanId(1), SpanId(2), 0.9, AlignmentKind::Contains)
+                .with_offsets(Some(source_offset), Some(target_offset)),
+        );
+
+        let alignment = graph.alignments_from(SpanId(1))[0];
+        assert_eq!(alignment.source_offset, Some(source_offset));
+        assert_eq!(alignment.target_offset, Some(target_offset));
+    }
+
+    #[test]
+    fn reconstructs_phoneme_to_word_to_audio_path_bidirectionally() {
+        let phoneme = SpanId(10);
+        let word = SpanId(20);
+        let audio = SpanId(30);
+
+        let mut graph = AlignmentGraph::new();
+        graph.add_alignment(Alignment::new(phoneme, word, 0.93, AlignmentKind::Equivalent));
+        graph.add_alignment(Alignment::new(word, audio, 0.99, AlignmentKind::Derived));
+
+        let phoneme_to_audio = graph.reconstruct_path(phoneme, audio).expect("path exists");
+        assert_eq!(phoneme_to_audio, vec![phoneme, word, audio]);
+
+        let audio_to_phoneme = graph.reconstruct_path(audio, phoneme).expect("reverse path exists");
+        assert_eq!(audio_to_phoneme, vec![audio, word, phoneme]);
     }
 }
