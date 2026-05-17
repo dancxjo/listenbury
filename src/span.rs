@@ -76,6 +76,21 @@ pub struct Span<T> {
 }
 
 impl<T: Clone> Span<T> {
+    pub fn new_provisional(
+        id: SpanId,
+        text_id: TextId,
+        modality: Modality,
+        start: Cursor,
+        end: Option<Cursor>,
+        contents: T,
+        confidence: f32,
+        stability: f32,
+    ) -> Self {
+        Self::new_hypothesis(
+            id, text_id, modality, start, end, contents, confidence, stability,
+        )
+    }
+
     pub fn new_hypothesis(
         id: SpanId,
         text_id: TextId,
@@ -284,5 +299,42 @@ mod tests {
 
         assert!(outer.contains_span(&inner));
         assert!(!outer.contains_span(&not_inner));
+    }
+
+    #[test]
+    fn open_ended_outer_span_contains_bounded_and_open_ended_inner() {
+        let outer = Span::new_provisional(
+            SpanId(1),
+            TextId(1),
+            Modality::Episode,
+            Cursor(10),
+            None,
+            "outer".to_string(),
+            1.0,
+            1.0,
+        );
+        let bounded_inner = Span::new_provisional(
+            SpanId(2),
+            TextId(1),
+            Modality::Topic,
+            Cursor(12),
+            Some(Cursor(24)),
+            "bounded".to_string(),
+            1.0,
+            1.0,
+        );
+        let open_inner = Span::new_provisional(
+            SpanId(3),
+            TextId(1),
+            Modality::Topic,
+            Cursor(16),
+            None,
+            "open".to_string(),
+            1.0,
+            1.0,
+        );
+
+        assert!(outer.contains_span(&bounded_inner));
+        assert!(outer.contains_span(&open_inner));
     }
 }
