@@ -210,7 +210,7 @@ use listenbury::word::{TranscriptWord, transcript_to_word_stream};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{AudioFrame, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(any(
     test,
     all(
@@ -345,8 +345,9 @@ use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
         feature = "tts-piper"
     )
 ))]
+use prompt::ContinuePromptGate;
 #[cfg(test)]
-use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
+use prompt::ContinuePromptGateConfig;
 #[cfg(any(
     test,
     all(
