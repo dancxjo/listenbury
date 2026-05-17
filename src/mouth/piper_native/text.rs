@@ -69,7 +69,10 @@ impl PunctuationCommitmentClassifier for HeuristicPunctuationCommitmentClassifie
         }
 
         let stem = trimmed[..trimmed.len() - last.len_utf8()].trim_end();
-        let last_token = stem.split_ascii_whitespace().next_back().unwrap_or_default();
+        let last_token = stem
+            .split_ascii_whitespace()
+            .next_back()
+            .unwrap_or_default();
         if last_token.is_empty() {
             return PunctuationCommitmentState::SafeToPrepare;
         }
@@ -172,8 +175,10 @@ impl TextNormalizer {
             return Err(TextNormalizationError::EmptyInput);
         }
 
-        let boundary = if matches!(punctuation_commitment, PunctuationCommitmentState::SafeToPlay)
-        {
+        let boundary = if matches!(
+            punctuation_commitment,
+            PunctuationCommitmentState::SafeToPlay
+        ) {
             ProsodyBoundaryHint::PossibleSentenceEnd
         } else if saw_phrase_break {
             ProsodyBoundaryHint::PhraseBreak
@@ -247,12 +252,18 @@ fn expand_known_abbreviation(token: &str) -> Option<&'static str> {
 }
 
 fn is_title_case_honorific(token: &str) -> bool {
-    token.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+    token
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase())
         && expand_known_abbreviation(&token.to_ascii_lowercase()).is_some()
 }
 
 fn looks_like_url_or_email(token: &str) -> bool {
-    token.contains('@') || token.contains("://") || token.contains("www.") || looks_like_url_prefix(token)
+    token.contains('@')
+        || token.contains("://")
+        || token.contains("www.")
+        || looks_like_url_prefix(token)
 }
 
 fn looks_like_url_prefix(token: &str) -> bool {
@@ -338,7 +349,10 @@ mod tests {
             normalized.tokens,
             vec![NormalizedToken::Word("dr".to_string())]
         );
-        assert_eq!(normalized.boundary, ProsodyBoundaryHint::PossibleSentenceEnd);
+        assert_eq!(
+            normalized.boundary,
+            ProsodyBoundaryHint::PossibleSentenceEnd
+        );
         assert_eq!(
             normalized.punctuation_commitment,
             PunctuationCommitmentState::SafeToPlay

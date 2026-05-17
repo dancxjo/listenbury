@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
-    NormalizedToken, PunctuationCommitmentState, ProsodyBoundaryHint, ProsodyCommitment,
+    NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
 use crate::text_stability::stable_prefix_len;
