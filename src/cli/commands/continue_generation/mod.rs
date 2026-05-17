@@ -5519,6 +5519,21 @@ mod tests {
     }
 
     #[test]
+    fn transcript_speculative_planner_snaps_to_character_boundary() {
+        let mut planner = TranscriptSpeculativePlanner::default();
+        let state = planner
+            .observe(&TranscriptCandidateEvent::CandidateUpdated {
+                id: TranscriptCandidateId(1),
+                text: "héllo".to_string(),
+                stable_prefix_len: 2,
+                confidence: None,
+            })
+            .expect("stability update");
+        assert_eq!(state.stable_text, "hé");
+        assert_eq!(state.unstable_text, "llo");
+    }
+
+    #[test]
     fn mouth_event_is_wrapped_as_live_input() {
         assert_eq!(
             wrap_mouth_event("speech_playback_completed: id=3"),

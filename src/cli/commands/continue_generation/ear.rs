@@ -59,9 +59,11 @@ impl TranscriptStabilityState {
             split
         } else {
             text.char_indices()
-                .take_while(|(idx, _)| *idx < split)
-                .last()
-                .map_or(0, |(idx, _)| idx)
+                .find_map(|(idx, ch)| {
+                    let end = idx + ch.len_utf8();
+                    (end >= split).then_some(end)
+                })
+                .unwrap_or(text.len())
         };
         let (stable_text, unstable_text) = text.split_at(split);
         Self {
