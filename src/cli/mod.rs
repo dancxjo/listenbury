@@ -347,6 +347,15 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// Start the WaveDeck browser viewer alongside the listen loop (live events streamed via SSE).
+    #[arg(long)]
+    pub(crate) web: bool,
+    /// Host for the embedded web viewer (requires --web).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) web_host: String,
+    /// Port for the embedded web viewer (requires --web).
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) web_port: u16,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
@@ -756,6 +765,30 @@ mod tests {
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+        assert!(!command.web);
+        assert_eq!(command.web_host, "127.0.0.1");
+        assert_eq!(command.web_port, 8787);
+    }
+
+    #[test]
+    fn listen_parses_web_flag() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--web",
+            "--web-host",
+            "0.0.0.0",
+            "--web-port",
+            "9000",
+        ])
+        .expect("listen should parse --web flags");
+
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
+        };
+        assert!(command.web);
+        assert_eq!(command.web_host, "0.0.0.0");
+        assert_eq!(command.web_port, 9000);
     }
 
     #[test]

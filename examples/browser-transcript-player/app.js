@@ -12,8 +12,43 @@ const jumpPrevButton = document.getElementById("jump-prev");
 const jumpNextButton = document.getElementById("jump-next");
 const playSelectionClipButton = document.getElementById("play-selection-clip");
 const audio = document.getElementById("audio");
+const liveBanner = document.getElementById("live-banner");
+const liveEventCount = document.getElementById("live-event-count");
+const liveConnectionStatus = document.getElementById("live-connection-status");
 const queryParams = new URLSearchParams(window.location.search);
 const VIEWER_NAME = "WaveDeck";
+
+// Live mode is activated by ?live=1 in the URL.
+const isLiveMode = queryParams.get("live") === "1";
+
+// Lane assignment for live trace event kinds.
+const LIVE_EVENT_LANE = {
+  capture_started: "Mic",
+  speech_started: "Mic",
+  breath_group_opened: "Mic",
+  breath_group_closed: "Mic",
+  asr_started: "ASR",
+  asr_finished: "ASR",
+  transcript: "ASR",
+  asr_timed_word_stream: "ASR",
+  llm_generation_started: "LLM",
+  first_llm_token: "LLM",
+  first_safe_speech_unit_emitted: "LLM",
+  speech_unit_committed: "LLM",
+  speech_unit_cancelled: "LLM",
+  speculative_speech_updated: "LLM",
+  first_tts_audio_frame_available: "Speaker",
+  playback_started: "Speaker",
+  playback_finished: "Speaker",
+  self_hearing_suppression_started: "Speaker",
+  self_hearing_suppression_ended: "Speaker",
+};
+
+// Accumulated live trace events.
+const liveEvents = [];
+let liveRenderScheduled = false;
+// Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
+const LIVE_RENDER_DEBOUNCE_MS = 80;
 
 const state = {
   payload: null,
@@ -55,6 +90,11 @@ audio.addEventListener("loadedmetadata", () => {
 void bootstrap();
 
 async function bootstrap() {
+  if (isLiveMode) {
+    enterLiveMode();
+    return;
+  }
+
   const payloadMode = queryParams.get("payload");
   if (payloadMode === "demo") {
     await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");
@@ -77,6 +117,156 @@ async function bootstrap() {
   }
   await loadDemo();
 }
+
+function enterLiveMode() {
+  document.body.classList.add("live-mode");
+  liveBanner.hidden = false;
+  document.title = "WaveDeck · Live";
+  viewerTitle.textContent = "Live — Listenbury";
+  statusMessage.textContent = "Connecting to live event stream…";
+
+  connectLiveEvents();
+}
+
+function connectLiveEvents() {
+  const source = new EventSource("/api/live-events");
+
+  source.onopen = () => {
+    liveConnectionStatus.textContent = "connected";
+    liveConnectionStatus.className = "live-status-connected";
+    statusMessage.textContent = "Listening for live events…";
+  };
+
+  source.onmessage = (event) => {
+    try {
+      const traceEvent = JSON.parse(event.data);
+      addLiveEvent(traceEvent);
+    } catch (err) {
+      console.error("Failed to parse live event:", err, event.data);
+    }
+  };
+
+  source.onerror = () => {
+    liveConnectionStatus.textContent = "disconnected";
+    liveConnectionStatus.className = "live-status-error";
+    statusMessage.textContent = "Live event stream disconnected. Session may have ended.";
+    source.close();
+  };
+}
+
+function addLiveEvent(traceEvent) {
+  liveEvents.push(traceEvent);
+  liveEventCount.textContent = `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`;
+
+  if (!liveRenderScheduled) {
+    liveRenderScheduled = true;
+    setTimeout(() => {
+      liveRenderScheduled = false;
+      applyLiveEvents();
+    }, LIVE_RENDER_DEBOUNCE_MS);
+  }
+}
+
+function applyLiveEvents() {
+  const payload = buildLivePayload(liveEvents);
+  applyPayload(payload);
+  viewerTitle.textContent = "Live — Listenbury";
+}
+
+function buildLivePayload(events) {
+  // Group events by lane and convert to ViewerPayload-compatible format.
+  const viewerEvents = [];
+  const viewerMarkers = [];
+
+  // Track open spans (start events without a matching end).
+  const openSpans = new Map(); // key: `${lane}:${turn}:${startKind}` → start_ms
+
+  // Pairs: when we see the "end" event, close the span started by the "start" event.
+  const spanPairs = {
+    asr_started: { end: "asr_finished", lane: "ASR" },
+    playback_started: { end: "playback_finished", lane: "Speaker" },
+    llm_generation_started: { end: "playback_started", lane: "LLM" },
+    self_hearing_suppression_started: { end: "self_hearing_suppression_ended", lane: "Speaker" },
+  };
+  const endToStart = {};
+  for (const [startKind, info] of Object.entries(spanPairs)) {
+    endToStart[info.end] = { startKind, lane: info.lane };
+  }
+
+  function openSpanKey(lane, turn, startKind) {
+    return JSON.stringify([lane, turn ?? null, startKind]);
+  }
+
+  for (const event of events) {
+    const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
+
+    // Check if this closes a span.
+    const startInfo = endToStart[event.kind];
+    if (startInfo) {
+      const openKey = openSpanKey(startInfo.lane, event.turn, startInfo.startKind);
+      const spanStart = openSpans.get(openKey);
+      if (spanStart !== undefined) {
+        openSpans.delete(openKey);
+        viewerEvents.push({
+          lane: startInfo.lane,
+          kind: startInfo.startKind,
+          label: labelForKind(startInfo.startKind),
+          start_ms: spanStart,
+          end_ms: event.elapsed_ms,
+          metadata: event,
+        });
+        continue;
+      }
+    }
+
+    // Check if this opens a span.
+    if (spanPairs[event.kind]) {
+      const spanKey = openSpanKey(lane, event.turn, event.kind);
+      openSpans.set(spanKey, event.elapsed_ms);
+      // Don't emit yet – wait for the closing event.
+      continue;
+    }
+
+    // Emit as a marker or event.
+    const label = event.text ? event.text.slice(0, 60) : labelForKind(event.kind);
+    viewerMarkers.push({
+      lane,
+      kind: event.kind,
+      label,
+      at_ms: event.elapsed_ms,
+      metadata: { event },
+    });
+  }
+
+  // Flush any unclosed spans as open-ended spans up to current max elapsed_ms.
+  const maxMs = Math.max(0, ...events.map((e) => e.elapsed_ms));
+  for (const [key, startMs] of openSpans.entries()) {
+    const [lane, turn, kind] = JSON.parse(key);
+    viewerEvents.push({
+      lane,
+      kind,
+      label: `${labelForKind(kind)} (in progress)`,
+      start_ms: startMs,
+      end_ms: maxMs,
+      metadata: {
+        in_progress: true,
+        turn: turn,
+      },
+    });
+  }
+
+  return {
+    title: "Live — Listenbury",
+    streams: [],
+    events: viewerEvents,
+    markers: viewerMarkers,
+  };
+}
+
+function labelForKind(kind) {
+  return kind.replace(/_/g, " ");
+}
+
 
 async function loadDemo() {
   await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");

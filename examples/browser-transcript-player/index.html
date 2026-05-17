@@ -17,12 +17,22 @@
       <div class="brand">
         <p class="eyebrow">Listenbury timeline studio</p>
         <h1>WaveDeck</h1>
-        <p class="subtitle">
+        <p class="subtitle" id="header-subtitle">
           Full-width timeline debugger for serialized TimedWordStream payloads
           and event lanes.
         </p>
       </div>
-      <section class="toolbar">
+
+      <!-- Live mode indicator (shown only in live mode) -->
+      <div id="live-banner" class="live-banner" hidden>
+        <span class="live-dot"></span>
+        <strong>Live</strong>
+        <span id="live-event-count">0 events</span>
+        <span id="live-connection-status" class="live-status-connecting">connecting…</span>
+      </div>
+
+      <!-- File/demo toolbar (hidden in live mode) -->
+      <section class="toolbar" id="file-toolbar">
         <button id="load-demo" type="button">Load bundled demo</button>
         <label class="file-picker">
           JSON payload
@@ -32,22 +42,22 @@
           Audio override
           <input id="audio-file" type="file" accept="audio/*" />
         </label>
+      </section>
+
+      <!-- Playback controls (always visible) -->
+      <section class="toolbar" id="playback-toolbar">
         <button id="jump-prev" type="button" aria-label="Previous word">◀ Prev</button>
         <button id="play-pause" type="button">Play</button>
         <button id="jump-next" type="button" aria-label="Next word">Next ▶</button>
         <button id="play-selection-clip" type="button" disabled>Play selected clip</button>
       </section>
+
       <section class="status-bar">
         <strong id="viewer-title">No stream loaded</strong>
         <span id="status-message">Load the bundled demo or choose a local JSON payload.</span>
         <span id="playback-time">0.000s</span>
       </section>
       <audio id="audio" controls preload="metadata"></audio>
-      <p class="milestone-note">
-        Shared audio timeline mode is active (`audio.url`): words and events are
-        aligned on one ruler, with optional event/marker `audio_ref` clip
-        playback.
-      </p>
     </header>
     <main class="workspace">
       <section class="viewer-stage">

@@ -108,7 +108,7 @@ use listenbury::hearing::{SelfHearingState, SuppressionDecision};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder};
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder, SseBroadcaster, TeeSink};
 #[cfg(any(
     test,
     all(
@@ -290,7 +290,7 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-type LiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
+type LiveTrace = LiveTraceRecorder<TeeSink<Option<JsonlTraceWriter>, Option<SseBroadcaster>>>;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -553,7 +553,44 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         .play()
         .with_context(|| format!("failed to start capture from {input_name}"))?;
 
-    let mut trace = LiveTraceRecorder::new(trace_started_at, trace_writer);
+    let broadcaster = if command.web {
+        let bc = SseBroadcaster::new();
+        let server_bc = bc.clone();
+        let bind_host = command.web_host.clone();
+        let web_port = command.web_port;
+        let browser_host = match bind_host.as_str() {
+            "0.0.0.0" => "127.0.0.1".to_string(),
+            "::" => "[::1]".to_string(),
+            _ => {
+                let looks_like_ipv6 = bind_host.contains(':')
+                    && !bind_host.starts_with('[')
+                    && !bind_host.ends_with(']');
+                if looks_like_ipv6 {
+                    format!("[{bind_host}]")
+                } else {
+                    bind_host.clone()
+                }
+            }
+        };
+        let url = format!("http://{}:{}/", browser_host, web_port);
+        std::thread::spawn(move || {
+            if let Err(e) = listenbury::web::serve(listenbury::web::ServeConfig {
+                host: bind_host,
+                port: web_port,
+                payload: None,
+                trace: None,
+                broadcaster: Some(server_bc),
+            }) {
+                eprintln!("embedded web server error: {e:#}");
+            }
+        });
+        println!("Listenbury web viewer available at {url}?live=1");
+        Some(bc)
+    } else {
+        None
+    };
+
+    let mut trace = LiveTraceRecorder::new(trace_started_at, TeeSink(trace_writer, broadcaster));
     trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
 
     println!(

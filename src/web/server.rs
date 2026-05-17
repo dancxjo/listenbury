@@ -2,9 +2,11 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
+use crate::live_trace::SseBroadcaster;
 use crate::trace::viewer_payload::live_trace_jsonl_reader_to_viewer_payload;
 
 use super::assets;
@@ -15,12 +17,14 @@ pub struct ServeConfig {
     pub port: u16,
     pub payload: Option<PathBuf>,
     pub trace: Option<PathBuf>,
+    pub broadcaster: Option<SseBroadcaster>,
 }
 
 #[derive(Debug, Clone)]
 struct ServerState {
     payload: Option<PathBuf>,
     trace: Option<PathBuf>,
+    broadcaster: Option<SseBroadcaster>,
 }
 
 #[derive(Debug)]
@@ -109,12 +113,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         .context("read bound web viewer local address")?;
 
     println!("Listenbury web viewer serving on http://{local_addr}");
-    println!("Routes: /, /assets/*, /demo, /api/*, /healthz");
+    println!("Routes: /, /assets/*, /demo, /api/*, /api/live-events, /healthz");
 
-    let state = ServerState {
+    let state = Arc::new(ServerState {
         payload: config.payload,
         trace: config.trace,
-    };
+        broadcaster: config.broadcaster,
+    });
 
     for stream in listener.incoming() {
         let mut stream = match stream {
@@ -124,20 +129,23 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 continue;
             }
         };
-        if let Err(error) = handle_connection(&mut stream, &state) {
-            eprintln!("web viewer request error: {error:#}");
-            let _ = write_response(
-                &mut stream,
-                &HttpResponse::internal_error("request handling failed\n"),
-                false,
-            );
-        }
+        let state = Arc::clone(&state);
+        std::thread::spawn(move || {
+            if let Err(error) = handle_connection(&mut stream, &state) {
+                eprintln!("web viewer request error: {error:#}");
+                let _ = write_response(
+                    &mut stream,
+                    &HttpResponse::internal_error("request handling failed\n"),
+                    false,
+                );
+            }
+        });
     }
 
     Ok(())
 }
 
-fn handle_connection(stream: &mut TcpStream, state: &ServerState) -> Result<()> {
+fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result<()> {
     let mut first_line = String::new();
     {
         let mut reader = BufReader::new(
@@ -160,8 +168,52 @@ fn handle_connection(stream: &mut TcpStream, state: &ServerState) -> Result<()> 
     let target = parts.next().unwrap_or("/");
     let is_head = method.eq_ignore_ascii_case("HEAD");
 
+    let path = target.split('?').next().unwrap_or("/");
+
+    // SSE endpoint: keep connection alive and stream events.
+    if path == "/api/live-events" {
+        return handle_sse(stream, method, state);
+    }
+
     let response = route_request(method, target, state);
     write_response(stream, &response, is_head)?;
+    Ok(())
+}
+
+fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) -> Result<()> {
+    if !method.eq_ignore_ascii_case("GET") {
+        let response = HttpResponse::method_not_allowed("only GET is supported\n");
+        return write_response(stream, &response, false);
+    }
+
+    let Some(broadcaster) = &state.broadcaster else {
+        let response = HttpResponse::not_found("live events not available: no active listen session\n");
+        return write_response(stream, &response, false);
+    };
+
+    let rx = broadcaster.subscribe();
+
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+    )
+    .context("write SSE headers")?;
+    // Send a keepalive comment so the browser knows the connection is established.
+    write!(stream, ": connected\n\n").context("write SSE connected comment")?;
+    stream.flush().context("flush SSE headers")?;
+
+    loop {
+        match rx.recv() {
+            Ok(event) => {
+                let json =
+                    serde_json::to_string(&event).context("serialize SSE live trace event")?;
+                write!(stream, "data: {json}\n\n").context("write SSE data frame")?;
+                stream.flush().context("flush SSE data frame")?;
+            }
+            Err(_) => break, // broadcaster dropped (listen session ended)
+        }
+    }
+
     Ok(())
 }
 
@@ -188,7 +240,7 @@ fn write_response(stream: &mut TcpStream, response: &HttpResponse, is_head: bool
     Ok(())
 }
 
-fn route_request(method: &str, target: &str, state: &ServerState) -> HttpResponse {
+fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpResponse {
     if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
         return HttpResponse::method_not_allowed("only GET/HEAD are supported\n");
     }
@@ -245,7 +297,7 @@ fn route_request(method: &str, target: &str, state: &ServerState) -> HttpRespons
     }
 }
 
-fn load_payload(state: &ServerState) -> Result<Option<Vec<u8>>> {
+fn load_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
     let Some(path) = state.payload.as_ref() else {
         return Ok(None);
     };
@@ -254,7 +306,7 @@ fn load_payload(state: &ServerState) -> Result<Option<Vec<u8>>> {
     Ok(Some(payload))
 }
 
-fn load_trace(state: &ServerState) -> Result<Option<String>> {
+fn load_trace(state: &Arc<ServerState>) -> Result<Option<String>> {
     let Some(path) = state.trace.as_ref() else {
         return Ok(None);
     };
@@ -263,7 +315,7 @@ fn load_trace(state: &ServerState) -> Result<Option<String>> {
     Ok(Some(trace))
 }
 
-fn load_trace_viewer_payload(state: &ServerState) -> Result<Option<Vec<u8>>> {
+fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
     let Some(path) = state.trace.as_ref() else {
         return Ok(None);
     };
@@ -283,15 +335,17 @@ fn load_trace_viewer_payload(state: &ServerState) -> Result<Option<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
 
-    fn empty_state() -> ServerState {
-        ServerState {
+    fn empty_state() -> Arc<ServerState> {
+        Arc::new(ServerState {
             payload: None,
             trace: None,
-        }
+            broadcaster: None,
+        })
     }
 
     fn temp_path(label: &str) -> PathBuf {
@@ -337,10 +391,11 @@ mod tests {
         )
         .expect("write trace");
 
-        let state = ServerState {
+        let state = Arc::new(ServerState {
             payload: Some(payload_path.clone()),
             trace: Some(trace_path.clone()),
-        };
+            broadcaster: None,
+        });
 
         let payload_response = route_request("GET", "/api/payload", &state);
         assert_eq!(payload_response.status, 200);
@@ -372,5 +427,13 @@ mod tests {
                 .iter()
                 .any(|(name, value)| *name == "Location" && value == "/?payload=demo")
         );
+    }
+
+    #[test]
+    fn live_events_returns_404_without_broadcaster() {
+        let response = route_request("GET", "/api/live-events", &empty_state());
+        // route_request doesn't handle /api/live-events (that's handled in handle_connection)
+        // so it falls through to not_found
+        assert_eq!(response.status, 404);
     }
 }

@@ -361,6 +361,7 @@ The hosted server exposes stable routes for the viewer and payload APIs:
 /api/payload          JSON from --payload (when provided)
 /api/trace            JSONL from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
+/api/live-events      SSE stream of live LiveTraceEvent JSON (requires listen --web)
 /healthz              simple health check
 ```
 
@@ -532,6 +533,41 @@ listenbury listen
 ```
 
 The current loop listens for speech, transcribes a completed segment, generates a response, synthesizes it, plays it, and returns to listening. It is intentionally simple and serves as the baseline for future duplex and interruption-aware behavior.
+
+#### Live browser viewer
+
+Pass `--web` to start the embedded WaveDeck browser viewer alongside the listen loop. Events (mic activity, ASR results, LLM turns, speaker activity) are streamed live to the browser via Server-Sent Events.
+
+```bash
+listenbury listen --web
+# or via justfile:
+just run listen --web
+```
+
+The server prints the viewer URL on startup:
+
+```text
+Listenbury web viewer available at http://127.0.0.1:8787/?live=1
+```
+
+Open that URL in a browser to see a live event timeline that updates in real time as events happen on the mic and speakers.
+
+Note: live SSE currently streams future events only. If you connect late, earlier events are not replayed yet.
+
+Optional web flags:
+
+```bash
+listenbury listen --web --web-host 0.0.0.0 --web-port 9000
+```
+
+The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Event kinds are grouped into timeline lanes:
+
+| Lane | Events |
+|---|---|
+| **Mic** | `capture_started`, `speech_started`, `breath_group_opened/closed` |
+| **ASR** | `asr_started/finished`, `transcript` |
+| **LLM** | `llm_generation_started`, `first_llm_token`, `first_safe_speech_unit_emitted` |
+| **Speaker** | `playback_started/finished`, `first_tts_audio_frame_available` |
 
 ## Configuration
 

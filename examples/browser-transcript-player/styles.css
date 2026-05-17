@@ -520,3 +520,82 @@ h1 {
     padding: 0.75rem;
   }
 }
+
+/* ── Live mode styles ──────────────────────────────────────────────────── */
+.live-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 500;
+  grid-column: 1 / -1;
+}
+
+.live-banner[hidden] {
+  display: none;
+}
+
+.live-dot {
+  width: 10px;
+  height: 10px;
+  background: #e53e3e;
+  border-radius: 50%;
+  animation: live-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+
+.live-status-connecting {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.live-status-connected {
+  color: #38a169;
+}
+
+.live-status-error {
+  color: #e53e3e;
+}
+
+body.live-mode #file-toolbar {
+  display: none;
+}
+
+body.live-mode audio {
+  display: none;
+}
+
+/* Event lane kind colors for live events */
+.kind-speech_started .chip-body,
+.kind-breath_group_opened .chip-body,
+.kind-breath_group_closed .chip-body,
+.kind-capture_started .chip-body {
+  background: color-mix(in srgb, #2b6cb0 60%, transparent);
+}
+
+.kind-asr_started .chip-body,
+.kind-asr_finished .chip-body,
+.kind-transcript .chip-body {
+  background: color-mix(in srgb, #276749 60%, transparent);
+}
+
+.kind-llm_generation_started .chip-body,
+.kind-first_llm_token .chip-body,
+.kind-first_safe_speech_unit_emitted .chip-body {
+  background: color-mix(in srgb, #744210 60%, transparent);
+}
+
+.kind-playback_started .chip-body,
+.kind-playback_finished .chip-body,
+.kind-first_tts_audio_frame_available .chip-body {
+  background: color-mix(in srgb, #553c9a 60%, transparent);
+}

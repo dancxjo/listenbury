@@ -1,6 +1,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -261,6 +262,75 @@ where
             "self_hearing_suppression_ended",
             pending.expected_until,
         )
+    }
+}
+
+/// A sink that emits to two downstream sinks simultaneously.
+pub struct TeeSink<A, B>(pub A, pub B);
+
+impl<A, B> LiveTraceSink for TeeSink<A, B>
+where
+    A: LiveTraceSink,
+    B: LiveTraceSink,
+{
+    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+        self.0.emit(event.clone())?;
+        self.1.emit(event)?;
+        Ok(())
+    }
+}
+
+/// Broadcasts live trace events to subscribed SSE clients.
+///
+/// Clone is cheap – all clones share the same sender list.
+#[derive(Clone, Debug)]
+pub struct SseBroadcaster {
+    senders: Arc<Mutex<Vec<crossbeam_channel::Sender<LiveTraceEvent>>>>,
+}
+
+impl SseBroadcaster {
+    pub fn new() -> Self {
+        Self {
+            senders: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Create a new receiver that will receive all future broadcast events.
+    pub fn subscribe(&self) -> crossbeam_channel::Receiver<LiveTraceEvent> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        match self.senders.lock() {
+            Ok(mut senders) => {
+                senders.push(tx);
+            }
+            Err(error) => {
+                tracing::error!(
+                    "SseBroadcaster senders mutex poisoned in subscribe; receiver will not get events: {error}"
+                );
+            }
+        }
+        rx
+    }
+}
+
+impl Default for SseBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LiveTraceSink for SseBroadcaster {
+    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+        match self.senders.lock() {
+            Ok(mut senders) => {
+                senders.retain(|tx| tx.send(event.clone()).is_ok());
+            }
+            Err(error) => {
+                tracing::error!(
+                    "SseBroadcaster senders mutex poisoned in emit; dropping event broadcast: {error}"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
