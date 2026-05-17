@@ -60,34 +60,18 @@ fn browser_transcript_player_demo_json_deserializes() {
     assert!(audio.url.ends_with("welcome.wav"));
     assert_eq!(audio.duration_ms, Some(2081));
 
-    assert_eq!(
-        payload.streams.len(),
-        3,
-        "demo should include all bundled word lanes"
-    );
-    assert!(
-        payload
-            .streams
-            .iter()
-            .all(|lane| lane.label.as_ref().is_some_and(|label| !label.is_empty()))
-    );
-
-    let stream_ids: Vec<u64> = payload
+    assert_eq!(payload.streams.len(), 3, "demo should include all bundled word lanes");
+    assert!(payload
         .streams
         .iter()
-        .map(|lane| lane.stream.id.0)
-        .collect();
-    assert_eq!(
-        stream_ids,
-        vec![1, 2, 3],
-        "expected stream IDs in demo order"
-    );
-    assert!(
-        payload
-            .streams
-            .iter()
-            .all(|lane| !lane.stream.words.is_empty())
-    );
+        .all(|lane| lane.label.as_ref().is_some_and(|label| !label.is_empty())));
+
+    let stream_ids: Vec<u64> = payload.streams.iter().map(|lane| lane.stream.id.0).collect();
+    assert_eq!(stream_ids, vec![1, 2, 3], "expected stream IDs in demo order");
+    assert!(payload
+        .streams
+        .iter()
+        .all(|lane| !lane.stream.words.is_empty()));
     assert!(
         payload
             .streams
@@ -119,10 +103,11 @@ fn browser_transcript_player_demo_json_deserializes() {
         "demo should include environmental observation events"
     );
     assert!(
-        payload
-            .events
-            .iter()
-            .all(|event| { event.end_ms.is_none_or(|end_ms| end_ms >= event.start_ms) }),
+        payload.events.iter().all(|event| {
+            event
+                .end_ms
+                .is_none_or(|end_ms| end_ms >= event.start_ms)
+        }),
         "event spans should have non-negative durations"
     );
     assert!(
@@ -133,7 +118,10 @@ fn browser_transcript_player_demo_json_deserializes() {
         "event lanes should be labeled"
     );
     assert!(
-        payload.events.iter().any(|event| event.metadata.is_some()),
+        payload
+            .events
+            .iter()
+            .any(|event| event.metadata.is_some()),
         "at least one event should include inspectable metadata"
     );
 
@@ -178,7 +166,10 @@ fn browser_transcript_player_demo_json_deserializes() {
         "demo should include latency events"
     );
     assert!(
-        payload.events.iter().any(|event| event.start_ms <= 1000),
+        payload
+            .events
+            .iter()
+            .any(|event| event.start_ms <= 1000),
         "demo should include early timeline events"
     );
     assert!(
@@ -283,37 +274,34 @@ fn browser_transcript_player_demo_json_deserializes() {
     );
 
     assert!(
-        payload.events.iter().any(|event| {
-            event.kind == "interruption_decision"
-                && event
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("action"))
-                    .is_some()
-        }),
+        payload
+            .events
+            .iter()
+            .any(|event| {
+                event.kind == "interruption_decision"
+                    && event.metadata.as_ref().and_then(|m| m.get("action")).is_some()
+            }),
         "interruption events should carry action metadata"
     );
     assert!(
-        payload.events.iter().any(|event| {
-            event.kind == "environment_observation"
-                && event
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("class"))
-                    .is_some()
-        }),
+        payload
+            .events
+            .iter()
+            .any(|event| {
+                event.kind == "environment_observation"
+                    && event.metadata.as_ref().and_then(|m| m.get("class")).is_some()
+            }),
         "environment events should carry observation metadata"
     );
 
     assert!(
-        payload.events.iter().any(|event| {
-            event.kind == "overlap_started"
-                && event
-                    .metadata
-                    .as_ref()
-                    .and_then(|m| m.get("routing"))
-                    .is_some()
-        }),
+        payload
+            .events
+            .iter()
+            .any(|event| {
+                event.kind == "overlap_started"
+                    && event.metadata.as_ref().and_then(|m| m.get("routing")).is_some()
+            }),
         "overlap events should carry routing metadata"
     );
     assert!(
@@ -324,11 +312,10 @@ fn browser_transcript_player_demo_json_deserializes() {
         "latency events should carry milestone metadata"
     );
     assert!(
-        payload.markers.iter().any(|marker| marker
-            .metadata
-            .as_ref()
-            .and_then(|m| m.get("stream_id"))
-            .is_some()),
+        payload
+            .markers
+            .iter()
+            .any(|marker| marker.metadata.as_ref().and_then(|m| m.get("stream_id")).is_some()),
         "markers should carry inspectable metadata"
     );
 
