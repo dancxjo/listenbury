@@ -16,6 +16,14 @@ const AUDITION_VOICE_SCORE_THRESHOLD: f32 = 0.38;
 const AUDITION_STRONG_VOICE_SCORE_THRESHOLD: f32 = 0.45;
 const AUDITION_ENVIRONMENT_SCORE_THRESHOLD: f32 = 0.53;
 const AUDITION_ENVIRONMENT_COOLDOWN_FRAMES: u8 = 25;
+/// Env score threshold that bypasses hysteresis: a clearly exceptional transient.
+const AUDITION_ENVIRONMENT_STRONG_SCORE_THRESHOLD: f32 = 0.78;
+/// Brightness below this value identifies a low-spectral (thump/sub-bass) sound.
+/// Brightness is derived as `zero_crossing_rate * 2.0`, so this threshold
+/// corresponds roughly to a fundamental frequency below ~100 Hz.
+const AUDITION_ENVIRONMENT_LOW_SPECTRAL_BRIGHTNESS: f32 = 0.04;
+/// Consecutive frames a low-spectral candidate must remain salient before acceptance.
+const AUDITION_ENVIRONMENT_HYSTERESIS_FRAMES: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditoryRouting {
@@ -58,6 +66,9 @@ pub struct AuditoryFrameDiagnostics {
     pub environment_score: f32,
     pub noise_floor_rms: f32,
     pub routing_reason: &'static str,
+    /// Number of consecutive frames that have qualified as an environmental candidate.
+    /// Used to track hysteresis buildup for low-spectral (thump-like) sounds.
+    pub environmental_hysteresis_frames: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +135,9 @@ struct AuditorySceneState {
     noise_floor_rms: f32,
     speech_like_frames: u8,
     environmental_cooldown_frames: u8,
+    /// Consecutive frames that have qualified as an environmental candidate.
+    /// Resets to zero whenever a frame does not qualify.
+    environmental_candidate_frames: u8,
 }
 
 impl Default for AuditorySceneState {
@@ -132,6 +146,7 @@ impl Default for AuditorySceneState {
             noise_floor_rms: AUDITION_BASELINE_NOISE_RMS,
             speech_like_frames: 0,
             environmental_cooldown_frames: 0,
+            environmental_candidate_frames: 0,
         }
     }
 }
@@ -161,6 +176,21 @@ fn analyze_speaker_reference_with_state(
 
     let environmental_candidate = frame_rms >= AUDITION_MIN_ENVIRONMENTAL_RMS
         && features.environment_score >= AUDITION_ENVIRONMENT_SCORE_THRESHOLD;
+    if environmental_candidate {
+        state.environmental_candidate_frames =
+            state.environmental_candidate_frames.saturating_add(1);
+    } else {
+        state.environmental_candidate_frames = 0;
+    }
+    // A low-spectral sound (very low brightness / ZCR, typical of thumps and
+    // sub-bass handling noise) requires sustained salience across several frames
+    // before it is accepted, unless it is a clearly exceptional transient.
+    let is_low_spectral = features.brightness < AUDITION_ENVIRONMENT_LOW_SPECTRAL_BRIGHTNESS;
+    let is_strong_transient =
+        features.environment_score >= AUDITION_ENVIRONMENT_STRONG_SCORE_THRESHOLD;
+    let hysteresis_met = !is_low_spectral
+        || is_strong_transient
+        || state.environmental_candidate_frames >= AUDITION_ENVIRONMENT_HYSTERESIS_FRAMES;
     let (routing, routing_reason) = if speaker.decision == SuppressionDecision::Suppress {
         (AuditoryRouting::EchoOnly, "speaker_reference_suppressed")
     } else if residual_is_voice
@@ -181,11 +211,20 @@ fn analyze_speaker_reference_with_state(
             AuditoryRouting::ExternalSpeechCandidate,
             "sustained_voice_score",
         )
+    } else if environmental_candidate && !hysteresis_met {
+        (
+            AuditoryRouting::SilenceOrNoise,
+            "environmental_hysteresis_building",
+        )
     } else if environmental_candidate && state.environmental_cooldown_frames == 0 {
         state.environmental_cooldown_frames = AUDITION_ENVIRONMENT_COOLDOWN_FRAMES;
         (
             AuditoryRouting::EnvironmentalSoundCandidate,
-            "salient_non_speech_sound",
+            if is_strong_transient {
+                "environmental_transient_accepted"
+            } else {
+                "salient_non_speech_sound"
+            },
         )
     } else if environmental_candidate {
         (
@@ -241,6 +280,7 @@ fn analyze_speaker_reference_with_state(
             environment_score: features.environment_score,
             noise_floor_rms: state.noise_floor_rms,
             routing_reason,
+            environmental_hysteresis_frames: state.environmental_candidate_frames,
         },
     }
 }
@@ -705,5 +745,71 @@ mod tests {
             })
             .sum::<f32>()
             / actual.len().max(1) as f32
+    }
+
+    /// A single-frame low-frequency thump (low ZCR, low brightness) must not
+    /// immediately route as an environmental candidate.  The hysteresis window
+    /// must build up first.
+    #[test]
+    fn brief_low_frequency_thump_is_suppressed_by_hysteresis() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        // Simulate a single frame of a very low-frequency (sub-100 Hz) loud
+        // thump: high RMS, very low ZCR / brightness, moderate env_score.
+        let thump = low_freq_thump(160);
+        let analysis = analyzer
+            .analyze(frame_at(1_000_000_000, thump))
+            .expect("analysis should succeed");
+        assert_eq!(
+            analysis.routing,
+            AuditoryRouting::SilenceOrNoise,
+            "single thump frame should be held by hysteresis, not routed immediately: {:?}",
+            analysis.diagnostics
+        );
+        assert_eq!(
+            analysis.diagnostics.routing_reason,
+            "environmental_hysteresis_building",
+            "routing reason should indicate hysteresis building"
+        );
+    }
+
+    /// A low-frequency thump that is sustained across the hysteresis window
+    /// must eventually produce an `EnvironmentalSoundCandidate`.
+    #[test]
+    fn sustained_low_frequency_sound_routes_environmental_after_hysteresis() {
+        let analyzer =
+            AuditorySceneAnalyzer::new(Arc::new(Mutex::new(SpeakerReferenceMask::new())));
+        let mut environmental_count = 0;
+        let mut last_reason = "";
+
+        for frame_index in 0..10 {
+            let analysis = analyzer
+                .analyze(frame_at(
+                    1_000_000_000 + frame_index * 10_000_000,
+                    low_freq_thump(160),
+                ))
+                .expect("analysis should succeed");
+            if analysis.routing == AuditoryRouting::EnvironmentalSoundCandidate {
+                environmental_count += 1;
+            }
+            last_reason = analysis.diagnostics.routing_reason;
+        }
+
+        assert!(
+            environmental_count >= 1,
+            "sustained low-frequency sound should eventually route as environmental (got 0 in 10 frames); last reason={last_reason}"
+        );
+    }
+
+    /// Synthesise a loud sub-100 Hz thump: high RMS, very low ZCR/brightness.
+    fn low_freq_thump(len: usize) -> Vec<f32> {
+        let sample_rate = 16_000.0f32;
+        let freq_hz = 60.0f32; // 60 Hz fundamental → very low brightness
+        (0..len)
+            .map(|idx| {
+                let t = idx as f32 / sample_rate;
+                (std::f32::consts::TAU * freq_hz * t).sin() * 0.45
+            })
+            .collect()
     }
 }

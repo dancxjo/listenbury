@@ -3313,7 +3313,7 @@ fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
         return;
     }
     eprintln!(
-        "[ear] routing={:?} rms={:.4} zcr={:.3} brightness={:.3} vad_speech={} voice_score={:.3} env_score={:.3} noise_floor={:.4} corr={:.3} residual={:.3} delay_ms={} reason={}",
+        "[ear] routing={:?} rms={:.4} zcr={:.3} brightness={:.3} vad_speech={} voice_score={:.3} env_score={:.3} noise_floor={:.4} corr={:.3} residual={:.3} delay_ms={} env_hysteresis={} reason={}",
         analysis.routing,
         analysis.diagnostics.rms,
         analysis.diagnostics.zero_crossing_rate,
@@ -3325,6 +3325,7 @@ fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
         analysis.self_voice.correlation,
         analysis.self_voice.residual_ratio,
         analysis.self_voice.delay_ms,
+        analysis.diagnostics.environmental_hysteresis_frames,
         analysis.diagnostics.routing_reason
     );
 }
