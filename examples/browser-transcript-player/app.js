@@ -40,7 +40,7 @@ playSelectionClipButton.addEventListener("click", () => playSelectedClip());
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
     audio.pause();
-    state.stopAtMs = null;
+    clearPlaybackStop();
   }
   refreshPlaybackState();
 });
@@ -181,7 +181,7 @@ function applyPayload(rawPayload) {
     };
   });
   state.selectedItem = firstItemSelection();
-  state.stopAtMs = null;
+  clearPlaybackStop();
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
   render();
@@ -596,7 +596,7 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
     audio.currentTime = word.resolvedTiming.start_ms / 1000;
   }
 
-  state.stopAtMs = null;
+  clearPlaybackStop();
   refreshPlaybackState();
   renderSelection();
 }
@@ -616,7 +616,7 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
     }
   }
 
-  state.stopAtMs = null;
+  clearPlaybackStop();
   refreshPlaybackState();
   renderSelection();
 }
@@ -723,7 +723,7 @@ function normalizeAudioRefString(value) {
 }
 
 function normalizeAudioRefMs(value, fallbackValue) {
-  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : Math.max(0, Math.round(fallbackValue));
+  return Math.max(0, Math.round(Number.isFinite(value) ? value : fallbackValue));
 }
 
 function playSelectedClip() {
@@ -747,7 +747,7 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
 
   const seekAndMaybePlay = () => {
     audio.currentTime = startMs / 1000;
-    state.stopAtMs = endMs > startMs ? endMs : null;
+    setPlaybackStop(startMs, endMs);
     if (autoplay) {
       void audio.play();
     }
@@ -761,6 +761,14 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
     return;
   }
   seekAndMaybePlay();
+}
+
+function setPlaybackStop(startMs, endMs) {
+  state.stopAtMs = endMs > startMs ? endMs : null;
+}
+
+function clearPlaybackStop() {
+  state.stopAtMs = null;
 }
 
 function coerceMs(value, label) {
