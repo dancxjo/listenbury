@@ -1,22 +1,10 @@
+import { h, render as preactRender } from "https://esm.sh/preact@10.26.9";
+
 const viewer = document.getElementById("viewer");
-const viewerTitle = document.getElementById("viewer-title");
-const statusMessage = document.getElementById("status-message");
-const playbackTime = document.getElementById("playback-time");
-const selectionSummary = document.getElementById("selection-summary");
-const selectionJson = document.getElementById("selection-json");
-const playPauseButton = document.getElementById("play-pause");
-const jumpPrevButton = document.getElementById("jump-prev");
-const jumpNextButton = document.getElementById("jump-next");
-const playSelectionClipButton = document.getElementById("play-selection-clip");
-const zoomOutButton = document.getElementById("zoom-out");
-const zoomInButton = document.getElementById("zoom-in");
+const chromeShellRoot = document.getElementById("chrome-shell-root");
+const transcriptShellRoot = document.getElementById("transcript-shell-root");
+const inspectorShellRoot = document.getElementById("inspector-shell-root");
 const audio = document.getElementById("audio");
-const liveBanner = document.getElementById("live-banner");
-const liveEventCount = document.getElementById("live-event-count");
-const liveConnectionStatus = document.getElementById("live-connection-status");
-const transcriptRibbon = document.getElementById("transcript-ribbon");
-const transcriptRibbonText = document.getElementById("transcript-ribbon-text");
-const spanDebugLog = document.getElementById("span-debug-log");
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
@@ -109,6 +97,13 @@ const state = {
   suppressTimelineSelectEvent: false,
 };
 
+const uiState = {
+  liveMode: false,
+  connectionStatusClass: "live-status-connecting",
+  connectionStatusText: "connecting…",
+  statusMessage: "Connecting to live event stream…",
+};
+
 const sourceLabels = {
   RecordedAudio: "Recorded audio",
   LiveAsr: "Live ASR",
@@ -116,12 +111,175 @@ const sourceLabels = {
   SyntheticSpeech: "Synthetic speech",
 };
 
-playPauseButton.addEventListener("click", () => togglePlayback());
-jumpPrevButton.addEventListener("click", () => jumpSelectedWord(-1));
-jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
-playSelectionClipButton.addEventListener("click", () => playSelectedClip());
-zoomOutButton.addEventListener("click", () => zoomTimelineOut());
-zoomInButton.addEventListener("click", () => zoomTimelineIn());
+const DEFAULT_SELECTION_MESSAGE = "Select a word or event to inspect timing and metadata.";
+
+function RibbonToken({ token }) {
+  return h(
+    "span",
+    {
+      className: token.className,
+      title: token.title ?? undefined,
+    },
+    token.text,
+  );
+}
+
+function ConnectionChrome({ projection }) {
+  return h(
+    h.Fragment,
+    null,
+    h(
+      "div",
+      { id: "live-banner", className: "live-banner", hidden: !projection.liveMode },
+      h("span", { className: "live-dot" }),
+      h("strong", null, "Live"),
+      h("span", { id: "live-event-count" }, projection.liveEventCountLabel),
+      h("span", { id: "live-connection-status", className: projection.connectionStatusClass }, projection.connectionStatusText),
+    ),
+    h(
+      "section",
+      { className: "toolbar", id: "playback-toolbar" },
+      h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", onClick: () => jumpSelectedWord(-1) }, "◀ Prev"),
+      h("button", { id: "play-pause", type: "button", onClick: () => togglePlayback() }, projection.playPauseLabel),
+      h("button", { id: "jump-next", type: "button", "aria-label": "Next word", onClick: () => jumpSelectedWord(1) }, "Next ▶"),
+      h(
+        "button",
+        {
+          id: "play-selection-clip",
+          type: "button",
+          disabled: !projection.canPlaySelectionClip,
+          onClick: () => playSelectedClip(),
+        },
+        projection.playSelectionClipLabel,
+      ),
+    ),
+    h(
+      "section",
+      { className: "toolbar zoom-toolbar", id: "zoom-toolbar", "aria-label": "Timeline zoom controls" },
+      h("button", { id: "zoom-out", type: "button", "aria-label": "Zoom out", disabled: !projection.canZoom, onClick: () => zoomTimelineOut() }, "Zoom -"),
+      h("button", { id: "zoom-in", type: "button", "aria-label": "Zoom in", disabled: !projection.canZoom, onClick: () => zoomTimelineIn() }, "Zoom +"),
+    ),
+    h(
+      "section",
+      { className: "status-bar" },
+      h("strong", { id: "viewer-title" }, projection.viewerTitle),
+      h("span", { id: "status-message" }, projection.statusMessage),
+      h("span", { id: "playback-time" }, projection.playbackTimeLabel),
+    ),
+  );
+}
+
+function TranscriptRibbonPane({ projection }) {
+  return h(
+    "div",
+    { id: "transcript-ribbon", className: "transcript-ribbon", hidden: !projection.liveMode, "aria-live": "polite", "aria-label": "Live transcript" },
+    h("span", { className: "transcript-ribbon-label" }, "Transcript"),
+    h(
+      "span",
+      { id: "transcript-ribbon-text", className: "transcript-ribbon-text" },
+      projection.transcriptTokens.flatMap((token, index) =>
+        index === projection.transcriptTokens.length - 1 ? [h(RibbonToken, { token })] : [h(RibbonToken, { token }), " "],
+      ),
+    ),
+    h(
+      "span",
+      { id: "transcript-ribbon-hint", className: "transcript-ribbon-hint" },
+      h("span", { className: "span-legend-item span-state-hypothetical" }, "Hypothesis"),
+      h("span", { className: "span-legend-item span-state-stable" }, "Stable"),
+      h("span", { className: "span-legend-item span-state-committed" }, "Committed"),
+      h("span", { className: "span-legend-item span-state-revised" }, "Revised"),
+    ),
+  );
+}
+
+function InspectorPane({ projection }) {
+  return h(
+    h.Fragment,
+    null,
+    h("h2", null, "Inspector"),
+    h(
+      "div",
+      { id: "selection-summary", className: "selection-summary" },
+      projection.selectionBadge
+        ? h("span", { className: projection.selectionBadge.className }, projection.selectionBadge.text)
+        : null,
+      projection.selectionSummaryParts,
+      projection.selectionRevisions.length
+        ? h(
+            "div",
+            { className: "inspector-revision-history" },
+            h("strong", null, "↩ Retroactive revision"),
+            projection.selectionRevisions.map((rev) =>
+              h(
+                "div",
+                { className: "inspector-revision-entry" },
+                h("span", null, `at ${rev.atMs}ms:`),
+                h("del", null, rev.fromText),
+                h("span", null, "→"),
+                h("span", { className: "revision-new" }, rev.toText),
+              ),
+            ),
+          )
+        : null,
+    ),
+    h("pre", { id: "selection-json", className: "selection-json" }, projection.selectionJson),
+    h(
+      "details",
+      { id: "span-debug-section", className: "span-debug-section", open: true },
+      h("summary", { className: "span-debug-summary" }, "Span debug log"),
+      h(
+        "div",
+        { id: "span-debug-log", className: "span-debug-log" },
+        projection.debugEntries.length
+          ? projection.debugEntries.map((entry) =>
+              h(
+                "div",
+                { className: `span-debug-entry entry-${entry.type}` },
+                h("span", { className: "span-debug-time" }, entry.time),
+                h("span", { className: "span-debug-msg" }, entry.message),
+              ),
+            )
+          : h("p", { className: "span-debug-empty" }, "Span events will appear here during a live session."),
+      ),
+    ),
+  );
+}
+
+function buildShellProjection() {
+  const selectionProjection = buildSelectionProjection();
+  return {
+    liveMode: uiState.liveMode,
+    viewerTitle: state.payload?.title ?? (uiState.liveMode ? "Live — Listenbury" : "No stream loaded"),
+    statusMessage: uiState.statusMessage,
+    playbackTimeLabel: formatPlaybackTime(),
+    playPauseLabel: audio.paused ? "Play" : "Pause",
+    canPlaySelectionClip: selectionProjection.canPlaySelectionClip,
+    playSelectionClipLabel: selectionProjection.playSelectionClipLabel,
+    canZoom: state.lanes.length > 0 && Boolean(state.timeline),
+    liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
+    connectionStatusText: uiState.connectionStatusText,
+    connectionStatusClass: uiState.connectionStatusClass,
+    transcriptTokens: transcriptTokensFromSession(liveSession),
+    selectionBadge: selectionProjection.badge,
+    selectionSummaryParts: selectionProjection.summaryParts,
+    selectionRevisions: selectionProjection.revisions,
+    selectionJson: selectionProjection.selectionJson,
+    debugEntries: debugEntriesFromSession(liveSession),
+  };
+}
+
+function renderShell() {
+  const projection = buildShellProjection();
+  if (chromeShellRoot) {
+    preactRender(h(ConnectionChrome, { projection }), chromeShellRoot);
+  }
+  if (transcriptShellRoot) {
+    preactRender(h(TranscriptRibbonPane, { projection }), transcriptShellRoot);
+  }
+  if (inspectorShellRoot) {
+    preactRender(h(InspectorPane, { projection }), inspectorShellRoot);
+  }
+}
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
@@ -145,11 +303,12 @@ async function bootstrap() {
 
 function enterLiveMode() {
   document.body.classList.add("live-mode");
-  liveBanner.hidden = false;
-  transcriptRibbon.hidden = false;
+  uiState.liveMode = true;
   document.title = "WaveDeck · Live";
-  viewerTitle.textContent = "Live — Listenbury";
-  statusMessage.textContent = "Connecting to live event stream…";
+  uiState.statusMessage = "Connecting to live event stream…";
+  uiState.connectionStatusClass = "live-status-connecting";
+  uiState.connectionStatusText = "connecting…";
+  renderShell();
 
   connectLiveEvents();
 }
@@ -158,9 +317,10 @@ function connectLiveEvents() {
   const source = new EventSource("/api/live-events");
 
   source.onopen = () => {
-    liveConnectionStatus.textContent = "connected";
-    liveConnectionStatus.className = "live-status-connected";
-    statusMessage.textContent = "Listening for live events…";
+    uiState.connectionStatusText = "connected";
+    uiState.connectionStatusClass = "live-status-connected";
+    uiState.statusMessage = "Listening for live events…";
+    renderShell();
   };
 
   source.onmessage = (event) => {
@@ -182,16 +342,18 @@ function connectLiveEvents() {
     } catch (err) {
       console.error("Failed to parse live availability event:", err, event.data);
     }
-    liveConnectionStatus.textContent = "unavailable";
-    liveConnectionStatus.className = "live-status-error";
-    statusMessage.textContent = message;
+    uiState.connectionStatusText = "unavailable";
+    uiState.connectionStatusClass = "live-status-error";
+    uiState.statusMessage = message;
+    renderShell();
     source.close();
   });
 
   source.onerror = () => {
-    liveConnectionStatus.textContent = "disconnected";
-    liveConnectionStatus.className = "live-status-error";
-    statusMessage.textContent = "Live event stream disconnected. Session may have ended.";
+    uiState.connectionStatusText = "disconnected";
+    uiState.connectionStatusClass = "live-status-error";
+    uiState.statusMessage = "Live event stream disconnected. Session may have ended.";
+    renderShell();
     source.close();
   };
 }
@@ -199,7 +361,6 @@ function connectLiveEvents() {
 function addLiveEvent(traceEvent) {
   liveEvents.push(traceEvent);
   reduceLiveEvent(liveSession, traceEvent);
-  liveEventCount.textContent = `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`;
 
   if (!liveRenderScheduled) {
     liveRenderScheduled = true;
@@ -487,26 +648,12 @@ function liveSessionToViewerPayload(session) {
 
 // ── Span debug log ─────────────────────────────────────────────────────────
 
-function renderSpanDebugLog(session) {
-  if (!spanDebugLog || !session.debugLog.length) {
-    return;
-  }
-  // Show the 40 most-recent entries, newest first.
-  const entries = session.debugLog.slice(-40).reverse();
-  const fragment = document.createDocumentFragment();
-  for (const entry of entries) {
-    const el = document.createElement("div");
-    el.className = `span-debug-entry entry-${entry.type}`;
-    const time = document.createElement("span");
-    time.className = "span-debug-time";
-    time.textContent = `${(entry.elapsedMs / 1000).toFixed(3)}s`;
-    const msg = document.createElement("span");
-    msg.className = "span-debug-msg";
-    msg.textContent = entry.message;
-    el.append(time, msg);
-    fragment.append(el);
-  }
-  spanDebugLog.replaceChildren(fragment);
+function debugEntriesFromSession(session) {
+  return session.debugLog.slice(-40).reverse().map((entry) => ({
+    type: entry.type,
+    time: `${(entry.elapsedMs / 1000).toFixed(3)}s`,
+    message: entry.message,
+  }));
 }
 
 // ── Transcript ribbon ──────────────────────────────────────────────────────
@@ -515,12 +662,8 @@ function renderSpanDebugLog(session) {
 // Both past turns (via finalTranscript + latestWordStream) and the current
 // in-progress turn (via transcriptCandidate or latestWordStream) are driven
 // by the session model, not by raw event lists.
-function renderTranscriptRibbon(session) {
-  if (!transcriptRibbonText) {
-    return;
-  }
-
-  const fragment = document.createDocumentFragment();
+function transcriptTokensFromSession(session) {
+  const tokens = [];
   const sortedTurns = [...session.turns.entries()].sort((a, b) => a[0] - b[0]);
 
   for (const [, liveTurn] of sortedTurns) {
@@ -529,51 +672,51 @@ function renderTranscriptRibbon(session) {
       const wordStream = liveTurn.latestWordStream;
       if (wordStream?.words?.length > 0) {
         for (const word of wordStream.words) {
-          const token = document.createElement("span");
           const commitClass = `commit-${commitmentClass(word.commitment)}`;
-          token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
-          token.textContent = word.text;
-          const revTooltip = formatRevisionTooltip(word);
-          if (revTooltip) {
-            token.title = revTooltip;
-          }
-          fragment.append(token, " ");
+          tokens.push({
+            className: `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`,
+            text: word.text,
+            title: formatRevisionTooltip(word),
+          });
         }
       } else {
         // Fall back to plain committed text.
-        const token = document.createElement("span");
-        token.className = "transcript-token span-state-committed";
-        token.textContent = liveTurn.finalTranscript;
-        fragment.append(token, " ");
+        tokens.push({
+          className: "transcript-token span-state-committed",
+          text: liveTurn.finalTranscript,
+          title: null,
+        });
       }
     } else if (liveTurn.transcriptCandidate) {
       // In-progress turn: stable prefix + unstable tail from transcript_candidate.
       const { stable_text, unstable_text } = liveTurn.transcriptCandidate;
       if (stable_text) {
-        const stableToken = document.createElement("span");
-        stableToken.className = "transcript-token span-state-stable";
-        stableToken.textContent = stable_text;
-        fragment.append(stableToken, " ");
+        tokens.push({
+          className: "transcript-token span-state-stable",
+          text: stable_text,
+          title: null,
+        });
       }
       if (unstable_text) {
-        const provisionalToken = document.createElement("span");
-        provisionalToken.className = "transcript-token span-state-hypothetical";
-        provisionalToken.textContent = unstable_text;
-        fragment.append(provisionalToken);
+        tokens.push({
+          className: "transcript-token span-state-hypothetical",
+          text: unstable_text,
+          title: null,
+        });
       }
     } else if (liveTurn.latestWordStream?.words?.length > 0) {
       // Word-stream fallback when no transcript_candidate is available.
       for (const word of liveTurn.latestWordStream.words) {
-        const token = document.createElement("span");
         const commitClass = `commit-${commitmentClass(word.commitment)}`;
-        token.className = `transcript-token ${commitClass}`;
-        token.textContent = word.text;
-        fragment.append(token, " ");
+        tokens.push({
+          className: `transcript-token ${commitClass}`,
+          text: word.text,
+          title: null,
+        });
       }
     }
   }
-
-  transcriptRibbonText.replaceChildren(fragment);
+  return tokens;
 }
 
 // Map WordCommitment enum variant to a lowercase CSS class fragment.
@@ -601,9 +744,6 @@ function formatRevisionTooltip(word) {
 function applyLiveEvents() {
   const payload = liveSessionToViewerPayload(liveSession);
   applyPayload(payload, { preserveSelection: true });
-  viewerTitle.textContent = "Live — Listenbury";
-  renderTranscriptRibbon(liveSession);
-  renderSpanDebugLog(liveSession);
 }
 
 function labelForKind(kind) {
@@ -612,7 +752,8 @@ function labelForKind(kind) {
 
 function togglePlayback() {
   if (!audio.src) {
-    statusMessage.textContent = "No audio source loaded.";
+    uiState.statusMessage = "No audio source loaded.";
+    renderShell();
     return;
   }
 
@@ -822,11 +963,6 @@ function syncMaxDurationWithAudio() {
 }
 
 function render() {
-  viewerTitle.textContent = state.payload?.title ?? "No stream loaded";
-  playbackTime.textContent = formatPlaybackTime();
-  playPauseButton.textContent = audio.paused ? "Play" : "Pause";
-  updateZoomControls();
-
   if (!state.lanes.length) {
     viewer.className = "viewer empty";
     if (state.timelineItemsDataSet) {
@@ -1013,10 +1149,9 @@ function syncTimelineProjection(groups, items) {
 }
 
 function refreshPlaybackState() {
-  playbackTime.textContent = formatPlaybackTime();
-  playPauseButton.textContent = audio.paused ? "Play" : "Pause";
   const nowMs = Math.round(audio.currentTime * 1000);
   if (!state.timelineItemsDataSet) {
+    renderShell();
     return;
   }
 
@@ -1034,109 +1169,11 @@ function refreshPlaybackState() {
     state.timelineItemsDataSet.update(updates);
   }
   syncTimelineSelectionFromState();
+  renderShell();
 }
 
 function renderSelection() {
   updateZoomControls();
-  playSelectionClipButton.disabled = true;
-  playSelectionClipButton.textContent = "Play selected clip";
-  if (!state.selectedItem) {
-    selectionSummary.textContent = "Select a word or event to inspect timing and metadata.";
-    selectionJson.textContent = "{}";
-    return;
-  }
-
-  if (state.selectedItem.type === "event") {
-    const lane = state.lanes[state.selectedItem.laneIndex];
-    const event = lane?.events?.[state.selectedItem.itemIndex];
-    if (!lane || !event) {
-      selectionSummary.textContent = "Select a word or event to inspect timing and metadata.";
-      selectionJson.textContent = "{}";
-      return;
-    }
-
-    selectionSummary.innerHTML = `
-      <strong>${lane.label}</strong><br />
-      Event <strong>${event.label}</strong><br />
-      ${event.start_ms}–${event.end_ms} ms · kind <strong>${event.kind}</strong>
-    `;
-    if (event.audio_ref?.url) {
-      playSelectionClipButton.disabled = false;
-      playSelectionClipButton.textContent = "Play event clip";
-    }
-
-    selectionJson.textContent = JSON.stringify(
-      {
-        lane: lane.label,
-        laneType: "event",
-        id: event.id,
-        kind: event.kind,
-        label: event.label,
-        start_ms: event.start_ms,
-        end_ms: event.end_ms,
-        duration_ms: Math.max(0, event.end_ms - event.start_ms),
-        audioRef: event.audio_ref,
-        metadata: event.metadata,
-        original: event.original,
-      },
-      null,
-      2,
-    );
-    return;
-  }
-
-  const lane = state.lanes[state.selectedItem.laneIndex];
-  const word = lane?.words?.[state.selectedItem.itemIndex];
-  if (!lane || !word) {
-    selectionSummary.textContent = "Select a word or event to inspect timing and metadata.";
-    selectionJson.textContent = "{}";
-    return;
-  }
-
-  selectionSummary.innerHTML = `
-    <strong>${lane.label}</strong><br />
-    Word <strong>${word.text}</strong><br />
-    ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${
-      word.timing_confidence ?? "n/a"
-    }<br />
-    Timing source: <strong>${word.timingSourceDetail}</strong>
-  `;
-
-  const revisionBlock = buildRevisionHistoryHtml(word);
-
-  selectionJson.textContent = JSON.stringify(
-    {
-      lane: lane.label,
-      source: lane.stream.source,
-      streamId: lane.stream.id,
-      wordId: word.id,
-      text: word.text,
-      timing: word.timing,
-      resolvedTiming: word.resolvedTiming,
-      timingResolution: word.timingResolution,
-      timingSourceDetail: word.timingSourceDetail,
-      confidence: word.timing_confidence,
-      commitment: word.commitment,
-      spanState: describeSpanState(word.commitment),
-      boundarySource: word.boundary_source,
-      lexicalSpan: word.lexical_span,
-      audioRef: word.audio_ref,
-      revisions: word._revisions ?? [],
-    },
-    null,
-    2,
-  );
-
-  // Show commitment state badge + revision history in the summary panel.
-  if (word.commitment) {
-    const badge = document.createElement("span");
-    badge.className = `inspector-span-state commit-${commitmentClass(word.commitment)}`;
-    badge.textContent = describeSpanState(word.commitment);
-    selectionSummary.prepend(badge);
-  }
-  if (revisionBlock) {
-    selectionSummary.insertAdjacentHTML("beforeend", revisionBlock);
-  }
 }
 
 function selectWord(laneIndex, wordIndex, seekAudio) {
@@ -1525,9 +1562,7 @@ function clampTimeSelection(selection) {
 }
 
 function updateZoomControls() {
-  const canZoom = state.lanes.length > 0 && Boolean(state.timeline);
-  zoomInButton.disabled = !canZoom;
-  zoomOutButton.disabled = !canZoom;
+  renderShell();
 }
 
 function firstItemSelection() {
@@ -1743,7 +1778,8 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
   if (audio.src !== targetUrl) {
     audio.src = targetUrl;
     audio.addEventListener("loadedmetadata", seekAndMaybePlay, { once: true });
-    statusMessage.textContent = `Loaded clip reference ${targetUrl}.`;
+    uiState.statusMessage = `Loaded clip reference ${targetUrl}.`;
+    renderShell();
     return;
   }
   seekAndMaybePlay();
@@ -1802,6 +1838,127 @@ function formatPlaybackTime() {
   return `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
 }
 
+function buildSelectionProjection() {
+  if (!state.selectedItem) {
+    return {
+      canPlaySelectionClip: false,
+      playSelectionClipLabel: "Play selected clip",
+      summaryParts: [DEFAULT_SELECTION_MESSAGE],
+      selectionJson: "{}",
+      badge: null,
+      revisions: [],
+    };
+  }
+
+  if (state.selectedItem.type === "event") {
+    const lane = state.lanes[state.selectedItem.laneIndex];
+    const event = lane?.events?.[state.selectedItem.itemIndex];
+    if (!lane || !event) {
+      return {
+        canPlaySelectionClip: false,
+        playSelectionClipLabel: "Play selected clip",
+        summaryParts: [DEFAULT_SELECTION_MESSAGE],
+        selectionJson: "{}",
+        badge: null,
+        revisions: [],
+      };
+    }
+    return {
+      canPlaySelectionClip: Boolean(event.audio_ref?.url),
+      playSelectionClipLabel: event.audio_ref?.url ? "Play event clip" : "Play selected clip",
+      summaryParts: [
+        h("strong", null, lane.label),
+        h("br"),
+        "Event ",
+        h("strong", null, event.label),
+        h("br"),
+        `${event.start_ms}–${event.end_ms} ms · kind `,
+        h("strong", null, event.kind),
+      ],
+      selectionJson: JSON.stringify(
+        {
+          lane: lane.label,
+          laneType: "event",
+          id: event.id,
+          kind: event.kind,
+          label: event.label,
+          start_ms: event.start_ms,
+          end_ms: event.end_ms,
+          duration_ms: Math.max(0, event.end_ms - event.start_ms),
+          audioRef: event.audio_ref,
+          metadata: event.metadata,
+          original: event.original,
+        },
+        null,
+        2,
+      ),
+      badge: null,
+      revisions: [],
+    };
+  }
+
+  const lane = state.lanes[state.selectedItem.laneIndex];
+  const word = lane?.words?.[state.selectedItem.itemIndex];
+  if (!lane || !word) {
+    return {
+      canPlaySelectionClip: false,
+      playSelectionClipLabel: "Play selected clip",
+      summaryParts: [DEFAULT_SELECTION_MESSAGE],
+      selectionJson: "{}",
+      badge: null,
+      revisions: [],
+    };
+  }
+  return {
+    canPlaySelectionClip: false,
+    playSelectionClipLabel: "Play selected clip",
+    summaryParts: [
+      h("strong", null, lane.label),
+      h("br"),
+      "Word ",
+      h("strong", null, word.text),
+      h("br"),
+      `${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${word.timing_confidence ?? "n/a"}`,
+      h("br"),
+      "Timing source: ",
+      h("strong", null, word.timingSourceDetail),
+    ],
+    selectionJson: JSON.stringify(
+      {
+        lane: lane.label,
+        source: lane.stream.source,
+        streamId: lane.stream.id,
+        wordId: word.id,
+        text: word.text,
+        timing: word.timing,
+        resolvedTiming: word.resolvedTiming,
+        timingResolution: word.timingResolution,
+        timingSourceDetail: word.timingSourceDetail,
+        confidence: word.timing_confidence,
+        commitment: word.commitment,
+        spanState: describeSpanState(word.commitment),
+        boundarySource: word.boundary_source,
+        lexicalSpan: word.lexical_span,
+        audioRef: word.audio_ref,
+        revisions: word._revisions ?? [],
+      },
+      null,
+      2,
+    ),
+    badge: word.commitment
+      ? {
+          className: `inspector-span-state commit-${commitmentClass(word.commitment)}`,
+          text: describeSpanState(word.commitment),
+        }
+      : null,
+    revisions: (word._revisions ?? []).map((rev) => ({
+      atMs: rev.at_ms,
+      fromText: rev.fromText,
+      toText: word.text,
+    })),
+  };
+}
+
 // ── Span state helpers ────────────────────────────────────────────────────
 
 /**
@@ -1819,33 +1976,6 @@ function describeSpanState(commitment) {
     case "Cancelled":    return "Cancelled — abandoned before playback";
     default:             return commitment ?? "Unknown";
   }
-}
-
-/**
- * Build an HTML fragment for the revision history of a word span.
- * Returns an empty string when there are no revisions.
- */
-function buildRevisionHistoryHtml(word) {
-  const revisions = word._revisions;
-  if (!revisions?.length) {
-    return "";
-  }
-  const rows = revisions
-    .map((rev) => {
-      const reason = rev.reason ? `<div class="inspector-revision-reason">${escapeHtml(rev.reason)}</div>` : "";
-      return `<div class="inspector-revision-entry">
-        <span>at ${rev.at_ms}ms:</span>
-        <del>${escapeHtml(rev.fromText)}</del>
-        <span>→</span>
-        <span class="revision-new">${escapeHtml(word.text)}</span>
-        ${reason}
-      </div>`;
-    })
-    .join("");
-  return `<div class="inspector-revision-history">
-    <strong>↩ Retroactive revision</strong>
-    ${rows}
-  </div>`;
 }
 
 function escapeHtml(str) {

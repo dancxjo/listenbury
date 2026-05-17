@@ -28,46 +28,11 @@
         </p>
       </div>
 
-      <!-- Live mode indicator (shown only in live mode) -->
-      <div id="live-banner" class="live-banner" hidden>
-        <span class="live-dot"></span>
-        <strong>Live</strong>
-        <span id="live-event-count">0 events</span>
-        <span id="live-connection-status" class="live-status-connecting">connecting…</span>
-      </div>
-
-      <!-- Playback controls (always visible) -->
-      <section class="toolbar" id="playback-toolbar">
-        <button id="jump-prev" type="button" aria-label="Previous word">◀ Prev</button>
-        <button id="play-pause" type="button">Play</button>
-        <button id="jump-next" type="button" aria-label="Next word">Next ▶</button>
-        <button id="play-selection-clip" type="button" disabled>Play selected clip</button>
-      </section>
-
-      <section class="toolbar zoom-toolbar" id="zoom-toolbar" aria-label="Timeline zoom controls">
-        <button id="zoom-out" type="button" aria-label="Zoom out">Zoom -</button>
-        <button id="zoom-in" type="button" aria-label="Zoom in">Zoom +</button>
-      </section>
-
-      <section class="status-bar">
-        <strong id="viewer-title">Live — Listenbury</strong>
-        <span id="status-message">Connecting to live event stream…</span>
-        <span id="playback-time">0.000s</span>
-      </section>
+      <div id="chrome-shell-root"></div>
       <audio id="audio" controls preload="metadata"></audio>
     </header>
 
-    <!-- Live transcript ribbon: shows provisional → stable → committed words in real time -->
-    <div id="transcript-ribbon" class="transcript-ribbon" hidden aria-live="polite" aria-label="Live transcript">
-      <span class="transcript-ribbon-label">Transcript</span>
-      <span id="transcript-ribbon-text" class="transcript-ribbon-text"></span>
-      <span id="transcript-ribbon-hint" class="transcript-ribbon-hint">
-        <span class="span-legend-item span-state-hypothetical">Hypothesis</span>
-        <span class="span-legend-item span-state-stable">Stable</span>
-        <span class="span-legend-item span-state-committed">Committed</span>
-        <span class="span-legend-item span-state-revised">Revised</span>
-      </span>
-    </div>
+    <div id="transcript-shell-root"></div>
 
     <main class="workspace">
       <section class="viewer-stage">
@@ -77,19 +42,7 @@
       </section>
 
       <aside class="inspector">
-        <h2>Inspector</h2>
-        <div id="selection-summary" class="selection-summary">
-          Select a word or event to inspect timing and metadata.
-        </div>
-        <pre id="selection-json" class="selection-json">{}</pre>
-
-        <!-- Span debug log: shows span state transitions and revision reasons -->
-        <details id="span-debug-section" class="span-debug-section" open>
-          <summary class="span-debug-summary">Span debug log</summary>
-          <div id="span-debug-log" class="span-debug-log">
-            <p class="span-debug-empty">Span events will appear here during a live session.</p>
-          </div>
-        </details>
+        <div id="inspector-shell-root"></div>
       </aside>
     </main>
 
