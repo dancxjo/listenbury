@@ -4,9 +4,6 @@ const statusMessage = document.getElementById("status-message");
 const playbackTime = document.getElementById("playback-time");
 const selectionSummary = document.getElementById("selection-summary");
 const selectionJson = document.getElementById("selection-json");
-const loadDemoButton = document.getElementById("load-demo");
-const jsonFileInput = document.getElementById("json-file");
-const audioFileInput = document.getElementById("audio-file");
 const playPauseButton = document.getElementById("play-pause");
 const jumpPrevButton = document.getElementById("jump-prev");
 const jumpNextButton = document.getElementById("jump-next");
@@ -20,16 +17,12 @@ const liveConnectionStatus = document.getElementById("live-connection-status");
 const transcriptRibbon = document.getElementById("transcript-ribbon");
 const transcriptRibbonText = document.getElementById("transcript-ribbon-text");
 const spanDebugLog = document.getElementById("span-debug-log");
-const queryParams = new URLSearchParams(window.location.search);
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
 const ZOOM_FACTOR = 1.8;
 const WHEEL_ZOOM_FACTOR = 1.16;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
-
-// Live mode is activated by ?live=1 in the URL.
-const isLiveMode = queryParams.get("live") === "1";
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -109,9 +102,6 @@ const sourceLabels = {
   SyntheticSpeech: "Synthetic speech",
 };
 
-loadDemoButton.addEventListener("click", () => loadDemo());
-jsonFileInput.addEventListener("change", (event) => readJsonFile(event.target.files?.[0]));
-audioFileInput.addEventListener("change", (event) => readAudioFile(event.target.files?.[0]));
 playPauseButton.addEventListener("click", () => togglePlayback());
 jumpPrevButton.addEventListener("click", () => jumpSelectedWord(-1));
 jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
@@ -140,32 +130,7 @@ audio.addEventListener("loadedmetadata", () => {
 void bootstrap();
 
 async function bootstrap() {
-  if (isLiveMode) {
-    enterLiveMode();
-    return;
-  }
-
-  const payloadMode = queryParams.get("payload");
-  if (payloadMode === "demo") {
-    await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");
-    return;
-  }
-  if (payloadMode === "provided") {
-    const loaded = await loadPayloadFromUrls(["/api/payload"], "Loaded --payload JSON.");
-    if (loaded) {
-      return;
-    }
-  }
-  if (payloadMode === "trace") {
-    const loaded = await loadPayloadFromUrls(
-      ["/api/trace-viewer-payload"],
-      "Loaded --trace viewer payload conversion.",
-    );
-    if (loaded) {
-      return;
-    }
-  }
-  await loadDemo();
+  enterLiveMode();
 }
 
 function enterLiveMode() {
@@ -635,61 +600,9 @@ function labelForKind(kind) {
   return kind.replace(/_/g, " ");
 }
 
-
-async function loadDemo() {
-  await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");
-}
-
-async function loadPayloadFromUrls(urls, successMessage) {
-  try {
-    const failures = [];
-    for (const url of urls) {
-      const response = await fetch(url);
-      if (!response.ok) {
-        failures.push(`${url} (${response.status})`);
-        continue;
-      }
-      const payload = await response.json();
-      applyPayload(payload);
-      statusMessage.textContent = successMessage;
-      return true;
-    }
-    throw new Error(`failed to load payload from ${failures.join(", ") || urls.join(", ")}`);
-  } catch (error) {
-    statusMessage.textContent =
-      `Unable to auto-load demo (${error?.message ?? "unknown error"}). Serve the repository over local HTTP or choose a JSON file manually.`;
-    console.error(error);
-    return false;
-  }
-}
-
-async function readJsonFile(file) {
-  if (!file) {
-    return;
-  }
-
-  try {
-    const payload = JSON.parse(await file.text());
-    applyPayload(payload);
-    statusMessage.textContent = `Loaded ${file.name}.`;
-  } catch (error) {
-    statusMessage.textContent = `Failed to parse ${file.name}.`;
-    console.error(error);
-  }
-}
-
-function readAudioFile(file) {
-  if (!file) {
-    return;
-  }
-
-  audio.src = URL.createObjectURL(file);
-  statusMessage.textContent = `Loaded audio override ${file.name}.`;
-}
-
 function togglePlayback() {
   if (!audio.src) {
-    statusMessage.textContent = "No audio loaded. Choose an audio file or load a payload with audio.url.";
+    statusMessage.textContent = "No audio loaded for this selection.";
     return;
   }
 
@@ -751,67 +664,11 @@ function applyPayload(rawPayload, options = {}) {
   clearPlaybackStop();
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
-  renderStaticTranscriptRibbon(normalized);
   restoreViewportSnapshot(previousViewport);
   render();
 }
 
-// Render the transcript ribbon for static (non-live) payloads.
-// Shows word streams that carry commitment information so the span lifecycle is visible
-// even when replaying a saved trace.
-function renderStaticTranscriptRibbon(normalized) {
-  if (!transcriptRibbon || !transcriptRibbonText) {
-    return;
-  }
-  // Only show if there's at least one word stream with commitment data.
-  const hasCommitmentData = normalized.streams.some(
-    (lane) => lane.stream?.words?.some((w) => w.commitment),
-  );
-  if (!hasCommitmentData) {
-    // Don't touch the ribbon — live mode manages it separately.
-    return;
-  }
-
-  transcriptRibbon.hidden = false;
-  const fragment = document.createDocumentFragment();
-  for (const lane of normalized.streams) {
-    for (const word of (lane.stream?.words ?? [])) {
-      const token = document.createElement("span");
-      const commitClass = `commit-${commitmentClass(word.commitment)}`;
-      token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
-      token.textContent = word.text;
-      const revTooltip = formatRevisionTooltip(word);
-      if (revTooltip) {
-        token.title = revTooltip;
-      }
-      fragment.append(token, " ");
-    }
-  }
-  transcriptRibbonText.replaceChildren(fragment);
-}
-
 function normalizePayload(rawPayload) {
-  if (isTimedWordStream(rawPayload)) {
-    return {
-      title: VIEWER_NAME,
-      audio: null,
-      streams: [{ label: defaultLaneLabel(rawPayload, 0), stream: rawPayload }],
-      events: [],
-    };
-  }
-
-  if (Array.isArray(rawPayload)) {
-    return {
-      title: VIEWER_NAME,
-      audio: null,
-      streams: rawPayload.map((stream, index) => ({
-        label: defaultLaneLabel(stream, index),
-        stream,
-      })),
-      events: [],
-    };
-  }
-
   if (
     rawPayload &&
     (Array.isArray(rawPayload.streams) || Array.isArray(rawPayload.events) || Array.isArray(rawPayload.markers))
@@ -836,9 +693,7 @@ function normalizePayload(rawPayload) {
     };
   }
 
-  throw new Error(
-    "payload must be a TimedWordStream, an array of TimedWordStreams, or an object with streams/events",
-  );
+  throw new Error("payload must be an object with streams/events");
 }
 
 function normalizeWordLane(lane) {
