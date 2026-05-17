@@ -3,12 +3,20 @@ use std::collections::VecDeque;
 use crate::audio::frame::AudioFrame;
 use crate::hearing::sound_classify::{SoundFeatures, describe_sound};
 
+const MAX_CAPTURED_ACTIVE_SOUND_MS: u64 = 5_000;
+
 #[derive(Debug, Clone)]
 pub struct EnvironmentalSound {
     pub label: Option<String>,
     pub description: String,
     pub confidence: f32,
     pub salience: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnvironmentalSoundClip {
+    pub sound: EnvironmentalSound,
+    pub frames: Vec<AudioFrame>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,10 +50,18 @@ struct ActiveSound {
     sum_centroid_hz: f32,
     sum_density: f32,
     peak_rms: f32,
+    frames: Vec<AudioFrame>,
 }
 
 impl ActiveSound {
-    fn new(started_at_ms: u64, rms: f32, centroid_hz: f32, density: f32, duration_ms: u64) -> Self {
+    fn new(
+        frame: &AudioFrame,
+        started_at_ms: u64,
+        rms: f32,
+        centroid_hz: f32,
+        density: f32,
+        duration_ms: u64,
+    ) -> Self {
         Self {
             started_at_ms,
             duration_ms,
@@ -53,15 +69,26 @@ impl ActiveSound {
             sum_centroid_hz: centroid_hz,
             sum_density: density,
             peak_rms: rms,
+            frames: vec![frame.clone()],
         }
     }
 
-    fn update(&mut self, rms: f32, centroid_hz: f32, density: f32, duration_ms: u64) {
+    fn update(
+        &mut self,
+        frame: &AudioFrame,
+        rms: f32,
+        centroid_hz: f32,
+        density: f32,
+        duration_ms: u64,
+    ) {
         self.duration_ms = self.duration_ms.saturating_add(duration_ms);
         self.frame_count = self.frame_count.saturating_add(1);
         self.sum_centroid_hz += centroid_hz;
         self.sum_density += density;
         self.peak_rms = self.peak_rms.max(rms);
+        if self.duration_ms <= MAX_CAPTURED_ACTIVE_SOUND_MS {
+            self.frames.push(frame.clone());
+        }
     }
 
     fn avg_centroid_hz(&self) -> f32 {
@@ -114,6 +141,15 @@ impl EnvironmentalSoundObserver {
         frame: &AudioFrame,
         speech_active: bool,
     ) -> Option<EnvironmentalSound> {
+        self.observe_frame_with_audio(frame, speech_active)
+            .map(|clip| clip.sound)
+    }
+
+    pub fn observe_frame_with_audio(
+        &mut self,
+        frame: &AudioFrame,
+        speech_active: bool,
+    ) -> Option<EnvironmentalSoundClip> {
         let duration_ms = frame_duration_ms(frame);
         let frame_started_at_ms = self.frame_time_ms;
         self.frame_time_ms = self.frame_time_ms.saturating_add(duration_ms);
@@ -144,6 +180,7 @@ impl EnvironmentalSoundObserver {
                 self.silence_started_at_ms = None;
                 self.update_noise_floor(rms, false);
                 self.upsert_active_sound(
+                    frame,
                     frame_started_at_ms,
                     duration_ms,
                     rms,
@@ -163,6 +200,7 @@ impl EnvironmentalSoundObserver {
 
     fn upsert_active_sound(
         &mut self,
+        frame: &AudioFrame,
         started_at_ms: u64,
         duration_ms: u64,
         rms: f32,
@@ -170,9 +208,10 @@ impl EnvironmentalSoundObserver {
         temporal_density: f32,
     ) {
         match &mut self.active_sound {
-            Some(active) => active.update(rms, centroid_hz, temporal_density, duration_ms),
+            Some(active) => active.update(frame, rms, centroid_hz, temporal_density, duration_ms),
             None => {
                 self.active_sound = Some(ActiveSound::new(
+                    frame,
                     started_at_ms,
                     rms,
                     centroid_hz,
@@ -187,7 +226,7 @@ impl EnvironmentalSoundObserver {
         &mut self,
         now_ms: u64,
         suppress_emit_for_speech: bool,
-    ) -> Option<EnvironmentalSound> {
+    ) -> Option<EnvironmentalSoundClip> {
         let active = self.active_sound.take()?;
         if suppress_emit_for_speech || active.duration_ms < self.config.min_duration_ms {
             return None;
@@ -224,11 +263,14 @@ impl EnvironmentalSoundObserver {
         }
         self.last_observation_ms = Some(now_ms);
 
-        Some(EnvironmentalSound {
-            label: classification.label,
-            description: classification.description,
-            confidence: classification.confidence,
-            salience,
+        Some(EnvironmentalSoundClip {
+            sound: EnvironmentalSound {
+                label: classification.label,
+                description: classification.description,
+                confidence: classification.confidence,
+                salience,
+            },
+            frames: active.frames,
         })
     }
 
@@ -262,7 +304,7 @@ impl EnvironmentalSoundObserver {
         1_000.0 / mean.max(1.0)
     }
 
-    fn maybe_emit_silence_observation(&mut self) -> Option<EnvironmentalSound> {
+    fn maybe_emit_silence_observation(&mut self) -> Option<EnvironmentalSoundClip> {
         let started = *self.silence_started_at_ms.get_or_insert(self.frame_time_ms);
         let silence_duration_ms = self.frame_time_ms.saturating_sub(started);
         if silence_duration_ms < self.config.silence_min_duration_ms {
@@ -276,14 +318,17 @@ impl EnvironmentalSoundObserver {
             return None;
         }
         self.last_silence_observation_ms = Some(self.frame_time_ms);
-        Some(EnvironmentalSound {
-            label: Some("silence".to_string()),
-            description: format!(
-                "I heard ongoing silence for {}.",
-                format_seconds_duration(silence_duration_ms)
-            ),
-            confidence: 0.95,
-            salience: 0.0,
+        Some(EnvironmentalSoundClip {
+            sound: EnvironmentalSound {
+                label: Some("silence".to_string()),
+                description: format!(
+                    "I heard ongoing silence for {}.",
+                    format_seconds_duration(silence_duration_ms)
+                ),
+                confidence: 0.95,
+                salience: 0.0,
+            },
+            frames: Vec::new(),
         })
     }
 }
@@ -478,6 +523,30 @@ mod tests {
                 .iter()
                 .any(|event| event.description.contains("sharp impact sound"))
         );
+    }
+
+    #[test]
+    fn sound_clip_includes_finalized_environmental_audio() {
+        let mut observer = EnvironmentalSoundObserver::default();
+        for _ in 0..100 {
+            let _ = observer.observe_frame_with_audio(&silence_frame(), false);
+        }
+        let impact = impact_frame();
+        let _ = observer.observe_frame_with_audio(&impact, false);
+
+        let mut output = Vec::new();
+        for _ in 0..25 {
+            if let Some(event) = observer.observe_frame_with_audio(&silence_frame(), false) {
+                output.push(event);
+            }
+        }
+
+        let clip = output
+            .iter()
+            .find(|event| event.sound.description.contains("sharp impact sound"))
+            .expect("impact sound should emit an audio clip");
+        assert_eq!(clip.frames.len(), 1);
+        assert_eq!(clip.frames[0].samples, impact.samples);
     }
 
     #[test]

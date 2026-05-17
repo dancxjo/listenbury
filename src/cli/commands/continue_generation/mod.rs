@@ -113,6 +113,13 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::hearing::environment::EnvironmentalSoundClip;
 #[cfg(any(
     test,
     all(
@@ -3663,6 +3670,17 @@ const SELF_HEARING_OBSERVATION_INTERVAL_MS: u64 = 2_000;
 ))]
 const OVERLAP_OBSERVATION_INTERVAL_MS: u64 = 500;
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const ENVIRONMENTAL_ASR_SILENCE_PADDING_MS: u64 = 250;
+
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -3889,8 +3907,11 @@ fn process_continue_ear_frame(
             process_continue_vad_and_asr_frame(analysis.frame, state, asr_tx, event_tx)?;
         }
         AuditoryRouting::EnvironmentalSoundCandidate => {
-            if let Some(sound) = state.environment.observe_frame(&analysis.frame, false) {
-                let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+            if let Some(clip) = state
+                .environment
+                .observe_frame_with_audio(&analysis.frame, false)
+            {
+                send_environmental_sound_clip(clip, asr_tx, event_tx);
             }
             process_continue_segmenter_silence_frame(
                 analysis.frame.clone(),
@@ -3901,9 +3922,12 @@ fn process_continue_ear_frame(
             send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
         AuditoryRouting::SilenceOrNoise => {
-            if let Some(sound) = state.environment.observe_frame(&analysis.frame, false) {
-                if sound.label.as_deref() != Some("silence") {
-                    let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+            if let Some(clip) = state
+                .environment
+                .observe_frame_with_audio(&analysis.frame, false)
+            {
+                if clip.sound.label.as_deref() != Some("silence") {
+                    send_environmental_sound_clip(clip, asr_tx, event_tx);
                 }
             }
             process_continue_segmenter_silence_frame(
@@ -3918,6 +3942,62 @@ fn process_continue_ear_frame(
 
     state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn send_environmental_sound_clip(
+    clip: EnvironmentalSoundClip,
+    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+) {
+    let EnvironmentalSoundClip { sound, frames } = clip;
+    let should_transcribe = sound.label.as_deref() != Some("silence") && !frames.is_empty();
+    let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
+
+    if should_transcribe {
+        let frames = padded_environmental_asr_frames(&frames, ENVIRONMENTAL_ASR_SILENCE_PADDING_MS);
+        if !frames.is_empty() {
+            let _ = asr_tx.send(frames);
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn padded_environmental_asr_frames(frames: &[AudioFrame], padding_ms: u64) -> Vec<AudioFrame> {
+    let Some(first) = frames.first() else {
+        return Vec::new();
+    };
+    let frame_duration_ms = frame_duration_ms(first);
+    if frame_duration_ms == 0 || padding_ms == 0 {
+        return frames.to_vec();
+    }
+
+    let padding_frames = padding_ms.div_ceil(frame_duration_ms) as usize;
+    let silence_frame = || AudioFrame {
+        captured_at: ExactTimestamp::now(),
+        sample_rate_hz: first.sample_rate_hz,
+        channels: first.channels,
+        samples: vec![0.0; first.samples.len()],
+    };
+
+    let mut padded = Vec::with_capacity(frames.len().saturating_add(padding_frames * 2));
+    padded.extend((0..padding_frames).map(|_| silence_frame()));
+    padded.extend(frames.iter().cloned());
+    padded.extend((0..padding_frames).map(|_| silence_frame()));
+    padded
 }
 
 #[cfg(all(
@@ -4208,11 +4288,14 @@ fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize
     samples_per_channel.saturating_mul(usize::from(channels).max(1))
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     if frame.sample_rate_hz == 0 || frame.channels == 0 {
@@ -5459,10 +5542,11 @@ mod tests {
         TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
-        mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
-        wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event,
-        wrap_time_event,
+        mouth_command_for_runtime_event, next_time_event_interval, padded_environmental_asr_frames,
+        vad_observation_message, wrap_ear_event, wrap_live_input, wrap_mouth_event,
+        wrap_runtime_event, wrap_source_event, wrap_time_event,
     };
+    use listenbury::AudioFrame;
     use listenbury::ExactTimestamp;
     use listenbury::mind::llm::LlmEvent;
     use listenbury::speech::transcript::{
@@ -5622,6 +5706,25 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert!(first[0].text.contains("Heard: hello"));
         assert!(second[0].text.contains("Heard: hello"));
+    }
+
+    #[test]
+    fn environmental_asr_padding_adds_silence_before_and_after_clip() {
+        let clip = vec![AudioFrame {
+            captured_at: ExactTimestamp { unix_nanos: 0 },
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.5; 160],
+        }];
+
+        let padded = padded_environmental_asr_frames(&clip, 20);
+
+        assert_eq!(padded.len(), 5);
+        assert!(padded[0].samples.iter().all(|sample| *sample == 0.0));
+        assert!(padded[1].samples.iter().all(|sample| *sample == 0.0));
+        assert_eq!(padded[2].samples, vec![0.5; 160]);
+        assert!(padded[3].samples.iter().all(|sample| *sample == 0.0));
+        assert!(padded[4].samples.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]

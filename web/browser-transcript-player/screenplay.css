@@ -132,6 +132,9 @@ body {
   margin: 0.55rem 0 0.14rem;
   text-align: center;
   text-transform: uppercase;
+  text-decoration: underline;
+  text-decoration-thickness: 0.06em;
+  text-underline-offset: 0.09em;
 }
 
 .dialogue {
