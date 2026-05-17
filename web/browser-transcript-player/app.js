@@ -27,6 +27,8 @@ const ZOOM_LATEST_WINDOW_MS = 30_000;
 const WORD_DENSITY_LABEL_MIN_PX = 22;
 const WORD_DENSITY_BADGE_MIN_PX = 64;
 const HOVER_PREVIEW_OFFSET_PX = 14;
+const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
+const WAVEFORM_PEAK_BUCKETS = 2_400;
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -47,6 +49,9 @@ const LIVE_EVENT_LANE = {
   asr_timed_word_stream: "ASR",
   llm_generation_started: "LLM",
   first_llm_token: "LLM",
+  llm_token: "LLM",
+  llm_token_delta: "LLM",
+  token_emitted: "LLM",
   first_safe_speech_unit_emitted: "LLM",
   speech_unit_committed: "LLM",
   speech_unit_cancelled: "LLM",
@@ -56,6 +61,12 @@ const LIVE_EVENT_LANE = {
   playback_finished: "Speaker",
   self_hearing_suppression_started: "Speaker",
   self_hearing_suppression_ended: "Speaker",
+  face_expression: "Emotion",
+  face_state: "Emotion",
+  facial_expression: "Emotion",
+  expression_changed: "Emotion",
+  emotion_state: "Emotion",
+  affect_state: "Emotion",
 };
 
 // Span pairing rules: maps start-event kind → { end-event kind, lane }.
@@ -99,6 +110,7 @@ const state = {
   followLatest: false,
   dragSelection: null,
   brushSelection: null,
+  waveform: { url: null, peaks: null, durationMs: 0, status: "idle" },
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
@@ -923,6 +935,9 @@ function semanticSpanLabel(session, kind, turnId, fallback) {
 function semanticEventLabel(event) {
   return (
     normalizeSemanticText(event.text) ??
+    normalizeSemanticText(event.face) ??
+    normalizeSemanticText(event.emotion) ??
+    normalizeSemanticText(event.affect) ??
     transcriptCandidateText(event.artifact) ??
     wordStreamText(event.artifact?.words) ??
     null
@@ -934,6 +949,10 @@ function semanticLabelFromPayloadEntry(entry, fallback) {
     normalizeSemanticText(entry.text) ??
     normalizeSemanticText(entry.metadata?.text) ??
     normalizeSemanticText(entry.metadata?.event?.text) ??
+    normalizeSemanticText(entry.metadata?.face) ??
+    normalizeSemanticText(entry.metadata?.event?.face) ??
+    normalizeSemanticText(entry.metadata?.emotion) ??
+    normalizeSemanticText(entry.metadata?.affect) ??
     transcriptCandidateText(entry.metadata?.artifact) ??
     transcriptCandidateText(entry.metadata?.event?.artifact) ??
     wordStreamText(entry.metadata?.artifact?.words) ??
@@ -1116,7 +1135,7 @@ function normalizeEvents(events, markers) {
 
     normalizedEvents.push({
       id: entry.id ?? `event-${index + 1}`,
-      lane: entry.lane ?? "Events",
+      lane: semanticLaneForEvent(entry.lane, entry.kind ?? "event", entry.metadata),
       kind: entry.kind ?? "event",
       label: semanticLabelFromPayloadEntry(entry, entry.label ?? entry.kind ?? `Event ${index + 1}`),
       start_ms: startMs,
@@ -1137,7 +1156,7 @@ function normalizeEvents(events, markers) {
 
     normalizedEvents.push({
       id: entry.id ?? `marker-${index + 1}`,
-      lane: entry.lane ?? "Markers",
+      lane: semanticLaneForEvent(entry.lane ?? "Markers", entry.kind ?? "marker", entry.metadata),
       kind: entry.kind ?? "marker",
       label: semanticLabelFromPayloadEntry(entry, entry.label ?? entry.kind ?? `Marker ${index + 1}`),
       start_ms: atMs,
@@ -1170,6 +1189,17 @@ function normalizeEventLanes(events) {
   }));
 }
 
+function semanticLaneForEvent(explicitLane, kind, metadata) {
+  const normalizedKind = String(kind ?? "");
+  if (isEmotionKind(normalizedKind) || metadata?.face || metadata?.emotion || metadata?.affect) {
+    return "Emotion";
+  }
+  if (normalizedKind.includes("token") && explicitLane === "Markers") {
+    return "LLM";
+  }
+  return explicitLane ?? "Events";
+}
+
 function inferPayloadDuration(stream) {
   const timedEnd = Math.max(0, ...stream.words.map((word) => word.timing?.end_ms ?? 0));
   return timedEnd || 1000;
@@ -1177,10 +1207,65 @@ function inferPayloadDuration(stream) {
 
 function configureAudio(audioConfig) {
   if (!audioConfig?.url) {
+    state.waveform = { url: null, peaks: null, durationMs: 0, status: "idle" };
     return;
   }
 
   audio.src = audioConfig.url;
+  void loadWaveform(audioConfig.url);
+}
+
+async function loadWaveform(url) {
+  if (!url || state.waveform.url === url) {
+    return;
+  }
+  state.waveform = { url, peaks: null, durationMs: 0, status: "loading" };
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const buffer = await response.arrayBuffer();
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) {
+      throw new Error("Web Audio API unavailable");
+    }
+    const context = new AudioContextCtor();
+    const audioBuffer = await context.decodeAudioData(buffer.slice(0));
+    await context.close?.();
+    state.waveform = {
+      url,
+      peaks: waveformPeaksFromAudioBuffer(audioBuffer),
+      durationMs: Math.round(audioBuffer.duration * 1000),
+      status: "ready",
+    };
+    renderCustomTimeline();
+  } catch (err) {
+    console.warn("Unable to build waveform overlay:", err);
+    state.waveform = { url, peaks: null, durationMs: 0, status: "error" };
+  }
+}
+
+function waveformPeaksFromAudioBuffer(audioBuffer) {
+  const channelCount = audioBuffer.numberOfChannels;
+  const sampleCount = audioBuffer.length;
+  const bucketCount = Math.min(WAVEFORM_PEAK_BUCKETS, Math.max(1, sampleCount));
+  const samplesPerBucket = Math.max(1, Math.floor(sampleCount / bucketCount));
+  const peaks = [];
+
+  for (let bucket = 0; bucket < bucketCount; bucket++) {
+    const start = bucket * samplesPerBucket;
+    const end = bucket === bucketCount - 1 ? sampleCount : Math.min(sampleCount, start + samplesPerBucket);
+    let peak = 0;
+    for (let channel = 0; channel < channelCount; channel++) {
+      const data = audioBuffer.getChannelData(channel);
+      for (let i = start; i < end; i++) {
+        peak = Math.max(peak, Math.abs(data[i] ?? 0));
+      }
+    }
+    peaks.push(Math.min(1, peak));
+  }
+  return peaks;
 }
 
 function syncMaxDurationWithAudio() {
@@ -1368,6 +1453,10 @@ function renderCustomTimeline() {
       .join(" ");
     trackEl.dataset.laneIndex = String(laneIndex);
 
+    if (lane.type === "word") {
+      appendWaveformOverlay(trackEl, trackContentWidth);
+    }
+
     // Time-range selection overlay
     const selOverlay = document.createElement("div");
     selOverlay.className = "time-range-selection";
@@ -1391,6 +1480,7 @@ function renderCustomTimeline() {
           state.selectedItem.itemIndex === wordIndex;
         const isActive = nowMs >= startMs && nowMs <= endMs;
         const widthPx = Math.max(2, pxForMs(endMs - startMs));
+        const prosodyLevel = prosodyLevelForWord(word);
         const densityClass =
           widthPx < WORD_DENSITY_LABEL_MIN_PX
             ? "density-word"
@@ -1404,6 +1494,7 @@ function renderCustomTimeline() {
           `source-${classToken(lane.stream.source)}`,
           densityClass,
           word.timingResolution === "fallback-layout" ? "fallback-timing" : "",
+          prosodyLevel !== null ? "has-prosody" : "",
           `commit-${commitmentClass(word.commitment)}`,
           word._revisions?.length ? "was-revised" : "",
         ]
@@ -1421,6 +1512,9 @@ function renderCustomTimeline() {
         chip.dataset.itemType = "word";
         chip.style.left = `${pxForMs(startMs)}px`;
         chip.style.width = `${widthPx}px`;
+        if (prosodyLevel !== null) {
+          chip.style.setProperty("--prosody-level", String(prosodyLevel));
+        }
         chip.title = `${lane.label} · ${word.text} (${startMs}–${endMs} ms) · ${word.timingSourceDetail}`;
         chip.setAttribute("aria-label", `${lane.label}: ${word.text}`);
         if (densityClass === "density-word") {
@@ -1428,6 +1522,7 @@ function renderCustomTimeline() {
         } else {
           appendWordChipContent(chip, word, densityClass === "detailed-word");
         }
+        appendAlignmentHandles(chip, word);
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
       });
@@ -1451,8 +1546,10 @@ function renderCustomTimeline() {
           `lane-${classToken(lane.label)}`,
           event.style,
           `kind-${classToken(event.kind)}`,
-          event.kind === "overlap_detected" ? "overlap-region" : "",
-          event.kind === "speech_unit_cancelled" ? "interruption-region" : "",
+          isOverlapKind(event.kind) ? "overlap-region" : "",
+          isInterruptionKind(event.kind) ? "interruption-region" : "",
+          isTokenKind(event.kind) ? "token-region" : "",
+          isEmotionKind(event.kind) ? "emotion-region" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -1492,6 +1589,57 @@ function renderCustomTimeline() {
   if (state.followLatest) {
     applyFollowLatest();
   }
+}
+
+function appendWaveformOverlay(trackEl, trackContentWidth) {
+  if (state.waveform.status !== "ready" || !state.waveform.peaks?.length || state.waveform.durationMs <= 0) {
+    return;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.className = "waveform-overlay";
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.style.width = `${trackContentWidth}px`;
+  trackEl.append(canvas);
+
+  requestAnimationFrame(() => drawWaveformOverlay(canvas, trackContentWidth));
+}
+
+function drawWaveformOverlay(canvas, trackContentWidth) {
+  const peaks = state.waveform.peaks;
+  if (!peaks?.length) {
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = Math.max(1, Math.min(trackContentWidth, WAVEFORM_CANVAS_MAX_WIDTH_PX));
+  const cssHeight = Math.max(1, rect.height || 80);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.strokeStyle = "rgba(99, 210, 255, 0.18)";
+  ctx.lineWidth = 1;
+  const centerY = cssHeight / 2;
+  const maxAmp = cssHeight * 0.34;
+  const durationScale = state.maxDurationMs / Math.max(1, state.waveform.durationMs);
+
+  ctx.beginPath();
+  for (let x = 0; x < cssWidth; x++) {
+    const timelineRatio = x / Math.max(1, cssWidth);
+    const audioRatio = Math.min(1, timelineRatio * durationScale);
+    const peakIndex = Math.min(peaks.length - 1, Math.floor(audioRatio * peaks.length));
+    const amp = Math.max(1, peaks[peakIndex] * maxAmp);
+    ctx.moveTo(x + 0.5, centerY - amp);
+    ctx.lineTo(x + 0.5, centerY + amp);
+  }
+  ctx.stroke();
 }
 
 // Update only active/selected classes on existing chips (no DOM rebuild).
@@ -1698,10 +1846,14 @@ function timelineItemFromChip(chip) {
     const word = lane.words?.[itemIndex];
     if (!word) return null;
     const revision = word._revisions?.[word._revisions.length - 1];
+    const prosodyLevel = prosodyLevelForWord(word);
     return {
       title: word.text,
       meta: `${lane.label} · ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · ${describeSpanState(word.commitment)}`,
-      detail: revision ? `revised from "${revision.fromText}" at ${revision.at_ms} ms` : word.timingSourceDetail,
+      detail: [
+        revision ? `revised from "${revision.fromText}" at ${revision.at_ms} ms` : word.timingSourceDetail,
+        prosodyLevel !== null ? `prosody ${(prosodyLevel * 100).toFixed(0)}%` : null,
+      ].filter(Boolean).join(" · "),
     };
   }
 
@@ -1710,8 +1862,28 @@ function timelineItemFromChip(chip) {
   return {
     title: timelineEvent.label,
     meta: `${lane.label} · ${timelineEvent.start_ms}–${timelineEvent.end_ms} ms · ${labelForKind(timelineEvent.kind)}`,
-    detail: timelineEvent.metadata?.derived ? "derived semantic span" : null,
+    detail: eventPreviewDetail(timelineEvent),
   };
+}
+
+function eventPreviewDetail(event) {
+  const details = [];
+  if (event.metadata?.derived) {
+    details.push("derived semantic span");
+  }
+  const face = event.metadata?.face ?? event.metadata?.event?.face;
+  if (face) {
+    details.push(`face ${face}`);
+  }
+  const reason = event.metadata?.reason ?? event.metadata?.event?.reason;
+  if (reason) {
+    details.push(reason);
+  }
+  const action = event.metadata?.action ?? event.metadata?.policy ?? event.metadata?.event?.artifact?.action;
+  if (action) {
+    details.push(String(action));
+  }
+  return details.length ? details.join(" · ") : null;
 }
 
 // Keyboard shortcuts for DAW-style navigation.
@@ -2179,6 +2351,10 @@ function createChipContent(text) {
 }
 
 function appendWordChipContent(chip, word, includeBadges) {
+  const prosodyLevel = prosodyLevelForWord(word);
+  if (prosodyLevel !== null) {
+    chip.append(createProsodyStrip(prosodyLevel));
+  }
   const latestRevision = word._revisions?.[word._revisions.length - 1];
   if (latestRevision?.fromText) {
     const ghost = document.createElement("span");
@@ -2190,6 +2366,30 @@ function appendWordChipContent(chip, word, includeBadges) {
   if (includeBadges) {
     chip.append(createChipBadges([describeShortCommitment(word.commitment)]));
   }
+}
+
+function createProsodyStrip(level) {
+  const strip = document.createElement("span");
+  strip.className = "prosody-strip";
+  strip.setAttribute("aria-hidden", "true");
+  const fill = document.createElement("span");
+  fill.className = "prosody-fill";
+  fill.style.transform = `scaleX(${level})`;
+  strip.append(fill);
+  return strip;
+}
+
+function appendAlignmentHandles(chip, word) {
+  if (!word.timing) {
+    return;
+  }
+  const startHandle = document.createElement("span");
+  startHandle.className = "alignment-handle alignment-start";
+  startHandle.setAttribute("aria-hidden", "true");
+  const endHandle = document.createElement("span");
+  endHandle.className = "alignment-handle alignment-end";
+  endHandle.setAttribute("aria-hidden", "true");
+  chip.append(startHandle, endHandle);
 }
 
 function createTokenDensityBar(word) {
@@ -2229,11 +2429,48 @@ function shortKindLabel(kind) {
     case "speech_started": return "speech";
     case "asr_started": return "asr";
     case "llm_generation_started": return "llm";
+    case "first_llm_token": return "token";
     case "playback_started": return "play";
     case "breath_group": return "breath";
     case "self_hearing_suppression_started": return "self";
     default: return labelForKind(kind).split(" ").slice(0, 2).join(" ");
   }
+}
+
+function prosodyLevelForWord(word) {
+  const candidates = [
+    word.prosody?.energy,
+    word.prosody?.intensity,
+    word.prosody?.volume,
+    word.prosody?.stress,
+    word.energy,
+    word.intensity,
+    word.volume,
+    word.stress,
+  ];
+  const value = candidates.find((candidate) => Number.isFinite(candidate));
+  if (value == null) {
+    return null;
+  }
+  return Number(value) > 1 ? Math.min(1, Number(value) / 100) : Math.max(0, Math.min(1, Number(value)));
+}
+
+function isOverlapKind(kind) {
+  return String(kind ?? "").includes("overlap") || String(kind ?? "").includes("barge");
+}
+
+function isInterruptionKind(kind) {
+  const token = String(kind ?? "");
+  return token.includes("interrupt") || token.includes("yield") || token.includes("cancelled");
+}
+
+function isTokenKind(kind) {
+  return String(kind ?? "").includes("token");
+}
+
+function isEmotionKind(kind) {
+  const token = String(kind ?? "");
+  return token.includes("emotion") || token.includes("affect") || token.includes("face") || token.includes("expression");
 }
 
 function escapeHtml(value) {
