@@ -8,6 +8,148 @@
     )
 ))]
 use super::*;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::speech::transcript::{
+    TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
+};
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct TranscriptStabilityState {
+    pub(super) candidate_id: TranscriptCandidateId,
+    pub(super) stable_text: String,
+    pub(super) unstable_text: String,
+    pub(super) confidence: Option<f32>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl TranscriptStabilityState {
+    pub(super) fn from_parts(
+        candidate_id: TranscriptCandidateId,
+        text: &str,
+        stable_prefix_len: usize,
+        confidence: Option<f32>,
+    ) -> Self {
+        let split = stable_prefix_len.min(text.len());
+        let split = if text.is_char_boundary(split) {
+            split
+        } else {
+            text.char_indices()
+                .find_map(|(idx, ch)| {
+                    let end = idx + ch.len_utf8();
+                    (end >= split).then_some(end)
+                })
+                .unwrap_or(text.len())
+        };
+        let (stable_text, unstable_text) = text.split_at(split);
+        Self {
+            candidate_id,
+            stable_text: stable_text.to_string(),
+            unstable_text: unstable_text.to_string(),
+            confidence,
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+pub(super) struct TranscriptSpeculativePlanner {
+    active_candidate: Option<TranscriptCandidateId>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl TranscriptSpeculativePlanner {
+    pub(super) fn observe(
+        &mut self,
+        event: &TranscriptCandidateEvent,
+    ) -> Option<TranscriptStabilityState> {
+        match event {
+            TranscriptCandidateEvent::CandidateStarted { id } => {
+                self.active_candidate = Some(*id);
+                None
+            }
+            TranscriptCandidateEvent::CandidateUpdated {
+                id,
+                text,
+                stable_prefix_len,
+                confidence,
+            } => {
+                self.active_candidate = Some(*id);
+                Some(TranscriptStabilityState::from_parts(
+                    *id,
+                    text,
+                    *stable_prefix_len,
+                    *confidence,
+                ))
+            }
+            TranscriptCandidateEvent::CandidateReplaced { new, .. } => {
+                self.active_candidate = Some(*new);
+                None
+            }
+            TranscriptCandidateEvent::CandidateFinalized {
+                id,
+                text,
+                confidence,
+            } => {
+                if self.active_candidate == Some(*id) {
+                    self.active_candidate = None;
+                }
+                Some(TranscriptStabilityState::from_parts(
+                    *id,
+                    text,
+                    text.len(),
+                    *confidence,
+                ))
+            }
+            TranscriptCandidateEvent::CandidateCancelled { id } => {
+                if self.active_candidate == Some(*id) {
+                    self.active_candidate = None;
+                }
+                None
+            }
+        }
+    }
+}
 
 #[cfg(any(
     test,
@@ -46,6 +188,11 @@ pub(super) enum ContinueEarEvent {
     Transcript {
         text: String,
         timed_word_stream: TimedWordStream,
+        occurred_at: ExactTimestamp,
+    },
+    TranscriptCandidate {
+        event: TranscriptCandidateEvent,
+        stability: Option<TranscriptStabilityState>,
         occurred_at: ExactTimestamp,
     },
     Error {
@@ -93,6 +240,41 @@ impl ContinueEarEvent {
                 "Someone began speaking while Pete was speaking. self_confidence={self_confidence:.2} external_confidence={external_confidence:.2} duration_ms={duration_ms}"
             ),
             Self::Transcript { text, .. } => format!("Heard: {}", text.trim()),
+            Self::TranscriptCandidate {
+                event,
+                stability,
+                occurred_at: _,
+            } => match event {
+                TranscriptCandidateEvent::CandidateStarted { id } => {
+                    format!("transcript_candidate_started: id={}", id.0)
+                }
+                TranscriptCandidateEvent::CandidateUpdated { id, .. }
+                | TranscriptCandidateEvent::CandidateFinalized { id, .. } => {
+                    if let Some(state) = stability {
+                        format!(
+                            "transcript_candidate_state: id={} stable={:?} unstable={:?} confidence={:?}",
+                            id.0, state.stable_text, state.unstable_text, state.confidence
+                        )
+                    } else {
+                        format!("transcript_candidate_state: id={}", id.0)
+                    }
+                }
+                TranscriptCandidateEvent::CandidateReplaced { old, new, reason } => {
+                    let reason = match reason {
+                        TranscriptReplacementReason::HeadChanged { stable_prefix_len } => {
+                            format!("head_changed stable_prefix_len={stable_prefix_len}")
+                        }
+                        TranscriptReplacementReason::Restarted => "restarted".to_string(),
+                    };
+                    format!(
+                        "transcript_candidate_replaced: old={} new={} reason={}",
+                        old.0, new.0, reason
+                    )
+                }
+                TranscriptCandidateEvent::CandidateCancelled { id } => {
+                    format!("transcript_candidate_cancelled: id={}", id.0)
+                }
+            },
             Self::Error { message } => format!("error: {message}"),
         }
     }
@@ -110,6 +292,7 @@ impl ContinueEarEvent {
             Self::ListeningStarted { .. }
             | Self::SpeechStarted
             | Self::SpeechStopped
+            | Self::TranscriptCandidate { .. }
             | Self::Error { .. } => None,
         }
     }

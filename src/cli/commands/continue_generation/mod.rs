@@ -316,6 +316,13 @@ mod prompt;
 mod source;
 mod trace;
 
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use ear::TranscriptStabilityState;
 #[cfg(any(
     test,
     all(
@@ -325,7 +332,7 @@ mod trace;
         feature = "tts-piper"
     )
 ))]
-use ear::ContinueEarEvent;
+use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
 #[cfg(any(
     test,
     all(
@@ -549,6 +556,57 @@ fn emit_live_asr_trace_events(
     stream_event.artifact =
         Some(serde_json::to_value(stream).context("serialize ASR TimedWordStream artifact")?);
     trace.emit(stream_event)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_live_asr_candidate_trace_event(
+    trace: &mut ContinueLiveTrace,
+    turn: u64,
+    event: &listenbury::speech::transcript::TranscriptCandidateEvent,
+    stability: Option<&TranscriptStabilityState>,
+    occurred_at: ExactTimestamp,
+) -> Result<()> {
+    let mut candidate_event = trace.event(turn, "transcript_candidate", occurred_at);
+    candidate_event.text = Some(match event {
+        listenbury::speech::transcript::TranscriptCandidateEvent::CandidateStarted { id } => {
+            format!("candidate_started id={}", id.0)
+        }
+        listenbury::speech::transcript::TranscriptCandidateEvent::CandidateUpdated {
+            id, ..
+        } => {
+            format!("candidate_updated id={}", id.0)
+        }
+        listenbury::speech::transcript::TranscriptCandidateEvent::CandidateReplaced {
+            old,
+            new,
+            reason,
+        } => format!(
+            "candidate_replaced old={} new={} reason={reason:?}",
+            old.0, new.0
+        ),
+        listenbury::speech::transcript::TranscriptCandidateEvent::CandidateFinalized {
+            id, ..
+        } => {
+            format!("candidate_finalized id={}", id.0)
+        }
+        listenbury::speech::transcript::TranscriptCandidateEvent::CandidateCancelled { id } => {
+            format!("candidate_cancelled id={}", id.0)
+        }
+    });
+    if let Some(stability) = stability {
+        candidate_event.artifact = Some(json!({
+            "candidate_id": stability.candidate_id.0,
+            "stable_text": stability.stable_text,
+            "unstable_text": stability.unstable_text,
+            "confidence": stability.confidence,
+        }));
+    }
+    trace.emit(candidate_event)
 }
 
 #[cfg(all(
@@ -2286,6 +2344,20 @@ fn append_pending_live_events(
                     *occurred_at,
                 )?;
             }
+            ContinueEarEvent::TranscriptCandidate {
+                event,
+                stability,
+                occurred_at,
+            } => {
+                eprintln!("[ear] {}", ear_event.to_message());
+                emit_live_asr_candidate_trace_event(
+                    live_trace,
+                    live_trace_turn.saturating_add(1),
+                    event,
+                    stability.as_ref(),
+                    *occurred_at,
+                )?;
+            }
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::SpeechStarted
             | ContinueEarEvent::SpeechStopped
@@ -2711,6 +2783,7 @@ impl DuplexTurnController {
                 self.external_speech_started_at =
                     Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
             }
+            ContinueEarEvent::TranscriptCandidate { .. } => {}
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::AuditoryObservation { .. }
             | ContinueEarEvent::EnvironmentalSound { .. }
@@ -3315,27 +3388,44 @@ impl ContinueEar {
             .name("listenbury-dev-continue-asr".to_string())
             .spawn(move || {
                 let mut next_stream_id = 1u64;
+                let mut speculative_planner = TranscriptSpeculativePlanner::default();
                 while !stop_for_asr.load(Ordering::Relaxed) {
                     match asr_rx.recv_timeout(Duration::from_millis(20)) {
                         Ok(frames) => match transcribe_group(&frames, &mut recognizer) {
-                            Ok(text) if !text.is_empty() => {
-                                let timed_word_stream = live_asr_text_to_word_stream(
-                                    WordStreamId(next_stream_id),
-                                    &text,
-                                );
-                                next_stream_id = next_stream_id.saturating_add(1);
-                                if event_tx_for_asr
-                                    .send(ContinueEarEvent::Transcript {
-                                        text,
-                                        timed_word_stream,
-                                        occurred_at: ExactTimestamp::now(),
-                                    })
-                                    .is_err()
-                                {
-                                    return;
+                            Ok(output) => {
+                                let observed_at = ExactTimestamp::now();
+                                for event in output.candidate_events {
+                                    let stability = speculative_planner.observe(&event);
+                                    if event_tx_for_asr
+                                        .send(ContinueEarEvent::TranscriptCandidate {
+                                            event,
+                                            stability,
+                                            occurred_at: observed_at,
+                                        })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+
+                                if !output.text.is_empty() {
+                                    let timed_word_stream = live_asr_text_to_word_stream(
+                                        WordStreamId(next_stream_id),
+                                        &output.text,
+                                    );
+                                    next_stream_id = next_stream_id.saturating_add(1);
+                                    if event_tx_for_asr
+                                        .send(ContinueEarEvent::Transcript {
+                                            text: output.text,
+                                            timed_word_stream,
+                                            occurred_at: observed_at,
+                                        })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
                                 }
                             }
-                            Ok(_) => {}
                             Err(error) => {
                                 let _ = event_tx_for_asr.send(ContinueEarEvent::Error {
                                     message: error.to_string(),
@@ -5203,8 +5293,8 @@ mod tests {
         ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat, ContinuePromptGate,
         ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
         RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
-        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TypeScriptCommand,
-        build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TranscriptSpeculativePlanner,
+        TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
@@ -5213,6 +5303,9 @@ mod tests {
     };
     use listenbury::ExactTimestamp;
     use listenbury::mind::llm::LlmEvent;
+    use listenbury::speech::transcript::{
+        TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
+    };
     use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
 
     #[test]
@@ -5367,6 +5460,77 @@ mod tests {
         assert_eq!(second.len(), 1);
         assert!(first[0].text.contains("Heard: hello"));
         assert!(second[0].text.contains("Heard: hello"));
+    }
+
+    #[test]
+    fn transcript_speculative_planner_tracks_stable_and_unstable_segments() {
+        let mut planner = TranscriptSpeculativePlanner::default();
+        assert!(
+            planner
+                .observe(&TranscriptCandidateEvent::CandidateStarted {
+                    id: TranscriptCandidateId(1),
+                })
+                .is_none()
+        );
+
+        let first = planner
+            .observe(&TranscriptCandidateEvent::CandidateUpdated {
+                id: TranscriptCandidateId(1),
+                text: "can you".to_string(),
+                stable_prefix_len: "can ".len(),
+                confidence: Some(0.7),
+            })
+            .expect("stability update");
+        assert_eq!(first.stable_text, "can ");
+        assert_eq!(first.unstable_text, "you");
+        assert_eq!(first.confidence, Some(0.7));
+
+        let second = planner
+            .observe(&TranscriptCandidateEvent::CandidateUpdated {
+                id: TranscriptCandidateId(1),
+                text: "can you tell".to_string(),
+                stable_prefix_len: "can you".len(),
+                confidence: Some(0.8),
+            })
+            .expect("stability update");
+        assert_eq!(second.stable_text, "can you");
+        assert_eq!(second.unstable_text, " tell");
+        assert_eq!(second.confidence, Some(0.8));
+    }
+
+    #[test]
+    fn transcript_candidate_head_replacement_is_exposed_beyond_recognizer() {
+        let event = ContinueEarEvent::TranscriptCandidate {
+            event: TranscriptCandidateEvent::CandidateReplaced {
+                old: TranscriptCandidateId(3),
+                new: TranscriptCandidateId(4),
+                reason: TranscriptReplacementReason::HeadChanged {
+                    stable_prefix_len: 0,
+                },
+            },
+            stability: None,
+            occurred_at: ExactTimestamp { unix_nanos: 42 },
+        };
+
+        assert!(event.to_message().contains(
+            "transcript_candidate_replaced: old=3 new=4 reason=head_changed stable_prefix_len=0"
+        ));
+        assert!(event.direct_prompt_packet().is_none());
+    }
+
+    #[test]
+    fn transcript_speculative_planner_snaps_to_character_boundary() {
+        let mut planner = TranscriptSpeculativePlanner::default();
+        let state = planner
+            .observe(&TranscriptCandidateEvent::CandidateUpdated {
+                id: TranscriptCandidateId(1),
+                text: "héllo".to_string(),
+                stable_prefix_len: 2,
+                confidence: None,
+            })
+            .expect("stability update");
+        assert_eq!(state.stable_text, "hé");
+        assert_eq!(state.unstable_text, "llo");
     }
 
     #[test]
