@@ -360,7 +360,7 @@ function syncMaxDurationWithAudio() {
 
 function render() {
   viewerTitle.textContent = state.payload?.title ?? "No stream loaded";
-  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
+  playbackTime.textContent = formatPlaybackTime();
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
 
   if (!state.lanes.length) {
@@ -511,7 +511,7 @@ function renderEventLane(lane) {
 }
 
 function refreshPlaybackState() {
-  playbackTime.textContent = `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
+  playbackTime.textContent = formatPlaybackTime();
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
   const nowMs = Math.round(audio.currentTime * 1000);
 
@@ -838,4 +838,8 @@ function coerceMs(value, label) {
     throw new Error(`${label} must be a finite number, received: ${String(value)}`);
   }
   return Math.max(0, Math.round(value));
+}
+
+function formatPlaybackTime() {
+  return `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
 }
