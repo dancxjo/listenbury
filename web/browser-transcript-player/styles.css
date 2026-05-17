@@ -253,6 +253,7 @@ h1 {
 .lane-label-entry {
   min-height: 6.5rem;
   overflow: hidden;
+  border-bottom: 1px solid rgba(44, 55, 66, 0.5);
 }
 
 .lane-label-entry.event-lane {
@@ -351,10 +352,6 @@ h1 {
   background: #121820;
 }
 
-.lane-label-entry {
-  border-bottom: 1px solid rgba(44, 55, 66, 0.5);
-}
-
 .lane-header h2 {
   margin: 0;
   color: #d8e2ea;
@@ -391,12 +388,6 @@ h1 {
   min-height: 4.25rem;
 }
 
-/* Active toggle button (e.g. Follow Latest when enabled) */
-.active-toggle {
-  border-color: var(--accent);
-  background: rgba(99, 210, 255, 0.14);
-  color: var(--accent);
-}
 
 .timeline-chip {
   position: absolute;

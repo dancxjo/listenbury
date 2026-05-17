@@ -9,6 +9,9 @@ const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
+const MAX_RULER_TICKS = 200;
+// How long a point-in-time marker appears "active" during playback (ms).
+const MARKER_ACTIVE_DURATION_MS = 120;
 
 // Custom timeline renderer settings
 const DEFAULT_ZOOM_PX_PER_SECOND = 80;
@@ -1091,7 +1094,7 @@ function renderCustomTimeline() {
   rulerEl.className = "timeline-ruler";
   const col = getScrollContainer();
   const vpMs = col ? Math.max(MIN_VIEW_DURATION_MS, msForPx(col.clientWidth)) : state.maxDurationMs;
-  const rulerTicks = buildAllRulerTicks(state.maxDurationMs, vpMs);
+  const rulerTicks = buildRulerTicks(state.maxDurationMs, vpMs);
   rulerTicks.forEach((ms) => {
     const tick = document.createElement("span");
     tick.className = "ruler-tick";
@@ -1187,7 +1190,7 @@ function renderCustomTimeline() {
           state.selectedItem?.type === "event" &&
           state.selectedItem.laneIndex === laneIndex &&
           state.selectedItem.itemIndex === eventIndex;
-        const activeEndMs = isMarker ? startMs + 120 : endMs;
+        const activeEndMs = isMarker ? startMs + MARKER_ACTIVE_DURATION_MS : endMs;
         const isActive = nowMs >= startMs && nowMs <= activeEndMs;
 
         const baseClass = [
@@ -1235,12 +1238,9 @@ function updateChipStates() {
   for (const [key, chip] of state.chipElementByKey.entries()) {
     const timing = state.itemTimingByKey.get(key);
     if (!timing) continue;
-    const parts = key.split(":");
-    const itemType = parts[0];
-    const laneIndex = parseInt(parts[1], 10);
-    const itemIndex = parseInt(parts[2], 10);
+    const { itemType, laneIndex, itemIndex } = parseItemKey(key);
     const isMarker = timing.endMs <= timing.startMs;
-    const activeEndMs = isMarker ? timing.startMs + 120 : timing.endMs;
+    const activeEndMs = isMarker ? timing.startMs + MARKER_ACTIVE_DURATION_MS : timing.endMs;
     const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
     const isSelected =
       state.selectedItem?.type === itemType &&
@@ -1256,17 +1256,19 @@ function updateChipStates() {
   }
 }
 
-// Build a sorted deduplicated list of ruler tick timestamps covering [0..maxDurationMs].
-// Uses viewportMs to determine spacing so ~10 ticks are visible per screenful.
-// Caps at 200 total ticks to avoid excessive DOM nodes for long sessions.
-function buildAllRulerTicks(maxDurationMs, viewportMs) {
+// Build ruler tick timestamps covering [0..maxDurationMs].
+// Spacing is based on viewportMs so ~10 ticks appear per visible screen width.
+// Capped at MAX_RULER_TICKS to avoid excessive DOM nodes for long sessions.
+function buildRulerTicks(maxDurationMs, viewportMs) {
   const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewportMs);
   const targetSegments = 10;
+  // Candidate step sizes in ms: from fine-grained (25ms) to coarse (10min)
   const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
   const desiredStep = safeDuration / targetSegments;
-  // Also enforce a minimum step to keep total tick count under 200
-  const minStepForMaxTicks = maxDurationMs / 200;
+  // Enforce a minimum step to keep total tick count under MAX_RULER_TICKS
+  const minStepForMaxTicks = maxDurationMs / MAX_RULER_TICKS;
   const effectiveDesiredStep = Math.max(desiredStep, minStepForMaxTicks);
+  // Candidate steps: 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 15s, 30s, 1min, 2min, 5min, 10min
   const stepMs = preferredSteps.find((step) => step >= effectiveDesiredStep) ?? 600_000;
 
   const ticks = [];
@@ -1559,7 +1561,7 @@ function startTimeRangeSelection(event) {
     return;
   }
 
-  const startMs = timeMsAtClientX(event.clientX);
+  const startMs = clientXToTimelineMs(event.clientX);
   if (startMs === null) {
     return;
   }
@@ -1582,7 +1584,7 @@ function moveTimeRangeSelection(event) {
     return;
   }
 
-  const endMs = timeMsAtClientX(event.clientX);
+  const endMs = clientXToTimelineMs(event.clientX);
   if (endMs === null) {
     return;
   }
@@ -1596,7 +1598,7 @@ function finishTimeRangeSelection(event) {
   }
 
   const dragSelection = state.dragSelection;
-  const endMs = timeMsAtClientX(event.clientX);
+  const endMs = clientXToTimelineMs(event.clientX);
   if (endMs !== null) {
     dragSelection.endMs = endMs;
   }
@@ -1643,7 +1645,7 @@ function cancelTimeRangeSelection(event) {
   updateTimeRangeSelectionOverlays();
 }
 
-function timeMsAtClientX(clientX) {
+function clientXToTimelineMs(clientX) {
   const col = getScrollContainer();
   if (!col) return null;
   const rect = col.getBoundingClientRect();
@@ -1738,6 +1740,11 @@ function describeTimingSource(word, hasMeasuredTiming) {
 
 function itemKey(itemType, laneIndex, itemIndex) {
   return `${itemType}:${laneIndex}:${itemIndex}`;
+}
+
+function parseItemKey(key) {
+  const [itemType, laneStr, itemStr] = key.split(":");
+  return { itemType, laneIndex: parseInt(laneStr, 10), itemIndex: parseInt(itemStr, 10) };
 }
 
 function classToken(value) {
