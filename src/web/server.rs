@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,6 +25,49 @@ struct ServerState {
     payload: Option<PathBuf>,
     trace: Option<PathBuf>,
     broadcaster: Option<SseBroadcaster>,
+}
+
+pub struct BoundServer {
+    listener: TcpListener,
+    local_addr: SocketAddr,
+    state: Arc<ServerState>,
+}
+
+impl BoundServer {
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn serve(self) -> Result<()> {
+        println!(
+            "Listenbury web viewer serving on http://{}",
+            self.local_addr
+        );
+        println!("Routes: /, /assets/*, /demo, /api/*, /api/live-events, /healthz");
+
+        for stream in self.listener.incoming() {
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    eprintln!("web viewer accept error: {error}");
+                    continue;
+                }
+            };
+            let state = Arc::clone(&self.state);
+            std::thread::spawn(move || {
+                if let Err(error) = handle_connection(&mut stream, &state) {
+                    eprintln!("web viewer request error: {error:#}");
+                    let _ = write_response(
+                        &mut stream,
+                        &HttpResponse::internal_error("request handling failed\n"),
+                        false,
+                    );
+                }
+            });
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -106,14 +149,15 @@ impl HttpResponse {
 }
 
 pub fn serve(config: ServeConfig) -> Result<()> {
+    bind(config)?.serve()
+}
+
+pub fn bind(config: ServeConfig) -> Result<BoundServer> {
     let listener = TcpListener::bind((config.host.as_str(), config.port))
         .with_context(|| format!("bind web viewer server to {}:{}", config.host, config.port))?;
     let local_addr = listener
         .local_addr()
         .context("read bound web viewer local address")?;
-
-    println!("Listenbury web viewer serving on http://{local_addr}");
-    println!("Routes: /, /assets/*, /demo, /api/*, /api/live-events, /healthz");
 
     let state = Arc::new(ServerState {
         payload: config.payload,
@@ -121,28 +165,11 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         broadcaster: config.broadcaster,
     });
 
-    for stream in listener.incoming() {
-        let mut stream = match stream {
-            Ok(stream) => stream,
-            Err(error) => {
-                eprintln!("web viewer accept error: {error}");
-                continue;
-            }
-        };
-        let state = Arc::clone(&state);
-        std::thread::spawn(move || {
-            if let Err(error) = handle_connection(&mut stream, &state) {
-                eprintln!("web viewer request error: {error:#}");
-                let _ = write_response(
-                    &mut stream,
-                    &HttpResponse::internal_error("request handling failed\n"),
-                    false,
-                );
-            }
-        });
-    }
-
-    Ok(())
+    Ok(BoundServer {
+        listener,
+        local_addr,
+        state,
+    })
 }
 
 fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result<()> {
@@ -503,5 +530,25 @@ mod tests {
         assert!(response.contains("Content-Type: text/event-stream"));
         assert!(response.contains("event: live-unavailable"));
         assert!(response.contains("no active listen session"));
+    }
+
+    #[test]
+    fn bind_reports_port_in_use_before_serving() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind occupied test port");
+        let addr = listener.local_addr().expect("occupied local addr");
+
+        let error = bind(ServeConfig {
+            host: "127.0.0.1".to_string(),
+            port: addr.port(),
+            payload: None,
+            trace: None,
+            broadcaster: None,
+        })
+        .expect_err("second bind should fail");
+
+        assert!(
+            format!("{error:#}").contains("bind web viewer server to 127.0.0.1"),
+            "unexpected bind error: {error:#}"
+        );
     }
 }

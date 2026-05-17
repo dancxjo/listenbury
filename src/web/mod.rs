@@ -1,4 +1,4 @@
 mod assets;
 mod server;
 
-pub use server::{ServeConfig, serve};
+pub use server::{BoundServer, ServeConfig, bind, serve};

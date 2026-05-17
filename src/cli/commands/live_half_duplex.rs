@@ -557,7 +557,6 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
         let bind_host = command.web_host.clone();
-        let web_port = command.web_port;
         let browser_host = match bind_host.as_str() {
             "0.0.0.0" => "127.0.0.1".to_string(),
             "::" => "[::1]".to_string(),
@@ -572,15 +571,18 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 }
             }
         };
+        let server = listenbury::web::bind(listenbury::web::ServeConfig {
+            host: bind_host,
+            port: command.web_port,
+            payload: None,
+            trace: None,
+            broadcaster: Some(server_bc),
+        })
+        .context("failed to start embedded web viewer")?;
+        let web_port = server.local_addr().port();
         let url = format!("http://{}:{}/", browser_host, web_port);
         std::thread::spawn(move || {
-            if let Err(e) = listenbury::web::serve(listenbury::web::ServeConfig {
-                host: bind_host,
-                port: web_port,
-                payload: None,
-                trace: None,
-                broadcaster: Some(server_bc),
-            }) {
+            if let Err(e) = server.serve() {
                 eprintln!("embedded web server error: {e:#}");
             }
         });
