@@ -72,6 +72,23 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "tts-piper"
 ))]
 use cpal::{FromSample, Sample, SizedSample};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::VadBackendKind;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::WhisperSpeechRecognizer;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -112,13 +129,6 @@ use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 use listenbury::hearing::{
     AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
 #[cfg(any(
     test,
     all(
@@ -129,6 +139,13 @@ use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
     )
 ))]
 use listenbury::mind::llm::LlmEvent;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
 #[cfg(any(
     test,
     all(
@@ -160,23 +177,6 @@ use listenbury::mouth::tts::TextToSpeech;
     feature = "tts-piper"
 ))]
 use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::WhisperSpeechRecognizer;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-use listenbury::VadBackendKind;
 #[cfg(any(
     test,
     all(
@@ -301,16 +301,6 @@ use ear::ContinueEarEvent;
         feature = "tts-piper"
     )
 ))]
-use source::SourceCommand;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
 use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
 #[cfg(any(
     test,
@@ -322,6 +312,16 @@ use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
     )
 ))]
 use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use source::SourceCommand;
 #[cfg(any(
     test,
     all(
@@ -2690,8 +2690,7 @@ fn drain_mouth_events_into_llm(
                     }
                     ContinueMouthEvent::SpeechQueued { .. }
                     | ContinueMouthEvent::SpeechSynthesisStarted { .. }
-                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
-                    => {}
+                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. } => {}
                 }
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
@@ -4378,7 +4377,6 @@ enum SpeechControlCommand {
     Pause,
     Resume,
 }
-
 
 #[cfg(test)]
 impl ContinueRuntimeEvent {
