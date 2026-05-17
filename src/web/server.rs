@@ -44,7 +44,7 @@ impl BoundServer {
             "Listenbury web viewer serving on http://{}",
             self.local_addr
         );
-        println!("Routes: /, /assets/*, /api/*, /api/live-events, /healthz");
+        println!("Routes: /, /screenplay, /assets/*, /api/*, /api/live-events, /healthz");
 
         for stream in self.listener.incoming() {
             let mut stream = match stream {
@@ -275,13 +275,23 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
     let path = target.split('?').next().unwrap_or("/");
     match path {
         "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
+        "/screenplay" | "/screenplay/" => {
+            HttpResponse::ok("text/html; charset=utf-8", assets::SCREENPLAY_HTML)
+        }
         "/healthz" => HttpResponse::ok("text/plain; charset=utf-8", "ok\n"),
 
         "/app.js" | "/assets/app.js" => {
             HttpResponse::ok("application/javascript; charset=utf-8", assets::APP_JS)
         }
+        "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SCREENPLAY_JS,
+        ),
         "/styles.css" | "/assets/styles.css" => {
             HttpResponse::ok("text/css; charset=utf-8", assets::STYLES_CSS)
+        }
+        "/screenplay.css" | "/assets/screenplay.css" => {
+            HttpResponse::ok("text/css; charset=utf-8", assets::SCREENPLAY_CSS)
         }
         "/demo.json" | "/assets/demo.json" | "/api/demo-payload" => {
             HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
@@ -462,6 +472,26 @@ mod tests {
         let response = route_request("GET", "/", &live_state());
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
+    }
+
+    #[test]
+    fn serves_live_screenplay_page_and_assets() {
+        let state = live_state();
+
+        let page = route_request("GET", "/screenplay", &state);
+        assert_eq!(page.status, 200);
+        assert_eq!(page.content_type, "text/html; charset=utf-8");
+        let page_body = String::from_utf8(page.body).expect("utf8 page");
+        assert!(page_body.contains("The Life of Pete Listenbury"));
+        assert!(page_body.contains("by Pete Listenbury"));
+
+        let script = route_request("GET", "/assets/screenplay.js", &state);
+        assert_eq!(script.status, 200);
+        assert_eq!(script.content_type, "application/javascript; charset=utf-8");
+
+        let styles = route_request("GET", "/assets/screenplay.css", &state);
+        assert_eq!(styles.status, 200);
+        assert_eq!(styles.content_type, "text/css; charset=utf-8");
     }
 
     #[test]

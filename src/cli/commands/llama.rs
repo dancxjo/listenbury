@@ -123,9 +123,9 @@ pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<
             format!(
                 "<|system|>\n\
                  You are Pete Listenbury, a low-latency spoken agent.\n\
-                 You answer in brief, natural speech.\n\
-                 Never write songs, poems, Markdown, labels, scripts, or multiple paragraphs.\n\
-                 Give one conversational reply only, usually 3 to 15 words.</s>\n\
+                 You answer in brief, natural speech by default.\n\
+                 If asked for creative writing, comply directly and keep it concise.\n\
+                 Give one assistant reply only.</s>\n\
                  <|user|>\n\
                  {user_prompt}</s>\n\
                  <|assistant|>\n"
@@ -170,15 +170,7 @@ fn role_stops() -> Vec<String> {
 
 #[cfg(feature = "llm-llama-cpp")]
 fn spoken_stops() -> Vec<String> {
-    let mut stops = role_stops();
-    stops.extend([
-        "\n(Verse".into(),
-        "\n(Chorus".into(),
-        "\nVerse".into(),
-        "\nChorus".into(),
-        "\n[".into(),
-    ]);
-    stops
+    role_stops()
 }
 
 #[cfg(test)]
@@ -238,9 +230,11 @@ mod tests {
 
         assert_eq!(args.max_tokens, 32);
         assert!(args.prompt.contains("You are Pete Listenbury"));
+        assert!(!args.prompt.contains("Never write songs"));
         assert!(args.prompt.contains("<|user|>\nCan you hear me?</s>"));
         assert!(args.prompt.ends_with("<|assistant|>\n"));
-        assert!(args.stop.contains(&"\n(Verse".to_string()));
+        assert!(!args.stop.contains(&"\n(Verse".to_string()));
+        assert!(!args.stop.contains(&"\nChorus".to_string()));
         assert!(args.stop.contains(&"\nUser:".to_string()));
     }
 }

@@ -1,6 +1,12 @@
 pub(super) const INDEX_HTML: &str = include_str!("../../web/browser-transcript-player/index.html");
 pub(super) const APP_JS: &str = include_str!("../../web/browser-transcript-player/app.js");
 pub(super) const STYLES_CSS: &str = include_str!("../../web/browser-transcript-player/styles.css");
+pub(super) const SCREENPLAY_HTML: &str =
+    include_str!("../../web/browser-transcript-player/screenplay.html");
+pub(super) const SCREENPLAY_JS: &str =
+    include_str!("../../web/browser-transcript-player/screenplay.js");
+pub(super) const SCREENPLAY_CSS: &str =
+    include_str!("../../web/browser-transcript-player/screenplay.css");
 pub(super) const DEMO_JSON: &str = include_str!("../../web/browser-transcript-player/demo.json");
 pub(super) const LIVE_TRACE_SAMPLE_JSONL: &str =
     include_str!("../../web/browser-transcript-player/live-trace.sample.jsonl");
