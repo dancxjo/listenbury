@@ -27,6 +27,9 @@ use crate::word::stream::{
     WordStreamSource, WordTiming,
 };
 
+const MIN_REFINED_WORD_DURATION_MS: u64 = 20;
+const BOUNDARY_SEARCH_RADIUS_MS: u64 = 120;
+
 // ---------------------------------------------------------------------------
 // Input type
 // ---------------------------------------------------------------------------
@@ -166,6 +169,154 @@ impl WordBoundaryRefiner for NoopWordBoundaryRefiner {
     }
 }
 
+/// First-pass heuristic acoustic boundary refiner.
+///
+/// Uses a local energy-minimum search around each Whisper-adjacent boundary to
+/// nudge boundaries toward likely pause regions in the waveform.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HeuristicAcousticWordBoundaryRefiner;
+
+impl WordBoundaryRefiner for HeuristicAcousticWordBoundaryRefiner {
+    fn refine(&self, audio: &[AudioFrame], stream: &mut TimedWordStream) {
+        let Some(energy_per_ms) = energy_profile_per_ms(audio) else {
+            return;
+        };
+        if stream.words.len() < 2 {
+            return;
+        }
+
+        for i in 0..stream.words.len().saturating_sub(1) {
+            let left = &stream.words[i];
+            let right = &stream.words[i + 1];
+
+            if left.boundary_source != BoundarySource::Whisper
+                || right.boundary_source != BoundarySource::Whisper
+            {
+                continue;
+            }
+
+            let (Some(left_timing), Some(right_timing)) = (left.timing, right.timing) else {
+                continue;
+            };
+            if left_timing.start_ms > left_timing.end_ms
+                || right_timing.start_ms > right_timing.end_ms
+            {
+                continue;
+            }
+            let min_boundary_ms = left_timing
+                .start_ms
+                .saturating_add(MIN_REFINED_WORD_DURATION_MS);
+            let max_boundary_ms = right_timing
+                .end_ms
+                .saturating_sub(MIN_REFINED_WORD_DURATION_MS);
+            if min_boundary_ms > max_boundary_ms {
+                continue;
+            }
+
+            let original_boundary_ms = left_timing.end_ms.min(right_timing.start_ms);
+            let search_start = original_boundary_ms
+                .saturating_sub(BOUNDARY_SEARCH_RADIUS_MS)
+                .max(min_boundary_ms);
+            let search_end = original_boundary_ms
+                .saturating_add(BOUNDARY_SEARCH_RADIUS_MS)
+                .min(max_boundary_ms)
+                .min(energy_per_ms.len().saturating_sub(1) as u64);
+            if search_start > search_end {
+                continue;
+            }
+
+            let mut best_boundary_ms = original_boundary_ms;
+            let mut best_energy = f32::INFINITY;
+            for boundary_ms in search_start..=search_end {
+                let energy = smoothed_energy_at_ms(&energy_per_ms, boundary_ms as usize);
+                if energy < best_energy {
+                    best_energy = energy;
+                    best_boundary_ms = boundary_ms;
+                }
+            }
+
+            if best_boundary_ms == left_timing.end_ms && best_boundary_ms == right_timing.start_ms {
+                continue;
+            }
+
+            let (left_slice, right_slice) = stream.words.split_at_mut(i + 1);
+            let left_mut = &mut left_slice[i];
+            let right_mut = &mut right_slice[0];
+
+            left_mut.timing = WordTiming::new(left_timing.start_ms, best_boundary_ms);
+            right_mut.timing = WordTiming::new(best_boundary_ms, right_timing.end_ms);
+            left_mut.boundary_source = BoundarySource::RefinedAcoustic;
+            right_mut.boundary_source = BoundarySource::RefinedAcoustic;
+        }
+    }
+}
+
+fn energy_profile_per_ms(audio: &[AudioFrame]) -> Option<Vec<f32>> {
+    let mut ms_energies = Vec::<f32>::new();
+    let mut ms_counts = Vec::<u32>::new();
+    let mut frame_offset_ms = 0u64;
+
+    for frame in audio {
+        if frame.sample_rate_hz == 0 || frame.channels == 0 {
+            continue;
+        }
+        let channels = frame.channels as usize;
+        let per_channel_samples = frame.samples.len() / channels;
+        if per_channel_samples == 0 {
+            continue;
+        }
+        let frame_duration_ms = per_channel_samples as u64 * 1_000 / frame.sample_rate_hz as u64;
+
+        for sample_idx in 0..per_channel_samples {
+            let mut mono = 0.0f32;
+            for ch in 0..channels {
+                mono += frame.samples[sample_idx * channels + ch].abs();
+            }
+            mono /= channels as f32;
+
+            let ms_idx =
+                frame_offset_ms + (sample_idx as u64 * 1_000 / frame.sample_rate_hz as u64);
+            let ms_idx = ms_idx as usize;
+            if ms_idx >= ms_energies.len() {
+                ms_energies.resize(ms_idx + 1, 0.0);
+                ms_counts.resize(ms_idx + 1, 0);
+            }
+            ms_energies[ms_idx] += mono;
+            ms_counts[ms_idx] += 1;
+        }
+
+        frame_offset_ms = frame_offset_ms.saturating_add(frame_duration_ms);
+    }
+
+    if ms_energies.is_empty() {
+        return None;
+    }
+
+    for (energy, count) in ms_energies.iter_mut().zip(ms_counts.iter()) {
+        if *count > 0 {
+            *energy /= *count as f32;
+        }
+    }
+
+    Some(ms_energies)
+}
+
+fn smoothed_energy_at_ms(energy_per_ms: &[f32], ms_idx: usize) -> f32 {
+    let start = ms_idx.saturating_sub(5);
+    let end = (ms_idx + 5).min(energy_per_ms.len().saturating_sub(1));
+    let mut sum = 0.0f32;
+    let mut count = 0usize;
+    for v in &energy_per_ms[start..=end] {
+        sum += *v;
+        count += 1;
+    }
+    if count == 0 {
+        0.0
+    } else {
+        sum / count as f32
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -173,6 +324,7 @@ impl WordBoundaryRefiner for NoopWordBoundaryRefiner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::ExactTimestamp;
 
     // ------------------------------------------------------------------
     // transcript_to_word_stream
@@ -224,18 +376,14 @@ mod tests {
         assert_eq!(stream.words[1].timing_confidence, Some(0.88));
 
         // All words are Final with Whisper boundary source
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Final)
-        );
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.boundary_source == BoundarySource::Whisper)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::Final));
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.boundary_source == BoundarySource::Whisper));
     }
 
     /// Timing is correctly preserved from the TranscriptWord fields.
@@ -290,12 +438,10 @@ mod tests {
 
         assert_eq!(stream.words.len(), 2);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.boundary_source == BoundarySource::Predicted)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.boundary_source == BoundarySource::Predicted));
 
         // Confidence forwarded even when timing is absent
         assert_eq!(stream.words[0].timing_confidence, Some(0.7));
@@ -387,6 +533,108 @@ mod tests {
         let refiner = NoopWordBoundaryRefiner;
         refiner.refine(&[], &mut stream);
 
+        assert_eq!(stream, original);
+    }
+
+    // ------------------------------------------------------------------
+    // HeuristicAcousticWordBoundaryRefiner
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn heuristic_refiner_moves_boundary_toward_local_silence() {
+        let words = vec![
+            TranscriptWord {
+                text: "hello".into(),
+                start_ms: Some(0),
+                end_ms: Some(330),
+                confidence: Some(0.9),
+            },
+            TranscriptWord {
+                text: "world".into(),
+                start_ms: Some(330),
+                end_ms: Some(800),
+                confidence: Some(0.9),
+            },
+        ];
+        let mut stream = transcript_to_word_stream(WordStreamId(9), &words);
+
+        let mut samples = vec![1.0f32; 900];
+        samples[290..410].fill(0.0);
+        let audio = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 1_000,
+            channels: 1,
+            samples,
+        }];
+
+        HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
+
+        let left = stream.words[0].timing.expect("left timing");
+        let right = stream.words[1].timing.expect("right timing");
+        assert_ne!(left.end_ms, 330);
+        assert_eq!(left.end_ms, right.start_ms);
+        assert!((290..=410).contains(&left.end_ms));
+        assert_eq!(
+            stream.words[0].boundary_source,
+            BoundarySource::RefinedAcoustic
+        );
+        assert_eq!(
+            stream.words[1].boundary_source,
+            BoundarySource::RefinedAcoustic
+        );
+    }
+
+    #[test]
+    fn heuristic_refiner_preserves_non_whisper_provenance() {
+        let words = vec![
+            TranscriptWord {
+                text: "one".into(),
+                start_ms: Some(0),
+                end_ms: Some(200),
+                confidence: None,
+            },
+            TranscriptWord {
+                text: "two".into(),
+                start_ms: Some(200),
+                end_ms: Some(400),
+                confidence: None,
+            },
+        ];
+        let mut stream = transcript_to_word_stream(WordStreamId(10), &words);
+        stream.words[0].boundary_source = BoundarySource::Manual;
+        let original = stream.clone();
+
+        let audio = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 1_000,
+            channels: 1,
+            samples: vec![0.0; 500],
+        }];
+
+        HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
+        assert_eq!(stream, original);
+    }
+
+    #[test]
+    fn heuristic_refiner_no_audio_is_noop() {
+        let words = vec![
+            TranscriptWord {
+                text: "keep".into(),
+                start_ms: Some(0),
+                end_ms: Some(100),
+                confidence: None,
+            },
+            TranscriptWord {
+                text: "same".into(),
+                start_ms: Some(100),
+                end_ms: Some(200),
+                confidence: None,
+            },
+        ];
+        let mut stream = transcript_to_word_stream(WordStreamId(11), &words);
+        let original = stream.clone();
+
+        HeuristicAcousticWordBoundaryRefiner.refine(&[], &mut stream);
         assert_eq!(stream, original);
     }
 }

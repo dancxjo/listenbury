@@ -251,7 +251,10 @@ fn synthesize_native_for_compare(
 }
 
 #[cfg(feature = "tts-piper-native")]
-fn resolve_native_ids(args: &PiperCompareArgs, config: &PiperVoiceConfig) -> Result<PiperIdSequence> {
+fn resolve_native_ids(
+    args: &PiperCompareArgs,
+    config: &PiperVoiceConfig,
+) -> Result<PiperIdSequence> {
     let phoneme_sequence = if let Some(raw) = args.phonemes.as_ref() {
         let symbols: Vec<_> = raw.split_whitespace().collect();
         anyhow::ensure!(
@@ -270,12 +273,97 @@ fn resolve_native_ids(args: &PiperCompareArgs, config: &PiperVoiceConfig) -> Res
             .with_context(|| format!("failed to phonemize text `{}` for native Piper", args.text))?
     };
 
-    phoneme_sequence.to_piper_ids(config).with_context(|| {
-        format!(
-            "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
-            args.text
-        )
+    phoneme_sequence
+        .to_piper_ids(config)
+        .or_else(|_| espeak_compatible_ids(&phoneme_sequence, config))
+        .with_context(|| {
+            format!(
+                "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
+                args.text
+            )
+        })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn espeak_compatible_ids(
+    phoneme_sequence: &PiperPhonemeSequence,
+    config: &PiperVoiceConfig,
+) -> std::result::Result<
+    PiperIdSequence,
+    listenbury::mouth::piper_native::PiperPhonemeIdConversionError,
+> {
+    let sequence = espeak_compatible_sequence(phoneme_sequence, config)?;
+    sequence.to_piper_ids(config)
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn espeak_compatible_sequence(
+    phoneme_sequence: &PiperPhonemeSequence,
+    config: &PiperVoiceConfig,
+) -> std::result::Result<
+    PiperPhonemeSequence,
+    listenbury::mouth::piper_native::PiperPhonemeIdConversionError,
+> {
+    let mut symbols = vec![PiperPhoneme("^".to_string())];
+    for phoneme in &phoneme_sequence.phonemes {
+        let expanded = expand_espeak_phoneme(&phoneme.0, config).ok_or_else(|| {
+            listenbury::mouth::piper_native::PiperPhonemeIdConversionError::UnknownPhoneme {
+                symbol: phoneme.0.clone(),
+            }
+        })?;
+        symbols.extend(expanded.into_iter().map(PiperPhoneme));
+    }
+    symbols.push(PiperPhoneme("$".to_string()));
+
+    let mut interspersed = Vec::with_capacity(symbols.len().saturating_mul(2).saturating_sub(1));
+    for (index, symbol) in symbols.into_iter().enumerate() {
+        if index > 0 {
+            interspersed.push(PiperPhoneme("_".to_string()));
+        }
+        interspersed.push(symbol);
+    }
+
+    Ok(PiperPhonemeSequence {
+        phonemes: interspersed,
     })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
+    let expanded = match symbol {
+        "AA" => &["ɑ"][..],
+        "AH" => &["ə"],
+        "AY" => &["a", "ɪ"],
+        "D" => &["d"],
+        "EH" => &["ɛ"],
+        "ER" => &["ɚ"],
+        "EY" => &["ˈ", "e", "ɪ"],
+        "F" => &["f"],
+        "IH" => &["ɪ"],
+        "IY" => &["i"],
+        "JH" => &["d", "ʒ"],
+        "K" => &["k"],
+        "L" => &["l"],
+        "NG" => &["ŋ"],
+        "OW" => &["o", "ʊ"],
+        "R" => &["ɹ"],
+        "S" => &["s"],
+        "T" => &["t"],
+        "TS" => &["t", "s"],
+        "|" => &["."],
+        _ if config.phoneme_id_map.contains_key(symbol) => return Some(vec![symbol.to_string()]),
+        _ => return None,
+    };
+
+    expanded
+        .iter()
+        .all(|symbol| config.phoneme_id_map.contains_key(*symbol))
+        .then(|| {
+            expanded
+                .iter()
+                .map(|symbol| (*symbol).to_string())
+                .collect()
+        })
 }
 
 #[cfg(feature = "tts-piper-native")]
@@ -628,6 +716,7 @@ mod tests {
             "listenbury-piper-symlink-test-{}",
             std::process::id()
         ));
+        let _ = std::fs::remove_dir_all(&root);
         let hidden_dir = root.join(".models");
         let visible_dir = root.join("voices");
         std::fs::create_dir_all(&hidden_dir).expect("create hidden model directory");
@@ -648,6 +737,47 @@ mod tests {
         ));
 
         std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    #[cfg(feature = "tts-piper-native")]
+    fn espeak_compatible_ids_match_piper_debug_shape_for_okay() {
+        let config = PiperVoiceConfig::from_json_str(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "_": [0],
+                "^": [1],
+                "$": [2],
+                ".": [10],
+                "e": [18],
+                "k": [23],
+                "o": [27],
+                "ɪ": [74],
+                "ʊ": [100],
+                "ˈ": [120]
+              }
+            }
+            "#,
+        )
+        .expect("voice config should parse");
+        let sequence = PiperPhonemeSequence {
+            phonemes: ["OW", "K", "EY", "|"]
+                .into_iter()
+                .map(|symbol| PiperPhoneme(symbol.to_string()))
+                .collect(),
+        };
+
+        let ids = espeak_compatible_ids(&sequence, &config)
+            .expect("ARPAbet symbols should map to eSpeak Piper IDs");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 0, 27, 0, 100, 0, 23, 0, 120, 0, 18, 0, 74, 0, 10, 0, 2]
+            }
+        );
     }
 
     #[test]
