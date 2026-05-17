@@ -310,11 +310,7 @@ fn smoothed_energy_at_ms(energy_per_ms: &[f32], ms_idx: usize) -> f32 {
         sum += *v;
         count += 1;
     }
-    if count == 0 {
-        0.0
-    } else {
-        sum / count as f32
-    }
+    if count == 0 { 0.0 } else { sum / count as f32 }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,14 +372,18 @@ mod tests {
         assert_eq!(stream.words[1].timing_confidence, Some(0.88));
 
         // All words are Final with Whisper boundary source
-        assert!(stream
-            .words
-            .iter()
-            .all(|w| w.commitment == WordCommitment::Final));
-        assert!(stream
-            .words
-            .iter()
-            .all(|w| w.boundary_source == BoundarySource::Whisper));
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|w| w.commitment == WordCommitment::Final)
+        );
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|w| w.boundary_source == BoundarySource::Whisper)
+        );
     }
 
     /// Timing is correctly preserved from the TranscriptWord fields.
@@ -438,10 +438,12 @@ mod tests {
 
         assert_eq!(stream.words.len(), 2);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(stream
-            .words
-            .iter()
-            .all(|w| w.boundary_source == BoundarySource::Predicted));
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|w| w.boundary_source == BoundarySource::Predicted)
+        );
 
         // Confidence forwarded even when timing is absent
         assert_eq!(stream.words[0].timing_confidence, Some(0.7));

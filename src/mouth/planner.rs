@@ -639,7 +639,10 @@ fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
 }
 
 fn looks_like_provisional_period_token(text: &str) -> bool {
-    let token = text.split_ascii_whitespace().next_back().unwrap_or_default();
+    let token = text
+        .split_ascii_whitespace()
+        .next_back()
+        .unwrap_or_default();
     if !token.ends_with('.') {
         return false;
     }

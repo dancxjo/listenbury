@@ -145,7 +145,10 @@ impl AlignmentGraph {
             .entry(alignment.source)
             .or_default()
             .push(index);
-        self.incoming.entry(alignment.target).or_default().push(index);
+        self.incoming
+            .entry(alignment.target)
+            .or_default()
+            .push(index);
         self.alignments.push(alignment);
     }
 
@@ -531,13 +534,20 @@ mod tests {
         let audio = SpanId(30);
 
         let mut graph = AlignmentGraph::new();
-        graph.add_alignment(Alignment::new(phoneme, word, 0.93, AlignmentKind::Equivalent));
+        graph.add_alignment(Alignment::new(
+            phoneme,
+            word,
+            0.93,
+            AlignmentKind::Equivalent,
+        ));
         graph.add_alignment(Alignment::new(word, audio, 0.99, AlignmentKind::Derived));
 
         let phoneme_to_audio = graph.reconstruct_path(phoneme, audio).expect("path exists");
         assert_eq!(phoneme_to_audio, vec![phoneme, word, audio]);
 
-        let audio_to_phoneme = graph.reconstruct_path(audio, phoneme).expect("reverse path exists");
+        let audio_to_phoneme = graph
+            .reconstruct_path(audio, phoneme)
+            .expect("reverse path exists");
         assert_eq!(audio_to_phoneme, vec![audio, word, phoneme]);
     }
 }

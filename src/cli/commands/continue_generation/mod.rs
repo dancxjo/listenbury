@@ -72,6 +72,33 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "tts-piper"
 ))]
 use cpal::{FromSample, Sample, SizedSample};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::ExactTimestamp;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::VadBackendKind;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::WhisperSpeechRecognizer;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -102,7 +129,7 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{create_vad_backend, VadResult, VoiceActivityDetector};
+use listenbury::hearing::vad::{VadResult, VoiceActivityDetector, create_vad_backend};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -160,13 +187,6 @@ use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
     feature = "tts-piper"
 ))]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::word::{transcript_to_word_stream, TranscriptWord};
 #[cfg(any(
     test,
     all(
@@ -177,33 +197,13 @@ use listenbury::word::{transcript_to_word_stream, TranscriptWord};
     )
 ))]
 use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-use listenbury::ExactTimestamp;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-use listenbury::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::WhisperSpeechRecognizer;
+use listenbury::word::{TranscriptWord, transcript_to_word_stream};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -230,7 +230,7 @@ use serde::{Deserialize, Serialize};
         feature = "tts-piper"
     )
 ))]
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -261,7 +261,7 @@ use std::path::PathBuf;
         feature = "tts-piper"
     )
 ))]
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 #[cfg(any(
     test,
     all(
@@ -271,7 +271,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
         feature = "tts-piper"
     )
 ))]
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -306,8 +306,8 @@ use std::time::{Duration, Instant};
     )
 ))]
 use tsrun::{
-    api, js_value_to_json, Guarded, InternalModule, Interpreter, InterpreterConfig, JsError,
-    JsValue, StepResult,
+    Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
+    js_value_to_json,
 };
 
 mod ear;
@@ -342,7 +342,7 @@ use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
         feature = "tts-piper"
     )
 ))]
-use mouth::{mouth_command_for_runtime_event, ContinueMouthCommand};
+use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
 #[cfg(any(
     test,
     all(
@@ -375,8 +375,8 @@ use source::SourceCommand;
     )
 ))]
 use source::{
-    execute_grep_source, execute_list_source_files, execute_search_source, execute_source_command,
-    execute_view_source_file, SourceCommandExecution,
+    SourceCommandExecution, execute_grep_source, execute_list_source_files, execute_search_source,
+    execute_source_command, execute_view_source_file,
 };
 #[cfg(any(
     test,
@@ -5450,23 +5450,23 @@ fn contains_template_token(content: &str) -> bool {
 mod tests {
     use super::VadObservationKind;
     use super::{
-        build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat, ContinuePromptGate,
+        ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
+        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
+        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TranscriptSpeculativePlanner,
+        TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
         wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event,
-        wrap_time_event, ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat,
-        ContinuePromptGate, ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter,
-        PromptPacket, RollingContextManager, SourceCommand, SpeechControlCommand,
-        SpeechEventDetector, TranscriptSpeculativePlanner, TypeScriptCommand,
-        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS,
+        wrap_time_event,
     };
+    use listenbury::ExactTimestamp;
     use listenbury::mind::llm::LlmEvent;
     use listenbury::speech::transcript::{
         TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
     };
     use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
-    use listenbury::ExactTimestamp;
 
     #[test]
     fn stdin_append_is_wrapped_as_live_input() {
@@ -5523,9 +5523,10 @@ mod tests {
         };
 
         assert_eq!(gate.consider_ear_event(&event, now).len(), 1);
-        assert!(gate
-            .consider_ear_event(&event, now + std::time::Duration::from_millis(100))
-            .is_empty());
+        assert!(
+            gate.consider_ear_event(&event, now + std::time::Duration::from_millis(100))
+                .is_empty()
+        );
         assert_eq!(
             gate.consider_ear_event(&event, now + std::time::Duration::from_millis(800))
                 .len(),
@@ -5568,8 +5569,8 @@ mod tests {
         });
         let now = std::time::Instant::now();
 
-        assert!(gate
-            .consider_ear_event(
+        assert!(
+            gate.consider_ear_event(
                 &ContinueEarEvent::OverlapDetected {
                     self_confidence: 0.8,
                     external_confidence: 0.7,
@@ -5577,7 +5578,8 @@ mod tests {
                 },
                 now
             )
-            .is_empty());
+            .is_empty()
+        );
 
         let packets = gate.consider_ear_event(
             &ContinueEarEvent::OverlapDetected {
@@ -5589,9 +5591,11 @@ mod tests {
         );
 
         assert_eq!(packets.len(), 1);
-        assert!(packets[0]
-            .text
-            .contains("Pete heard overlapping speech while speaking."));
+        assert!(
+            packets[0]
+                .text
+                .contains("Pete heard overlapping speech while speaking.")
+        );
         assert!(!packets[0].text.contains("self_confidence"));
     }
 
@@ -5621,11 +5625,13 @@ mod tests {
     #[test]
     fn transcript_speculative_planner_tracks_stable_and_unstable_segments() {
         let mut planner = TranscriptSpeculativePlanner::default();
-        assert!(planner
-            .observe(&TranscriptCandidateEvent::CandidateStarted {
-                id: TranscriptCandidateId(1),
-            })
-            .is_none());
+        assert!(
+            planner
+                .observe(&TranscriptCandidateEvent::CandidateStarted {
+                    id: TranscriptCandidateId(1),
+                })
+                .is_none()
+        );
 
         let first = planner
             .observe(&TranscriptCandidateEvent::CandidateUpdated {
@@ -5922,9 +5928,11 @@ mod tests {
     fn speech_detector_defers_live_events_during_partial_typescript_tag() {
         let mut detector = SpeechEventDetector::default();
 
-        assert!(detector
-            .ingest("<ts>import { listFiles } from \"pete:will\";\nlist")
-            .is_empty());
+        assert!(
+            detector
+                .ingest("<ts>import { listFiles } from \"pete:will\";\nlist")
+                .is_empty()
+        );
         assert!(detector.defers_live_events());
         assert_eq!(
             detector.ingest("Files()</ts>"),

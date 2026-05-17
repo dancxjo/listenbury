@@ -2004,8 +2004,7 @@ mod tests {
     use listenbury::word::WordCommitment;
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, FillerPlanner,
-        FillerPlannerConfig, RuntimePacket,
-        SpeechPlannerConfig,
+        FillerPlannerConfig, RuntimePacket, SpeechPlannerConfig,
     };
 
     fn token(text: &str) -> LlmEvent {

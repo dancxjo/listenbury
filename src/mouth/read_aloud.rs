@@ -54,14 +54,20 @@ pub trait ReadAloudAudioPreparer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadAloudCandidateEvent {
-    CandidateStarted { id: SpeechCandidateId },
-    CandidateUpdated { candidate: ReadAloudCandidate },
+    CandidateStarted {
+        id: SpeechCandidateId,
+    },
+    CandidateUpdated {
+        candidate: ReadAloudCandidate,
+    },
     CandidateReplaced {
         old: SpeechCandidateId,
         new: SpeechCandidateId,
         stable_prefix_len: usize,
     },
-    CandidateCancelled { id: SpeechCandidateId },
+    CandidateCancelled {
+        id: SpeechCandidateId,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -161,7 +167,10 @@ fn has_confident_sentence_end(trimmed: &str) -> bool {
     }
 
     let stem = trimmed[..trimmed.len() - 1].trim_end();
-    let last_token = stem.split_ascii_whitespace().next_back().unwrap_or_default();
+    let last_token = stem
+        .split_ascii_whitespace()
+        .next_back()
+        .unwrap_or_default();
     if last_token.is_empty() {
         return false;
     }
@@ -178,11 +187,10 @@ fn has_confident_sentence_end(trimmed: &str) -> bool {
     let is_honorific = matches!(
         lower.as_str(),
         "dr" | "mr" | "mrs" | "ms" | "prof" | "sr" | "jr"
-    )
-        && last_token
-            .chars()
-            .next()
-            .is_some_and(|ch| ch.is_ascii_uppercase());
+    ) && last_token
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_uppercase());
     if is_honorific {
         return false;
     }
