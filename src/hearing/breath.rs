@@ -3,6 +3,9 @@ use uuid::Uuid;
 use crate::event::HearingEvent;
 use crate::hearing::vad::VadResult;
 
+pub const DEFAULT_VAD_FRAME_MS: u64 = 10;
+pub const DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS: u64 = 800;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BreathGroupId(pub Uuid);
 
@@ -24,9 +27,19 @@ impl Default for BreathGroupConfig {
     fn default() -> Self {
         Self {
             open_after_speech_frames: 3,
-            close_after_silence_frames: 10,
+            close_after_silence_frames: frames_for_duration_ms(
+                DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS,
+                DEFAULT_VAD_FRAME_MS,
+            ),
         }
     }
+}
+
+const fn frames_for_duration_ms(duration_ms: u64, frame_ms: u64) -> usize {
+    if duration_ms == 0 || frame_ms == 0 {
+        return 0;
+    }
+    duration_ms.div_ceil(frame_ms) as usize
 }
 
 #[derive(Debug)]
@@ -135,7 +148,7 @@ mod tests {
             let _ = segmenter.process(speech());
         }
 
-        for _ in 0..9 {
+        for _ in 0..(BreathGroupConfig::default().close_after_silence_frames - 1) {
             let events = segmenter.process(silence());
             assert!(
                 !events
@@ -160,7 +173,7 @@ mod tests {
         }
 
         let mut closed = false;
-        for _ in 0..10 {
+        for _ in 0..BreathGroupConfig::default().close_after_silence_frames {
             let events = segmenter.process(silence());
             if events
                 .iter()
@@ -171,5 +184,13 @@ mod tests {
         }
 
         assert!(closed);
+    }
+
+    #[test]
+    fn default_close_wait_matches_conversational_turn_silence() {
+        assert_eq!(
+            BreathGroupConfig::default().close_after_silence_frames as u64 * DEFAULT_VAD_FRAME_MS,
+            DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS
+        );
     }
 }

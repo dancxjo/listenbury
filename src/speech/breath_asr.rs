@@ -19,7 +19,7 @@ impl Default for BreathAsrConfig {
             pre_roll_ms: 100,
             trailing_pad_ms: 100,
             min_group_ms: 150,
-            max_group_ms: 15_000,
+            max_group_ms: 0,
         }
     }
 }
@@ -184,9 +184,9 @@ mod tests {
         let mut frames = Vec::new();
         frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(5));
         frames.extend(std::iter::repeat_with(|| make_frame(0.3)).take(6));
-        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(12));
+        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(82));
         frames.extend(std::iter::repeat_with(|| make_frame(0.3)).take(6));
-        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(12));
+        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(82));
 
         let segments = collect_breath_segments(
             &frames,
@@ -209,7 +209,7 @@ mod tests {
         let mut frames = Vec::new();
         frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(4));
         frames.extend(std::iter::repeat_with(|| make_frame(0.3)).take(6));
-        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(12));
+        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(82));
 
         let segments = collect_breath_segments(
             &frames,
@@ -231,7 +231,7 @@ mod tests {
     fn splits_long_groups_by_max_duration() {
         let mut frames = Vec::new();
         frames.extend(std::iter::repeat_with(|| make_frame(0.3)).take(70));
-        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(12));
+        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(82));
 
         let segments = collect_breath_segments(
             &frames,
@@ -246,5 +246,17 @@ mod tests {
 
         assert!(!segments.is_empty());
         assert!(segments.iter().all(|segment| segment.duration_ms() <= 200));
+    }
+
+    #[test]
+    fn default_keeps_long_contiguous_group_until_silence() {
+        let mut frames = Vec::new();
+        frames.extend(std::iter::repeat_with(|| make_frame(0.3)).take(70));
+        frames.extend(std::iter::repeat_with(|| make_frame(0.0)).take(82));
+
+        let segments = collect_breath_segments(&frames, BreathAsrConfig::default()).unwrap();
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].duration_ms() >= 1_400);
     }
 }

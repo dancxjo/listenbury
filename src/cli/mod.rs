@@ -114,7 +114,7 @@ pub(crate) struct BreathTranscribeCommand {
     pub(crate) trailing_pad_ms: u64,
     #[arg(long, default_value_t = 150)]
     pub(crate) min_group_ms: u64,
-    #[arg(long, default_value_t = 15_000)]
+    #[arg(long, default_value_t = 0)]
     pub(crate) max_group_ms: u64,
 }
 
