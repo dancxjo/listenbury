@@ -178,6 +178,12 @@ pub(crate) struct ContinueCommand {
     /// Time to listen after an auto-pause before clearing or resuming TTS.
     #[arg(long, default_value_t = 700)]
     pub(crate) tts_vad_listen_ms: u64,
+    /// Run a synthetic duplex diagnostic scenario instead of the live mic/speaker loop.
+    #[arg(long, value_enum)]
+    pub(crate) duplex_trace_scenario: Option<DuplexTraceScenarioOption>,
+    /// Write structured JSONL trace output (required when --duplex-trace-scenario is set).
+    #[arg(long)]
+    pub(crate) jsonl: Option<PathBuf>,
     /// Initial prompt text. If omitted, generation starts from Pete's continuous-awareness seed.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
@@ -328,6 +334,12 @@ pub(crate) enum VadBackendOption {
     #[value(name = "webrtc")]
     WebRtc,
     Silero,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub(crate) enum DuplexTraceScenarioOption {
+    #[value(name = "overlap-yield")]
+    OverlapYield,
 }
 
 impl VadBackendOption {
@@ -802,6 +814,8 @@ mod tests {
         assert_eq!(command.verbatim_turns, 8);
         assert_eq!(command.tts_vad_pause_ms, 250);
         assert_eq!(command.tts_vad_listen_ms, 700);
+        assert!(command.duplex_trace_scenario.is_none());
+        assert!(command.jsonl.is_none());
         assert_eq!(command.prompt, ["seed", "prompt"]);
     }
 
@@ -872,6 +886,32 @@ mod tests {
         assert_eq!(command.vad, VadBackendOption::Energy);
         assert_eq!(command.tts_vad_pause_ms, 180);
         assert_eq!(command.tts_vad_listen_ms, 900);
+    }
+
+    #[test]
+    fn dev_continue_accepts_duplex_trace_scenario_and_jsonl() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "continue",
+            "--duplex-trace-scenario",
+            "overlap-yield",
+            "--jsonl",
+            "out/duplex-trace.jsonl",
+        ])
+        .expect("dev continue should parse duplex trace scenario options");
+
+        let Some(Command::Dev {
+            command: DevCommand::Continue(command),
+        }) = cli.command
+        else {
+            panic!("expected continue command");
+        };
+        assert_eq!(
+            command.duplex_trace_scenario,
+            Some(DuplexTraceScenarioOption::OverlapYield)
+        );
+        assert_eq!(command.jsonl, Some(PathBuf::from("out/duplex-trace.jsonl")));
     }
 
     #[test]
