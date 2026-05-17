@@ -28,6 +28,8 @@ enum Command {
     Transcribe(TranscribeCommand),
     #[command(about = "Speak text aloud")]
     Say(SayCommand),
+    #[command(about = "Compare process-backed and native Piper synthesis")]
+    PiperCompare(PiperCompareCommand),
     #[command(
         alias = "live-half-duplex",
         about = "Listen and reply in a live voice loop"
@@ -237,6 +239,26 @@ pub(crate) struct SayCommand {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct PiperCompareCommand {
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long, alias = "model-path")]
+    pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) native_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) native_config: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) process_output_wav: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) native_output_wav: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) phonemes: Option<String>,
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    pub(crate) words: Vec<String>,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct RoundTripWavCommand {
     pub(crate) input_wav: PathBuf,
     #[arg(long)]
@@ -417,6 +439,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
+        Command::PiperCompare(cmd) => commands::run_piper_compare(cmd),
         Command::Listen(cmd) => commands::run_live_half_duplex(cmd),
         Command::Ask(cmd) => commands::run_llama_turn(cmd),
         Command::Complete(mut cmd) => {
@@ -543,6 +566,33 @@ mod tests {
         };
         assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
         assert_eq!(command.words, ["hello", "there"]);
+    }
+
+    #[test]
+    fn piper_compare_parses_text_and_optional_outputs() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "piper-compare",
+            "--process-output-wav",
+            "out/process.wav",
+            "--native-output-wav",
+            "out/native.wav",
+            "Okay.",
+        ])
+        .expect("piper-compare should parse text and optional output paths");
+
+        let Some(Command::PiperCompare(command)) = cli.command else {
+            panic!("expected piper-compare command");
+        };
+        assert_eq!(
+            command.process_output_wav,
+            Some(PathBuf::from("out/process.wav"))
+        );
+        assert_eq!(
+            command.native_output_wav,
+            Some(PathBuf::from("out/native.wav"))
+        );
+        assert_eq!(command.words, ["Okay."]);
     }
 
     #[test]

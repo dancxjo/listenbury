@@ -1,10 +1,19 @@
-use crate::cli::SayCommand;
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::play_audio_frames;
 use crate::cli::model_paths::resolve_piper_voice;
+use crate::cli::{PiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::audio::write_wav;
+#[cfg(feature = "tts-piper-native")]
+use listenbury::mouth::backend::TtsBackend;
+#[cfg(feature = "tts-piper-native")]
+use listenbury::mouth::piper::ProcessPiperBackend;
+#[cfg(feature = "tts-piper-native")]
+use listenbury::mouth::piper_native::{
+    GraphemeToPhoneme, NativePiperBackend, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig,
+    SimpleEnglishG2p,
+};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{PiperConfig, PiperTextToSpeech};
@@ -26,6 +35,290 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub(crate) fn run_piper_compare(command: PiperCompareCommand) -> Result<()> {
+    #[cfg(not(feature = "tts-piper-native"))]
+    {
+        let _ = command;
+        anyhow::bail!(
+            "listenbury piper-compare requires the `tts-piper-native` feature to compare native synthesis"
+        );
+    }
+
+    #[cfg(feature = "tts-piper-native")]
+    {
+        run_piper_compare_impl(command)
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn run_piper_compare_impl(command: PiperCompareCommand) -> Result<()> {
+    let args = PiperCompareArgs::from_command(command)?;
+    let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
+    let process_voice = resolve_piper_voice(args.piper_voice.clone())?;
+    let process_config = piper_config_for_voice(piper_bin.clone(), process_voice)?;
+    let process_stats = synthesize_process_for_compare(&process_config, &args.text)?;
+
+    let native_model_path = args
+        .native_voice
+        .clone()
+        .unwrap_or_else(|| process_config.model_path.clone());
+    let native_config_path = args
+        .native_config
+        .clone()
+        .or_else(|| process_config.config_path.clone())
+        .unwrap_or_else(|| native_model_path.with_extension("onnx.json"));
+    let native_voice_config = read_native_voice_config(&native_config_path)?;
+    let phoneme_sequence = resolve_native_phonemes(&args, &native_voice_config)?;
+    let native_stats = synthesize_native_for_compare(
+        &native_model_path,
+        &native_voice_config,
+        &phoneme_sequence,
+        &args.text,
+    )?;
+
+    report_compare_stats(&process_stats, &native_stats);
+
+    if let Some(output) = args.process_output_wav {
+        write_say_wav(&output, &process_stats.frames)?;
+    }
+    if let Some(output) = args.native_output_wav {
+        write_say_wav(&output, &native_stats.frames)?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "tts-piper-native")]
+#[derive(Debug)]
+struct PiperCompareArgs {
+    piper_bin: Option<PathBuf>,
+    piper_voice: Option<PathBuf>,
+    native_voice: Option<PathBuf>,
+    native_config: Option<PathBuf>,
+    process_output_wav: Option<PathBuf>,
+    native_output_wav: Option<PathBuf>,
+    phonemes: Option<String>,
+    text: String,
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl PiperCompareArgs {
+    fn from_command(command: PiperCompareCommand) -> Result<Self> {
+        anyhow::ensure!(
+            !command.words.is_empty(),
+            "missing text to compare; try `listenbury piper-compare \"Okay.\"`"
+        );
+        let text = command.words.join(" ");
+        anyhow::ensure!(
+            !text.trim().is_empty(),
+            "missing text to compare; try `listenbury piper-compare \"Okay.\"`"
+        );
+
+        Ok(Self {
+            piper_bin: command.piper_bin,
+            piper_voice: command.piper_voice,
+            native_voice: command.native_voice,
+            native_config: command.native_config,
+            process_output_wav: command.process_output_wav,
+            native_output_wav: command.native_output_wav,
+            phonemes: command.phonemes,
+            text,
+        })
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+#[derive(Debug, Clone)]
+struct SynthesisStats {
+    frames: Vec<AudioFrame>,
+    runtime: Duration,
+    audio: AudioStats,
+}
+
+#[cfg(feature = "tts-piper-native")]
+#[derive(Debug, Clone, PartialEq)]
+struct AudioStats {
+    sample_rate_hz: u32,
+    channels: u16,
+    sample_count: usize,
+    duration_ms: f64,
+    rms: f32,
+    peak_abs: f32,
+}
+
+#[cfg(feature = "tts-piper-native")]
+impl AudioStats {
+    fn from_frames(frames: &[AudioFrame], label: &str) -> Result<Self> {
+        let Some(first) = frames.first() else {
+            anyhow::bail!("{label} synthesis produced no frames");
+        };
+        anyhow::ensure!(
+            first.sample_rate_hz > 0,
+            "{label} synthesis produced an invalid sample rate of 0 Hz"
+        );
+        anyhow::ensure!(
+            first.channels > 0,
+            "{label} synthesis produced an invalid channel count of 0"
+        );
+
+        let mut samples = Vec::new();
+        for frame in frames {
+            anyhow::ensure!(
+                frame.sample_rate_hz == first.sample_rate_hz,
+                "{label} synthesis changed sample rate mid-stream ({} -> {})",
+                first.sample_rate_hz,
+                frame.sample_rate_hz
+            );
+            anyhow::ensure!(
+                frame.channels == first.channels,
+                "{label} synthesis changed channel count mid-stream ({} -> {})",
+                first.channels,
+                frame.channels
+            );
+            samples.extend_from_slice(&frame.samples);
+        }
+
+        let sample_count = samples.len();
+        let (rms, peak_abs) = if sample_count == 0 {
+            (0.0, 0.0)
+        } else {
+            let square_sum = samples.iter().map(|sample| sample * sample).sum::<f32>();
+            let rms = (square_sum / sample_count as f32).sqrt();
+            let peak_abs = samples
+                .iter()
+                .map(|sample| sample.abs())
+                .fold(0.0_f32, f32::max);
+            (rms, peak_abs)
+        };
+
+        let duration_ms =
+            (sample_count as f64 / f64::from(first.sample_rate_hz) / f64::from(first.channels))
+                * 1000.0;
+
+        Ok(Self {
+            sample_rate_hz: first.sample_rate_hz,
+            channels: first.channels,
+            sample_count,
+            duration_ms,
+            rms,
+            peak_abs,
+        })
+    }
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<SynthesisStats> {
+    let mut backend = ProcessPiperBackend::new(config.clone());
+    let t0 = Instant::now();
+    let frames = backend.synthesize(text)?;
+    let runtime = t0.elapsed();
+    let audio = AudioStats::from_frames(&frames, "process")?;
+    Ok(SynthesisStats {
+        frames,
+        runtime,
+        audio,
+    })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn synthesize_native_for_compare(
+    model_path: &Path,
+    config: &PiperVoiceConfig,
+    phonemes: &PiperPhonemeSequence,
+    text: &str,
+) -> Result<SynthesisStats> {
+    let ids = phonemes
+        .to_piper_ids(config)
+        .with_context(|| format!("failed to map native phonemes for `{text}`"))?;
+    let mut backend = NativePiperBackend::load(model_path, config.clone()).with_context(|| {
+        format!(
+            "failed to initialize native Piper backend from model {}",
+            model_path.display()
+        )
+    })?;
+    let t0 = Instant::now();
+    let frames = backend.synthesize_id_frames(&ids).with_context(|| {
+        format!(
+            "native Piper synthesis failed for model {}",
+            model_path.display()
+        )
+    })?;
+    let runtime = t0.elapsed();
+    let audio = AudioStats::from_frames(&frames, "native")?;
+    Ok(SynthesisStats {
+        frames,
+        runtime,
+        audio,
+    })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn resolve_native_phonemes(
+    args: &PiperCompareArgs,
+    config: &PiperVoiceConfig,
+) -> Result<PiperPhonemeSequence> {
+    if let Some(raw) = args.phonemes.as_ref() {
+        let symbols: Vec<_> = raw.split_whitespace().collect();
+        anyhow::ensure!(
+            !symbols.is_empty(),
+            "native phoneme override was empty; pass symbols like --phonemes \"OW K EY |\""
+        );
+        return Ok(PiperPhonemeSequence {
+            phonemes: symbols
+                .into_iter()
+                .map(|symbol| PiperPhoneme(symbol.to_string()))
+                .collect(),
+        });
+    }
+
+    let g2p = SimpleEnglishG2p::default();
+    g2p.phonemize(&args.text)
+        .with_context(|| format!("failed to phonemize text `{}` for native Piper", args.text))
+        .and_then(|sequence| {
+            sequence.to_piper_ids(config).with_context(|| {
+                format!(
+                    "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
+                    args.text
+                )
+            })?;
+            Ok(sequence)
+        })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn read_native_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
+    let json = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read native Piper config at {}", path.display()))?;
+    PiperVoiceConfig::from_json_str(&json).with_context(|| {
+        format!(
+            "failed to parse native Piper config JSON at {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(feature = "tts-piper-native")]
+fn report_compare_stats(process: &SynthesisStats, native: &SynthesisStats) {
+    println!("process runtime: {}ms", process.runtime.as_millis());
+    println!("native inference: {}ms", native.runtime.as_millis());
+    println!(
+        "process sample rate: {} Hz | native sample rate: {} Hz",
+        process.audio.sample_rate_hz, native.audio.sample_rate_hz
+    );
+    println!(
+        "process duration: {:.2}ms | native duration: {:.2}ms",
+        process.audio.duration_ms, native.audio.duration_ms
+    );
+    println!(
+        "process samples: {} | native samples: {}",
+        process.audio.sample_count, native.audio.sample_count
+    );
+    println!(
+        "process rms/peak: {:.5}/{:.5} | native rms/peak: {:.5}/{:.5}",
+        process.audio.rms, process.audio.peak_abs, native.audio.rms, native.audio.peak_abs
+    );
 }
 
 #[derive(Debug)]
@@ -248,6 +541,7 @@ fn copy_if_needed(source: &Path, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use listenbury::time::ExactTimestamp;
 
     #[test]
     fn say_args_treats_single_word_as_text() {
@@ -305,5 +599,45 @@ mod tests {
         );
         assert_eq!(args.piper_voice, Some(PathBuf::from("voice.onnx")));
         assert_eq!(args.text, "hello");
+    }
+
+    #[test]
+    #[cfg(feature = "tts-piper-native")]
+    fn piper_compare_args_joins_words_into_text() {
+        let args = PiperCompareArgs::from_command(PiperCompareCommand {
+            piper_bin: None,
+            piper_voice: None,
+            native_voice: None,
+            native_config: None,
+            process_output_wav: None,
+            native_output_wav: None,
+            phonemes: None,
+            words: vec!["Okay.".to_string(), "Again.".to_string()],
+        })
+        .expect("words should parse");
+
+        assert_eq!(args.text, "Okay. Again.");
+    }
+
+    #[test]
+    #[cfg(feature = "tts-piper-native")]
+    fn audio_stats_computes_duration_rms_and_peak() {
+        let stats = AudioStats::from_frames(
+            &[AudioFrame {
+                captured_at: ExactTimestamp::now(),
+                sample_rate_hz: 20,
+                channels: 1,
+                samples: vec![0.0, 0.5, -1.0, 0.5],
+            }],
+            "test",
+        )
+        .expect("stats should compute");
+
+        assert_eq!(stats.sample_rate_hz, 20);
+        assert_eq!(stats.channels, 1);
+        assert_eq!(stats.sample_count, 4);
+        assert!((stats.duration_ms - 200.0).abs() < 0.0001);
+        assert!((stats.rms - 0.6123724).abs() < 0.0001);
+        assert!((stats.peak_abs - 1.0).abs() < 0.0001);
     }
 }
