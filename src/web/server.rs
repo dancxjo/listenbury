@@ -136,7 +136,6 @@ impl HttpResponse {
             headers: Vec::new(),
         }
     }
-
 }
 
 pub fn serve(config: ServeConfig) -> Result<()> {
@@ -275,14 +274,14 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
 
     let path = target.split('?').next().unwrap_or("/");
     match path {
-        "/" => HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML),
+        "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
         "/healthz" => HttpResponse::ok("text/plain; charset=utf-8", "ok\n"),
 
         "/app.js" | "/assets/app.js" => {
-            HttpResponse::static_asset("application/javascript; charset=utf-8", assets::APP_JS)
+            HttpResponse::ok("application/javascript; charset=utf-8", assets::APP_JS)
         }
         "/styles.css" | "/assets/styles.css" => {
-            HttpResponse::static_asset("text/css; charset=utf-8", assets::STYLES_CSS)
+            HttpResponse::ok("text/css; charset=utf-8", assets::STYLES_CSS)
         }
         "/demo.json" | "/assets/demo.json" | "/api/demo-payload" => {
             HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
@@ -290,9 +289,7 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/welcome.wav" | "/assets/welcome.wav" => {
             HttpResponse::static_asset("audio/wav", assets::WELCOME_WAV)
         }
-        "/assets/index.html" => {
-            HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML)
-        }
+        "/assets/index.html" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
         "/assets/live-trace.sample.jsonl" => HttpResponse::static_asset(
             "application/x-ndjson; charset=utf-8",
             assets::LIVE_TRACE_SAMPLE_JSONL,
