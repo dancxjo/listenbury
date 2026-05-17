@@ -49,6 +49,8 @@ pub struct ViewerEvent {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_ref: Option<ViewerClipAudioRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +62,17 @@ pub struct ViewerMarker {
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_ref: Option<ViewerClipAudioRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewerClipAudioRef {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_ms: Option<u64>,
 }
 
 pub fn live_trace_jsonl_to_viewer_payload(input: &str) -> Result<ViewerPayload> {
@@ -293,7 +306,10 @@ fn split_words_with_spans(text: &str) -> Vec<(String, TextSpan)> {
 fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<ViewerMarker>) {
     let mut spans = Vec::new();
     let mut markers = Vec::new();
-    let mut pending_starts: HashMap<(u64, String), (u64, Option<Value>)> = HashMap::new();
+    let mut pending_starts: HashMap<
+        (u64, String),
+        (u64, Option<Value>, Option<ViewerClipAudioRef>),
+    > = HashMap::new();
 
     for event in events {
         if event.kind == "asr_timed_word_stream" {
@@ -301,6 +317,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         }
         let lane = lane_for_kind(&event.kind).to_string();
         let metadata = Some(metadata_from_event(event));
+        let audio_ref = event_audio_ref(event);
 
         if let Some((base_kind, _end_kind)) = start_to_end_kind(&event.kind) {
             if event.kind == "self_hearing_suppression_started" {
@@ -314,6 +331,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
                         end_ms: Some(end_ms),
                         label: Some(humanize_kind("self_hearing_suppression")),
                         metadata,
+                        audio_ref: audio_ref.clone(),
                     });
                     continue;
                 }
@@ -321,7 +339,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
 
             pending_starts.insert(
                 (event.turn, base_kind.to_string()),
-                (event.elapsed_ms, metadata.clone()),
+                (event.elapsed_ms, metadata.clone(), audio_ref.clone()),
             );
             markers.push(ViewerMarker {
                 lane,
@@ -329,12 +347,13 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
                 at_ms: event.elapsed_ms,
                 label: Some(humanize_kind(&event.kind)),
                 metadata,
+                audio_ref,
             });
             continue;
         }
 
         if let Some(base_kind) = end_kind_to_base_kind(&event.kind) {
-            if let Some((start_ms, start_metadata)) =
+            if let Some((start_ms, start_metadata, start_audio_ref)) =
                 pending_starts.remove(&(event.turn, base_kind.to_string()))
             {
                 spans.push(ViewerEvent {
@@ -344,6 +363,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
                     end_ms: Some(event.elapsed_ms.max(start_ms)),
                     label: Some(humanize_kind(base_kind)),
                     metadata: merge_metadata(start_metadata, metadata),
+                    audio_ref: start_audio_ref.or(audio_ref.clone()),
                 });
                 continue;
             }
@@ -355,6 +375,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
             at_ms: event.elapsed_ms,
             label: Some(humanize_kind(&event.kind)),
             metadata,
+            audio_ref,
         });
     }
 
@@ -459,6 +480,58 @@ fn live_asr_timed_word_stream_from_event(event: &LiveTraceEvent) -> Option<Timed
     }
     let artifact = event.artifact.as_ref()?;
     serde_json::from_value(artifact.clone()).ok()
+}
+
+fn event_audio_ref(event: &LiveTraceEvent) -> Option<ViewerClipAudioRef> {
+    clip_audio_ref_from_value(event.artifact.as_ref()?)
+}
+
+fn clip_audio_ref_from_value(value: &Value) -> Option<ViewerClipAudioRef> {
+    let Value::Object(map) = value else {
+        return None;
+    };
+    if let Some(nested) = map
+        .get("audio_ref")
+        .or_else(|| map.get("audio"))
+        .or_else(|| map.get("clip"))
+    {
+        if let Some(audio_ref) = clip_audio_ref_from_value(nested) {
+            return Some(audio_ref);
+        }
+    }
+    let url = map
+        .get("url")
+        .or_else(|| map.get("audio_url"))
+        .or_else(|| map.get("path"))
+        .or_else(|| map.get("audio_path"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some(ViewerClipAudioRef {
+        url,
+        start_ms: clip_audio_ref_ms(
+            map.get("start_ms")
+                .or_else(|| map.get("clip_start_ms"))
+                .or_else(|| map.get("at_ms")),
+        ),
+        end_ms: clip_audio_ref_ms(map.get("end_ms").or_else(|| map.get("clip_end_ms"))),
+    })
+}
+
+fn clip_audio_ref_ms(value: Option<&Value>) -> Option<u64> {
+    value.and_then(|value| match value {
+        Value::Number(number) => {
+            if let Some(unsigned) = number.as_u64() {
+                Some(unsigned)
+            } else {
+                number
+                    .as_i64()
+                    .and_then(|signed| u64::try_from(signed).ok())
+            }
+        }
+        _ => None,
+    })
 }
 
 fn humanize_kind(kind: &str) -> String {
@@ -612,5 +685,58 @@ mod tests {
             })
         );
         assert_eq!(lane.stream.words[0].timing_confidence, Some(0.91));
+    }
+
+    #[test]
+    fn exposes_event_audio_refs_from_artifacts() {
+        let mut playback_started = event(1, "playback_started", 900);
+        playback_started.artifact = Some(serde_json::json!({
+            "url": "clips/turn-001-playback.wav",
+            "start_ms": 120,
+            "end_ms": 460
+        }));
+        let mut overlap_started = event(1, "overlap_started", 930);
+        overlap_started.artifact = Some(serde_json::json!({
+            "audio": {
+                "path": "clips/turn-001-overlap.wav",
+                "clip_start_ms": 0,
+                "clip_end_ms": 210
+            }
+        }));
+        let overlap_ended = event(1, "overlap_ended", 1140);
+
+        let payload = live_trace_events_to_viewer_payload(&[
+            playback_started,
+            overlap_started,
+            overlap_ended,
+        ]);
+
+        let playback_marker = payload
+            .markers
+            .iter()
+            .find(|marker| marker.kind == "playback_started")
+            .expect("playback marker should exist");
+        assert_eq!(
+            playback_marker.audio_ref,
+            Some(ViewerClipAudioRef {
+                url: "clips/turn-001-playback.wav".to_string(),
+                start_ms: Some(120),
+                end_ms: Some(460),
+            })
+        );
+
+        let overlap_event = payload
+            .events
+            .iter()
+            .find(|event| event.kind == "overlap")
+            .expect("overlap span should exist");
+        assert_eq!(
+            overlap_event.audio_ref,
+            Some(ViewerClipAudioRef {
+                url: "clips/turn-001-overlap.wav".to_string(),
+                start_ms: Some(0),
+                end_ms: Some(210),
+            })
+        );
     }
 }

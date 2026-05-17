@@ -379,13 +379,14 @@ The viewer renders multiple streams vertically with a shared ruler, highlights
 the active word during playback, and lets you click chips/ruler positions to
 seek the shared audio timeline. It is a debug timeline workstation for
 inspecting recorded, generated, and playback speech lanes.
+Event/marker selections can also expose and play saved clip references through
+`audio_ref` when present in payload data.
 
 Words without `timing` are displayed with fallback layout timing so they are
 visibly distinct from measured/aligned timings.
 
-Current milestone audio model: one shared `audio.url` timeline for all lanes.
-Future trace payloads may require per-lane audio references and event-only
-lanes.
+Current milestone audio model still supports one shared `audio.url` timeline
+for all lanes, with optional event/marker `audio_ref` clip playback.
 
 ### Export runtime live trace JSONL into viewer payload JSON
 
