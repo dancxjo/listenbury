@@ -561,7 +561,16 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         let browser_host = match bind_host.as_str() {
             "0.0.0.0" => "127.0.0.1".to_string(),
             "::" => "[::1]".to_string(),
-            _ => bind_host.clone(),
+            _ => {
+                let looks_like_ipv6 = bind_host.contains(':')
+                    && !bind_host.starts_with('[')
+                    && !bind_host.ends_with(']');
+                if looks_like_ipv6 {
+                    format!("[{bind_host}]")
+                } else {
+                    bind_host.clone()
+                }
+            }
         };
         let url = format!("http://{}:{}/", browser_host, web_port);
         std::thread::spawn(move || {

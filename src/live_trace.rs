@@ -303,7 +303,9 @@ impl SseBroadcaster {
                 senders.push(tx);
             }
             Err(error) => {
-                tracing::error!("SseBroadcaster senders mutex poisoned in subscribe: {error}");
+                tracing::error!(
+                    "SseBroadcaster senders mutex poisoned in subscribe; receiver will not get events: {error}"
+                );
             }
         }
         rx
@@ -323,7 +325,9 @@ impl LiveTraceSink for SseBroadcaster {
                 senders.retain(|tx| tx.send(event.clone()).is_ok());
             }
             Err(error) => {
-                tracing::error!("SseBroadcaster senders mutex poisoned in emit: {error}");
+                tracing::error!(
+                    "SseBroadcaster senders mutex poisoned in emit; dropping event broadcast: {error}"
+                );
             }
         }
         Ok(())

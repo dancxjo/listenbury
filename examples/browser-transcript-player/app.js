@@ -194,7 +194,7 @@ function buildLivePayload(events) {
   }
 
   function openSpanKey(lane, turn, startKind) {
-    return `${lane}:${turn ?? "none"}:${startKind}`;
+    return JSON.stringify([lane, turn ?? null, startKind]);
   }
 
   for (const event of events) {
@@ -241,7 +241,7 @@ function buildLivePayload(events) {
   // Flush any unclosed spans as open-ended spans up to current max elapsed_ms.
   const maxMs = Math.max(0, ...events.map((e) => e.elapsed_ms));
   for (const [key, startMs] of openSpans.entries()) {
-    const [lane, turn, kind] = key.split(":");
+    const [lane, turn, kind] = JSON.parse(key);
     viewerEvents.push({
       lane,
       kind,
@@ -250,7 +250,7 @@ function buildLivePayload(events) {
       end_ms: maxMs,
       metadata: {
         in_progress: true,
-        turn: turn === "none" ? null : Number(turn),
+        turn: turn,
       },
     });
   }
