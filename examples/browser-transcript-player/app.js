@@ -30,12 +30,19 @@ const isLiveMode = queryParams.get("live") === "1";
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
   capture_started: "Mic",
+  listening_started: "Mic",
   speech_started: "Mic",
+  speech_stopped: "Mic",
   breath_group_opened: "Mic",
   breath_group_closed: "Mic",
+  auditory_observation: "Mic",
+  environmental_sound: "Mic",
+  self_voice_heard: "Speaker",
+  overlap_detected: "Mic",
   asr_started: "ASR",
   asr_finished: "ASR",
   transcript: "ASR",
+  transcript_candidate: "ASR",
   asr_timed_word_stream: "ASR",
   llm_generation_started: "LLM",
   first_llm_token: "LLM",
@@ -199,6 +206,7 @@ function buildLivePayload(events) {
 
   // Pairs: when we see the "end" event, close the span started by the "start" event.
   const spanPairs = {
+    speech_started: { end: "speech_stopped", lane: "Mic" },
     asr_started: { end: "asr_finished", lane: "ASR" },
     playback_started: { end: "playback_finished", lane: "Speaker" },
     llm_generation_started: { end: "playback_started", lane: "LLM" },

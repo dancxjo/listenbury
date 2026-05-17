@@ -72,33 +72,6 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "tts-piper"
 ))]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-use listenbury::ExactTimestamp;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-use listenbury::VadBackendKind;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::WhisperSpeechRecognizer;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -129,7 +102,7 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::vad::{create_vad_backend, VadResult, VoiceActivityDetector};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -187,6 +160,13 @@ use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
     feature = "tts-piper"
 ))]
 use listenbury::mouth::tts::TextToSpeech;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::word::{transcript_to_word_stream, TranscriptWord};
 #[cfg(any(
     test,
     all(
@@ -197,13 +177,33 @@ use listenbury::mouth::tts::TextToSpeech;
     )
 ))]
 use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::ExactTimestamp;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::word::{TranscriptWord, transcript_to_word_stream};
+use listenbury::WhisperSpeechRecognizer;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -230,7 +230,7 @@ use serde::{Deserialize, Serialize};
         feature = "tts-piper"
     )
 ))]
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -261,7 +261,7 @@ use std::path::PathBuf;
         feature = "tts-piper"
     )
 ))]
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(any(
     test,
     all(
@@ -271,7 +271,7 @@ use std::sync::OnceLock;
         feature = "tts-piper"
     )
 ))]
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -306,8 +306,8 @@ use std::time::{Duration, Instant};
     )
 ))]
 use tsrun::{
-    Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
-    js_value_to_json,
+    api, js_value_to_json, Guarded, InternalModule, Interpreter, InterpreterConfig, JsError,
+    JsValue, StepResult,
 };
 
 mod ear;
@@ -342,7 +342,7 @@ use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
         feature = "tts-piper"
     )
 ))]
-use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
+use mouth::{mouth_command_for_runtime_event, ContinueMouthCommand};
 #[cfg(any(
     test,
     all(
@@ -375,8 +375,8 @@ use source::SourceCommand;
     )
 ))]
 use source::{
-    SourceCommandExecution, execute_grep_source, execute_list_source_files, execute_search_source,
-    execute_source_command, execute_view_source_file,
+    execute_grep_source, execute_list_source_files, execute_search_source, execute_source_command,
+    execute_view_source_file, SourceCommandExecution,
 };
 #[cfg(any(
     test,
@@ -630,6 +630,63 @@ fn emit_live_asr_candidate_trace_event(
         }));
     }
     trace.emit(candidate_event)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_live_ear_trace_event(
+    trace: &mut ContinueLiveTrace,
+    turn: u64,
+    event: &ContinueEarEvent,
+) -> Result<()> {
+    let mut trace_event = match event {
+        ContinueEarEvent::ListeningStarted { .. } => {
+            trace.event(0, "listening_started", ExactTimestamp::now())
+        }
+        ContinueEarEvent::SpeechStarted => {
+            trace.event(turn, "speech_started", ExactTimestamp::now())
+        }
+        ContinueEarEvent::SpeechStopped => {
+            trace.event(turn, "speech_stopped", ExactTimestamp::now())
+        }
+        ContinueEarEvent::AuditoryObservation { text } => {
+            let mut trace_event = trace.event(turn, "auditory_observation", ExactTimestamp::now());
+            trace_event.text = Some(text.clone());
+            trace_event
+        }
+        ContinueEarEvent::EnvironmentalSound { sound } => {
+            let mut trace_event = trace.event(turn, "environmental_sound", ExactTimestamp::now());
+            trace_event.text = Some(sound.description.clone());
+            trace_event
+        }
+        ContinueEarEvent::SelfVoiceHeard { .. } => {
+            let mut trace_event = trace.event(turn, "self_voice_heard", ExactTimestamp::now());
+            trace_event.text = Some(event.to_message());
+            trace_event
+        }
+        ContinueEarEvent::OverlapDetected { .. } => {
+            let mut trace_event = trace.event(turn, "overlap_detected", ExactTimestamp::now());
+            trace_event.text = Some(event.to_message());
+            trace_event
+        }
+        ContinueEarEvent::Error { message } => {
+            let mut trace_event = trace.event(turn, "ear_error", ExactTimestamp::now());
+            trace_event.text = Some(message.clone());
+            trace_event
+        }
+        ContinueEarEvent::Transcript { .. } | ContinueEarEvent::TranscriptCandidate { .. } => {
+            return Ok(());
+        }
+    };
+
+    if trace_event.text.is_none() {
+        trace_event.text = Some(event.to_message());
+    }
+    trace.emit(trace_event)
 }
 
 #[cfg(all(
@@ -2412,7 +2469,13 @@ fn append_pending_live_events(
             | ContinueEarEvent::EnvironmentalSound { .. }
             | ContinueEarEvent::SelfVoiceHeard { .. }
             | ContinueEarEvent::OverlapDetected { .. }
-            | ContinueEarEvent::Error { .. } => {}
+            | ContinueEarEvent::Error { .. } => {
+                emit_live_ear_trace_event(
+                    live_trace,
+                    live_trace_turn.saturating_add(1),
+                    &ear_event,
+                )?;
+            }
         }
         for packet in prompt_gate.consider_ear_event(&ear_event, Instant::now()) {
             append_or_defer_live_event(
@@ -3827,6 +3890,12 @@ fn process_continue_ear_frame(
             if let Some(sound) = state.environment.observe_frame(&analysis.frame, false) {
                 let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
             }
+            process_continue_segmenter_silence_frame(
+                analysis.frame.clone(),
+                state,
+                asr_tx,
+                event_tx,
+            )?;
             send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
         AuditoryRouting::SilenceOrNoise => {
@@ -3835,6 +3904,12 @@ fn process_continue_ear_frame(
                     let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
                 }
             }
+            process_continue_segmenter_silence_frame(
+                analysis.frame.clone(),
+                state,
+                asr_tx,
+                event_tx,
+            )?;
             send_vad_observation_transition(state, VadObservationKind::Silence, event_tx);
         }
     }
@@ -3851,6 +3926,9 @@ fn process_continue_ear_frame(
 ))]
 fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
     if !listenbury::developer_diagnostics_enabled() {
+        return;
+    }
+    if analysis.routing == AuditoryRouting::SilenceOrNoise {
         return;
     }
     eprintln!(
@@ -3891,6 +3969,41 @@ fn process_continue_vad_and_asr_frame(
         let _ = event_tx.send(ContinueEarEvent::EnvironmentalSound { sound });
     }
     let events = state.segmenter.process(vad_result);
+    process_continue_segmenter_events(frame, state, asr_tx, event_tx, events)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn process_continue_segmenter_silence_frame(
+    frame: AudioFrame,
+    state: &mut ContinueEarState,
+    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+) -> Result<()> {
+    let events = state.segmenter.process(VadResult {
+        speech_prob: 0.0,
+        is_speech: false,
+    });
+    process_continue_segmenter_events(frame, state, asr_tx, event_tx, events)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn process_continue_segmenter_events(
+    frame: AudioFrame,
+    state: &mut ContinueEarState,
+    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+    events: Vec<HearingEvent>,
+) -> Result<()> {
     for event in &events {
         match event {
             HearingEvent::SpeechStarted => {
@@ -5337,23 +5450,23 @@ fn contains_template_token(content: &str) -> bool {
 mod tests {
     use super::VadObservationKind;
     use super::{
-        ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat, ContinuePromptGate,
-        ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
-        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
-        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TranscriptSpeculativePlanner,
-        TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
+        build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         mouth_command_for_runtime_event, next_time_event_interval, vad_observation_message,
         wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event,
-        wrap_time_event,
+        wrap_time_event, ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat,
+        ContinuePromptGate, ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter,
+        PromptPacket, RollingContextManager, SourceCommand, SpeechControlCommand,
+        SpeechEventDetector, TranscriptSpeculativePlanner, TypeScriptCommand,
+        TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS,
     };
-    use listenbury::ExactTimestamp;
     use listenbury::mind::llm::LlmEvent;
     use listenbury::speech::transcript::{
         TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
     };
     use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
+    use listenbury::ExactTimestamp;
 
     #[test]
     fn stdin_append_is_wrapped_as_live_input() {
@@ -5410,10 +5523,9 @@ mod tests {
         };
 
         assert_eq!(gate.consider_ear_event(&event, now).len(), 1);
-        assert!(
-            gate.consider_ear_event(&event, now + std::time::Duration::from_millis(100))
-                .is_empty()
-        );
+        assert!(gate
+            .consider_ear_event(&event, now + std::time::Duration::from_millis(100))
+            .is_empty());
         assert_eq!(
             gate.consider_ear_event(&event, now + std::time::Duration::from_millis(800))
                 .len(),
@@ -5456,8 +5568,8 @@ mod tests {
         });
         let now = std::time::Instant::now();
 
-        assert!(
-            gate.consider_ear_event(
+        assert!(gate
+            .consider_ear_event(
                 &ContinueEarEvent::OverlapDetected {
                     self_confidence: 0.8,
                     external_confidence: 0.7,
@@ -5465,8 +5577,7 @@ mod tests {
                 },
                 now
             )
-            .is_empty()
-        );
+            .is_empty());
 
         let packets = gate.consider_ear_event(
             &ContinueEarEvent::OverlapDetected {
@@ -5478,11 +5589,9 @@ mod tests {
         );
 
         assert_eq!(packets.len(), 1);
-        assert!(
-            packets[0]
-                .text
-                .contains("Pete heard overlapping speech while speaking.")
-        );
+        assert!(packets[0]
+            .text
+            .contains("Pete heard overlapping speech while speaking."));
         assert!(!packets[0].text.contains("self_confidence"));
     }
 
@@ -5512,13 +5621,11 @@ mod tests {
     #[test]
     fn transcript_speculative_planner_tracks_stable_and_unstable_segments() {
         let mut planner = TranscriptSpeculativePlanner::default();
-        assert!(
-            planner
-                .observe(&TranscriptCandidateEvent::CandidateStarted {
-                    id: TranscriptCandidateId(1),
-                })
-                .is_none()
-        );
+        assert!(planner
+            .observe(&TranscriptCandidateEvent::CandidateStarted {
+                id: TranscriptCandidateId(1),
+            })
+            .is_none());
 
         let first = planner
             .observe(&TranscriptCandidateEvent::CandidateUpdated {
@@ -5815,11 +5922,9 @@ mod tests {
     fn speech_detector_defers_live_events_during_partial_typescript_tag() {
         let mut detector = SpeechEventDetector::default();
 
-        assert!(
-            detector
-                .ingest("<ts>import { listFiles } from \"pete:will\";\nlist")
-                .is_empty()
-        );
+        assert!(detector
+            .ingest("<ts>import { listFiles } from \"pete:will\";\nlist")
+            .is_empty());
         assert!(detector.defers_live_events());
         assert_eq!(
             detector.ingest("Files()</ts>"),
