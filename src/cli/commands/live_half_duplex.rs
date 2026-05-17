@@ -611,7 +611,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             state
                 .trace
                 .buffer_now(turn_id, "asr_started", ExactTimestamp::now());
-            let transcript = transcribe_group(&group_frames, &mut recognizer)?;
+            let transcript = transcribe_group(&group_frames, &mut recognizer)?.text;
             let transcript = transcript.trim();
             state
                 .trace
