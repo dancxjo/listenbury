@@ -11,8 +11,8 @@ use listenbury::mouth::backend::TtsBackend;
 use listenbury::mouth::piper::ProcessPiperBackend;
 #[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::piper_native::{
-    GraphemeToPhoneme, NativePiperBackend, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig,
-    SimpleEnglishG2p,
+    GraphemeToPhoneme, NativePiperBackend, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence,
+    PiperVoiceConfig, SimpleEnglishG2p,
 };
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
@@ -70,11 +70,11 @@ fn run_piper_compare_impl(command: PiperCompareCommand) -> Result<()> {
         .or_else(|| process_config.config_path.clone())
         .unwrap_or_else(|| native_model_path.with_extension("onnx.json"));
     let native_voice_config = read_native_voice_config(&native_config_path)?;
-    let phoneme_sequence = resolve_native_phonemes(&args, &native_voice_config)?;
+    let native_ids = resolve_native_ids(&args, &native_voice_config)?;
     let native_stats = synthesize_native_for_compare(
         &native_model_path,
         &native_voice_config,
-        &phoneme_sequence,
+        &native_ids,
         &args.text,
     )?;
 
@@ -193,9 +193,7 @@ impl AudioStats {
             (rms, peak_abs)
         };
 
-        let duration_ms =
-            (sample_count as f64 / f64::from(first.sample_rate_hz) / f64::from(first.channels))
-                * 1000.0;
+        let duration_ms = (sample_count as f64 / f64::from(first.sample_rate_hz)) * 1000.0;
 
         Ok(Self {
             sample_rate_hz: first.sample_rate_hz,
@@ -226,12 +224,9 @@ fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<Sy
 fn synthesize_native_for_compare(
     model_path: &Path,
     config: &PiperVoiceConfig,
-    phonemes: &PiperPhonemeSequence,
+    ids: &PiperIdSequence,
     text: &str,
 ) -> Result<SynthesisStats> {
-    let ids = phonemes
-        .to_piper_ids(config)
-        .with_context(|| format!("failed to map native phonemes for `{text}`"))?;
     let mut backend = NativePiperBackend::load(model_path, config.clone()).with_context(|| {
         format!(
             "failed to initialize native Piper backend from model {}",
@@ -239,10 +234,11 @@ fn synthesize_native_for_compare(
         )
     })?;
     let t0 = Instant::now();
-    let frames = backend.synthesize_id_frames(&ids).with_context(|| {
+    let frames = backend.synthesize_id_frames(ids).with_context(|| {
         format!(
-            "native Piper synthesis failed for model {}",
-            model_path.display()
+            "native Piper synthesis failed for model {} and text `{}`",
+            model_path.display(),
+            text
         )
     })?;
     let runtime = t0.elapsed();
@@ -255,36 +251,31 @@ fn synthesize_native_for_compare(
 }
 
 #[cfg(feature = "tts-piper-native")]
-fn resolve_native_phonemes(
-    args: &PiperCompareArgs,
-    config: &PiperVoiceConfig,
-) -> Result<PiperPhonemeSequence> {
-    if let Some(raw) = args.phonemes.as_ref() {
+fn resolve_native_ids(args: &PiperCompareArgs, config: &PiperVoiceConfig) -> Result<PiperIdSequence> {
+    let phoneme_sequence = if let Some(raw) = args.phonemes.as_ref() {
         let symbols: Vec<_> = raw.split_whitespace().collect();
         anyhow::ensure!(
             !symbols.is_empty(),
             "native phoneme override was empty; pass symbols like --phonemes \"OW K EY |\""
         );
-        return Ok(PiperPhonemeSequence {
+        PiperPhonemeSequence {
             phonemes: symbols
                 .into_iter()
                 .map(|symbol| PiperPhoneme(symbol.to_string()))
                 .collect(),
-        });
-    }
+        }
+    } else {
+        let g2p = SimpleEnglishG2p::default();
+        g2p.phonemize(&args.text)
+            .with_context(|| format!("failed to phonemize text `{}` for native Piper", args.text))?
+    };
 
-    let g2p = SimpleEnglishG2p::default();
-    g2p.phonemize(&args.text)
-        .with_context(|| format!("failed to phonemize text `{}` for native Piper", args.text))
-        .and_then(|sequence| {
-            sequence.to_piper_ids(config).with_context(|| {
-                format!(
-                    "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
-                    args.text
-                )
-            })?;
-            Ok(sequence)
-        })
+    phoneme_sequence.to_piper_ids(config).with_context(|| {
+        format!(
+            "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
+            args.text
+        )
+    })
 }
 
 #[cfg(feature = "tts-piper-native")]
