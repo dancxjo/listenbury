@@ -599,6 +599,350 @@ body.live-mode #file-toolbar {
   display: none;
 }
 
+/* ── Word commitment (span state) chip styles ──────────────────────────── */
+
+/* Hypothetical: dashed border, italic, faded — span is still provisional */
+.word-chip.commit-hypothetical {
+  border-style: dashed;
+  border-color: rgba(255, 209, 102, 0.55);
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 209, 102, 0.14) 0 2px, transparent 2px 10px),
+    #241f0e;
+  color: rgba(238, 243, 247, 0.62);
+  font-style: italic;
+  opacity: 0.82;
+}
+
+/* StableText: solid, stronger color — text locked, TTS not yet committed */
+.word-chip.commit-stabletext {
+  border-color: rgba(142, 230, 168, 0.65);
+  background:
+    linear-gradient(90deg, rgba(142, 230, 168, 0.18), transparent),
+    #14281a;
+  color: #d4f5df;
+}
+
+/* Prepared / Playable: bright green, approaching playback */
+.word-chip.commit-prepared,
+.word-chip.commit-playable {
+  border-color: rgba(100, 230, 140, 0.85);
+  background:
+    linear-gradient(90deg, rgba(100, 230, 140, 0.28), transparent),
+    #152a1c;
+  color: #c0ffd4;
+  font-weight: 600;
+}
+
+/* Played: word is being rendered to audio right now */
+.word-chip.commit-played {
+  border-color: rgba(99, 210, 255, 0.85);
+  background:
+    repeating-linear-gradient(90deg, rgba(99, 210, 255, 0.36) 0 2px, transparent 2px 8px),
+    #162832;
+  color: #c0e8ff;
+  font-weight: 700;
+}
+
+/* Final: committed, fully played and confirmed */
+.word-chip.commit-final {
+  border-color: rgba(99, 210, 255, 0.9);
+  background:
+    linear-gradient(90deg, rgba(99, 210, 255, 0.32), transparent),
+    #162832;
+  color: var(--text);
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(99, 210, 255, 0.25);
+}
+
+/* Cancelled: abandoned before playback */
+.word-chip.commit-cancelled {
+  border-style: dashed;
+  border-color: rgba(255, 122, 144, 0.55);
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 122, 144, 0.12) 0 2px, transparent 2px 8px),
+    #271318;
+  color: rgba(238, 243, 247, 0.4);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* Revised: word text was retroactively corrected */
+.word-chip.was-revised {
+  border-color: rgba(255, 167, 38, 0.9) !important;
+  box-shadow: 0 0 0 2px rgba(255, 167, 38, 0.3), 0 0 12px rgba(255, 167, 38, 0.2);
+}
+
+.word-chip.was-revised::after {
+  content: " ↩";
+  color: var(--warn);
+  font-style: normal;
+  font-weight: 700;
+  font-size: 0.7em;
+}
+
+/* Revision flash animation (applied transiently via JS) */
+@keyframes revision-flash {
+  0%   { background: rgba(255, 167, 38, 0.55); border-color: var(--warn); }
+  60%  { background: rgba(255, 167, 38, 0.28); }
+  100% { background: inherit; }
+}
+
+.word-chip.revision-flash {
+  animation: revision-flash 0.8s ease-out forwards;
+}
+
+/* ── Transcript ribbon ──────────────────────────────────────────────────── */
+
+.transcript-ribbon {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.6rem 1.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(11, 13, 16, 0.92);
+}
+
+.transcript-ribbon[hidden] {
+  display: none;
+}
+
+.transcript-ribbon-label {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
+.transcript-ribbon-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.transcript-ribbon-hint {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* Individual word tokens in the transcript ribbon */
+.transcript-token {
+  display: inline;
+  padding: 0 0.1em;
+  border-radius: 3px;
+  transition: background 0.3s, color 0.3s, opacity 0.3s;
+}
+
+/* Hypothesis / Hypothetical: faded, italic, dotted underline */
+.transcript-token.span-state-hypothetical,
+.transcript-token.commit-hypothetical {
+  color: rgba(238, 243, 247, 0.45);
+  font-style: italic;
+  text-decoration: underline dotted rgba(255, 209, 102, 0.5);
+}
+
+/* Stable: ready, text locked */
+.transcript-token.span-state-stable,
+.transcript-token.commit-stabletext {
+  color: rgba(238, 243, 247, 0.78);
+}
+
+/* Committed / Final: full weight */
+.transcript-token.span-state-committed,
+.transcript-token.commit-final,
+.transcript-token.commit-played {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Revised: orange highlight, was wrong */
+.transcript-token.span-state-revised {
+  color: var(--warn);
+  font-weight: 700;
+  text-decoration: underline wavy var(--warn);
+}
+
+/* Cancelled: struck through */
+.transcript-token.commit-cancelled {
+  color: rgba(238, 243, 247, 0.3);
+  text-decoration: line-through;
+}
+
+/* Ribbon flash when a word gets revised */
+@keyframes token-revision-flash {
+  0%   { background: rgba(255, 167, 38, 0.55); color: #fff; }
+  100% { background: transparent; }
+}
+.transcript-token.revision-flash {
+  animation: token-revision-flash 0.7s ease-out forwards;
+}
+
+/* Legend chips inside the ribbon hint */
+.span-legend-item {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.span-legend-item.span-state-hypothetical {
+  color: rgba(255, 209, 102, 0.7);
+  border-style: dashed;
+  font-style: italic;
+}
+.span-legend-item.span-state-stable {
+  color: rgba(142, 230, 168, 0.8);
+}
+.span-legend-item.span-state-committed {
+  color: rgba(99, 210, 255, 0.9);
+  font-weight: 800;
+}
+.span-legend-item.span-state-revised {
+  color: var(--warn);
+  text-decoration: underline wavy var(--warn);
+}
+
+/* ── Span debug log ─────────────────────────────────────────────────────── */
+
+.span-debug-section {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.span-debug-summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  user-select: none;
+  padding: 0.2rem 0;
+}
+
+.span-debug-summary:hover {
+  color: var(--text);
+}
+
+.span-debug-log {
+  margin-top: 0.5rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.span-debug-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.span-debug-entry {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0.25rem;
+  font: 0.77rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.4;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 0.5rem;
+}
+
+.span-debug-entry.entry-open    { border-left-color: rgba(142, 230, 168, 0.6); }
+.span-debug-entry.entry-stable  { border-left-color: rgba(99, 210, 255, 0.5); }
+.span-debug-entry.entry-commit  { border-left-color: var(--accent); color: var(--text); }
+.span-debug-entry.entry-revise  { border-left-color: var(--warn); color: var(--warn); font-weight: 700; }
+.span-debug-entry.entry-cancel  { border-left-color: var(--danger); color: var(--danger); }
+
+.span-debug-time {
+  color: var(--muted);
+  font-size: 0.7rem;
+  opacity: 0.72;
+}
+
+/* Inspector span state badge */
+.inspector-span-state {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin-bottom: 0.5rem;
+}
+
+.inspector-span-state.commit-hypothetical { color: rgba(255, 209, 102, 0.8); border-style: dashed; }
+.inspector-span-state.commit-stabletext   { color: rgba(142, 230, 168, 0.85); }
+.inspector-span-state.commit-prepared,
+.inspector-span-state.commit-playable     { color: rgba(100, 230, 140, 0.9); }
+.inspector-span-state.commit-played       { color: rgba(99, 210, 255, 0.9); }
+.inspector-span-state.commit-final        { color: var(--accent); }
+.inspector-span-state.commit-cancelled    { color: var(--danger); }
+
+.inspector-revision-history {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgba(255, 167, 38, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 167, 38, 0.07);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.inspector-revision-history strong {
+  color: var(--warn);
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.inspector-revision-entry {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  color: var(--muted);
+  font: 0.77rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.inspector-revision-entry del {
+  color: var(--danger);
+  text-decoration-color: var(--danger);
+}
+
+.inspector-revision-entry .revision-new {
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
+.inspector-revision-reason {
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border-left: 2px solid var(--warn);
+  background: rgba(255, 167, 38, 0.06);
+  font: 0.75rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 body.live-mode audio {
   display: none;
 }
