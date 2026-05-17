@@ -392,6 +392,9 @@ function connectLiveEvents() {
 }
 
 function addLiveEvent(traceEvent) {
+  if (traceEvent && typeof traceEvent === "object" && traceEvent.received_ms == null) {
+    traceEvent.received_ms = Math.round(performance.now() - liveSession.receivedOriginMs);
+  }
   liveEvents.push(traceEvent);
   reduceLiveEvent(liveSession, traceEvent);
 
@@ -424,11 +427,12 @@ const RELATIVE_WORD_END_GRACE_MS = 250;
 function createLiveSession() {
   return {
     turns: new Map(),      // turnId → LiveTurn
-    openSpans: new Map(),  // openSpanKey → start_ms
+    openSpans: new Map(),  // openSpanKey → { start_ms, label }
     viewerEvents: [],      // accumulated closed span events
     viewerMarkers: [],     // accumulated point markers
     debugLog: [],          // debug entries, generated exactly once per input event
     maxElapsedMs: 0,
+    receivedOriginMs: performance.now(),
   };
 }
 
@@ -442,9 +446,22 @@ function sessionGetOrCreateTurn(session, turnId) {
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
       generatedText: null,
+      generatedSpeechFragments: [],
     });
   }
   return session.turns.get(turnId);
+}
+
+function openSpanRecord(startMs, label = null) {
+  return { start_ms: startMs, label };
+}
+
+function openSpanStartMs(record) {
+  return typeof record === "number" ? record : record?.start_ms;
+}
+
+function openSpanLabel(record) {
+  return typeof record === "number" ? null : record?.label ?? null;
 }
 
 // Returns a stable string key for a word, preferring:
@@ -612,13 +629,16 @@ function reduceLiveEvent(session, event) {
 
   if (event.text && isGeneratedSpeechEventKind(event.kind)) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
-    liveTurn.generatedText = event.text;
+    updateGeneratedSpeechText(liveTurn, event);
   }
 
   // ── breath_group_opened → open span
   if (event.kind === "breath_group_opened") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
-    session.openSpans.set(key, event.elapsed_ms);
+    session.openSpans.set(
+      key,
+      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, "breath_group_opened", turn, labelForKind("breath_group_opened"))),
+    );
     log("open", `Breath group opened (turn ${turn})`);
     return;
   }
@@ -626,16 +646,17 @@ function reduceLiveEvent(session, event) {
   // ── breath_group_closed → close span
   if (event.kind === "breath_group_closed") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
-    const spanStart = session.openSpans.get(key);
+    const openSpan = session.openSpans.get(key);
+    const spanStart = openSpanStartMs(openSpan);
     if (spanStart !== undefined) {
       session.openSpans.delete(key);
       session.viewerEvents.push({
         lane: "Mic",
         kind: "breath_group",
-        label: semanticSpanLabel(session, "breath_group", turn, labelForKind("breath_group")),
+        label: closedSpanLabel(session, "breath_group", turn, openSpan),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: { event, turn, start_kind: "breath_group_opened" },
+        metadata: { event, turn, start_kind: "breath_group_opened", start_event_ms: spanStart, end_event_ms: event.elapsed_ms },
       });
       log("commit", `Breath group committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
     }
@@ -654,16 +675,17 @@ function reduceLiveEvent(session, event) {
   const startInfo = END_TO_START[event.kind];
   if (startInfo) {
     const openKey = openSpanKey(startInfo.lane, turn, startInfo.startKind);
-    const spanStart = session.openSpans.get(openKey);
+    const openSpan = session.openSpans.get(openKey);
+    const spanStart = openSpanStartMs(openSpan);
     if (spanStart !== undefined) {
       session.openSpans.delete(openKey);
       session.viewerEvents.push({
         lane: startInfo.lane,
         kind: startInfo.startKind,
-        label: semanticSpanLabel(session, startInfo.startKind, turn, labelForKind(startInfo.startKind)),
+        label: closedSpanLabel(session, startInfo.startKind, turn, openSpan),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: { event, turn, start_kind: startInfo.startKind },
+        metadata: { event, turn, start_kind: startInfo.startKind, start_event_ms: spanStart, end_event_ms: event.elapsed_ms },
       });
       if (startInfo.startKind === "asr_started") {
         log("commit", `ASR span committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
@@ -678,7 +700,10 @@ function reduceLiveEvent(session, event) {
   if (SPAN_PAIRS[event.kind]) {
     const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
     const spanKey = openSpanKey(lane, turn, event.kind);
-    session.openSpans.set(spanKey, event.elapsed_ms);
+    session.openSpans.set(
+      spanKey,
+      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind))),
+    );
     if (event.kind === "asr_started") {
       log("open", `ASR span opened (turn ${turn}) [Hypothesis]`);
     }
@@ -704,12 +729,13 @@ function reduceLiveEvent(session, event) {
 function liveSessionToViewerPayload(session) {
   // Flush any still-open spans as in-progress spans up to maxElapsedMs.
   const inProgressEvents = [];
-  for (const [key, startMs] of session.openSpans.entries()) {
+  for (const [key, openSpan] of session.openSpans.entries()) {
+    const startMs = openSpanStartMs(openSpan);
     const [spanLane, spanTurn, kind] = JSON.parse(key);
     inProgressEvents.push({
       lane: spanLane,
       kind,
-      label: semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
+      label: openSpanLabel(openSpan) ?? semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
       start_ms: startMs,
       end_ms: session.maxElapsedMs,
       metadata: { in_progress: true, turn: spanTurn },
@@ -914,6 +940,26 @@ function isGeneratedSpeechEventKind(kind) {
   ].includes(kind);
 }
 
+function updateGeneratedSpeechText(liveTurn, event) {
+  if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
+    return;
+  }
+
+  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
+    const fragments = liveTurn.generatedSpeechFragments;
+    const last = fragments[fragments.length - 1];
+    if (last !== event.text) {
+      fragments.push(event.text);
+    }
+    liveTurn.generatedText = fragments.join(" ");
+    return;
+  }
+
+  if (liveTurn.generatedSpeechFragments.length === 0) {
+    liveTurn.generatedText = event.text;
+  }
+}
+
 function semanticSpanLabel(session, kind, turnId, fallback) {
   const liveTurn = session.turns.get(turnId);
   switch (kind) {
@@ -930,6 +976,11 @@ function semanticSpanLabel(session, kind, turnId, fallback) {
     default:
       return fallback;
   }
+}
+
+function closedSpanLabel(session, kind, turnId, openSpan) {
+  const fallback = openSpanLabel(openSpan) ?? labelForKind(kind);
+  return semanticSpanLabel(session, kind, turnId, fallback);
 }
 
 function semanticEventLabel(event) {
@@ -1132,6 +1183,8 @@ function normalizeEvents(events, markers) {
     const startMs = coerceMs(entry.start_ms, `event ${index} start_ms`);
     const rawEndMs = entry.end_ms ?? startMs;
     const endMs = Math.max(startMs, coerceMs(rawEndMs, `event ${index} end_ms`));
+    const audioRef = normalizeEventAudioRef(entry, startMs, endMs);
+    const clocks = eventClocksFromEntry(entry, startMs, endMs, audioRef);
 
     normalizedEvents.push({
       id: entry.id ?? `event-${index + 1}`,
@@ -1141,7 +1194,8 @@ function normalizeEvents(events, markers) {
       start_ms: startMs,
       end_ms: endMs,
       metadata: entry.metadata ?? null,
-      audio_ref: normalizeEventAudioRef(entry, startMs, endMs),
+      audio_ref: audioRef,
+      clocks,
       style: endMs > startMs ? "span" : "marker",
       original: entry,
     });
@@ -1153,6 +1207,8 @@ function normalizeEvents(events, markers) {
     }
 
     const atMs = coerceMs(entry.at_ms ?? entry.start_ms, `marker ${index} at_ms`);
+    const audioRef = normalizeEventAudioRef(entry, atMs, atMs);
+    const clocks = eventClocksFromEntry(entry, atMs, atMs, audioRef);
 
     normalizedEvents.push({
       id: entry.id ?? `marker-${index + 1}`,
@@ -1162,7 +1218,8 @@ function normalizeEvents(events, markers) {
       start_ms: atMs,
       end_ms: atMs,
       metadata: entry.metadata ?? null,
-      audio_ref: normalizeEventAudioRef(entry, atMs, atMs),
+      audio_ref: audioRef,
+      clocks,
       style: "marker",
       original: entry,
     });
@@ -1532,7 +1589,10 @@ function renderCustomTimeline() {
         const isMarker = event.style === "marker" || event.start_ms === event.end_ms;
         const startMs = event.start_ms;
         const endMs = Math.max(event.end_ms, startMs + 1);
-        state.itemTimingByKey.set(key, { startMs, endMs });
+        const visualBounds = isMarker ? { startMs, endMs } : eventVisualBounds(event, startMs, endMs);
+        const visualStartMs = visualBounds.startMs;
+        const visualEndMs = Math.max(visualBounds.endMs, visualStartMs + 1);
+        state.itemTimingByKey.set(key, { startMs: visualStartMs, endMs: visualEndMs });
 
         const isSelected =
           state.selectedItem?.type === "event" &&
@@ -1550,6 +1610,7 @@ function renderCustomTimeline() {
           isInterruptionKind(event.kind) ? "interruption-region" : "",
           isTokenKind(event.kind) ? "token-region" : "",
           isEmotionKind(event.kind) ? "emotion-region" : "",
+          eventHasClockDivergence(event) ? "has-clock-divergence" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -1563,11 +1624,14 @@ function renderCustomTimeline() {
         chip.dataset.laneIndex = String(laneIndex);
         chip.dataset.itemIndex = String(eventIndex);
         chip.dataset.itemType = "event";
-        const widthPx = isMarker ? 10 : Math.max(12, pxForMs(event.end_ms - event.start_ms));
-        chip.style.left = `${pxForMs(startMs)}px`;
+        const widthPx = isMarker ? 10 : Math.max(12, pxForMs(visualEndMs - visualStartMs));
+        chip.style.left = `${pxForMs(visualStartMs)}px`;
         chip.style.width = `${widthPx}px`;
         const displayLabel = eventChipDisplayLabel(lane, event, startMs, endMs);
-        chip.title = `${lane.label} · ${event.label} · ${event.kind} (${startMs}–${endMs} ms)`;
+        chip.title = [
+          `${lane.label} · ${event.label} · ${event.kind}`,
+          ...eventClockLines(event),
+        ].join("\n");
         if (isMarker) {
           chip.setAttribute("aria-label", `${lane.label}: ${displayLabel}`);
           const markerPin = document.createElement("span");
@@ -1576,6 +1640,7 @@ function renderCustomTimeline() {
           chip.append(markerPin);
         } else {
           chip.setAttribute("aria-label", `${lane.label}: ${displayLabel}`);
+          appendEventClockOverlays(chip, event, visualStartMs, visualEndMs);
           chip.append(createChipContent(displayLabel), createChipBadges([shortKindLabel(event.kind)]));
         }
         trackEl.append(chip);
@@ -1869,7 +1934,7 @@ function timelineItemFromChip(chip) {
 }
 
 function eventPreviewDetail(event) {
-  const details = [];
+  const details = eventClockLines(event);
   if (event.metadata?.derived) {
     details.push("derived semantic span");
   }
@@ -2529,6 +2594,159 @@ function normalizeEventAudioRef(entry, fallbackStartMs, fallbackEndMs) {
   };
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) {
+      return number;
+    }
+  }
+  return null;
+}
+
+function eventClocksFromEntry(entry, spanStartMs, spanEndMs, audioRef) {
+  const metadata = entry?.metadata ?? {};
+  const event = metadata?.event ?? {};
+  const receivedMs = firstFiniteNumber(
+    entry?.received_ms,
+    metadata?.received_ms,
+    event?.received_ms,
+  );
+  const eventMs = firstFiniteNumber(
+    metadata?.start_event_ms,
+    entry?.event_ms,
+    entry?.at_ms,
+    metadata?.event_ms,
+    metadata?.elapsed_ms,
+    event?.elapsed_ms,
+    spanStartMs,
+  );
+  const endEventMs = firstFiniteNumber(
+    metadata?.end_event_ms,
+    metadata?.event?.elapsed_ms,
+    entry?.end_event_ms,
+    spanEndMs,
+  );
+
+  return {
+    event_ms: eventMs,
+    end_event_ms: endEventMs,
+    span_start_ms: spanStartMs,
+    span_end_ms: spanEndMs,
+    audio_start_ms: audioRef?.start_ms ?? null,
+    audio_end_ms: audioRef?.end_ms ?? null,
+    received_ms: receivedMs,
+  };
+}
+
+function formatClockValue(value) {
+  return Number.isFinite(value) ? `${Math.round(value)} ms` : "n/a";
+}
+
+function eventClockLines(event) {
+  const clocks = event?.clocks ?? {};
+  return [
+    `event_ms: ${formatClockValue(clocks.event_ms)}`,
+    `span_start_ms: ${formatClockValue(clocks.span_start_ms)}`,
+    `span_end_ms: ${formatClockValue(clocks.span_end_ms)}`,
+    `audio_start_ms: ${formatClockValue(clocks.audio_start_ms)}`,
+    `audio_end_ms: ${formatClockValue(clocks.audio_end_ms)}`,
+    `received_ms: ${formatClockValue(clocks.received_ms)}`,
+  ];
+}
+
+function eventClockSummary(event) {
+  return eventClockLines(event).join(" · ");
+}
+
+function eventVisualBounds(event, fallbackStartMs, fallbackEndMs) {
+  const clocks = event?.clocks ?? {};
+  const useAudioClock = !isSuppressionKind(event?.kind);
+  const candidates = [
+    fallbackStartMs,
+    fallbackEndMs,
+    clocks.event_ms,
+    useAudioClock ? clocks.audio_start_ms : null,
+    useAudioClock ? clocks.audio_end_ms : null,
+  ].filter(Number.isFinite);
+  if (!candidates.length) {
+    return { startMs: fallbackStartMs, endMs: fallbackEndMs };
+  }
+  const startMs = Math.min(...candidates);
+  const endMs = Math.max(...candidates, startMs + 1);
+  return { startMs, endMs };
+}
+
+function percentWithin(startMs, endMs, valueMs) {
+  if (!Number.isFinite(valueMs) || endMs <= startMs) {
+    return null;
+  }
+  const pct = ((valueMs - startMs) / (endMs - startMs)) * 100;
+  return Math.max(0, Math.min(100, pct));
+}
+
+function eventHasClockDivergence(event) {
+  const clocks = event?.clocks ?? {};
+  const values = [
+    clocks.event_ms,
+    clocks.span_start_ms,
+    !isSuppressionKind(event?.kind) ? clocks.audio_start_ms : null,
+  ].filter(Number.isFinite);
+  if (values.length < 2) {
+    return false;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return max - min >= 1;
+}
+
+function appendEventClockOverlays(chip, event, visualStartMs, visualEndMs) {
+  const clocks = event?.clocks ?? {};
+  const useAudioClock = !isSuppressionKind(event?.kind);
+  const visualDuration = visualEndMs - visualStartMs;
+  if (visualDuration <= 0) {
+    return;
+  }
+
+  const leadStart = firstFiniteNumber(useAudioClock ? clocks.audio_start_ms : null, clocks.span_start_ms);
+  const leadEnd = clocks.event_ms;
+  if (Number.isFinite(leadStart) && Number.isFinite(leadEnd) && leadEnd > leadStart) {
+    const leadLeft = percentWithin(visualStartMs, visualEndMs, leadStart);
+    const leadRight = percentWithin(visualStartMs, visualEndMs, leadEnd);
+    if (leadLeft != null && leadRight != null && leadRight > leadLeft) {
+      const lead = document.createElement("span");
+      lead.className = "event-derived-lead";
+      lead.style.left = `${leadLeft}%`;
+      lead.style.width = `${leadRight - leadLeft}%`;
+      chip.append(lead);
+    }
+  }
+
+  if (useAudioClock && Number.isFinite(clocks.audio_start_ms) && Number.isFinite(clocks.audio_end_ms)) {
+    const audioLeft = percentWithin(visualStartMs, visualEndMs, clocks.audio_start_ms);
+    const audioRight = percentWithin(visualStartMs, visualEndMs, clocks.audio_end_ms);
+    if (audioLeft != null && audioRight != null && audioRight > audioLeft) {
+      const audio = document.createElement("span");
+      audio.className = "event-audio-duration";
+      audio.style.left = `${audioLeft}%`;
+      audio.style.width = `${audioRight - audioLeft}%`;
+      chip.append(audio);
+    }
+  }
+
+  const tickLeft = percentWithin(visualStartMs, visualEndMs, clocks.event_ms);
+  if (tickLeft != null) {
+    const tick = document.createElement("span");
+    tick.className = "event-emission-tick";
+    tick.style.left = `${tickLeft}%`;
+    chip.append(tick);
+  }
+}
+
+function isSuppressionKind(kind) {
+  return String(kind ?? "").includes("suppression");
+}
+
 function normalizeAudioRefString(value) {
   if (typeof value !== "string") {
     return null;
@@ -2648,6 +2866,8 @@ function buildSelectionProjection() {
         h("br"),
         `${event.start_ms}–${event.end_ms} ms · kind `,
         h("strong", null, event.kind),
+        h("br"),
+        eventClockSummary(event),
       ],
       selectionJson: JSON.stringify(
         {
@@ -2659,6 +2879,7 @@ function buildSelectionProjection() {
           start_ms: event.start_ms,
           end_ms: event.end_ms,
           duration_ms: Math.max(0, event.end_ms - event.start_ms),
+          clocks: event.clocks,
           audioRef: event.audio_ref,
           metadata: event.metadata,
           original: event.original,

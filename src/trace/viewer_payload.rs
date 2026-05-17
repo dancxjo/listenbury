@@ -391,7 +391,12 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
                     start_ms,
                     end_ms: Some(event.elapsed_ms.max(start_ms)),
                     label: Some(humanize_kind(base_kind)),
-                    metadata: merge_metadata(start_metadata, metadata),
+                    metadata: merge_span_metadata(
+                        start_metadata,
+                        metadata,
+                        start_ms,
+                        event.elapsed_ms,
+                    ),
                     audio_ref: start_audio_ref.or(audio_ref.clone()),
                 });
                 continue;
@@ -426,6 +431,26 @@ fn merge_metadata(first: Option<Value>, second: Option<Value>) -> Option<Value> 
         (Some(left), Some(_)) => Some(left),
         (None, None) => None,
     }
+}
+
+fn merge_span_metadata(
+    first: Option<Value>,
+    second: Option<Value>,
+    start_event_ms: u64,
+    end_event_ms: u64,
+) -> Option<Value> {
+    let mut metadata = match merge_metadata(first, second) {
+        Some(Value::Object(map)) => map,
+        Some(value) => {
+            let mut map = Map::new();
+            map.insert("value".to_string(), value);
+            map
+        }
+        None => Map::new(),
+    };
+    metadata.insert("start_event_ms".to_string(), Value::from(start_event_ms));
+    metadata.insert("end_event_ms".to_string(), Value::from(end_event_ms));
+    Some(Value::Object(metadata))
 }
 
 fn start_to_end_kind(kind: &str) -> Option<(&str, &str)> {
@@ -472,6 +497,7 @@ fn lane_for_kind(kind: &str) -> &'static str {
 fn metadata_from_event(event: &LiveTraceEvent) -> Value {
     let mut metadata = Map::new();
     metadata.insert("turn".to_string(), Value::from(event.turn));
+    metadata.insert("elapsed_ms".to_string(), Value::from(event.elapsed_ms));
     metadata.insert("t_unix_ns".to_string(), Value::from(event.t_unix_ns));
     if let Some(text) = event.text.as_ref() {
         metadata.insert("text".to_string(), Value::from(text.clone()));

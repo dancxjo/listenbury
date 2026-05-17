@@ -353,7 +353,9 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
     assert!(!html.contains("id=\"zoom-selection\""));
     assert!(js.contains("function zoomTimelineIn"));
     assert!(js.contains("function zoomTimelineOut"));
-    assert!(js.contains("tracksCol.addEventListener(\"wheel\", onTimelineWheel, { passive: false })"));
+    assert!(
+        js.contains("tracksCol.addEventListener(\"wheel\", onTimelineWheel, { passive: false })")
+    );
     assert!(js.contains("function onTimelineWheel"));
     assert!(js.contains("function normalizeWheelDeltaY"));
     assert!(js.contains("function zoomToSelection"));

@@ -898,8 +898,9 @@ fn stream_speech_to_tts(
                         filler_plan.unit()
                     );
                     let filler_text = filler_plan.text().to_string();
-                    current_spoken_text = filler_text.clone();
                     response_fragments.push(filler_text.clone());
+                    current_spoken_text = join_spoken_fragments(&response_fragments);
+                    self_hearing.mark_output_intent(current_spoken_text.clone());
                     emit_speech_plan_trace(
                         trace,
                         user_turn_id,
@@ -952,8 +953,9 @@ fn stream_speech_to_tts(
             match unit {
                 ExpressiveUnit::Speech(plan) => {
                     let text = plan.text().to_string();
-                    current_spoken_text = text.clone();
                     response_fragments.push(text.clone());
+                    current_spoken_text = join_spoken_fragments(&response_fragments);
+                    self_hearing.mark_output_intent(current_spoken_text.clone());
                     main_llm_has_safe_speech_unit = true;
                     if !trace_state.first_safe_speech_unit_emitted {
                         let mut event = trace.event(
@@ -1517,7 +1519,9 @@ fn drain_ready_tts_audio(
         self_hearing.current_utterance_text.as_deref().unwrap_or("")
     );
     if !trace_state.playback_started {
-        trace.emit_now(trace_state.turn, "playback_started", ExactTimestamp::now())?;
+        let mut event = trace.event(trace_state.turn, "playback_started", ExactTimestamp::now());
+        event.text = Some(spoken_text.to_string());
+        trace.emit(event)?;
         trace_state.playback_started = true;
     }
     play_audio_frames(&frames, source)?;

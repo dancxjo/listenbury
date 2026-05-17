@@ -60,9 +60,22 @@ function sessionGetOrCreateTurn(session, turnId) {
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(),
       generatedText: null,
+      generatedSpeechFragments: [],
     });
   }
   return session.turns.get(turnId);
+}
+
+function openSpanRecord(startMs, label = null) {
+  return { start_ms: startMs, label };
+}
+
+function openSpanStartMs(record) {
+  return typeof record === "number" ? record : record?.start_ms;
+}
+
+function openSpanLabel(record) {
+  return typeof record === "number" ? null : record?.label ?? null;
 }
 
 function stableWordKey(word, index) {
@@ -172,6 +185,26 @@ function isGeneratedSpeechEventKind(kind) {
   ].includes(kind);
 }
 
+function updateGeneratedSpeechText(liveTurn, event) {
+  if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
+    return;
+  }
+
+  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
+    const fragments = liveTurn.generatedSpeechFragments;
+    const last = fragments[fragments.length - 1];
+    if (last !== event.text) {
+      fragments.push(event.text);
+    }
+    liveTurn.generatedText = fragments.join(" ");
+    return;
+  }
+
+  if (liveTurn.generatedSpeechFragments.length === 0) {
+    liveTurn.generatedText = event.text;
+  }
+}
+
 function semanticSpanLabel(session, kind, turnId, fallback) {
   const liveTurn = session.turns.get(turnId);
   switch (kind) {
@@ -188,6 +221,11 @@ function semanticSpanLabel(session, kind, turnId, fallback) {
     default:
       return fallback;
   }
+}
+
+function closedSpanLabel(session, kind, turnId, openSpan) {
+  const fallback = openSpanLabel(openSpan) ?? labelForKind(kind);
+  return semanticSpanLabel(session, kind, turnId, fallback);
 }
 
 function semanticEventLabel(event) {
@@ -305,28 +343,32 @@ function reduceLiveEvent(session, event) {
 
   if (event.text && isGeneratedSpeechEventKind(event.kind)) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
-    liveTurn.generatedText = event.text;
+    updateGeneratedSpeechText(liveTurn, event);
   }
 
   if (event.kind === "breath_group_opened") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
-    session.openSpans.set(key, event.elapsed_ms);
+    session.openSpans.set(
+      key,
+      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, "breath_group_opened", turn, labelForKind("breath_group_opened"))),
+    );
     log("open", `Breath group opened (turn ${turn})`);
     return;
   }
 
   if (event.kind === "breath_group_closed") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
-    const spanStart = session.openSpans.get(key);
+    const openSpan = session.openSpans.get(key);
+    const spanStart = openSpanStartMs(openSpan);
     if (spanStart !== undefined) {
       session.openSpans.delete(key);
       session.viewerEvents.push({
         lane: "Mic",
         kind: "breath_group",
-        label: semanticSpanLabel(session, "breath_group", turn, labelForKind("breath_group")),
+        label: closedSpanLabel(session, "breath_group", turn, openSpan),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: { event, turn, start_kind: "breath_group_opened" },
+        metadata: { event, turn, start_kind: "breath_group_opened", start_event_ms: spanStart, end_event_ms: event.elapsed_ms },
       });
       log("commit", `Breath group committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
     }
@@ -343,16 +385,17 @@ function reduceLiveEvent(session, event) {
   const startInfo = END_TO_START[event.kind];
   if (startInfo) {
     const openKey = openSpanKey(startInfo.lane, turn, startInfo.startKind);
-    const spanStart = session.openSpans.get(openKey);
+    const openSpan = session.openSpans.get(openKey);
+    const spanStart = openSpanStartMs(openSpan);
     if (spanStart !== undefined) {
       session.openSpans.delete(openKey);
       session.viewerEvents.push({
         lane: startInfo.lane,
         kind: startInfo.startKind,
-        label: semanticSpanLabel(session, startInfo.startKind, turn, labelForKind(startInfo.startKind)),
+        label: closedSpanLabel(session, startInfo.startKind, turn, openSpan),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: { event, turn, start_kind: startInfo.startKind },
+        metadata: { event, turn, start_kind: startInfo.startKind, start_event_ms: spanStart, end_event_ms: event.elapsed_ms },
       });
       if (startInfo.startKind === "asr_started") {
         log("commit", `ASR span committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
@@ -368,7 +411,10 @@ function reduceLiveEvent(session, event) {
       llm_generation_started: "LLM", self_hearing_suppression_started: "Speaker" };
     const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
     const spanKey = openSpanKey(lane, turn, event.kind);
-    session.openSpans.set(spanKey, event.elapsed_ms);
+    session.openSpans.set(
+      spanKey,
+      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind))),
+    );
     if (event.kind === "asr_started") {
       log("open", `ASR span opened (turn ${turn}) [Hypothesis]`);
     }
@@ -386,11 +432,12 @@ function reduceLiveEvent(session, event) {
 
 function liveSessionToViewerPayload(session) {
   const inProgressEvents = [];
-  for (const [key, startMs] of session.openSpans.entries()) {
+  for (const [key, openSpan] of session.openSpans.entries()) {
+    const startMs = openSpanStartMs(openSpan);
     const [spanLane, spanTurn, kind] = JSON.parse(key);
     inProgressEvents.push({
       lane: spanLane, kind,
-      label: semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
+      label: openSpanLabel(openSpan) ?? semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
       start_ms: startMs, end_ms: session.maxElapsedMs,
       metadata: { in_progress: true, turn: spanTurn },
     });
@@ -763,6 +810,28 @@ console.log("\n── Scenario 8c: Mic speech chips show stop time after listeni
     eventChipDisplayLabel({ label: "Mic" }, openMicSpeech, 100, 4320),
     "hello can you hear me",
     "in-progress Mic speech chip keeps live transcript",
+  );
+}
+
+console.log("\n── Scenario 8d: playback labels preserve queued speech units ──");
+{
+  const s = createLiveSession();
+  reduceLiveEvent(s, mkEvent("tts_enqueue_started", 1, 100, { text: "My name is Pete." }));
+  reduceLiveEvent(s, mkEvent("playback_started", 1, 120));
+  reduceLiveEvent(s, mkEvent("tts_enqueue_started", 1, 180, { text: "Nice to meet you." }));
+  reduceLiveEvent(s, mkEvent("playback_finished", 1, 500));
+
+  const payload = liveSessionToViewerPayload(s);
+  const playback = payload.events.find((event) => event.kind === "playback_started");
+  assertEqual(
+    playback?.label,
+    "My name is Pete. Nice to meet you.",
+    "closed playback span uses accumulated queued speech fragments",
+  );
+  assertEqual(
+    s.turns.get(1).generatedText,
+    "My name is Pete. Nice to meet you.",
+    "turn generated text accumulates queued speech fragments",
   );
 }
 

@@ -5,6 +5,9 @@ use crate::time::ExactTimestamp;
 
 /// Additional silence to suppress after Pete's TTS output ends, to absorb room echo.
 pub const SUPPRESSION_TAIL_MS: u64 = 300;
+/// Suppress a small window before speaker intent/playback, covering callback
+/// and clock jitter between queued mic frames and output scheduling.
+pub const SUPPRESSION_PRE_ROLL_MS: u64 = 100;
 /// Additional acoustic reference lifetime after playback ends.
 pub const SPEAKER_REFERENCE_TAIL_MS: u64 = 500;
 const SPEAKER_REFERENCE_MAX_DELAY_MS: i64 = 450;
@@ -64,12 +67,52 @@ impl SelfHearingState {
         expected_duration: Duration,
     ) {
         let now = ExactTimestamp::now();
+        self.mark_output_started_at(utterance_text, expected_duration, now);
+    }
+
+    /// Record that Pete intends to speak, before audio is necessarily ready.
+    ///
+    /// In half-duplex mode the microphone gate should close before output can
+    /// become audible.  The final window end is filled in once the audio
+    /// duration is known via [`mark_output_started`](Self::mark_output_started).
+    pub fn mark_output_intent(&mut self, utterance_text: impl Into<String>) {
+        self.mark_output_intent_at(utterance_text, ExactTimestamp::now());
+    }
+
+    /// Timestamp-injectable variant of
+    /// [`mark_output_intent`](Self::mark_output_intent), primarily for tests
+    /// and callers that already captured the scheduling time.
+    pub fn mark_output_intent_at(
+        &mut self,
+        utterance_text: impl Into<String>,
+        intended_at: ExactTimestamp,
+    ) {
+        self.pete_speaking = true;
+        let intended_start = suppression_start_with_pre_roll(intended_at);
+        self.output_started_at = Some(
+            self.output_started_at
+                .map_or(intended_start, |current| current.min(intended_start)),
+        );
+        self.current_utterance_text = Some(utterance_text.into());
+    }
+
+    /// Timestamp-injectable variant of
+    /// [`mark_output_started`](Self::mark_output_started).
+    pub fn mark_output_started_at(
+        &mut self,
+        utterance_text: impl Into<String>,
+        expected_duration: Duration,
+        started_at: ExactTimestamp,
+    ) {
         let tail_nanos = u128::from(SUPPRESSION_TAIL_MS) * 1_000_000;
         let window_nanos = expected_duration.as_nanos().saturating_add(tail_nanos);
         self.pete_speaking = true;
-        self.output_started_at = Some(now);
+        self.output_started_at = Some(
+            self.output_started_at
+                .unwrap_or_else(|| suppression_start_with_pre_roll(started_at)),
+        );
         self.output_expected_until = Some(ExactTimestamp {
-            unix_nanos: now.unix_nanos.saturating_add(window_nanos),
+            unix_nanos: started_at.unix_nanos.saturating_add(window_nanos),
         });
         self.current_utterance_text = Some(utterance_text.into());
     }
@@ -100,7 +143,12 @@ impl SelfHearingState {
     /// the wall-clock window has elapsed.
     pub fn suppression_decision_at(&self, timestamp: ExactTimestamp) -> SuppressionDecision {
         if self.pete_speaking {
-            return SuppressionDecision::Suppress;
+            if self
+                .output_started_at
+                .is_none_or(|started_at| timestamp.unix_nanos >= started_at.unix_nanos)
+            {
+                return SuppressionDecision::Suppress;
+            }
         }
         if let Some(until) = self.output_expected_until {
             if timestamp.unix_nanos <= until.unix_nanos {
@@ -108,6 +156,14 @@ impl SelfHearingState {
             }
         }
         SuppressionDecision::Allow
+    }
+}
+
+fn suppression_start_with_pre_roll(at: ExactTimestamp) -> ExactTimestamp {
+    ExactTimestamp {
+        unix_nanos: at
+            .unix_nanos
+            .saturating_sub(u128::from(SUPPRESSION_PRE_ROLL_MS) * 1_000_000),
     }
 }
 
@@ -417,7 +473,10 @@ mod tests {
     use crate::audio::frame::AudioFrame;
     use crate::time::ExactTimestamp;
 
-    use super::{SUPPRESSION_TAIL_MS, SelfHearingState, SpeakerReferenceMask, SuppressionDecision};
+    use super::{
+        SUPPRESSION_PRE_ROLL_MS, SUPPRESSION_TAIL_MS, SelfHearingState, SpeakerReferenceMask,
+        SuppressionDecision,
+    };
 
     #[test]
     fn initial_state_allows_all_frames() {
@@ -467,6 +526,76 @@ mod tests {
         assert_eq!(
             state.suppression_decision_at(ExactTimestamp { unix_nanos: 2_001 }),
             SuppressionDecision::Allow
+        );
+    }
+
+    #[test]
+    fn speaker_intent_suppresses_before_audio_duration_is_known() {
+        let mut state = SelfHearingState::new();
+        let intent_at = ExactTimestamp {
+            unix_nanos: 10_000_000_000,
+        };
+        state.mark_output_intent_at("One moment.", intent_at);
+
+        assert_eq!(
+            state.suppression_decision_at(intent_at),
+            SuppressionDecision::Suppress
+        );
+        assert_eq!(
+            state.suppression_decision_at(ExactTimestamp {
+                unix_nanos: intent_at
+                    .unix_nanos
+                    .saturating_sub(u128::from(SUPPRESSION_PRE_ROLL_MS) * 1_000_000)
+            }),
+            SuppressionDecision::Suppress
+        );
+    }
+
+    #[test]
+    fn active_speaking_does_not_suppress_frames_before_pre_roll() {
+        let mut state = SelfHearingState::new();
+        let intent_at = ExactTimestamp {
+            unix_nanos: 10_000_000_000,
+        };
+        state.mark_output_intent_at("One moment.", intent_at);
+
+        assert_eq!(
+            state.suppression_decision_at(ExactTimestamp {
+                unix_nanos: intent_at
+                    .unix_nanos
+                    .saturating_sub(u128::from(SUPPRESSION_PRE_ROLL_MS + 1) * 1_000_000)
+            }),
+            SuppressionDecision::Allow
+        );
+    }
+
+    #[test]
+    fn audio_start_keeps_original_intent_as_window_start() {
+        let mut state = SelfHearingState::new();
+        let intent_at = ExactTimestamp {
+            unix_nanos: 10_000_000_000,
+        };
+        let playback_at = ExactTimestamp {
+            unix_nanos: 12_000_000_000,
+        };
+        state.mark_output_intent_at("One moment.", intent_at);
+        state.mark_output_started_at("One moment.", Duration::from_millis(500), playback_at);
+
+        assert_eq!(
+            state.output_started_at,
+            Some(ExactTimestamp {
+                unix_nanos: intent_at
+                    .unix_nanos
+                    .saturating_sub(u128::from(SUPPRESSION_PRE_ROLL_MS) * 1_000_000)
+            })
+        );
+        assert_eq!(
+            state.output_expected_until,
+            Some(ExactTimestamp {
+                unix_nanos: playback_at
+                    .unix_nanos
+                    .saturating_add(u128::from(500 + SUPPRESSION_TAIL_MS) * 1_000_000)
+            })
         );
     }
 
