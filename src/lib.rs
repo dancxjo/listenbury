@@ -9,6 +9,7 @@ pub mod mind;
 pub mod models;
 pub mod mouth;
 pub mod runtime;
+pub mod span;
 pub mod speculative;
 pub mod speech;
 pub mod text_stability;
@@ -46,6 +47,7 @@ pub use mouth::read_aloud::{
     SpeechCandidateCommitment, SpeechCandidateId,
 };
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
+pub use span::{Cursor, Modality, Span, SpanId, SpanRevision, SpanState, Text, TextId};
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
