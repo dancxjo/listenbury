@@ -265,6 +265,11 @@ Default local build:
 just build
 ```
 
+The default build enables the portable local stack, including audio capture,
+resampling, WebRTC VAD, ASR, local LLM, Piper TTS, native Piper scaffolding,
+webcam support, and model download support. CUDA and Metal accelerator variants
+remain explicit opt-ins because they depend on the target machine and platform.
+
 CUDA build:
 
 ```bash

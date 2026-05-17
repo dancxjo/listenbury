@@ -5211,7 +5211,9 @@ mod tests {
         wrap_ear_event, wrap_live_input, wrap_mouth_event, wrap_runtime_event, wrap_source_event,
         wrap_time_event,
     };
+    use listenbury::ExactTimestamp;
     use listenbury::mind::llm::LlmEvent;
+    use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
 
     #[test]
     fn stdin_append_is_wrapped_as_live_input() {
