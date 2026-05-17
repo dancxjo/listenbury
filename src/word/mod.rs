@@ -22,7 +22,8 @@ pub mod stream;
 pub mod tts_export;
 
 pub use export::{
-    NoopWordBoundaryRefiner, TranscriptWord, WordBoundaryRefiner, transcript_to_word_stream,
+    transcript_to_word_stream, HeuristicAcousticWordBoundaryRefiner, NoopWordBoundaryRefiner,
+    TranscriptWord, WordBoundaryRefiner,
 };
 pub use stream::{
     AudioRef, BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode,
