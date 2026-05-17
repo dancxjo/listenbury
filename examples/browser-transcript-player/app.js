@@ -81,9 +81,11 @@ async function loadDemo() {
 
 async function loadPayloadFromUrls(urls, successMessage) {
   try {
+    const failures = [];
     for (const url of urls) {
       const response = await fetch(url);
       if (!response.ok) {
+        failures.push(`${url} (${response.status})`);
         continue;
       }
       const payload = await response.json();
@@ -91,10 +93,10 @@ async function loadPayloadFromUrls(urls, successMessage) {
       statusMessage.textContent = successMessage;
       return true;
     }
-    throw new Error(`failed to load payload from ${urls.join(", ")}`);
+    throw new Error(`failed to load payload from ${failures.join(", ") || urls.join(", ")}`);
   } catch (error) {
     statusMessage.textContent =
-      "Unable to auto-load demo. Serve the repository over local HTTP or choose a JSON file manually.";
+      `Unable to auto-load demo (${error?.message ?? "unknown error"}). Serve the repository over local HTTP or choose a JSON file manually.`;
     console.error(error);
     return false;
   }

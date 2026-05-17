@@ -5,7 +5,11 @@ use crate::cli::WebCommand;
 pub(crate) fn run_web(command: WebCommand) -> Result<()> {
     let url = format!("http://{}:{}/", command.host, command.port);
     if command.open {
-        open_browser(&url);
+        let open_url = url.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            open_browser(&open_url);
+        });
     }
 
     listenbury::web::serve(listenbury::web::ServeConfig {

@@ -28,6 +28,7 @@ struct HttpResponse {
     status: u16,
     reason: &'static str,
     content_type: &'static str,
+    cache_control: &'static str,
     body: Vec<u8>,
     headers: Vec<(&'static str, String)>,
 }
@@ -38,6 +39,18 @@ impl HttpResponse {
             status: 200,
             reason: "OK",
             content_type,
+            cache_control: "no-store",
+            body: body.into(),
+            headers: Vec::new(),
+        }
+    }
+
+    fn static_asset(content_type: &'static str, body: impl Into<Vec<u8>>) -> Self {
+        Self {
+            status: 200,
+            reason: "OK",
+            content_type,
+            cache_control: "public, max-age=3600",
             body: body.into(),
             headers: Vec::new(),
         }
@@ -48,6 +61,7 @@ impl HttpResponse {
             status: 404,
             reason: "Not Found",
             content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
             body: message.into().into_bytes(),
             headers: Vec::new(),
         }
@@ -58,6 +72,7 @@ impl HttpResponse {
             status: 405,
             reason: "Method Not Allowed",
             content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
             body: message.into().into_bytes(),
             headers: vec![("Allow", "GET, HEAD".to_string())],
         }
@@ -68,6 +83,7 @@ impl HttpResponse {
             status: 500,
             reason: "Internal Server Error",
             content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
             body: message.into().into_bytes(),
             headers: Vec::new(),
         }
@@ -78,6 +94,7 @@ impl HttpResponse {
             status: 302,
             reason: "Found",
             content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
             body: format!("redirecting to {location}\n").into_bytes(),
             headers: vec![("Location", location.to_string())],
         }
@@ -151,11 +168,12 @@ fn handle_connection(stream: &mut TcpStream, state: &ServerState) -> Result<()> 
 fn write_response(stream: &mut TcpStream, response: &HttpResponse, is_head: bool) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\n",
         response.status,
         response.reason,
         response.content_type,
         response.body.len(),
+        response.cache_control,
     )
     .context("write status line")?;
 
@@ -177,28 +195,30 @@ fn route_request(method: &str, target: &str, state: &ServerState) -> HttpRespons
 
     let path = target.split('?').next().unwrap_or("/");
     match path {
-        "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
+        "/" => HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML),
         "/healthz" => HttpResponse::ok("text/plain; charset=utf-8", "ok\n"),
         "/demo" => HttpResponse::redirect("/?payload=demo"),
 
         "/app.js" | "/assets/app.js" => {
-            HttpResponse::ok("application/javascript; charset=utf-8", assets::APP_JS)
+            HttpResponse::static_asset("application/javascript; charset=utf-8", assets::APP_JS)
         }
         "/styles.css" | "/assets/styles.css" => {
-            HttpResponse::ok("text/css; charset=utf-8", assets::STYLES_CSS)
+            HttpResponse::static_asset("text/css; charset=utf-8", assets::STYLES_CSS)
         }
         "/demo.json" | "/assets/demo.json" | "/api/demo-payload" => {
-            HttpResponse::ok("application/json; charset=utf-8", assets::DEMO_JSON)
+            HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
         }
         "/welcome.wav" | "/assets/welcome.wav" => {
-            HttpResponse::ok("audio/wav", assets::WELCOME_WAV)
+            HttpResponse::static_asset("audio/wav", assets::WELCOME_WAV)
         }
-        "/assets/index.html" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
-        "/assets/live-trace.sample.jsonl" => HttpResponse::ok(
+        "/assets/index.html" => {
+            HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML)
+        }
+        "/assets/live-trace.sample.jsonl" => HttpResponse::static_asset(
             "application/x-ndjson; charset=utf-8",
             assets::LIVE_TRACE_SAMPLE_JSONL,
         ),
-        "/assets/live-trace.sample.viewer.json" => HttpResponse::ok(
+        "/assets/live-trace.sample.viewer.json" => HttpResponse::static_asset(
             "application/json; charset=utf-8",
             assets::LIVE_TRACE_SAMPLE_VIEWER_JSON,
         ),
