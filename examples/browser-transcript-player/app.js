@@ -179,7 +179,7 @@ function buildLivePayload(events) {
   const viewerMarkers = [];
 
   // Track open spans (start events without a matching end).
-  const openSpans = new Map(); // key: `${lane}:${turn}` → start_ms
+  const openSpans = new Map(); // key: `${lane}:${turn}:${startKind}` → start_ms
 
   // Pairs: when we see the "end" event, close the span started by the "start" event.
   const spanPairs = {
@@ -193,14 +193,17 @@ function buildLivePayload(events) {
     endToStart[info.end] = { startKind, lane: info.lane };
   }
 
+  function openSpanKey(lane, turn, startKind) {
+    return `${lane}:${turn ?? "none"}:${startKind}`;
+  }
+
   for (const event of events) {
     const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
-    const spanKey = `${lane}:${event.turn}`;
 
     // Check if this closes a span.
     const startInfo = endToStart[event.kind];
     if (startInfo) {
-      const openKey = `${startInfo.lane}:${event.turn}`;
+      const openKey = openSpanKey(startInfo.lane, event.turn, startInfo.startKind);
       const spanStart = openSpans.get(openKey);
       if (spanStart !== undefined) {
         openSpans.delete(openKey);
@@ -218,6 +221,7 @@ function buildLivePayload(events) {
 
     // Check if this opens a span.
     if (spanPairs[event.kind]) {
+      const spanKey = openSpanKey(lane, event.turn, event.kind);
       openSpans.set(spanKey, event.elapsed_ms);
       // Don't emit yet – wait for the closing event.
       continue;
@@ -237,14 +241,17 @@ function buildLivePayload(events) {
   // Flush any unclosed spans as open-ended spans up to current max elapsed_ms.
   const maxMs = Math.max(0, ...events.map((e) => e.elapsed_ms));
   for (const [key, startMs] of openSpans.entries()) {
-    const [lane] = key.split(":");
+    const [lane, turn, kind] = key.split(":");
     viewerEvents.push({
       lane,
-      kind: "in_progress",
-      label: "…",
+      kind,
+      label: `${labelForKind(kind)} (in progress)`,
       start_ms: startMs,
       end_ms: maxMs,
-      metadata: null,
+      metadata: {
+        in_progress: true,
+        turn: turn === "none" ? null : Number(turn),
+      },
     });
   }
 

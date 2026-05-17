@@ -552,6 +552,8 @@ Listenbury web viewer available at http://127.0.0.1:8787/?live=1
 
 Open that URL in a browser to see a live event timeline that updates in real time as events happen on the mic and speakers.
 
+Note: live SSE currently streams future events only. If you connect late, earlier events are not replayed yet.
+
 Optional web flags:
 
 ```bash

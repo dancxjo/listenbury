@@ -556,12 +556,17 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let broadcaster = if command.web {
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
-        let web_host = command.web_host.clone();
+        let bind_host = command.web_host.clone();
         let web_port = command.web_port;
-        let url = format!("http://{}:{}/", web_host, web_port);
+        let browser_host = match bind_host.as_str() {
+            "0.0.0.0" => "127.0.0.1".to_string(),
+            "::" => "[::1]".to_string(),
+            _ => bind_host.clone(),
+        };
+        let url = format!("http://{}:{}/", browser_host, web_port);
         std::thread::spawn(move || {
             if let Err(e) = listenbury::web::serve(listenbury::web::ServeConfig {
-                host: web_host,
+                host: bind_host,
                 port: web_port,
                 payload: None,
                 trace: None,
