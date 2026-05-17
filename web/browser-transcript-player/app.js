@@ -602,7 +602,7 @@ function labelForKind(kind) {
 
 function togglePlayback() {
   if (!audio.src) {
-    statusMessage.textContent = "No audio loaded for this selection.";
+    statusMessage.textContent = "No audio source loaded.";
     return;
   }
 

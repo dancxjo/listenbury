@@ -455,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn demo_route_is_not_found() {
+    fn removed_demo_route_returns_404() {
         let response = route_request("GET", "/demo", &empty_state());
         assert_eq!(response.status, 404);
     }
@@ -468,8 +468,8 @@ mod tests {
     }
 
     #[test]
-    fn live_server_serves_index_when_query_is_present() {
-        let response = route_request("GET", "/?live=1", &live_state());
+    fn live_server_serves_index_with_unrelated_query_param() {
+        let response = route_request("GET", "/?foo=bar", &live_state());
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
     }
