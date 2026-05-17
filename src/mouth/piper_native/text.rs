@@ -143,9 +143,7 @@ impl TextNormalizer {
                     push_word_token(&mut tokens, &mut current);
                 }
                 ':' => {
-                    if next.is_some_and(|next| next == '/')
-                        && current.to_ascii_lowercase().starts_with("http")
-                    {
+                    if next.is_some_and(|next| next == '/') && looks_like_url_prefix(&current) {
                         current.push(':');
                         continue;
                     }
@@ -254,7 +252,12 @@ fn is_title_case_honorific(token: &str) -> bool {
 }
 
 fn looks_like_url_or_email(token: &str) -> bool {
-    token.contains('@') || token.contains("://") || token.contains("www.")
+    token.contains('@') || token.contains("://") || token.contains("www.") || looks_like_url_prefix(token)
+}
+
+fn looks_like_url_prefix(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    lower.starts_with("http") || lower.starts_with("www")
 }
 
 fn is_decimal_fragment(token: &str) -> bool {
