@@ -53,7 +53,7 @@ fn browser_transcript_player_demo_json_deserializes() {
 
     assert_eq!(
         payload.title.as_deref(),
-        Some("Listenbury TimedWordStream Demo")
+        Some("Listenbury WaveDeck Demo")
     );
 
     let audio = payload.audio.expect("demo should provide audio metadata");

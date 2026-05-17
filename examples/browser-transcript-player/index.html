@@ -3,53 +3,50 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Listenbury TimedWordStream Static Debug Viewer</title>
+    <title>Listenbury WaveDeck</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Listenbury debug surface</p>
-        <h1>TimedWordStream static debug viewer</h1>
+    <header class="top-chrome">
+      <div class="brand">
+        <p class="eyebrow">Listenbury timeline studio</p>
+        <h1>WaveDeck</h1>
         <p class="subtitle">
-          Static debug viewer for serialized TimedWordStream payloads. This is
-          an early local oscilloscope for inspecting recorded, generated, and
-          playback speech lanes.
+          Full-width timeline debugger for serialized TimedWordStream payloads
+          and event lanes.
         </p>
       </div>
+      <section class="toolbar">
+        <button id="load-demo" type="button">Load bundled demo</button>
+        <label class="file-picker">
+          JSON payload
+          <input id="json-file" type="file" accept=".json,application/json" />
+        </label>
+        <label class="file-picker">
+          Audio override
+          <input id="audio-file" type="file" accept="audio/*" />
+        </label>
+        <button id="jump-prev" type="button" aria-label="Previous word">◀ Prev</button>
+        <button id="play-pause" type="button">Play</button>
+        <button id="jump-next" type="button" aria-label="Next word">Next ▶</button>
+      </section>
+      <section class="status-bar">
+        <strong id="viewer-title">No stream loaded</strong>
+        <span id="status-message">Load the bundled demo or choose a local JSON payload.</span>
+        <span id="playback-time">0.000s</span>
+      </section>
+      <audio id="audio" controls preload="metadata"></audio>
+      <p class="milestone-note">
+        Shared audio timeline mode is active (`audio.url`): words and events are
+        aligned on one ruler.
+      </p>
     </header>
 
-    <section class="toolbar">
-      <button id="load-demo" type="button">Load bundled demo</button>
-      <label class="file-picker">
-        JSON payload
-        <input id="json-file" type="file" accept=".json,application/json" />
-      </label>
-      <label class="file-picker">
-        Audio override
-        <input id="audio-file" type="file" accept="audio/*" />
-      </label>
-      <button id="jump-prev" type="button">Previous word</button>
-      <button id="play-pause" type="button">Play</button>
-      <button id="jump-next" type="button">Next word</button>
-    </section>
-
-    <section class="status-bar">
-      <strong id="viewer-title">No stream loaded</strong>
-      <span id="status-message">Load the bundled demo or choose a local JSON payload.</span>
-      <span id="playback-time">0.000s</span>
-    </section>
-    <p class="milestone-note">
-      Milestone note: this viewer now supports synchronized word and
-      event/span lanes on one shared audio timeline (`audio.url`). Real traces
-      may still require per-lane audio references.
-    </p>
-
-    <audio id="audio" controls preload="metadata"></audio>
-
     <main class="workspace">
-      <section id="viewer" class="viewer empty">
-        <p>No streams loaded yet.</p>
+      <section class="viewer-stage">
+        <section id="viewer" class="viewer empty">
+          <p>No streams loaded yet.</p>
+        </section>
       </section>
 
       <aside class="inspector">
