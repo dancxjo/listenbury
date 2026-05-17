@@ -1978,13 +1978,6 @@ function describeSpanState(commitment) {
   }
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 /**
  * Build an HTML fragment for the revision history of a word span.
  * Returns an empty string when there are no revisions.
