@@ -72,6 +72,33 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     feature = "tts-piper"
 ))]
 use cpal::{FromSample, Sample, SizedSample};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::ExactTimestamp;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::VadBackendKind;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::WhisperSpeechRecognizer;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -118,7 +145,7 @@ use listenbury::hearing::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder};
 #[cfg(any(
     test,
     all(
@@ -129,6 +156,13 @@ use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
     )
 ))]
 use listenbury::mind::llm::LlmEvent;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
 #[cfg(any(
     test,
     all(
@@ -153,20 +187,6 @@ use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
     feature = "tts-piper"
 ))]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::WhisperSpeechRecognizer;
 #[cfg(any(
     test,
     all(
@@ -176,7 +196,21 @@ use listenbury::WhisperSpeechRecognizer;
         feature = "tts-piper"
     )
 ))]
-use listenbury::VadBackendKind;
+use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::word::{TranscriptWord, transcript_to_word_stream};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::{AudioFrame, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(any(
     test,
     all(
@@ -301,16 +335,6 @@ use ear::ContinueEarEvent;
         feature = "tts-piper"
     )
 ))]
-use source::SourceCommand;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
 use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
 #[cfg(any(
     test,
@@ -322,6 +346,16 @@ use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
     )
 ))]
 use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use source::SourceCommand;
 #[cfg(any(
     test,
     all(
@@ -465,6 +499,58 @@ const DEFAULT_CONTINUE_LLAMA_GPU_LAYERS: Option<u32> = None;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+type ContinueLiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> TimedWordStream {
+    let words = transcript
+        .split_whitespace()
+        .map(|word| TranscriptWord {
+            text: word.to_string(),
+            start_ms: None,
+            end_ms: None,
+            confidence: None,
+        })
+        .collect::<Vec<_>>();
+    let mut stream = transcript_to_word_stream(stream_id, &words);
+    stream.source = WordStreamSource::LiveAsr;
+    stream
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_live_asr_trace_events(
+    trace: &mut ContinueLiveTrace,
+    turn: u64,
+    text: &str,
+    stream: &TimedWordStream,
+    occurred_at: ExactTimestamp,
+) -> Result<()> {
+    let mut transcript_event = trace.event(turn, "transcript", occurred_at);
+    transcript_event.text = Some(text.to_string());
+    trace.emit(transcript_event)?;
+
+    let mut stream_event = trace.event(turn, "asr_timed_word_stream", occurred_at);
+    stream_event.artifact =
+        Some(serde_json::to_value(stream).context("serialize ASR TimedWordStream artifact")?);
+    trace.emit(stream_event)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let max_tokens = command
         .max_tokens
@@ -510,6 +596,15 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let vad_backend = command.vad.as_backend_kind();
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let speaker_reference = Arc::new(Mutex::new(SpeakerReferenceMask::default()));
+    let trace_started_at = ExactTimestamp::now();
+    let trace_writer = command
+        .jsonl
+        .map(JsonlTraceWriter::create)
+        .transpose()
+        .context("failed to create dev continue live trace writer")?;
+    let mut live_trace = LiveTraceRecorder::new(trace_started_at, trace_writer);
+    let mut live_trace_turn = 0u64;
+    live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(
         PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?),
         Arc::clone(&capture_enabled),
@@ -595,6 +690,8 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             &mut mouth,
             &mut tts_vad,
             &mut prompt_gate,
+            &mut live_trace,
+            &mut live_trace_turn,
         )?;
 
         if llm_paused_for_mouth && (pending_mouth_utterances == 0 || mouth_playback_paused) {
@@ -2106,6 +2203,8 @@ fn append_pending_live_events(
     mouth: &mut ContinueMouth,
     tts_vad: &mut DuplexTurnController,
     prompt_gate: &mut ContinuePromptGate,
+    live_trace: &mut ContinueLiveTrace,
+    live_trace_turn: &mut u64,
 ) -> Result<()> {
     if !defer_live_events {
         flush_deferred_live_events(llm_session, deferred_live_events)?;
@@ -2147,7 +2246,21 @@ fn append_pending_live_events(
 
     for ear_event in ear_rx.try_iter() {
         match &ear_event {
-            ContinueEarEvent::Transcript { text } => eprintln!("[dev continue] heard: {text}"),
+            ContinueEarEvent::Transcript {
+                text,
+                timed_word_stream,
+                occurred_at,
+            } => {
+                eprintln!("[dev continue] heard: {text}");
+                *live_trace_turn = live_trace_turn.saturating_add(1);
+                emit_live_asr_trace_events(
+                    live_trace,
+                    *live_trace_turn,
+                    text,
+                    timed_word_stream,
+                    *occurred_at,
+                )?;
+            }
             ContinueEarEvent::ListeningStarted { .. }
             | ContinueEarEvent::SpeechStarted
             | ContinueEarEvent::SpeechStopped
@@ -2690,8 +2803,7 @@ fn drain_mouth_events_into_llm(
                     }
                     ContinueMouthEvent::SpeechQueued { .. }
                     | ContinueMouthEvent::SpeechSynthesisStarted { .. }
-                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
-                    => {}
+                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. } => {}
                 }
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
@@ -2920,12 +3032,22 @@ impl ContinueEar {
         let asr = std::thread::Builder::new()
             .name("listenbury-dev-continue-asr".to_string())
             .spawn(move || {
+                let mut next_stream_id = 1u64;
                 while !stop_for_asr.load(Ordering::Relaxed) {
                     match asr_rx.recv_timeout(Duration::from_millis(20)) {
                         Ok(frames) => match transcribe_group(&frames, &mut recognizer) {
                             Ok(text) if !text.is_empty() => {
+                                let timed_word_stream = live_asr_text_to_word_stream(
+                                    WordStreamId(next_stream_id),
+                                    &text,
+                                );
+                                next_stream_id = next_stream_id.saturating_add(1);
                                 if event_tx_for_asr
-                                    .send(ContinueEarEvent::Transcript { text })
+                                    .send(ContinueEarEvent::Transcript {
+                                        text,
+                                        timed_word_stream,
+                                        occurred_at: ExactTimestamp::now(),
+                                    })
                                     .is_err()
                                 {
                                     return;
@@ -4380,7 +4502,6 @@ enum SpeechControlCommand {
     Resume,
 }
 
-
 #[cfg(test)]
 impl ContinueRuntimeEvent {
     fn to_message(&self) -> String {
@@ -4951,6 +5072,8 @@ mod tests {
         let now = std::time::Instant::now();
         let event = ContinueEarEvent::Transcript {
             text: "hello".to_string(),
+            timed_word_stream: TimedWordStream::new(WordStreamId(1), WordStreamSource::LiveAsr),
+            occurred_at: ExactTimestamp { unix_nanos: 0 },
         };
 
         let first = gate.consider_ear_event(&event, now);
@@ -5566,6 +5689,8 @@ grepSource("build_initial_prompt", 1)"#,
         controller.observe_ear_event(
             &super::ContinueEarEvent::Transcript {
                 text: "wait".to_string(),
+                timed_word_stream: TimedWordStream::new(WordStreamId(1), WordStreamSource::LiveAsr),
+                occurred_at: ExactTimestamp { unix_nanos: 0 },
             },
             started_at,
         );

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::time::ExactTimestamp;
 
@@ -27,6 +28,8 @@ pub struct LiveTraceEvent {
     pub unit_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_until_unix_ns: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<Value>,
 }
 
 impl LiveTraceEvent {
@@ -52,6 +55,7 @@ impl LiveTraceEvent {
             face: None,
             unit_kind: None,
             expected_until_unix_ns: None,
+            artifact: None,
         }
     }
 }

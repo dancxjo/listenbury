@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use ort::session::Session;
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
