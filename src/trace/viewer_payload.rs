@@ -137,9 +137,14 @@ enum TextLaneKind {
 fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
     let mut lane_events: BTreeMap<&'static str, Vec<(u64, String)>> = BTreeMap::new();
     let mut live_asr_streams = Vec::<(u64, TimedWordStream)>::new();
+    let mut live_tts_revision_streams = Vec::<(u64, TimedWordStream)>::new();
     for event in events {
         if let Some(stream) = live_asr_timed_word_stream_from_event(event) {
             live_asr_streams.push((event.elapsed_ms, stream));
+            continue;
+        }
+        if let Some(stream) = live_tts_timed_word_stream_from_event(event) {
+            live_tts_revision_streams.push((event.elapsed_ms, stream));
             continue;
         }
         let Some(text) = event.text.as_ref().map(|text| text.trim()) else {
@@ -164,6 +169,9 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
     if !live_asr_streams.is_empty() {
         lane_events.entry("User transcript").or_default();
     }
+    if !live_tts_revision_streams.is_empty() {
+        lane_events.entry("Pete intended speech").or_default();
+    }
 
     lane_events
         .into_iter()
@@ -186,6 +194,27 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                     stream: TimedWordStream {
                         id: WordStreamId(stream_index as u64 + 1),
                         source: WordStreamSource::LiveAsr,
+                        words,
+                    },
+                };
+            }
+            if label == "Pete intended speech" && !live_tts_revision_streams.is_empty() {
+                let mut streams = live_tts_revision_streams.iter().collect::<Vec<_>>();
+                streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
+                let mut words = Vec::new();
+                let mut next_word_id = 1u64;
+                for (_elapsed_ms, stream) in streams {
+                    for mut word in stream.words.iter().cloned() {
+                        word.id = WordId(next_word_id);
+                        next_word_id = next_word_id.saturating_add(1);
+                        words.push(word);
+                    }
+                }
+                return ViewerWordLane {
+                    label: label.to_string(),
+                    stream: TimedWordStream {
+                        id: WordStreamId(stream_index as u64 + 1),
+                        source: WordStreamSource::SyntheticSpeech,
                         words,
                     },
                 };
@@ -312,7 +341,7 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
     > = HashMap::new();
 
     for event in events {
-        if event.kind == "asr_timed_word_stream" {
+        if event.kind == "asr_timed_word_stream" || event.kind == "tts_timed_word_stream_revision" {
             continue;
         }
         let lane = lane_for_kind(&event.kind).to_string();
@@ -476,6 +505,14 @@ fn metadata_from_event(event: &LiveTraceEvent) -> Value {
 
 fn live_asr_timed_word_stream_from_event(event: &LiveTraceEvent) -> Option<TimedWordStream> {
     if event.kind != "asr_timed_word_stream" {
+        return None;
+    }
+    let artifact = event.artifact.as_ref()?;
+    serde_json::from_value(artifact.clone()).ok()
+}
+
+fn live_tts_timed_word_stream_from_event(event: &LiveTraceEvent) -> Option<TimedWordStream> {
+    if event.kind != "tts_timed_word_stream_revision" {
         return None;
     }
     let artifact = event.artifact.as_ref()?;
@@ -685,6 +722,81 @@ mod tests {
             })
         );
         assert_eq!(lane.stream.words[0].timing_confidence, Some(0.91));
+    }
+
+    #[test]
+    fn uses_live_tts_timed_word_stream_revisions_for_pete_lane() {
+        let mut provisional = event(1, "tts_timed_word_stream_revision", 300);
+        let provisional_stream = TimedWordStream {
+            id: WordStreamId(10),
+            source: WordStreamSource::SyntheticSpeech,
+            words: vec![
+                WordNode {
+                    id: WordId(1),
+                    text: "sure".to_string(),
+                    lexical_span: Some(TextSpan { start: 0, end: 4 }),
+                    timing: None,
+                    timing_confidence: None,
+                    commitment: WordCommitment::Hypothetical,
+                    boundary_source: BoundarySource::Predicted,
+                    audio_ref: None,
+                },
+                WordNode {
+                    id: WordId(2),
+                    text: "wait".to_string(),
+                    lexical_span: Some(TextSpan { start: 5, end: 9 }),
+                    timing: None,
+                    timing_confidence: None,
+                    commitment: WordCommitment::Cancelled,
+                    boundary_source: BoundarySource::Predicted,
+                    audio_ref: None,
+                },
+            ],
+        };
+        provisional.artifact = Some(serde_json::to_value(provisional_stream).unwrap());
+
+        let mut committed = event(1, "tts_timed_word_stream_revision", 320);
+        let committed_stream = TimedWordStream {
+            id: WordStreamId(10),
+            source: WordStreamSource::SyntheticSpeech,
+            words: vec![WordNode {
+                id: WordId(1),
+                text: "sure".to_string(),
+                lexical_span: Some(TextSpan { start: 0, end: 4 }),
+                timing: None,
+                timing_confidence: None,
+                commitment: WordCommitment::Final,
+                boundary_source: BoundarySource::Predicted,
+                audio_ref: None,
+            }],
+        };
+        committed.artifact = Some(serde_json::to_value(committed_stream).unwrap());
+
+        let payload = live_trace_events_to_viewer_payload(&[provisional, committed]);
+        let lane = payload
+            .streams
+            .iter()
+            .find(|lane| lane.label == "Pete intended speech")
+            .expect("pete intended speech lane should be present");
+        assert_eq!(lane.stream.source, WordStreamSource::SyntheticSpeech);
+        assert!(
+            lane.stream
+                .words
+                .iter()
+                .any(|word| word.commitment == WordCommitment::Hypothetical)
+        );
+        assert!(
+            lane.stream
+                .words
+                .iter()
+                .any(|word| word.commitment == WordCommitment::Cancelled)
+        );
+        assert!(
+            lane.stream
+                .words
+                .iter()
+                .any(|word| word.commitment == WordCommitment::Final)
+        );
     }
 
     #[test]

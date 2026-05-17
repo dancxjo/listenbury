@@ -87,13 +87,6 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::hearing::{SelfHearingState, SuppressionDecision};
 use listenbury::hearing::vad::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
@@ -102,6 +95,13 @@ use listenbury::hearing::vad::VadBackendKind;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::hearing::{SelfHearingState, SuppressionDecision};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -150,6 +150,26 @@ use listenbury::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, Speec
     feature = "tts-piper"
 ))]
 use listenbury::mouth::tts::TextToSpeech;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::word::tts_export::generated_text_to_word_stream;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::word::{TimedWordStream, WordCommitment, WordStreamId};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -323,6 +343,7 @@ struct LiveTurnTraceState {
     first_safe_speech_unit_emitted: bool,
     first_tts_audio_frame_emitted: bool,
     playback_started: bool,
+    last_speculative_speech_text: Option<String>,
 }
 
 #[cfg(all(
@@ -339,6 +360,7 @@ impl LiveTurnTraceState {
             first_safe_speech_unit_emitted: false,
             first_tts_audio_frame_emitted: false,
             playback_started: false,
+            last_speculative_speech_text: None,
         }
     }
 }
@@ -842,6 +864,7 @@ fn stream_speech_to_tts(
                     emit_speech_plan_trace(
                         trace,
                         user_turn_id,
+                        &mut trace_state,
                         &filler_plan,
                         ExactTimestamp::now(),
                     )?;
@@ -904,7 +927,13 @@ fn stream_speech_to_tts(
                         trace.emit(event)?;
                         trace_state.first_safe_speech_unit_emitted = true;
                     }
-                    emit_speech_plan_trace(trace, user_turn_id, &plan, ExactTimestamp::now())?;
+                    emit_speech_plan_trace(
+                        trace,
+                        user_turn_id,
+                        &mut trace_state,
+                        &plan,
+                        ExactTimestamp::now(),
+                    )?;
                     tts.enqueue(plan)?;
                     trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
@@ -962,7 +991,13 @@ fn stream_speech_to_tts(
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         response_fragments.push(current_spoken_text.clone());
         let fallback_plan = SpeechPlan::from(SpeechUnit::FullTurn(current_spoken_text.clone()));
-        emit_speech_plan_trace(trace, user_turn_id, &fallback_plan, ExactTimestamp::now())?;
+        emit_speech_plan_trace(
+            trace,
+            user_turn_id,
+            &mut trace_state,
+            &fallback_plan,
+            ExactTimestamp::now(),
+        )?;
         tts.enqueue(fallback_plan)?;
         trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
         let played_fallback = flush_tts_audio(
@@ -982,6 +1017,15 @@ fn stream_speech_to_tts(
         );
     }
     self_hearing.mark_output_finished();
+    emit_read_aloud_timed_word_stream_revision(
+        trace,
+        user_turn_id,
+        &join_spoken_fragments(&response_fragments),
+        WordCommitment::Final,
+        "final",
+        ExactTimestamp::now(),
+    )?;
+    trace_state.last_speculative_speech_text = None;
     trace.emit_now(user_turn_id, "playback_finished", ExactTimestamp::now())?;
     controller.on_pete_speech_finished();
     controller.record_user_message(transcript);
@@ -1287,13 +1331,90 @@ fn maybe_plan_cached_backchannel(
 fn emit_speech_plan_trace(
     trace: &mut LiveTrace,
     turn_id: u64,
+    trace_state: &mut LiveTurnTraceState,
     plan: &SpeechPlan,
     at: ExactTimestamp,
 ) -> Result<()> {
+    if let Some(previous) = trace_state
+        .last_speculative_speech_text
+        .as_deref()
+        .filter(|previous| *previous != plan.text())
+    {
+        emit_read_aloud_timed_word_stream_revision(
+            trace,
+            turn_id,
+            previous,
+            WordCommitment::Cancelled,
+            "cancelled",
+            at,
+        )?;
+    }
+    emit_read_aloud_timed_word_stream_revision(
+        trace,
+        turn_id,
+        plan.text(),
+        WordCommitment::Hypothetical,
+        "provisional",
+        at,
+    )?;
     let mut enqueue_started = trace.event(turn_id, "tts_enqueue_started", at);
     enqueue_started.text = Some(plan.text().to_string());
     enqueue_started.unit_kind = Some(speech_unit_kind(plan.unit()).to_string());
-    trace.emit(enqueue_started)
+    trace.emit(enqueue_started)?;
+    emit_read_aloud_timed_word_stream_revision(
+        trace,
+        turn_id,
+        plan.text(),
+        WordCommitment::Playable,
+        "committed",
+        at,
+    )?;
+    trace_state.last_speculative_speech_text = Some(plan.text().to_string());
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_read_aloud_timed_word_stream_revision(
+    trace: &mut LiveTrace,
+    turn_id: u64,
+    text: &str,
+    commitment: WordCommitment,
+    stage: &str,
+    at: ExactTimestamp,
+) -> Result<()> {
+    let stream = read_aloud_timed_word_stream(turn_id, text, commitment);
+    let mut event = trace.event(turn_id, "tts_timed_word_stream_revision", at);
+    event.reason = Some(stage.to_string());
+    event.artifact = Some(
+        serde_json::to_value(stream).context("serialize TTS TimedWordStream revision artifact")?,
+    );
+    trace.emit(event)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn read_aloud_timed_word_stream(
+    turn_id: u64,
+    text: &str,
+    commitment: WordCommitment,
+) -> TimedWordStream {
+    let mut stream = generated_text_to_word_stream(WordStreamId(turn_id), text);
+    for word in &mut stream.words {
+        word.commitment = commitment;
+    }
+    stream
 }
 
 #[cfg(all(
@@ -1838,11 +1959,12 @@ mod tests {
     use super::{
         HarmonyFinalFilter, LivePromptFormat, build_prompt, convert_frame_samples,
         live_half_duplex_stops, maybe_plan_cached_backchannel, planner_units_from_events,
-        prompt_format_for_model, vad_frame_format,
+        prompt_format_for_model, read_aloud_timed_word_stream, vad_frame_format,
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
     use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
+    use listenbury::word::WordCommitment;
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, RuntimePacket,
         SpeechPlannerConfig,
@@ -2053,6 +2175,19 @@ mod tests {
             converted
                 .iter()
                 .all(|sample| (*sample - 1.0).abs() < 0.0001)
+        );
+    }
+
+    #[test]
+    fn read_aloud_word_stream_marks_words_with_requested_commitment() {
+        let stream = read_aloud_timed_word_stream(7, "sure thing", WordCommitment::Hypothetical);
+        assert_eq!(stream.id.0, 7);
+        assert_eq!(stream.words.len(), 2);
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|word| word.commitment == WordCommitment::Hypothetical)
         );
     }
 
