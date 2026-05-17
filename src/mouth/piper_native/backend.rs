@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
-use ort::session::Session;
+use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;
@@ -53,6 +53,7 @@ pub struct NativePiperBackend {
 impl NativePiperBackend {
     pub fn load(model_path: impl AsRef<Path>, config: PiperVoiceConfig) -> Result<Self> {
         validate_config(&config)?;
+        initialize_ort_runtime()?;
 
         let model_path = model_path.as_ref().to_path_buf();
         if !model_path.is_file() {
@@ -64,6 +65,22 @@ impl NativePiperBackend {
 
         let session = Session::builder()
             .context("failed to create Piper ONNX session builder")?
+            .with_intra_threads(1)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to configure Piper ONNX intra-op threads: {error}")
+            })?
+            .with_inter_threads(1)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to configure Piper ONNX inter-op threads: {error}")
+            })?
+            .with_intra_op_spinning(false)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to configure Piper ONNX intra-op spinning: {error}")
+            })?
+            .with_optimization_level(GraphOptimizationLevel::Disable)
+            .map_err(|error| {
+                anyhow::anyhow!("failed to configure Piper ONNX optimization level: {error}")
+            })?
             .commit_from_file(&model_path)
             .with_context(|| {
                 format!(
@@ -261,6 +278,54 @@ impl NativePiperBackend {
             session: None,
         }
     }
+}
+
+fn initialize_ort_runtime() -> Result<()> {
+    if std::env::var_os("ORT_DYLIB_PATH").is_some() {
+        ort::init().commit();
+        return Ok(());
+    }
+
+    if let Some(path) = find_local_onnxruntime_dylib() {
+        ort::init_from(&path)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to load ONNX Runtime dynamic library from {}: {error}",
+                    path.display()
+                )
+            })?
+            .commit();
+    } else {
+        ort::init().commit();
+    }
+
+    Ok(())
+}
+
+fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let local_lib = home.join(".local/lib");
+    let entries = std::fs::read_dir(local_lib).ok()?;
+    let mut candidates = Vec::new();
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        if !file_name.to_string_lossy().starts_with("python") {
+            continue;
+        }
+        let capi_dir = entry.path().join("site-packages/onnxruntime/capi");
+        if let Ok(capi_entries) = std::fs::read_dir(capi_dir) {
+            candidates.extend(capi_entries.flatten().filter_map(|candidate| {
+                let name = candidate.file_name();
+                name.to_string_lossy()
+                    .starts_with("libonnxruntime.so")
+                    .then(|| candidate.path())
+            }));
+        }
+    }
+
+    candidates.sort();
+    candidates.pop()
 }
 
 impl TtsBackend for NativePiperBackend {

@@ -336,7 +336,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct LiveTurnTraceState {
     turn: u64,
     first_llm_token_emitted: bool,
