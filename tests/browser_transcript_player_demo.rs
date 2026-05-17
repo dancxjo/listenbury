@@ -52,7 +52,10 @@ fn browser_transcript_player_demo_json_deserializes() {
     ))
     .expect("demo JSON should deserialize");
 
-    assert_eq!(payload.title.as_deref(), Some("Listenbury WaveDeck Demo"));
+    assert_eq!(
+        payload.title.as_deref(),
+        Some("Listenbury WaveDeck Demo")
+    );
 
     let audio = payload.audio.expect("demo should provide audio metadata");
     assert!(audio.url.ends_with("welcome.wav"));
