@@ -136,6 +136,32 @@ function labelForKind(kind) {
   return kind.replace(/_/g, " ");
 }
 
+function formatRulerLabel(ms) {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  const [secondPart, decimalPart] = seconds.toFixed(1).split(".");
+  return `${minutes}:${secondPart.padStart(2, "0")}.${decimalPart}`;
+}
+
+function eventChipDisplayLabel(lane, event, startMs, endMs) {
+  if (
+    lane?.label === "Mic" &&
+    event?.kind === "speech_started" &&
+    event?.metadata?.in_progress !== true &&
+    endMs > startMs
+  ) {
+    return formatRulerLabel(endMs);
+  }
+  return event?.label ?? labelForKind(event?.kind ?? "event");
+}
+
 function isGeneratedSpeechEventKind(kind) {
   return [
     "first_safe_speech_unit_emitted",
@@ -712,6 +738,31 @@ console.log("\n── Scenario 8b: span labels prefer semantic content over even
   assert(
     payload.events.some((event) => event.kind === "playback_started" && event.label === "Yes, I can hear you."),
     "Speaker playback span label is emitted speech text",
+  );
+}
+
+console.log("\n── Scenario 8c: Mic speech chips show stop time after listening ends ──");
+{
+  const closedMicSpeech = {
+    kind: "speech_started",
+    label: "hello can you hear me",
+    metadata: { turn: 1, start_kind: "speech_started" },
+  };
+  assertEqual(
+    eventChipDisplayLabel({ label: "Mic" }, closedMicSpeech, 100, 4320),
+    "4.3s",
+    "closed Mic speech chip displays end timestamp",
+  );
+
+  const openMicSpeech = {
+    kind: "speech_started",
+    label: "hello can you hear me",
+    metadata: { in_progress: true, turn: 1 },
+  };
+  assertEqual(
+    eventChipDisplayLabel({ label: "Mic" }, openMicSpeech, 100, 4320),
+    "hello can you hear me",
+    "in-progress Mic speech chip keeps live transcript",
   );
 }
 

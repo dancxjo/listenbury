@@ -1566,15 +1566,17 @@ function renderCustomTimeline() {
         const widthPx = isMarker ? 10 : Math.max(12, pxForMs(event.end_ms - event.start_ms));
         chip.style.left = `${pxForMs(startMs)}px`;
         chip.style.width = `${widthPx}px`;
+        const displayLabel = eventChipDisplayLabel(lane, event, startMs, endMs);
         chip.title = `${lane.label} · ${event.label} · ${event.kind} (${startMs}–${endMs} ms)`;
         if (isMarker) {
-          chip.setAttribute("aria-label", `${lane.label}: ${event.label}`);
+          chip.setAttribute("aria-label", `${lane.label}: ${displayLabel}`);
           const markerPin = document.createElement("span");
           markerPin.className = "marker-pin";
           markerPin.setAttribute("aria-hidden", "true");
           chip.append(markerPin);
         } else {
-          chip.append(createChipContent(event.label), createChipBadges([shortKindLabel(event.kind)]));
+          chip.setAttribute("aria-label", `${lane.label}: ${displayLabel}`);
+          chip.append(createChipContent(displayLabel), createChipBadges([shortKindLabel(event.kind)]));
         }
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
@@ -2348,6 +2350,18 @@ function createChipContent(text) {
   content.className = "chip-content";
   content.textContent = text;
   return content;
+}
+
+function eventChipDisplayLabel(lane, event, startMs, endMs) {
+  if (
+    lane?.label === "Mic" &&
+    event?.kind === "speech_started" &&
+    event?.metadata?.in_progress !== true &&
+    endMs > startMs
+  ) {
+    return formatRulerLabel(endMs);
+  }
+  return event?.label ?? labelForKind(event?.kind ?? "event");
 }
 
 function appendWordChipContent(chip, word, includeBadges) {
