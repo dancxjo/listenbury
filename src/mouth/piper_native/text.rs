@@ -18,7 +18,8 @@ pub enum NormalizedToken {
 pub enum ProsodyBoundaryHint {
     None,
     PhraseBreak,
-    SentenceTerminalCandidate,
+    PossibleSentenceEnd,
+    FinalSentenceEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +27,8 @@ pub enum ProsodyCommitment {
     Provisional,
     Prepared,
     Playable,
-    Final,
+    Committed,
+    Cancelled,
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -93,7 +95,7 @@ impl TextNormalizer {
         }
 
         let boundary = if saw_sentence_terminal {
-            ProsodyBoundaryHint::SentenceTerminalCandidate
+            ProsodyBoundaryHint::PossibleSentenceEnd
         } else if saw_phrase_break {
             ProsodyBoundaryHint::PhraseBreak
         } else {
@@ -178,7 +180,7 @@ mod tests {
         );
         assert_eq!(
             normalized.boundary,
-            ProsodyBoundaryHint::SentenceTerminalCandidate
+            ProsodyBoundaryHint::PossibleSentenceEnd
         );
         assert_eq!(normalized.commitment, ProsodyCommitment::Provisional);
     }
