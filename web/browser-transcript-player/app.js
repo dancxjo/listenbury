@@ -20,9 +20,12 @@ const spanDebugLog = document.getElementById("span-debug-log");
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
-const ZOOM_FACTOR = 1.8;
 const WHEEL_ZOOM_FACTOR = 1.16;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
+const ZOOM_BUTTON_PERCENT = 0.25;
+const SESSION_EPOCH = Date.now();
+const TIMELINE_GROUP_IDS = ["Mic", "ASR", "LLM", "Speaker"];
+const visLib = window.vis;
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -73,6 +76,10 @@ function openSpanKey(lane, turn, startKind) {
   return JSON.stringify([lane, turn ?? null, startKind]);
 }
 
+function msDate(elapsedMs) {
+  return new Date(SESSION_EPOCH + Math.max(0, Math.round(elapsedMs)));
+}
+
 // Accumulated live trace events (kept for error recovery / diagnostics).
 const liveEvents = [];
 let liveRenderScheduled = false;
@@ -89,10 +96,15 @@ const state = {
   selectedItem: null,
   maxDurationMs: 1000,
   stopAtMs: null,
-  viewStartMs: null,
-  viewEndMs: null,
-  dragSelection: null,
-  suppressTimelineClick: false,
+  timeline: null,
+  timelineContainer: null,
+  timelineItemsDataSet: visLib ? new visLib.DataSet() : null,
+  timelineGroupsDataSet: visLib ? new visLib.DataSet() : null,
+  timelineSelectionById: new Map(),
+  timelineSelectionIdByKey: new Map(),
+  timelineItemBaseClassById: new Map(),
+  timelineItemTimingById: new Map(),
+  suppressTimelineSelectEvent: false,
 };
 
 const sourceLabels = {
@@ -106,12 +118,8 @@ playPauseButton.addEventListener("click", () => togglePlayback());
 jumpPrevButton.addEventListener("click", () => jumpSelectedWord(-1));
 jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
 playSelectionClipButton.addEventListener("click", () => playSelectedClip());
-zoomOutButton.addEventListener("click", () => zoomTimeline(1 / ZOOM_FACTOR));
-zoomInButton.addEventListener("click", () => zoomTimeline(ZOOM_FACTOR));
-viewer.addEventListener("pointerdown", startTimeRangeSelection);
-viewer.addEventListener("pointermove", moveTimeRangeSelection);
-viewer.addEventListener("pointerup", finishTimeRangeSelection);
-viewer.addEventListener("pointercancel", cancelTimeRangeSelection);
+zoomOutButton.addEventListener("click", () => zoomTimelineOut());
+zoomInButton.addEventListener("click", () => zoomTimelineIn());
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
@@ -590,7 +598,7 @@ function formatRevisionTooltip(word) {
 
 function applyLiveEvents() {
   const payload = liveSessionToViewerPayload(liveSession);
-  applyPayload(payload, { preserveSelection: true, preserveViewport: true });
+  applyPayload(payload, { preserveSelection: true });
   viewerTitle.textContent = "Live — Listenbury";
   renderTranscriptRibbon(liveSession);
   renderSpanDebugLog(liveSession);
@@ -635,37 +643,33 @@ function jumpSelectedWord(delta) {
 
 function applyPayload(rawPayload, options = {}) {
   const previousSelection = options.preserveSelection ? state.selectedItem : null;
-  const previousViewport = options.preserveViewport ? captureViewportSnapshot() : null;
-  if (!options.preserveViewport) {
-    state.viewStartMs = null;
-    state.viewEndMs = null;
-  }
-  state.dragSelection = null;
-
   const normalized = normalizePayload(rawPayload);
-  const wordLanes = normalized.streams.map((lane) => normalizeWordLane(lane));
-  const eventLanes = normalizeEventLanes(normalized.events);
 
   state.payload = normalized;
-  state.lanes = [...wordLanes, ...eventLanes].map((lane, laneIndex) => {
+  state.lanes = buildLanes(normalized);
+  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
+  clearPlaybackStop();
+  configureAudio(normalized.audio);
+  syncMaxDurationWithAudio();
+  render();
+}
+
+function buildLanes(normalizedPayload) {
+  const wordLanes = normalizedPayload.streams.map((lane) => normalizeWordLane(lane));
+  const eventLanes = normalizeEventLanes(normalizedPayload.events);
+
+  return [...wordLanes, ...eventLanes].map((lane, laneIndex) => {
     if (lane.type === "word") {
       return {
         ...lane,
         words: lane.words.map((word, wordIndex) => ({ ...word, laneIndex, wordIndex })),
       };
     }
-
     return {
       ...lane,
       events: lane.events.map((event, eventIndex) => ({ ...event, laneIndex, eventIndex })),
     };
   });
-  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
-  clearPlaybackStop();
-  configureAudio(normalized.audio);
-  syncMaxDurationWithAudio();
-  restoreViewportSnapshot(previousViewport);
-  render();
 }
 
 function normalizePayload(rawPayload) {
@@ -813,7 +817,6 @@ function syncMaxDurationWithAudio() {
   );
   const fromAudio = Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0;
   state.maxDurationMs = Math.max(fromPayload, fromStreams, fromEvents, fromAudio, 1000);
-  clampViewport();
 }
 
 function render() {
@@ -824,202 +827,210 @@ function render() {
 
   if (!state.lanes.length) {
     viewer.className = "viewer empty";
+    if (state.timelineItemsDataSet) {
+      state.timelineItemsDataSet.clear();
+    }
+    if (state.timelineGroupsDataSet) {
+      state.timelineGroupsDataSet.clear();
+    }
     viewer.innerHTML = "<p>No streams or events loaded yet.</p>";
     renderSelection();
     return;
   }
 
   viewer.className = "viewer";
-  viewer.replaceChildren(renderTimelineRuler(), ...state.lanes.map(renderLane));
+  if (!ensureTimeline()) {
+    viewer.className = "viewer empty";
+    viewer.innerHTML = "<p>vis-timeline failed to load.</p>";
+    return;
+  }
+  const timelineGroups = liveSessionToTimelineGroups(liveSession);
+  const timelineItems = liveSessionToTimelineItems(liveSession);
+  syncTimelineProjection(timelineGroups, timelineItems);
   refreshPlaybackState();
   renderSelection();
 }
 
-function renderLane(lane) {
-  return lane.type === "event" ? renderEventLane(lane) : renderWordLane(lane);
+function ensureTimeline() {
+  if (!visLib || !state.timelineItemsDataSet || !state.timelineGroupsDataSet) {
+    return false;
+  }
+  if (!state.timelineContainer || !viewer.contains(state.timelineContainer)) {
+    viewer.replaceChildren();
+    const container = document.createElement("div");
+    container.className = "timeline-host";
+    viewer.append(container);
+    state.timelineContainer = container;
+  }
+  if (!state.timeline) {
+    state.timeline = new visLib.Timeline(state.timelineContainer, state.timelineItemsDataSet, state.timelineGroupsDataSet, {
+      stack: false,
+      horizontalScroll: true,
+      zoomKey: "ctrlKey",
+      orientation: "top",
+      selectable: true,
+      multiselect: false,
+      showCurrentTime: false,
+      margin: { item: 8, axis: 8 },
+      moveable: true,
+      zoomable: true,
+    });
+    state.timeline.on("select", ({ items }) => {
+      if (state.suppressTimelineSelectEvent) {
+        return;
+      }
+      if (!items?.length) {
+        return;
+      }
+      const selected = state.timelineSelectionById.get(String(items[0]));
+      if (!selected) {
+        return;
+      }
+      if (selected.type === "word") {
+        selectWord(selected.laneIndex, selected.itemIndex, true);
+      } else {
+        selectEvent(selected.laneIndex, selected.itemIndex, true);
+      }
+    });
+  }
+  return true;
 }
 
-function renderTimelineRuler() {
-  const viewport = getViewport();
-  const ruler = document.createElement("div");
-  ruler.className = "timeline-ruler";
-  appendTimeRangeSelection(ruler, viewport);
-
-  const ticks = buildRulerTicks(viewport);
-  ticks.forEach((tickMs) => {
-    const tick = document.createElement("span");
-    tick.className = "ruler-tick";
-    tick.style.left = `${msToViewportPercent(tickMs, viewport)}%`;
-
-    const label = document.createElement("span");
-    label.className = "ruler-label";
-    label.style.left = `${msToViewportPercent(tickMs, viewport)}%`;
-    label.textContent = formatRulerLabel(tickMs);
-
-    ruler.append(tick, label);
-  });
-
-  ruler.addEventListener("click", (event) => {
-    if (state.suppressTimelineClick) {
-      state.suppressTimelineClick = false;
-      return;
-    }
-    if (!audio.src) {
-      return;
-    }
-    const rect = ruler.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    audio.currentTime = (viewport.startMs + ratio * viewport.durationMs) / 1000;
-    refreshPlaybackState();
-  });
-  ruler.addEventListener("wheel", (event) => zoomTimelineFromWheel(event, ruler), { passive: false });
-
-  return ruler;
+function liveSessionToTimelineGroups(_session) {
+  return TIMELINE_GROUP_IDS.map((id) => ({ id, content: id }));
 }
 
-function renderWordLane(lane) {
-  const viewport = getViewport();
-  const section = document.createElement("section");
-  section.className = "lane";
+function liveSessionToTimelineItems(session) {
+  const payload = liveSessionToViewerPayload(session);
+  const normalized = normalizePayload(payload);
+  const lanes = buildLanes(normalized);
+  const items = [];
 
-  const header = document.createElement("div");
-  header.className = "lane-header";
-
-  const title = document.createElement("h2");
-  title.textContent = lane.label;
-
-  const meta = document.createElement("div");
-  meta.className = "lane-meta";
-  meta.textContent = `${sourceLabels[lane.stream.source] ?? lane.stream.source} · ${lane.words.length} words`;
-
-  header.append(title, meta);
-  section.append(header);
-
-  const track = document.createElement("div");
-  track.className = "lane-track";
-  appendTimeRangeSelection(track, viewport);
-
-  lane.words.forEach((word) => {
-    const visibleRange = visibleItemRange(
-      word.resolvedTiming.start_ms,
-      word.resolvedTiming.end_ms,
-      viewport,
-    );
-    if (!visibleRange) {
+  lanes.forEach((lane) => {
+    if (lane.type === "word") {
+      lane.words.forEach((word, wordIndex) => {
+        const timing = word.resolvedTiming;
+        const className = [
+          "word-item",
+          word.timingResolution === "fallback-layout" ? "fallback-timing" : "",
+          `commit-${commitmentClass(word.commitment)}`,
+          word._revisions?.length ? "was-revised" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        items.push({
+          id: timelineWordId(lane, word, wordIndex),
+          group: timelineGroupForWordLane(lane),
+          content: escapeHtml(word.text),
+          start: msDate(timing.start_ms),
+          end: msDate(Math.max(timing.start_ms + 1, timing.end_ms)),
+          type: "range",
+          className,
+          title: escapeHtml(
+            `${lane.label} · ${word.text} (${timing.start_ms}–${timing.end_ms} ms) · ${word.timingSourceDetail}`,
+          ),
+          _selection: { type: "word", laneIndex: word.laneIndex, itemIndex: word.wordIndex },
+          _baseClassName: className,
+          _timing: { startMs: timing.start_ms, endMs: timing.end_ms },
+        });
+      });
       return;
     }
 
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "timeline-chip word-chip";
-    if (word.timingResolution === "fallback-layout") {
-      chip.classList.add("fallback-timing");
-    }
-    // Span state: style by WordCommitment (Hypothetical / StableText / Final / Cancelled …)
-    if (word.commitment) {
-      chip.classList.add(`commit-${commitmentClass(word.commitment)}`);
-    }
-    // Retroactive revision: word text was corrected in a later ASR pass.
-    if (word._revisions?.length > 0) {
-      chip.classList.add("was-revised");
-    }
-    chip.dataset.key = itemKey("word", word.laneIndex, word.wordIndex);
-    chip.dataset.itemType = "word";
-    chip.dataset.startMs = String(word.resolvedTiming.start_ms);
-    chip.dataset.endMs = String(word.resolvedTiming.end_ms);
-    chip.textContent = word.text;
-    chip.title = `${word.text} (${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms) · ${word.timingSourceDetail}`;
-
-    const left = msToViewportPercent(visibleRange.startMs, viewport);
-    const width = Math.max(
-      6,
-      durationToViewportPercent(visibleRange.endMs - visibleRange.startMs, viewport),
-    );
-
-    const clampedLeft = Math.min(left, 99);
-    chip.style.left = `${clampedLeft}%`;
-    chip.style.width = `${Math.min(width, 100 - clampedLeft)}%`;
-    chip.addEventListener("click", () => selectWord(word.laneIndex, word.wordIndex, true));
-    track.append(chip);
+    lane.events.forEach((event) => {
+      const className = [
+        "event-item",
+        event.style,
+        `kind-${classToken(event.kind)}`,
+        event.kind === "overlap_detected" ? "overlap-region" : "",
+        event.kind === "speech_unit_cancelled" ? "interruption-region" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      const isPoint = event.style === "marker" || event.start_ms === event.end_ms;
+      items.push({
+        id: timelineEventId(lane, event),
+        group: timelineGroupForEvent(event),
+        content: escapeHtml(event.label),
+        start: msDate(event.start_ms),
+        ...(isPoint ? {} : { end: msDate(event.end_ms), type: "range" }),
+        ...(isPoint ? { type: "point" } : {}),
+        className,
+        title: escapeHtml(`${lane.label} · ${event.kind} (${event.start_ms}–${event.end_ms} ms)`),
+        _selection: { type: "event", laneIndex: event.laneIndex, itemIndex: event.eventIndex },
+        _baseClassName: className,
+        _timing: { startMs: event.start_ms, endMs: event.end_ms },
+      });
+    });
   });
-
-  section.append(track);
-  return section;
+  return items;
 }
 
-function renderEventLane(lane) {
-  const viewport = getViewport();
-  const section = document.createElement("section");
-  section.className = "lane event-lane";
+function syncTimelineProjection(groups, items) {
+  const timelineRecords = items.map((item) => ({
+    ...item,
+    id: String(item.id),
+  }));
+  const nextGroupIds = new Set(groups.map((group) => String(group.id)));
+  const nextItemIds = new Set(timelineRecords.map((item) => item.id));
 
-  const header = document.createElement("div");
-  header.className = "lane-header";
+  const existingGroupIds = new Set(
+    (state.timelineGroupsDataSet.getIds() ?? []).map((groupId) => String(groupId)),
+  );
+  const existingItemIds = new Set(
+    (state.timelineItemsDataSet.getIds() ?? []).map((itemId) => String(itemId)),
+  );
 
-  const title = document.createElement("h2");
-  title.textContent = lane.label;
+  state.timelineGroupsDataSet.update(groups);
+  state.timelineItemsDataSet.update(
+    timelineRecords.map(({ _selection, _baseClassName, _timing, ...timelineItem }) => timelineItem),
+  );
 
-  const meta = document.createElement("div");
-  meta.className = "lane-meta";
-  meta.textContent = `${lane.events.length} events`;
+  const groupsToRemove = [...existingGroupIds].filter((groupId) => !nextGroupIds.has(groupId));
+  if (groupsToRemove.length) {
+    state.timelineGroupsDataSet.remove(groupsToRemove);
+  }
+  const itemsToRemove = [...existingItemIds].filter((itemId) => !nextItemIds.has(itemId));
+  if (itemsToRemove.length) {
+    state.timelineItemsDataSet.remove(itemsToRemove);
+  }
 
-  header.append(title, meta);
-  section.append(header);
-
-  const track = document.createElement("div");
-  track.className = "lane-track event-track";
-  appendTimeRangeSelection(track, viewport);
-
-  lane.events.forEach((event) => {
-    const visibleRange = visibleItemRange(event.start_ms, event.end_ms, viewport);
-    if (!visibleRange) {
-      return;
-    }
-
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = `timeline-chip event-chip ${event.style} kind-${classToken(event.kind)}`;
-    chip.dataset.key = itemKey("event", event.laneIndex, event.eventIndex);
-    chip.dataset.itemType = "event";
-    chip.dataset.startMs = String(event.start_ms);
-    chip.dataset.endMs = String(event.end_ms);
-    chip.textContent = event.label;
-    chip.title = `${event.kind} (${event.start_ms}–${event.end_ms} ms)`;
-
-    const left = msToViewportPercent(visibleRange.startMs, viewport);
-    const width =
-      event.style === "marker"
-        ? 2
-        : Math.max(3, durationToViewportPercent(visibleRange.endMs - visibleRange.startMs, viewport));
-
-    const clampedLeft = Math.min(left, 99);
-    chip.style.left = `${clampedLeft}%`;
-    chip.style.width = `${Math.min(width, 100 - clampedLeft)}%`;
-    chip.addEventListener("click", () => selectEvent(event.laneIndex, event.eventIndex, true));
-    track.append(chip);
-  });
-
-  section.append(track);
-  return section;
+  state.timelineSelectionById = new Map(
+    timelineRecords.map((item) => [item.id, item._selection]),
+  );
+  state.timelineSelectionIdByKey = new Map(
+    timelineRecords.map((item) => [
+      itemKey(item._selection.type, item._selection.laneIndex, item._selection.itemIndex),
+      item.id,
+    ]),
+  );
+  state.timelineItemBaseClassById = new Map(timelineRecords.map((item) => [item.id, item._baseClassName]));
+  state.timelineItemTimingById = new Map(timelineRecords.map((item) => [item.id, item._timing]));
+  syncTimelineSelectionFromState();
 }
 
 function refreshPlaybackState() {
   playbackTime.textContent = formatPlaybackTime();
   playPauseButton.textContent = audio.paused ? "Play" : "Pause";
   const nowMs = Math.round(audio.currentTime * 1000);
+  if (!state.timelineItemsDataSet) {
+    return;
+  }
 
-  document.querySelectorAll(".timeline-chip").forEach((chip) => {
-    const startMs = Number(chip.dataset.startMs);
-    const endMs = Number(chip.dataset.endMs);
-    const isMarker = chip.dataset.itemType === "event" && endMs <= startMs;
-    const activeEndMs = isMarker ? startMs + 120 : endMs;
-    chip.classList.toggle("active", nowMs >= startMs && nowMs <= activeEndMs);
-
-    chip.classList.toggle(
-      "selected",
-      state.selectedItem !== null &&
-        chip.dataset.key === itemKey(state.selectedItem.type, state.selectedItem.laneIndex, state.selectedItem.itemIndex),
-    );
-  });
+  const selectedId = selectedTimelineItemId();
+  const updates = [];
+  for (const [id, timing] of state.timelineItemTimingById.entries()) {
+    const baseClassName = state.timelineItemBaseClassById.get(id) ?? "";
+    const isMarker = timing.endMs <= timing.startMs;
+    const activeEndMs = isMarker ? timing.startMs + 120 : timing.endMs;
+    const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
+    const nextClassName = `${baseClassName}${isActive ? " active" : ""}${selectedId === id ? " selected" : ""}`;
+    updates.push({ id, className: nextClassName.trim() });
+  }
+  if (updates.length) {
+    state.timelineItemsDataSet.update(updates);
+  }
+  syncTimelineSelectionFromState();
 }
 
 function renderSelection() {
@@ -1139,6 +1150,7 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
   clearPlaybackStop();
   refreshPlaybackState();
   renderSelection();
+  syncTimelineSelectionFromState();
 }
 
 function selectEvent(laneIndex, eventIndex, seekAudio) {
@@ -1159,49 +1171,33 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   clearPlaybackStop();
   refreshPlaybackState();
   renderSelection();
+  syncTimelineSelectionFromState();
 }
 
-function zoomTimeline(factor, focusMsOverride = null) {
-  if (!state.lanes.length) {
-    return;
+function zoomTimelineIn() {
+  if (state.timeline) {
+    state.timeline.zoomIn(ZOOM_BUTTON_PERCENT);
   }
-
-  const viewport = getViewport();
-  const focusMs = Number.isFinite(focusMsOverride) ? focusMsOverride : viewportFocusMs(viewport);
-  const nextDuration = viewport.durationMs / factor;
-  setViewportAround(focusMs, nextDuration);
-  render();
+  updateZoomControls();
 }
 
-function zoomTimelineFromWheel(event, surface) {
-  if (!state.lanes.length) {
-    return;
+function zoomTimelineOut() {
+  if (state.timeline) {
+    state.timeline.zoomOut(ZOOM_BUTTON_PERCENT);
   }
-
-  const wheelDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
-  if (!wheelDelta) {
-    return;
-  }
-
-  const focusMs = timeMsAtClientX(event.clientX, surface);
-  if (focusMs === null) {
-    return;
-  }
-
-  event.preventDefault();
-  zoomTimeline(wheelDelta < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR, focusMs);
+  updateZoomControls();
 }
 
 function zoomToTimeSelection(selection) {
   const timing = clampTimeSelection(selection);
-  if (!timing) {
+  if (!timing || !state.timeline) {
     return;
   }
-
-  setViewportRange(timing.startMs, timing.endMs);
-  render();
+  state.timeline.setWindow(msDate(timing.startMs), msDate(timing.endMs), { animation: false });
+  updateZoomControls();
 }
 
+// Legacy manual viewport math is retired; vis-timeline now owns panning/zoom.
 function selectedItemTiming() {
   if (!state.selectedItem) {
     return null;
@@ -1526,10 +1522,9 @@ function clampTimeSelection(selection) {
 }
 
 function updateZoomControls() {
-  const viewport = getViewport();
-  const canZoom = state.lanes.length > 0;
-  zoomInButton.disabled = !canZoom || viewport.durationMs <= MIN_VIEW_DURATION_MS;
-  zoomOutButton.disabled = !canZoom || viewport.isFullTimeline;
+  const canZoom = state.lanes.length > 0 && Boolean(state.timeline);
+  zoomInButton.disabled = !canZoom;
+  zoomOutButton.disabled = !canZoom;
 }
 
 function firstItemSelection() {
@@ -1596,11 +1591,77 @@ function itemKey(itemType, laneIndex, itemIndex) {
   return `${itemType}:${laneIndex}:${itemIndex}`;
 }
 
+function selectedTimelineItemId() {
+  if (!state.selectedItem) {
+    return null;
+  }
+  const key = itemKey(state.selectedItem.type, state.selectedItem.laneIndex, state.selectedItem.itemIndex);
+  return state.timelineSelectionIdByKey.get(key) ?? null;
+}
+
+function syncTimelineSelectionFromState() {
+  if (!state.timeline) {
+    return;
+  }
+  const selectedId = selectedTimelineItemId();
+  state.suppressTimelineSelectEvent = true;
+  if (!selectedId) {
+    state.timeline.setSelection([]);
+    state.suppressTimelineSelectEvent = false;
+    return;
+  }
+  state.timeline.setSelection([selectedId], { focus: false });
+  state.suppressTimelineSelectEvent = false;
+}
+
+function timelineWordId(lane, word, wordIndex) {
+  const stableId = word.id ?? (word.lexical_span ? JSON.stringify(word.lexical_span) : `idx:${wordIndex}`);
+  return `word:${lane.stream.id}:${stableId}`;
+}
+
+function timelineEventId(lane, event) {
+  return `event:${lane.label}:${event.id ?? `${event.kind}:${event.start_ms}:${event.end_ms}`}`;
+}
+
+function timelineGroupForWordLane(lane) {
+  if (lane.stream?.source === "SyntheticSpeech") {
+    return "Speaker";
+  }
+  if (lane.stream?.source === "GeneratedText") {
+    return "LLM";
+  }
+  if (lane.stream?.source === "RecordedAudio") {
+    return "Mic";
+  }
+  return "ASR";
+}
+
+function timelineGroupForEvent(event) {
+  if (TIMELINE_GROUP_IDS.includes(event.lane)) {
+    return event.lane;
+  }
+  const metadataEventKind = event.metadata?.event?.kind;
+  const mappedLane = metadataEventKind ? LIVE_EVENT_LANE[metadataEventKind] : null;
+  if (mappedLane && TIMELINE_GROUP_IDS.includes(mappedLane)) {
+    return mappedLane;
+  }
+  return "ASR";
+}
+
 function classToken(value) {
   return String(value ?? "event")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function normalizeEventAudioRef(entry, fallbackStartMs, fallbackEndMs) {
