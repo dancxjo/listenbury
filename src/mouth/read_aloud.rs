@@ -140,22 +140,15 @@ fn safe_to_play_len(input: &str) -> usize {
         return trimmed.len();
     }
 
-    let words: Vec<&str> = trimmed.split_ascii_whitespace().collect();
-    if words.len() <= 1 {
+    if trimmed.split_ascii_whitespace().nth(1).is_none() {
         return 0;
     }
 
-    words
-        .iter()
-        .take(words.len() - 1)
-        .fold(String::new(), |mut acc, word| {
-            if !acc.is_empty() {
-                acc.push(' ');
-            }
-            acc.push_str(word);
-            acc
-        })
-        .len()
+    trimmed
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| ch.is_ascii_whitespace().then_some(idx))
+        .unwrap_or(0)
 }
 
 fn has_confident_sentence_end(trimmed: &str) -> bool {
@@ -182,7 +175,10 @@ fn has_confident_sentence_end(trimmed: &str) -> bool {
     }
 
     let lower = last_token.to_ascii_lowercase();
-    let is_honorific = matches!(lower.as_str(), "dr" | "mr" | "mrs" | "ms" | "prof")
+    let is_honorific = matches!(
+        lower.as_str(),
+        "dr" | "mr" | "mrs" | "ms" | "prof" | "sr" | "jr"
+    )
         && last_token
             .chars()
             .next()
