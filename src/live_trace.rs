@@ -298,8 +298,13 @@ impl SseBroadcaster {
     /// Create a new receiver that will receive all future broadcast events.
     pub fn subscribe(&self) -> crossbeam_channel::Receiver<LiveTraceEvent> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        if let Ok(mut senders) = self.senders.lock() {
-            senders.push(tx);
+        match self.senders.lock() {
+            Ok(mut senders) => {
+                senders.push(tx);
+            }
+            Err(error) => {
+                tracing::error!("SseBroadcaster senders mutex poisoned in subscribe: {error}");
+            }
         }
         rx
     }
@@ -313,8 +318,13 @@ impl Default for SseBroadcaster {
 
 impl LiveTraceSink for SseBroadcaster {
     fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
-        if let Ok(mut senders) = self.senders.lock() {
-            senders.retain(|tx| tx.send(event.clone()).is_ok());
+        match self.senders.lock() {
+            Ok(mut senders) => {
+                senders.retain(|tx| tx.send(event.clone()).is_ok());
+            }
+            Err(error) => {
+                tracing::error!("SseBroadcaster senders mutex poisoned in emit: {error}");
+            }
         }
         Ok(())
     }

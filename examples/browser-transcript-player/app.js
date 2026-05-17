@@ -47,6 +47,8 @@ const LIVE_EVENT_LANE = {
 // Accumulated live trace events.
 const liveEvents = [];
 let liveRenderScheduled = false;
+// Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
+const LIVE_RENDER_DEBOUNCE_MS = 80;
 
 const state = {
   payload: null,
@@ -161,7 +163,7 @@ function addLiveEvent(traceEvent) {
     setTimeout(() => {
       liveRenderScheduled = false;
       applyLiveEvents();
-    }, 80);
+    }, LIVE_RENDER_DEBOUNCE_MS);
   }
 }
 
