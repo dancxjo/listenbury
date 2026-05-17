@@ -767,7 +767,8 @@ mod tests {
             analysis.diagnostics
         );
         assert_eq!(
-            analysis.diagnostics.routing_reason, "environmental_hysteresis_building",
+            analysis.diagnostics.routing_reason,
+            "environmental_hysteresis_building",
             "routing reason should indicate hysteresis building"
         );
     }
