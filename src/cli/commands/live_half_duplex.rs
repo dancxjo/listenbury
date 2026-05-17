@@ -87,6 +87,13 @@ use listenbury::event::HearingEvent;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::hearing::{SelfHearingState, SuppressionDecision};
 use listenbury::hearing::vad::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
@@ -95,13 +102,6 @@ use listenbury::hearing::vad::VadBackendKind;
     feature = "tts-piper"
 ))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::hearing::{SelfHearingState, SuppressionDecision};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
