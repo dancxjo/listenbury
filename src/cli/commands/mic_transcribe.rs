@@ -20,6 +20,8 @@ use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+use listenbury::speech::transcript::TranscriptCandidateEvent;
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::{AudioFrame, ExactTimestamp, WhisperSpeechRecognizer};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use std::collections::{HashMap, VecDeque};
@@ -270,7 +272,7 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     for (id, frames) in state.active_groups.drain() {
         state.groups_closed += 1;
         println!("breath-group forced-close id={id:?} reason=shutdown");
-        let text = transcribe_group(&frames, &mut state.recognizer)?;
+        let text = transcribe_group(&frames, &mut state.recognizer)?.text;
         if text.is_empty() {
             println!("transcript group={} text=<empty>", state.groups_closed);
         } else {
@@ -327,7 +329,7 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
                 state.frame_time_ms.saturating_add(frame_duration_ms)
             );
             if let Some(group_frames) = state.active_groups.remove(&id) {
-                let text = transcribe_group(&group_frames, &mut state.recognizer)?;
+                let text = transcribe_group(&group_frames, &mut state.recognizer)?.text;
                 if text.is_empty() {
                     println!("transcript group={} text=<empty>", state.groups_closed);
                 } else {
@@ -348,24 +350,39 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+pub(super) struct TranscribeGroupOutput {
+    pub(super) text: String,
+    pub(super) candidate_events: Vec<TranscriptCandidateEvent>,
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 pub(super) fn transcribe_group(
     frames: &[AudioFrame],
     recognizer: &mut WhisperSpeechRecognizer,
-) -> Result<String> {
+) -> Result<TranscribeGroupOutput> {
     let whisper_frames = prepare_whisper_frames(frames, WHISPER_FRAME_SAMPLES)?;
     if whisper_frames.is_empty() {
-        return Ok(String::new());
+        return Ok(TranscribeGroupOutput {
+            text: String::new(),
+            candidate_events: Vec::new(),
+        });
     }
     for frame in &whisper_frames {
         recognizer.push_frame(frame)?;
     }
-    let text = recognizer
-        .poll_chunks()?
-        .into_iter()
-        .map(|chunk| chunk.text)
+    let candidate_events = recognizer.poll_candidate_events()?;
+    let text = candidate_events
+        .iter()
+        .filter_map(|event| match event {
+            TranscriptCandidateEvent::CandidateFinalized { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
         .collect::<Vec<_>>()
         .join(" ");
-    Ok(text.trim().to_string())
+    Ok(TranscribeGroupOutput {
+        text: text.trim().to_string(),
+        candidate_events,
+    })
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
