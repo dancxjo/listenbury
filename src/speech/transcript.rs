@@ -236,4 +236,94 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn nonfinal_extension_keeps_candidate_and_reports_stable_prefix() {
+        let mut tracker = TranscriptCandidateTracker::new();
+
+        let first = tracker.ingest_candidate("can you", None, false);
+        assert_eq!(
+            first,
+            vec![
+                TranscriptCandidateEvent::CandidateStarted {
+                    id: TranscriptCandidateId(1),
+                },
+                TranscriptCandidateEvent::CandidateUpdated {
+                    id: TranscriptCandidateId(1),
+                    text: "can you".to_string(),
+                    stable_prefix_len: "can you".len(),
+                    confidence: None,
+                },
+            ]
+        );
+
+        let second = tracker.ingest_candidate("can you tell", None, false);
+        assert_eq!(
+            second,
+            vec![TranscriptCandidateEvent::CandidateUpdated {
+                id: TranscriptCandidateId(1),
+                text: "can you tell".to_string(),
+                stable_prefix_len: "can you".len(),
+                confidence: None,
+            },]
+        );
+    }
+
+    #[test]
+    fn correction_after_stable_prefix_replaces_candidate_with_shared_head() {
+        let mut tracker = TranscriptCandidateTracker::new();
+        let _ = tracker.ingest_candidate("can you tell", None, false);
+
+        let events = tracker.ingest_candidate("can you help", None, false);
+        assert_eq!(
+            events,
+            vec![
+                TranscriptCandidateEvent::CandidateReplaced {
+                    old: TranscriptCandidateId(1),
+                    new: TranscriptCandidateId(2),
+                    reason: TranscriptReplacementReason::HeadChanged {
+                        stable_prefix_len: "can you ".len(),
+                    },
+                },
+                TranscriptCandidateEvent::CandidateStarted {
+                    id: TranscriptCandidateId(2),
+                },
+                TranscriptCandidateEvent::CandidateUpdated {
+                    id: TranscriptCandidateId(2),
+                    text: "can you help".to_string(),
+                    stable_prefix_len: "can you ".len(),
+                    confidence: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn novel_head_restarts_candidate_from_zero_stable_prefix() {
+        let mut tracker = TranscriptCandidateTracker::new();
+        let _ = tracker.ingest_candidate("can you tell", None, false);
+
+        let events = tracker.ingest_candidate("wait no actually", None, false);
+        assert_eq!(
+            events,
+            vec![
+                TranscriptCandidateEvent::CandidateReplaced {
+                    old: TranscriptCandidateId(1),
+                    new: TranscriptCandidateId(2),
+                    reason: TranscriptReplacementReason::HeadChanged {
+                        stable_prefix_len: 0,
+                    },
+                },
+                TranscriptCandidateEvent::CandidateStarted {
+                    id: TranscriptCandidateId(2),
+                },
+                TranscriptCandidateEvent::CandidateUpdated {
+                    id: TranscriptCandidateId(2),
+                    text: "wait no actually".to_string(),
+                    stable_prefix_len: 0,
+                    confidence: None,
+                },
+            ]
+        );
+    }
 }
