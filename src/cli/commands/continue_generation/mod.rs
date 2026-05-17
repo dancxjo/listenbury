@@ -508,6 +508,10 @@ type ContinueLiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
     feature = "tts-piper"
 ))]
 fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> TimedWordStream {
+    // `transcribe_group` currently returns finalized text chunks only, without
+    // per-word timing/confidence from the ASR backend. We still emit a
+    // first-class TimedWordStream artifact and preserve metadata fields as
+    // `None` when unavailable.
     let words = transcript
         .split_whitespace()
         .map(|word| TranscriptWord {

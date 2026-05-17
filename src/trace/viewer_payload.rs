@@ -157,12 +157,12 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
         .enumerate()
         .map(|(stream_index, (label, snippets))| {
             if label == "User transcript" && !live_asr_streams.is_empty() {
-                let mut streams = live_asr_streams.clone();
+                let mut streams = live_asr_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
                 let mut next_word_id = 1u64;
                 for (_elapsed_ms, stream) in streams {
-                    for mut word in stream.words {
+                    for mut word in stream.words.iter().cloned() {
                         word.id = WordId(next_word_id);
                         next_word_id = next_word_id.saturating_add(1);
                         words.push(word);
