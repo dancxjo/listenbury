@@ -627,11 +627,32 @@ fn is_safe_discourse_marker(text: &str, config: &SpeechPlannerConfig) -> bool {
 }
 
 fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
-    let lowercase = text.trim().to_ascii_lowercase();
+    let trimmed = text.trim();
+    let lowercase = trimmed.to_ascii_lowercase();
+    if looks_like_provisional_period_token(trimmed) {
+        return true;
+    }
     config
         .common_abbreviations
         .iter()
         .any(|abbreviation| lowercase.ends_with(abbreviation))
+}
+
+fn looks_like_provisional_period_token(text: &str) -> bool {
+    let token = text.split_ascii_whitespace().next_back().unwrap_or_default();
+    if !token.ends_with('.') {
+        return false;
+    }
+    let stem = token[..token.len() - 1].trim_end_matches('.');
+    if stem.is_empty() {
+        return false;
+    }
+    if stem.len() == 1 {
+        return stem.chars().all(|ch| ch.is_ascii_alphabetic());
+    }
+    stem.len() <= 4
+        && stem.chars().all(|ch| ch.is_ascii_uppercase())
+        && stem.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
 /// Find the byte offset just after the first complete sentence in `text`.
@@ -641,6 +662,9 @@ fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
 fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
     if let Some(end) = punctuation_sentence_end(text, config) {
         return Some(end);
+    }
+    if text.trim_end().ends_with('.') && is_common_abbreviation(text.trim_end(), config) {
+        return None;
     }
     if let Some(detector) = sentence_detector() {
         if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
@@ -872,6 +896,54 @@ mod tests {
             units,
             vec![speech(SpeechUnit::CompleteSentence(
                 "Dr. Smith arrived.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn planner_delays_single_initial_until_name_extends() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("I read a book by F.")]).is_empty());
+        assert_eq!(
+            planner.ingest(&[token(" Scott Fitzgerald.")]),
+            vec![speech(SpeechUnit::CompleteSentence(
+                "I read a book by F. Scott Fitzgerald.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn planner_delays_multi_initial_name_until_sentence_end() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("I read J. R. R.")]).is_empty());
+        assert_eq!(
+            planner.ingest(&[token(" Tolkien.")]),
+            vec![speech(SpeechUnit::CompleteSentence(
+                "I read J. R. R. Tolkien.".to_string()
+            ))]
+        );
+    }
+
+    #[test]
+    fn planner_handles_honorifics_and_ordinary_sentence_endings() {
+        let mut planner = SpeechPlanner::default();
+        assert!(planner.ingest(&[token("Mr.")]).is_empty());
+        assert_eq!(
+            planner.ingest(&[token(" Rogers arrived.")]),
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Mr. Rogers arrived.".to_string()
+            ))]
+        );
+        assert_eq!(
+            planner.ingest(&[token("This is fine.")]),
+            vec![speech(SpeechUnit::CompleteSentence(
+                "This is fine.".to_string()
+            ))]
+        );
+        assert_eq!(
+            planner.ingest(&[token("Dr. King spoke.")]),
+            vec![speech(SpeechUnit::CompleteSentence(
+                "Dr. King spoke.".to_string()
             ))]
         );
     }
