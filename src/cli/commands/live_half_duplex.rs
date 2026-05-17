@@ -108,7 +108,7 @@ use listenbury::hearing::{SelfHearingState, SuppressionDecision};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder};
+use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder, SseBroadcaster, TeeSink};
 #[cfg(any(
     test,
     all(
@@ -290,7 +290,7 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-type LiveTrace = LiveTraceRecorder<Option<JsonlTraceWriter>>;
+type LiveTrace = LiveTraceRecorder<TeeSink<Option<JsonlTraceWriter>, Option<SseBroadcaster>>>;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -553,7 +553,30 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         .play()
         .with_context(|| format!("failed to start capture from {input_name}"))?;
 
-    let mut trace = LiveTraceRecorder::new(trace_started_at, trace_writer);
+    let broadcaster = if command.web {
+        let bc = SseBroadcaster::new();
+        let server_bc = bc.clone();
+        let web_host = command.web_host.clone();
+        let web_port = command.web_port;
+        let url = format!("http://{}:{}/", web_host, web_port);
+        std::thread::spawn(move || {
+            if let Err(e) = listenbury::web::serve(listenbury::web::ServeConfig {
+                host: web_host,
+                port: web_port,
+                payload: None,
+                trace: None,
+                broadcaster: Some(server_bc),
+            }) {
+                eprintln!("embedded web server error: {e:#}");
+            }
+        });
+        println!("Listenbury web viewer available at {url}?live=1");
+        Some(bc)
+    } else {
+        None
+    };
+
+    let mut trace = LiveTraceRecorder::new(trace_started_at, TeeSink(trace_writer, broadcaster));
     trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
 
     println!(

@@ -18,6 +18,7 @@ pub(crate) fn run_web(command: WebCommand) -> Result<()> {
         port: command.port,
         payload: command.payload,
         trace: command.trace,
+        broadcaster: None,
     })
 }
 
