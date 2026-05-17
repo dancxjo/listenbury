@@ -6,6 +6,9 @@ use crate::mouth::piper_native::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, TextNormalizationError, TextNormalizer,
 };
 
+const WORD_SEPARATOR_SYMBOL: &str = " ";
+const PHRASE_BREAK_SYMBOL: &str = "|";
+
 pub trait GraphemeToPhoneme {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence>;
 }
@@ -65,7 +68,7 @@ impl SimpleEnglishG2p {
                     symbols.extend(word_symbols.iter().copied().map(String::from));
                     emitted_pronounceable += 1;
                     if emitted_pronounceable < pronounceable_count {
-                        symbols.push(" ".to_string());
+                        symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
                     }
                 }
                 NormalizedToken::Initial(initial) => {
@@ -74,12 +77,12 @@ impl SimpleEnglishG2p {
                     symbols.extend(initial_symbols.iter().copied().map(String::from));
                     emitted_pronounceable += 1;
                     if emitted_pronounceable < pronounceable_count {
-                        symbols.push(" ".to_string());
+                        symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
                     }
                 }
                 NormalizedToken::PhraseBreak => {
-                    if !matches!(symbols.last(), Some(last) if last == "|") {
-                        symbols.push("|".to_string());
+                    if !matches!(symbols.last(), Some(last) if last == PHRASE_BREAK_SYMBOL) {
+                        symbols.push(PHRASE_BREAK_SYMBOL.to_string());
                     }
                 }
             }
@@ -88,16 +91,16 @@ impl SimpleEnglishG2p {
         if matches!(
             normalized.boundary,
             ProsodyBoundaryHint::SentenceTerminalCandidate
-        ) && !matches!(symbols.last(), Some(last) if last == "|")
+        ) && !matches!(symbols.last(), Some(last) if last == PHRASE_BREAK_SYMBOL)
         {
-            symbols.push("|".to_string());
+            symbols.push(PHRASE_BREAK_SYMBOL.to_string());
         }
 
         let length_hints = symbols
             .iter()
             .map(|symbol| PhoneLengthHint {
                 symbol: symbol.clone(),
-                class: if symbol == " " || symbol == "|" {
+                class: if symbol == WORD_SEPARATOR_SYMBOL || symbol == PHRASE_BREAK_SYMBOL {
                     PhoneLengthClass::Short
                 } else {
                     PhoneLengthClass::Medium

@@ -155,7 +155,7 @@ fn expand_known_abbreviation(token: &str) -> Option<&'static str> {
     match token {
         "dr" => Some("doctor"),
         "mr" => Some("mister"),
-        "mrs" => Some("missus"),
+        "mrs" => Some("missis"),
         "ms" => Some("miss"),
         "prof" => Some("professor"),
         _ => None,
