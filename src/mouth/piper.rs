@@ -91,9 +91,7 @@ impl PiperBackendPreference {
         {
             None | Some("") | Some("process") => Self::Process,
             Some("native") => Self::Native,
-            Some("native-fallback") | Some("native_with_fallback") | Some("auto") => {
-                Self::NativeWithProcessFallback
-            }
+            Some("native-fallback") => Self::NativeWithProcessFallback,
             Some(other) => {
                 tracing::warn!(
                     backend_env = other,
