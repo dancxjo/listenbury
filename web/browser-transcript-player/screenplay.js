@@ -108,7 +108,7 @@ function reduceEvent(event) {
     return;
   }
 
-  if (event.kind === "playback_finished" && turn.llmProspective && !turn.llmFinal) {
+  if (event.kind === "playback_finished" && turn.llmProspective) {
     finalizeLlmText(turn, turn.llmProspective);
   }
 }
@@ -200,10 +200,17 @@ function applyTtsWordStreamRevision(turn, event) {
     }
     playedPrefix.push(word.text);
   }
+  let committedRevision = false;
   if (playedPrefix.length) {
-    turn.llmFinal = joinWords(playedPrefix);
+    commitLlmText(turn, joinWords(playedPrefix));
+    committedRevision = true;
+  } else if (reason.includes("committed")) {
+    commitLlmText(turn, text);
+    committedRevision = true;
   }
-  addLlmFragment(turn, text);
+  if (!committedRevision) {
+    addLlmFragment(turn, text);
+  }
 }
 
 function applyLlmTextEvent(turn, event) {
@@ -220,6 +227,11 @@ function applyLlmTextEvent(turn, event) {
 
   if (event.kind === "speculative_speech_updated") {
     setLlmProspective(turn, text);
+    return;
+  }
+
+  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
+    commitLlmText(turn, text);
     return;
   }
 
@@ -266,16 +278,33 @@ function removeLlmFragment(turn, text) {
 }
 
 function finalizeLlmText(turn, text) {
+  commitLlmText(turn, text);
+  turn.llmWords = [];
+}
+
+function commitLlmText(turn, text) {
   const next = textContent(text);
   if (!next) {
     return;
   }
-  turn.llmFinal = next;
-  turn.llmWords = [];
-  if (!turn.llmProspective || turn.llmProspective === next || next.startsWith(turn.llmProspective)) {
-    turn.llmProspective = next;
-    turn.llmFragments = [next];
+
+  const current = textContent(turn.llmFinal);
+  if (!current) {
+    turn.llmFinal = next;
+  } else if (current === next || current.endsWith(next)) {
+    turn.llmFinal = current;
+  } else if (next.startsWith(current)) {
+    turn.llmFinal = next;
+  } else {
+    turn.llmFinal = joinSemanticText(current, next);
   }
+
+  if (!turn.llmProspective || turn.llmFinal.startsWith(turn.llmProspective)) {
+    turn.llmProspective = turn.llmFinal;
+  } else if (!turn.llmProspective.startsWith(turn.llmFinal)) {
+    turn.llmProspective = joinSemanticText(turn.llmFinal, turn.llmProspective);
+  }
+  turn.llmFragments = turn.llmProspective ? [turn.llmProspective] : [];
 }
 
 function scheduleRender() {
@@ -393,19 +422,20 @@ function llmSegments(turn) {
   const finalText = turn.llmFinal;
   const prospectiveText = turn.llmProspective;
 
-  if (turn.llmWords.length) {
+  if (finalText) {
+    segments.push({ text: finalText });
+    const wordStreamText = turn.llmWords.length ? joinWords(turn.llmWords.map((word) => word.text)) : "";
+    const tail = prospectiveTail(finalText, prospectiveText) || prospectiveTail(finalText, wordStreamText);
+    if (tail) {
+      segments.push({ text: tail, className: "prospective-llm" });
+    }
+  } else if (turn.llmWords.length) {
     for (const word of turn.llmWords) {
       segments.push({
         text: word.text,
         className: isPlayedCommitment(word.commitment) ? "" : "prospective-llm",
         word: true,
       });
-    }
-  } else if (finalText) {
-    segments.push({ text: finalText });
-    const tail = prospectiveTail(finalText, prospectiveText);
-    if (tail) {
-      segments.push({ text: tail, className: "prospective-llm" });
     }
   } else if (prospectiveText) {
     segments.push({ text: prospectiveText, className: "prospective-llm" });
@@ -473,6 +503,9 @@ function prospectiveTail(finalText, prospectiveText) {
   const finalClean = textContent(finalText);
   const prospectiveClean = textContent(prospectiveText);
   if (!prospectiveClean || prospectiveClean === finalClean) {
+    return "";
+  }
+  if (finalClean.endsWith(prospectiveClean)) {
     return "";
   }
   if (prospectiveClean.startsWith(finalClean)) {

@@ -343,7 +343,6 @@ struct LiveTurnTraceState {
     first_safe_speech_unit_emitted: bool,
     first_tts_audio_frame_emitted: bool,
     playback_started: bool,
-    last_speculative_speech_text: Option<String>,
 }
 
 #[cfg(all(
@@ -360,7 +359,6 @@ impl LiveTurnTraceState {
             first_safe_speech_unit_emitted: false,
             first_tts_audio_frame_emitted: false,
             playback_started: false,
-            last_speculative_speech_text: None,
         }
     }
 }
@@ -904,7 +902,6 @@ fn stream_speech_to_tts(
                     emit_speech_plan_trace(
                         trace,
                         user_turn_id,
-                        &mut trace_state,
                         &filler_plan,
                         ExactTimestamp::now(),
                     )?;
@@ -968,13 +965,7 @@ fn stream_speech_to_tts(
                         trace.emit(event)?;
                         trace_state.first_safe_speech_unit_emitted = true;
                     }
-                    emit_speech_plan_trace(
-                        trace,
-                        user_turn_id,
-                        &mut trace_state,
-                        &plan,
-                        ExactTimestamp::now(),
-                    )?;
+                    emit_speech_plan_trace(trace, user_turn_id, &plan, ExactTimestamp::now())?;
                     tts.enqueue(plan)?;
                     trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
                     controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
@@ -1032,13 +1023,7 @@ fn stream_speech_to_tts(
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         response_fragments.push(current_spoken_text.clone());
         let fallback_plan = SpeechPlan::from(SpeechUnit::FullTurn(current_spoken_text.clone()));
-        emit_speech_plan_trace(
-            trace,
-            user_turn_id,
-            &mut trace_state,
-            &fallback_plan,
-            ExactTimestamp::now(),
-        )?;
+        emit_speech_plan_trace(trace, user_turn_id, &fallback_plan, ExactTimestamp::now())?;
         tts.enqueue(fallback_plan)?;
         trace.emit_now(user_turn_id, "tts_enqueue_finished", ExactTimestamp::now())?;
         let played_fallback = flush_tts_audio(
@@ -1066,7 +1051,6 @@ fn stream_speech_to_tts(
         "final",
         ExactTimestamp::now(),
     )?;
-    trace_state.last_speculative_speech_text = None;
     trace.emit_now(user_turn_id, "playback_finished", ExactTimestamp::now())?;
     controller.on_pete_speech_finished();
     controller.record_user_message(transcript);
@@ -1372,24 +1356,9 @@ fn maybe_plan_cached_backchannel(
 fn emit_speech_plan_trace(
     trace: &mut LiveTrace,
     turn_id: u64,
-    trace_state: &mut LiveTurnTraceState,
     plan: &SpeechPlan,
     at: ExactTimestamp,
 ) -> Result<()> {
-    if let Some(previous) = trace_state
-        .last_speculative_speech_text
-        .as_deref()
-        .filter(|previous| *previous != plan.text())
-    {
-        emit_read_aloud_timed_word_stream_revision(
-            trace,
-            turn_id,
-            previous,
-            WordCommitment::Cancelled,
-            "cancelled",
-            at,
-        )?;
-    }
     emit_read_aloud_timed_word_stream_revision(
         trace,
         turn_id,
@@ -1410,7 +1379,6 @@ fn emit_speech_plan_trace(
         "committed",
         at,
     )?;
-    trace_state.last_speculative_speech_text = Some(plan.text().to_string());
     Ok(())
 }
 
