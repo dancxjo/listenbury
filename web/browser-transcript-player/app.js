@@ -8,12 +8,9 @@ const audio = document.getElementById("audio");
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
-const WHEEL_ZOOM_FACTOR = 1.16;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
-const SESSION_EPOCH = Date.now();
 
 // Custom timeline renderer settings
-const LANE_LABEL_WIDTH = 132; // px, matches .lane-header CSS width
 const DEFAULT_ZOOM_PX_PER_SECOND = 80;
 const MIN_ZOOM_PX_PER_SECOND = 4;
 const MAX_ZOOM_PX_PER_SECOND = 4000;
@@ -1261,12 +1258,16 @@ function updateChipStates() {
 
 // Build a sorted deduplicated list of ruler tick timestamps covering [0..maxDurationMs].
 // Uses viewportMs to determine spacing so ~10 ticks are visible per screenful.
+// Caps at 200 total ticks to avoid excessive DOM nodes for long sessions.
 function buildAllRulerTicks(maxDurationMs, viewportMs) {
   const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewportMs);
   const targetSegments = 10;
   const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
   const desiredStep = safeDuration / targetSegments;
-  const stepMs = preferredSteps.find((step) => step >= desiredStep) ?? 600_000;
+  // Also enforce a minimum step to keep total tick count under 200
+  const minStepForMaxTicks = maxDurationMs / 200;
+  const effectiveDesiredStep = Math.max(desiredStep, minStepForMaxTicks);
+  const stepMs = preferredSteps.find((step) => step >= effectiveDesiredStep) ?? 600_000;
 
   const ticks = [];
   for (let at = 0; at <= maxDurationMs; at += stepMs) {
@@ -1844,26 +1845,6 @@ function setPlaybackStop(startMs, endMs) {
 
 function clearPlaybackStop() {
   state.stopAtMs = null;
-}
-
-function buildRulerTicks(viewport) {
-  const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewport.durationMs);
-  const targetSegments = 10;
-  const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000];
-  const desiredStep = safeDuration / targetSegments;
-  const stepMs = preferredSteps.find((step) => step >= desiredStep) ?? 120_000;
-  const ticks = [];
-  const firstTick = Math.ceil(viewport.startMs / stepMs) * stepMs;
-  if (viewport.startMs > 0) {
-    ticks.push(viewport.startMs);
-  }
-  for (let at = firstTick; at <= viewport.endMs; at += stepMs) {
-    ticks.push(at);
-  }
-  if (ticks[ticks.length - 1] !== viewport.endMs) {
-    ticks.push(viewport.endMs);
-  }
-  return [...new Set(ticks)];
 }
 
 function formatRulerLabel(ms) {
