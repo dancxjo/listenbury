@@ -178,6 +178,22 @@ function connectLiveEvents() {
     }
   };
 
+  source.addEventListener("live-unavailable", (event) => {
+    let message = "Live event stream is unavailable. Start with listen --web to stream events.";
+    try {
+      const payload = JSON.parse(event.data);
+      if (payload.message) {
+        message = payload.message;
+      }
+    } catch (err) {
+      console.error("Failed to parse live availability event:", err, event.data);
+    }
+    liveConnectionStatus.textContent = "unavailable";
+    liveConnectionStatus.className = "live-status-error";
+    statusMessage.textContent = message;
+    source.close();
+  });
+
   source.onerror = () => {
     liveConnectionStatus.textContent = "disconnected";
     liveConnectionStatus.className = "live-status-error";

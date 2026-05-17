@@ -187,18 +187,19 @@ fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) ->
     }
 
     let Some(broadcaster) = &state.broadcaster else {
-        let response =
-            HttpResponse::not_found("live events not available: no active listen session\n");
-        return write_response(stream, &response, false);
+        write_sse_headers(stream)?;
+        write!(
+            stream,
+            "event: live-unavailable\ndata: {{\"message\":\"live events are not available because no active listen session is attached\"}}\n\n"
+        )
+        .context("write SSE unavailable event")?;
+        stream.flush().context("flush SSE unavailable event")?;
+        return Ok(());
     };
 
     let rx = broadcaster.subscribe();
 
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
-    )
-    .context("write SSE headers")?;
+    write_sse_headers(stream)?;
     // Send a keepalive comment so the browser knows the connection is established.
     write!(stream, ": connected\n\n").context("write SSE connected comment")?;
     stream.flush().context("flush SSE headers")?;
@@ -216,6 +217,14 @@ fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) ->
     }
 
     Ok(())
+}
+
+fn write_sse_headers(stream: &mut TcpStream) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+    )
+    .context("write SSE headers")
 }
 
 fn write_response(stream: &mut TcpStream, response: &HttpResponse, is_head: bool) -> Result<()> {
@@ -339,6 +348,8 @@ fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -466,5 +477,31 @@ mod tests {
         // route_request doesn't handle /api/live-events (that's handled in handle_connection)
         // so it falls through to not_found
         assert_eq!(response.status, 404);
+    }
+
+    #[test]
+    fn live_events_connection_returns_sse_unavailable_without_broadcaster() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let addr = listener.local_addr().expect("local addr");
+        let state = empty_state();
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept test connection");
+            handle_connection(&mut stream, &state).expect("handle test request");
+        });
+
+        let mut client = TcpStream::connect(addr).expect("connect to test server");
+        client
+            .write_all(b"GET /api/live-events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .expect("write request");
+
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read response");
+        server.join().expect("server thread");
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(response.contains("Content-Type: text/event-stream"));
+        assert!(response.contains("event: live-unavailable"));
+        assert!(response.contains("no active listen session"));
     }
 }
