@@ -142,9 +142,9 @@ The initial rule is:
 
 Human conversation often includes short responses that are not full semantic turns: acknowledgments, hesitation markers, backchannels, and floor-holding sounds.
 
-Listenbury includes an early conservative planner for this kind of behavior.
+Listenbury includes an early conservative planner for this kind of behavior, but it is disabled by default for now.
 
-The current design prefers silence unless a short, cached response is useful and safe. Repetition guards prevent the same filler from being repeated too often.
+When enabled, the current design prefers silence unless a short, cached response is useful and safe. Repetition guards prevent the same filler from being repeated too often.
 
 This area is intentionally cautious. Poorly timed filler speech is worse than silence.
 
@@ -383,8 +383,9 @@ Use **Load bundled demo** to inspect the included sample payload wired to
 `welcome.wav`, or choose your own local JSON/audio files with the file pickers.
 The viewer renders multiple streams vertically with a shared ruler, highlights
 the active word during playback, and lets you click chips/ruler positions to
-seek the shared audio timeline. Use the zoom toolbar to zoom in, zoom out, or
-focus the timeline around the selected word/event. It is a debug timeline workstation for
+seek the shared audio timeline. Drag across the ruler or an empty lane region
+to mark a time range; releasing the mouse zooms directly into that range.
+The same toolbar can still zoom in or zoom out. It is a debug timeline workstation for
 inspecting recorded, generated, and playback speech lanes.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
@@ -570,7 +571,7 @@ Optional web flags:
 listenbury listen --web --web-host 0.0.0.0 --web-port 9000
 ```
 
-The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Playback and timeline zoom controls stay available so you can focus on a selected live event as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
+The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Playback and timeline zoom controls stay available so you can drag-zoom into a time range as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
 
 | Lane | Events |
 |---|---|

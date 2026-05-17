@@ -190,6 +190,7 @@ impl Default for FillerContext {
 
 #[derive(Debug, Clone, Copy)]
 pub struct FillerPlannerConfig {
+    pub enabled: bool,
     pub min_silence_for_filler_ms: u64,
     pub repeat_cooldown_ms: u64,
     pub allow_multiple_fillers_per_turn: bool,
@@ -198,6 +199,7 @@ pub struct FillerPlannerConfig {
 impl Default for FillerPlannerConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             min_silence_for_filler_ms: DEFAULT_FILLER_ACTIVATION_DELAY_MS,
             repeat_cooldown_ms: DEFAULT_FILLER_REPEAT_COOLDOWN_MS,
             allow_multiple_fillers_per_turn: false,
@@ -221,7 +223,8 @@ impl FillerPlanner {
     }
 
     pub fn decide(&mut self, ctx: &FillerContext) -> FillerDecision {
-        if ctx.turn_state != TurnState::PeteThinking
+        if !self.config.enabled
+            || ctx.turn_state != TurnState::PeteThinking
             || ctx.user_interrupted_recently
             || ctx.main_llm_has_safe_speech_unit
             || ctx.silence_duration_ms < self.config.min_silence_for_filler_ms
@@ -528,9 +531,29 @@ mod tests {
         THINKING_FILLERS.contains(&id)
     }
 
+    fn enabled_filler_planner() -> FillerPlanner {
+        FillerPlanner::new(FillerPlannerConfig {
+            enabled: true,
+            ..FillerPlannerConfig::default()
+        })
+    }
+
+    fn controller_with_fillers_enabled() -> ConversationController {
+        let mut controller = ConversationController::default();
+        controller.filler_planner = enabled_filler_planner();
+        controller
+    }
+
+    #[test]
+    fn planner_is_silent_by_default() {
+        let mut planner = FillerPlanner::default();
+        let ctx = thinking_context(10_000, 1);
+        assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
+    }
+
     #[test]
     fn planner_can_fill_after_tokens_before_safe_speech() {
-        let mut planner = FillerPlanner::default();
+        let mut planner = enabled_filler_planner();
         let mut ctx = thinking_context(10_000, 1);
         ctx.main_llm_has_emitted_token = true;
         assert!(matches!(
@@ -541,7 +564,7 @@ mod tests {
 
     #[test]
     fn planner_prefers_silence_when_safe_speech_is_ready() {
-        let mut planner = FillerPlanner::default();
+        let mut planner = enabled_filler_planner();
         let mut ctx = thinking_context(10_000, 1);
         ctx.main_llm_has_safe_speech_unit = true;
         assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
@@ -549,7 +572,7 @@ mod tests {
 
     #[test]
     fn planner_chooses_cached_backchannel_while_waiting() {
-        let mut planner = FillerPlanner::default();
+        let mut planner = enabled_filler_planner();
         let ctx = thinking_context(10_000, 1);
         assert!(matches!(
             planner.decide(&ctx),
@@ -559,7 +582,7 @@ mod tests {
 
     #[test]
     fn planner_avoids_repeating_same_filler_within_cooldown() {
-        let mut planner = FillerPlanner::default();
+        let mut planner = enabled_filler_planner();
         let first = thinking_context(10_000, 1);
         let second = thinking_context(10_500, 2);
         assert!(matches!(
@@ -571,7 +594,7 @@ mod tests {
 
     #[test]
     fn planner_emits_only_one_filler_per_turn_by_default() {
-        let mut planner = FillerPlanner::default();
+        let mut planner = enabled_filler_planner();
         let first = thinking_context(10_000, 9);
         let second = thinking_context(80_000, 9);
         assert!(matches!(
@@ -583,7 +606,7 @@ mod tests {
 
     #[test]
     fn controller_paths_cached_backchannel_to_speech_unit() {
-        let mut controller = ConversationController::default();
+        let mut controller = controller_with_fillers_enabled();
         let ctx = thinking_context(10_000, 1);
         let command = controller.decide_filler_command(&ctx);
         assert!(matches!(

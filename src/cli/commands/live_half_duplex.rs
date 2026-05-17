@@ -2003,7 +2003,8 @@ mod tests {
     use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
     use listenbury::word::WordCommitment;
     use listenbury::{
-        ConversationController, ConversationMessage, ConversationRole, RuntimePacket,
+        ConversationController, ConversationMessage, ConversationRole, FillerPlanner,
+        FillerPlannerConfig, RuntimePacket,
         SpeechPlannerConfig,
     };
 
@@ -2011,6 +2012,15 @@ mod tests {
         LlmEvent::Token {
             text: text.to_string(),
         }
+    }
+
+    fn controller_with_fillers_enabled() -> ConversationController {
+        let mut controller = ConversationController::default();
+        controller.filler_planner = FillerPlanner::new(FillerPlannerConfig {
+            enabled: true,
+            ..FillerPlannerConfig::default()
+        });
+        controller
     }
 
     #[test]
@@ -2230,7 +2240,7 @@ mod tests {
 
     #[test]
     fn filler_planning_can_emit_cached_backchannel_before_safe_speech() {
-        let mut controller = ConversationController::default();
+        let mut controller = controller_with_fillers_enabled();
         controller.turn_tracker.on_pete_thinking_started();
 
         let first = maybe_plan_cached_backchannel(
@@ -2277,7 +2287,7 @@ mod tests {
 
     #[test]
     fn filler_planning_waits_for_floor_cede_delay() {
-        let mut controller = ConversationController::default();
+        let mut controller = controller_with_fillers_enabled();
         controller.turn_tracker.on_pete_thinking_started();
 
         let too_early = maybe_plan_cached_backchannel(
@@ -2307,7 +2317,7 @@ mod tests {
 
     #[test]
     fn filler_planning_can_fill_after_tokens_but_not_after_safe_speech() {
-        let mut controller = ConversationController::default();
+        let mut controller = controller_with_fillers_enabled();
         controller.turn_tracker.on_pete_thinking_started();
 
         let after_token = maybe_plan_cached_backchannel(

@@ -13,7 +13,6 @@ const jumpNextButton = document.getElementById("jump-next");
 const playSelectionClipButton = document.getElementById("play-selection-clip");
 const zoomOutButton = document.getElementById("zoom-out");
 const zoomInButton = document.getElementById("zoom-in");
-const zoomSelectionButton = document.getElementById("zoom-selection");
 const audio = document.getElementById("audio");
 const liveBanner = document.getElementById("live-banner");
 const liveEventCount = document.getElementById("live-event-count");
@@ -23,6 +22,7 @@ const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
 const ZOOM_FACTOR = 1.8;
+const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
 
 // Live mode is activated by ?live=1 in the URL.
 const isLiveMode = queryParams.get("live") === "1";
@@ -64,6 +64,8 @@ const state = {
   stopAtMs: null,
   viewStartMs: null,
   viewEndMs: null,
+  dragSelection: null,
+  suppressTimelineClick: false,
 };
 
 const sourceLabels = {
@@ -82,7 +84,10 @@ jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
 playSelectionClipButton.addEventListener("click", () => playSelectedClip());
 zoomOutButton.addEventListener("click", () => zoomTimeline(1 / ZOOM_FACTOR));
 zoomInButton.addEventListener("click", () => zoomTimeline(ZOOM_FACTOR));
-zoomSelectionButton.addEventListener("click", () => zoomToSelection());
+viewer.addEventListener("pointerdown", startTimeRangeSelection);
+viewer.addEventListener("pointermove", moveTimeRangeSelection);
+viewer.addEventListener("pointerup", finishTimeRangeSelection);
+viewer.addEventListener("pointercancel", cancelTimeRangeSelection);
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
@@ -369,6 +374,7 @@ function applyPayload(rawPayload, options = {}) {
     state.viewStartMs = null;
     state.viewEndMs = null;
   }
+  state.dragSelection = null;
 
   const normalized = normalizePayload(rawPayload);
   const wordLanes = normalized.streams.map((lane) => normalizeWordLane(lane));
@@ -593,6 +599,7 @@ function renderTimelineRuler() {
   const viewport = getViewport();
   const ruler = document.createElement("div");
   ruler.className = "timeline-ruler";
+  appendTimeRangeSelection(ruler, viewport);
 
   const ticks = buildRulerTicks(viewport);
   ticks.forEach((tickMs) => {
@@ -609,6 +616,10 @@ function renderTimelineRuler() {
   });
 
   ruler.addEventListener("click", (event) => {
+    if (state.suppressTimelineClick) {
+      state.suppressTimelineClick = false;
+      return;
+    }
     if (!audio.src) {
       return;
     }
@@ -641,6 +652,7 @@ function renderWordLane(lane) {
 
   const track = document.createElement("div");
   track.className = "lane-track";
+  appendTimeRangeSelection(track, viewport);
 
   lane.words.forEach((word) => {
     const visibleRange = visibleItemRange(
@@ -702,6 +714,7 @@ function renderEventLane(lane) {
 
   const track = document.createElement("div");
   track.className = "lane-track event-track";
+  appendTimeRangeSelection(track, viewport);
 
   lane.events.forEach((event) => {
     const visibleRange = visibleItemRange(event.start_ms, event.end_ms, viewport);
@@ -892,15 +905,13 @@ function zoomTimeline(factor) {
   render();
 }
 
-function zoomToSelection() {
-  const timing = selectedItemTiming();
+function zoomToTimeSelection(selection) {
+  const timing = clampTimeSelection(selection);
   if (!timing) {
     return;
   }
 
-  const selectionDuration = Math.max(MIN_SELECTION_VIEW_MS, timing.endMs - timing.startMs);
-  const paddedDuration = Math.min(state.maxDurationMs, selectionDuration * 1.35);
-  setViewportAround((timing.startMs + timing.endMs) / 2, paddedDuration);
+  setViewportRange(timing.startMs, timing.endMs);
   render();
 }
 
@@ -966,6 +977,12 @@ function setViewportAround(focusMs, requestedDurationMs) {
   state.viewEndMs = startMs + nextDuration;
 }
 
+function setViewportRange(startMs, endMs) {
+  const selectionDuration = Math.max(MIN_SELECTION_VIEW_MS, endMs - startMs);
+  const centerMs = startMs + (endMs - startMs) / 2;
+  setViewportAround(centerMs, selectionDuration);
+}
+
 function clampViewport() {
   if (state.viewStartMs === null || state.viewEndMs === null) {
     state.viewStartMs = null;
@@ -1020,12 +1037,178 @@ function durationToViewportPercent(durationMs, viewport) {
   return (durationMs / viewport.durationMs) * 100;
 }
 
+function appendTimeRangeSelection(container, viewport) {
+  const overlay = document.createElement("div");
+  overlay.className = "time-range-selection";
+  overlay.setAttribute("aria-hidden", "true");
+  container.append(overlay);
+  updateTimeRangeSelectionOverlay(overlay, viewport);
+}
+
+function updateTimeRangeSelectionOverlays() {
+  const viewport = getViewport();
+  document.querySelectorAll(".time-range-selection").forEach((overlay) => {
+    updateTimeRangeSelectionOverlay(overlay, viewport);
+  });
+  updateZoomControls();
+}
+
+function updateTimeRangeSelectionOverlay(overlay, viewport) {
+  const selection = activeTimeRangeSelection();
+  if (!selection) {
+    overlay.hidden = true;
+    overlay.style.width = "0";
+    return;
+  }
+
+  const visibleRange = visibleItemRange(selection.startMs, selection.endMs, viewport);
+  if (!visibleRange) {
+    overlay.hidden = true;
+    overlay.style.width = "0";
+    return;
+  }
+
+  const left = Math.max(0, Math.min(100, msToViewportPercent(visibleRange.startMs, viewport)));
+  const right = Math.max(0, Math.min(100, msToViewportPercent(visibleRange.endMs, viewport)));
+  overlay.hidden = false;
+  overlay.style.left = `${left}%`;
+  overlay.style.width = `${Math.max(0, right - left)}%`;
+}
+
+function activeTimeRangeSelection() {
+  if (state.dragSelection) {
+    return normalizeTimeSelection(state.dragSelection.startMs, state.dragSelection.endMs);
+  }
+  return null;
+}
+
+function startTimeRangeSelection(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!state.lanes.length || event.button !== 0 || target?.closest(".timeline-chip")) {
+    return;
+  }
+
+  const surface = target?.closest(".lane-track, .timeline-ruler");
+  if (!surface) {
+    return;
+  }
+
+  const startMs = timeMsAtClientX(event.clientX, surface);
+  if (startMs === null) {
+    return;
+  }
+
+  event.preventDefault();
+  state.dragSelection = {
+    pointerId: event.pointerId,
+    surface,
+    startClientX: event.clientX,
+    startMs,
+    endMs: startMs,
+  };
+  viewer.setPointerCapture(event.pointerId);
+  updateTimeRangeSelectionOverlays();
+}
+
+function moveTimeRangeSelection(event) {
+  if (!state.dragSelection || state.dragSelection.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const endMs = timeMsAtClientX(event.clientX, state.dragSelection.surface);
+  if (endMs === null) {
+    return;
+  }
+  state.dragSelection.endMs = endMs;
+  updateTimeRangeSelectionOverlays();
+}
+
+function finishTimeRangeSelection(event) {
+  if (!state.dragSelection || state.dragSelection.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const dragSelection = state.dragSelection;
+  const endMs = timeMsAtClientX(event.clientX, dragSelection.surface);
+  if (endMs !== null) {
+    dragSelection.endMs = endMs;
+  }
+
+  state.dragSelection = null;
+  if (viewer.hasPointerCapture(event.pointerId)) {
+    viewer.releasePointerCapture(event.pointerId);
+  }
+
+  const delta = Math.abs(event.clientX - dragSelection.startClientX);
+  if (delta < RANGE_SELECTION_DRAG_THRESHOLD_PX) {
+    if (audio.src && endMs !== null) {
+      audio.currentTime = endMs / 1000;
+      refreshPlaybackState();
+    }
+    updateTimeRangeSelectionOverlays();
+    return;
+  }
+
+  const selection = normalizeTimeSelection(dragSelection.startMs, dragSelection.endMs);
+  if (!selection) {
+    updateTimeRangeSelectionOverlays();
+    return;
+  }
+
+  state.suppressTimelineClick = true;
+  window.setTimeout(() => {
+    state.suppressTimelineClick = false;
+  }, 0);
+  zoomToTimeSelection(selection);
+}
+
+function cancelTimeRangeSelection(event) {
+  if (!state.dragSelection || state.dragSelection.pointerId !== event.pointerId) {
+    return;
+  }
+
+  state.dragSelection = null;
+  if (viewer.hasPointerCapture(event.pointerId)) {
+    viewer.releasePointerCapture(event.pointerId);
+  }
+  updateTimeRangeSelectionOverlays();
+}
+
+function timeMsAtClientX(clientX, surface) {
+  const viewport = getViewport();
+  const rect = surface.getBoundingClientRect();
+  if (!rect.width) {
+    return null;
+  }
+  const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+  return viewport.startMs + ratio * viewport.durationMs;
+}
+
+function normalizeTimeSelection(startMs, endMs) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return null;
+  }
+
+  const start = Math.max(0, Math.min(state.maxDurationMs, Math.min(startMs, endMs)));
+  const end = Math.max(0, Math.min(state.maxDurationMs, Math.max(startMs, endMs)));
+  if (end <= start) {
+    return null;
+  }
+  return { startMs: start, endMs: end };
+}
+
+function clampTimeSelection(selection) {
+  if (!selection) {
+    return null;
+  }
+  return normalizeTimeSelection(selection.startMs, selection.endMs);
+}
+
 function updateZoomControls() {
   const viewport = getViewport();
   const canZoom = state.lanes.length > 0;
   zoomInButton.disabled = !canZoom || viewport.durationMs <= MIN_VIEW_DURATION_MS;
   zoomOutButton.disabled = !canZoom || viewport.isFullTimeline;
-  zoomSelectionButton.disabled = !canZoom || !selectedItemTiming();
 }
 
 function firstItemSelection() {

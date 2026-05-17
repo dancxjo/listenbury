@@ -240,6 +240,16 @@ h1 {
   overflow: hidden;
 }
 
+.time-range-selection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  border: 1px solid rgba(99, 210, 255, 0.78);
+  background: rgba(99, 210, 255, 0.18);
+  pointer-events: none;
+}
+
 .ruler-tick {
   position: absolute;
   top: 0;
@@ -334,6 +344,7 @@ h1 {
 
 .timeline-chip {
   position: absolute;
+  z-index: 2;
   top: 50%;
   transform: translateY(-50%);
   max-width: 100%;

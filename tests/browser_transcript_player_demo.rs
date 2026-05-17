@@ -351,8 +351,12 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
 
     assert!(html.contains("id=\"zoom-in\""));
     assert!(html.contains("id=\"zoom-out\""));
-    assert!(html.contains("id=\"zoom-selection\""));
+    assert!(!html.contains("id=\"zoom-selection\""));
     assert!(js.contains("function zoomTimeline"));
-    assert!(js.contains("function zoomToSelection"));
+    assert!(!js.contains("function zoomToSelection"));
+    assert!(js.contains("function startTimeRangeSelection"));
+    assert!(js.contains("function appendTimeRangeSelection"));
+    assert!(js.contains("function zoomToTimeSelection"));
+    assert!(js.contains("RANGE_SELECTION_DRAG_THRESHOLD_PX"));
     assert!(js.contains("msToViewportPercent"));
 }
