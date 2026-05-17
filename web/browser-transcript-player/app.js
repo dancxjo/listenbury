@@ -24,6 +24,9 @@ const WHEEL_ZOOM_MAX_FACTOR = 2;
 const ZOOM_SELECTION_PADDING_FACTOR = 0.3;
 const ZOOM_SELECTION_PADDING_MIN_MS = 250;
 const ZOOM_LATEST_WINDOW_MS = 30_000;
+const WORD_DENSITY_LABEL_MIN_PX = 22;
+const WORD_DENSITY_BADGE_MIN_PX = 64;
+const HOVER_PREVIEW_OFFSET_PX = 14;
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -95,6 +98,7 @@ const state = {
   zoomPxPerSecond: DEFAULT_ZOOM_PX_PER_SECOND,
   followLatest: false,
   dragSelection: null,
+  brushSelection: null,
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
@@ -271,7 +275,7 @@ function buildShellProjection() {
     canPlaySelectionClip: selectionProjection.canPlaySelectionClip,
     playSelectionClipLabel: selectionProjection.playSelectionClipLabel,
     canZoom: state.lanes.length > 0,
-    hasSelection: Boolean(state.selectedItem),
+    hasSelection: Boolean(state.selectedItem || state.brushSelection),
     followLatest: state.followLatest,
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
@@ -1287,6 +1291,9 @@ function ensureCustomTimeline() {
   tracksCol.addEventListener("pointermove", moveTimeRangeSelection);
   tracksCol.addEventListener("pointerup", finishTimeRangeSelection);
   tracksCol.addEventListener("pointercancel", cancelTimeRangeSelection);
+  tracksCol.addEventListener("pointerover", showTimelineHoverPreview);
+  tracksCol.addEventListener("pointermove", positionTimelineHoverPreview);
+  tracksCol.addEventListener("pointerout", hideTimelineHoverPreview);
 }
 
 function renderCustomTimeline() {
@@ -1366,6 +1373,9 @@ function renderCustomTimeline() {
     selOverlay.className = "time-range-selection";
     selOverlay.setAttribute("aria-hidden", "true");
     selOverlay.hidden = true;
+    const selLabel = document.createElement("span");
+    selLabel.className = "time-range-selection-label";
+    selOverlay.append(selLabel);
     trackEl.append(selOverlay);
 
     if (lane.type === "word") {
@@ -1380,11 +1390,19 @@ function renderCustomTimeline() {
           state.selectedItem.laneIndex === laneIndex &&
           state.selectedItem.itemIndex === wordIndex;
         const isActive = nowMs >= startMs && nowMs <= endMs;
+        const widthPx = Math.max(2, pxForMs(endMs - startMs));
+        const densityClass =
+          widthPx < WORD_DENSITY_LABEL_MIN_PX
+            ? "density-word"
+            : widthPx < WORD_DENSITY_BADGE_MIN_PX
+              ? "compact-word"
+              : "detailed-word";
 
         const baseClass = [
           "timeline-chip word-chip",
           `lane-${classToken(lane.label)}`,
           `source-${classToken(lane.stream.source)}`,
+          densityClass,
           word.timingResolution === "fallback-layout" ? "fallback-timing" : "",
           `commit-${commitmentClass(word.commitment)}`,
           word._revisions?.length ? "was-revised" : "",
@@ -1402,9 +1420,14 @@ function renderCustomTimeline() {
         chip.dataset.itemIndex = String(wordIndex);
         chip.dataset.itemType = "word";
         chip.style.left = `${pxForMs(startMs)}px`;
-        chip.style.width = `${Math.max(2, pxForMs(endMs - startMs))}px`;
+        chip.style.width = `${widthPx}px`;
         chip.title = `${lane.label} · ${word.text} (${startMs}–${endMs} ms) · ${word.timingSourceDetail}`;
-        chip.append(createChipContent(word.text), createChipBadges([describeShortCommitment(word.commitment)]));
+        chip.setAttribute("aria-label", `${lane.label}: ${word.text}`);
+        if (densityClass === "density-word") {
+          chip.append(createTokenDensityBar(word));
+        } else {
+          appendWordChipContent(chip, word, densityClass === "detailed-word");
+        }
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
       });
@@ -1590,6 +1613,107 @@ function onTimelineClick(event) {
   }
 }
 
+function showTimelineHoverPreview(event) {
+  const chip = event.target?.closest?.(".timeline-chip");
+  if (!chip) return;
+  const preview = ensureTimelineHoverPreview();
+  renderTimelineHoverPreview(preview, chip);
+  preview.hidden = false;
+  positionTimelineHoverPreview(event);
+}
+
+function positionTimelineHoverPreview(event) {
+  const preview = document.getElementById("timeline-hover-preview");
+  if (!preview || preview.hidden) return;
+  const margin = 8;
+  const previewRect = preview.getBoundingClientRect();
+  const x = Math.min(
+    window.innerWidth - previewRect.width - margin,
+    event.clientX + HOVER_PREVIEW_OFFSET_PX,
+  );
+  const y = Math.min(
+    window.innerHeight - previewRect.height - margin,
+    event.clientY + HOVER_PREVIEW_OFFSET_PX,
+  );
+  preview.style.left = `${Math.max(margin, x)}px`;
+  preview.style.top = `${Math.max(margin, y)}px`;
+}
+
+function hideTimelineHoverPreview(event) {
+  const leavingChip = event.target?.closest?.(".timeline-chip");
+  const enteringChip = event.relatedTarget?.closest?.(".timeline-chip");
+  if (!leavingChip || leavingChip === enteringChip) return;
+  const preview = document.getElementById("timeline-hover-preview");
+  if (preview) {
+    preview.hidden = true;
+  }
+}
+
+function ensureTimelineHoverPreview() {
+  let preview = document.getElementById("timeline-hover-preview");
+  if (preview) {
+    return preview;
+  }
+  preview = document.createElement("div");
+  preview.id = "timeline-hover-preview";
+  preview.className = "timeline-hover-preview";
+  preview.hidden = true;
+  document.body.append(preview);
+  return preview;
+}
+
+function renderTimelineHoverPreview(preview, chip) {
+  const item = timelineItemFromChip(chip);
+  if (!item) {
+    preview.hidden = true;
+    return;
+  }
+
+  preview.replaceChildren();
+  const title = document.createElement("strong");
+  title.className = "hover-preview-title";
+  title.textContent = item.title;
+
+  const meta = document.createElement("span");
+  meta.className = "hover-preview-meta";
+  meta.textContent = item.meta;
+
+  preview.append(title, meta);
+  if (item.detail) {
+    const detail = document.createElement("span");
+    detail.className = "hover-preview-detail";
+    detail.textContent = item.detail;
+    preview.append(detail);
+  }
+}
+
+function timelineItemFromChip(chip) {
+  const laneIndex = parseInt(chip.dataset.laneIndex, 10);
+  const itemIndex = parseInt(chip.dataset.itemIndex, 10);
+  const itemType = chip.dataset.itemType;
+  const lane = state.lanes[laneIndex];
+  if (!lane) return null;
+
+  if (itemType === "word") {
+    const word = lane.words?.[itemIndex];
+    if (!word) return null;
+    const revision = word._revisions?.[word._revisions.length - 1];
+    return {
+      title: word.text,
+      meta: `${lane.label} · ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · ${describeSpanState(word.commitment)}`,
+      detail: revision ? `revised from "${revision.fromText}" at ${revision.at_ms} ms` : word.timingSourceDetail,
+    };
+  }
+
+  const timelineEvent = lane.events?.[itemIndex];
+  if (!timelineEvent) return null;
+  return {
+    title: timelineEvent.label,
+    meta: `${lane.label} · ${timelineEvent.start_ms}–${timelineEvent.end_ms} ms · ${labelForKind(timelineEvent.kind)}`,
+    detail: timelineEvent.metadata?.derived ? "derived semantic span" : null,
+  };
+}
+
 // Keyboard shortcuts for DAW-style navigation.
 window.addEventListener("keydown", function onTimelineKeyDown(event) {
   if (event.target?.tagName === "INPUT" || event.target?.tagName === "TEXTAREA" || event.target?.isContentEditable) return;
@@ -1643,7 +1767,9 @@ window.addEventListener("keydown", function onTimelineKeyDown(event) {
       break;
     case "Escape":
       state.selectedItem = null;
+      state.brushSelection = null;
       updateChipStates();
+      updateTimeRangeSelectionOverlays();
       renderSelection();
       renderShell();
       break;
@@ -1735,7 +1861,7 @@ function zoomToTimeSelection(selection) {
 }
 
 function zoomToSelection() {
-  const timing = selectedItemTiming();
+  const timing = state.brushSelection ?? selectedItemTiming();
   if (!timing) return;
   zoomToTimeSelection(timing);
 }
@@ -1824,6 +1950,10 @@ function updateTimeRangeSelectionOverlays() {
     overlay.hidden = false;
     overlay.style.left = `${startPx}px`;
     overlay.style.width = `${widthPx}px`;
+    const label = overlay.querySelector(".time-range-selection-label");
+    if (label) {
+      label.textContent = `${formatRulerLabel(selection.startMs)}–${formatRulerLabel(selection.endMs)}`;
+    }
   });
   updateZoomControls();
 }
@@ -1832,7 +1962,7 @@ function activeTimeRangeSelection() {
   if (state.dragSelection) {
     return normalizeTimeSelection(state.dragSelection.startMs, state.dragSelection.endMs);
   }
-  return null;
+  return clampTimeSelection(state.brushSelection);
 }
 
 function startTimeRangeSelection(event) {
@@ -1896,6 +2026,7 @@ function finishTimeRangeSelection(event) {
 
   const delta = Math.abs(event.clientX - dragSelection.startClientX);
   if (delta < RANGE_SELECTION_DRAG_THRESHOLD_PX) {
+    state.brushSelection = null;
     if (audio.src && endMs !== null) {
       audio.currentTime = endMs / 1000;
       refreshPlaybackState();
@@ -1914,6 +2045,7 @@ function finishTimeRangeSelection(event) {
   window.setTimeout(() => {
     state.suppressTimelineClick = false;
   }, 0);
+  state.brushSelection = selection;
   zoomToTimeSelection(selection);
 }
 
@@ -2044,6 +2176,27 @@ function createChipContent(text) {
   content.className = "chip-content";
   content.textContent = text;
   return content;
+}
+
+function appendWordChipContent(chip, word, includeBadges) {
+  const latestRevision = word._revisions?.[word._revisions.length - 1];
+  if (latestRevision?.fromText) {
+    const ghost = document.createElement("span");
+    ghost.className = "revision-ghost";
+    ghost.textContent = latestRevision.fromText;
+    chip.append(ghost);
+  }
+  chip.append(createChipContent(word.text));
+  if (includeBadges) {
+    chip.append(createChipBadges([describeShortCommitment(word.commitment)]));
+  }
+}
+
+function createTokenDensityBar(word) {
+  const bar = document.createElement("span");
+  bar.className = "token-density-bar";
+  bar.dataset.commitment = commitmentClass(word.commitment);
+  return bar;
 }
 
 function createChipBadges(labels) {

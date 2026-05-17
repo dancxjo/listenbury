@@ -310,6 +310,24 @@ h1 {
   pointer-events: none;
 }
 
+.time-range-selection-label {
+  position: sticky;
+  left: 0.45rem;
+  top: 0.35rem;
+  display: inline-flex;
+  max-width: calc(100% - 0.75rem);
+  overflow: hidden;
+  padding: 0.12rem 0.35rem;
+  border: 1px solid rgba(99, 210, 255, 0.5);
+  border-radius: 4px;
+  background: rgba(7, 9, 12, 0.82);
+  color: #d8f4ff;
+  font: 0.68rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .ruler-tick {
   position: absolute;
   top: 0;
@@ -414,6 +432,25 @@ h1 {
   white-space: nowrap;
 }
 
+.revision-ghost {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: rgba(255, 209, 102, 0.72);
+  font-size: 0.78em;
+  text-decoration: line-through;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.revision-ghost::after {
+  content: "→";
+  display: inline-block;
+  margin-left: 0.25rem;
+  color: rgba(255, 209, 102, 0.6);
+  text-decoration: none;
+}
+
 .chip-badges {
   display: inline-flex;
   gap: 0.2rem;
@@ -445,6 +482,33 @@ h1 {
     #18313a;
   color: var(--text);
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.24);
+}
+
+.word-chip.compact-word {
+  min-height: 2.25rem;
+  padding: 0 0.34rem;
+  font-size: 0.78rem;
+}
+
+.word-chip.density-word {
+  min-width: 0;
+  min-height: 2.15rem;
+  padding: 0;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.token-density-bar {
+  width: 100%;
+  height: 1.45rem;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--lane-color, var(--accent)) 62%, rgba(238, 243, 247, 0.18));
+  opacity: 0.82;
+}
+
+.density-word.was-revised .token-density-bar {
+  background: var(--warn);
+  opacity: 0.95;
 }
 
 .word-chip:hover,
@@ -622,6 +686,44 @@ h1 {
 
 .timeline-chip.marker {
   color: var(--lane-color, var(--warn));
+}
+
+.timeline-hover-preview {
+  position: fixed;
+  z-index: 50;
+  display: grid;
+  gap: 0.28rem;
+  max-width: min(28rem, calc(100vw - 1rem));
+  padding: 0.62rem 0.72rem;
+  border: 1px solid rgba(157, 171, 186, 0.36);
+  border-radius: 7px;
+  background: rgba(7, 9, 12, 0.95);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.timeline-hover-preview[hidden] {
+  display: none;
+}
+
+.hover-preview-title {
+  overflow: hidden;
+  font-size: 0.9rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hover-preview-meta,
+.hover-preview-detail {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.hover-preview-detail {
+  color: color-mix(in srgb, var(--accent) 60%, var(--muted));
 }
 
 .lane-header {
@@ -851,10 +953,18 @@ h1 {
 
 .word-chip.was-revised::after {
   content: " ↩";
+  flex-shrink: 0;
   color: var(--warn);
   font-style: normal;
   font-weight: 700;
   font-size: 0.7em;
+}
+
+.word-chip.density-word.was-revised::after {
+  position: absolute;
+  right: -0.18rem;
+  top: -0.42rem;
+  font-size: 0.62rem;
 }
 
 /* Revision flash animation (applied transiently via JS) */
