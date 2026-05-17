@@ -1,6 +1,13 @@
 use crate::mouth::piper_native::g2p::{PhonemeProsodyCandidate, SpeechCandidateId};
 use crate::mouth::piper_native::text::{ProsodyBoundaryHint, ProsodyCommitment};
 
+const PAUSE_MS_DEFAULT: u64 = 140;
+const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
+const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
+const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
+const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
+const CONTOUR_FINAL_CLOSURE: (f32, f32, f32) = (0.08_f32, 0.92_f32, 0.86_f32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BreathGroupId(pub u64);
 
@@ -189,9 +196,9 @@ impl BreathGroupProsodyPlanner {
             ops.push(ProsodyOp::InsertPause(PauseOp {
                 after: ProsodyTarget::WholeCandidate,
                 millis: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
-                    260
+                    PAUSE_MS_FINAL_CLOSURE
                 } else {
-                    140
+                    PAUSE_MS_DEFAULT
                 },
                 commitment: base.commitment,
             }));
@@ -215,9 +222,8 @@ fn boundary_state(candidate: &PhonemeProsodyCandidate) -> BoundaryState {
 
     match candidate.boundary_hint {
         ProsodyBoundaryHint::PossibleSentenceEnd => BoundaryState::PossibleClosure,
-        ProsodyBoundaryHint::None
-        | ProsodyBoundaryHint::PhraseBreak
-        | ProsodyBoundaryHint::FinalSentenceEnd => BoundaryState::Continuing,
+        ProsodyBoundaryHint::None | ProsodyBoundaryHint::PhraseBreak => BoundaryState::Continuing,
+        ProsodyBoundaryHint::FinalSentenceEnd => unreachable!("final sentence end handled above"),
     }
 }
 
@@ -226,10 +232,10 @@ fn build_contour(
     previous: Option<&ProsodyContour>,
 ) -> ProsodyContour {
     let (base_continuation, pause_likelihood, speaking_rate_hint) = match candidate.boundary_hint {
-        ProsodyBoundaryHint::None => (0.82_f32, 0.10_f32, 1.0_f32),
-        ProsodyBoundaryHint::PhraseBreak => (0.74_f32, 0.58_f32, 0.95_f32),
-        ProsodyBoundaryHint::PossibleSentenceEnd => (0.34_f32, 0.76_f32, 0.90_f32),
-        ProsodyBoundaryHint::FinalSentenceEnd => (0.08_f32, 0.92_f32, 0.86_f32),
+        ProsodyBoundaryHint::None => CONTOUR_CONTINUING,
+        ProsodyBoundaryHint::PhraseBreak => CONTOUR_PHRASE_BREAK,
+        ProsodyBoundaryHint::PossibleSentenceEnd => CONTOUR_POSSIBLE_CLOSURE,
+        ProsodyBoundaryHint::FinalSentenceEnd => CONTOUR_FINAL_CLOSURE,
     };
 
     let continuation_bias = if candidate.stable_prefix_len > 0 {
