@@ -425,6 +425,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       latestWordStream: null,
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
+      generatedText: null,
     });
   }
   return session.turns.get(turnId);
@@ -593,6 +594,11 @@ function reduceLiveEvent(session, event) {
     // Fall through to emit as a lane marker below.
   }
 
+  if (event.text && isGeneratedSpeechEventKind(event.kind)) {
+    const liveTurn = sessionGetOrCreateTurn(session, turn);
+    liveTurn.generatedText = event.text;
+  }
+
   // ── breath_group_opened → open span
   if (event.kind === "breath_group_opened") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
@@ -610,10 +616,10 @@ function reduceLiveEvent(session, event) {
       session.viewerEvents.push({
         lane: "Mic",
         kind: "breath_group",
-        label: labelForKind("breath_group"),
+        label: semanticSpanLabel(session, "breath_group", turn, labelForKind("breath_group")),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: event,
+        metadata: { event, turn, start_kind: "breath_group_opened" },
       });
       log("commit", `Breath group committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
     }
@@ -638,15 +644,17 @@ function reduceLiveEvent(session, event) {
       session.viewerEvents.push({
         lane: startInfo.lane,
         kind: startInfo.startKind,
-        label: labelForKind(startInfo.startKind),
+        label: semanticSpanLabel(session, startInfo.startKind, turn, labelForKind(startInfo.startKind)),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: event,
+        metadata: { event, turn, start_kind: startInfo.startKind },
       });
       if (startInfo.startKind === "asr_started") {
         log("commit", `ASR span committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
       }
-      return;
+      if (!SPAN_PAIRS[event.kind]) {
+        return;
+      }
     }
   }
 
@@ -663,7 +671,7 @@ function reduceLiveEvent(session, event) {
 
   // ── All other events → point marker
   const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
-  const label = event.text ? event.text.slice(0, 60) : labelForKind(event.kind);
+  const label = semanticEventLabel(event) ?? labelForKind(event.kind);
   session.viewerMarkers.push({
     lane,
     kind: event.kind,
@@ -685,7 +693,7 @@ function liveSessionToViewerPayload(session) {
     inProgressEvents.push({
       lane: spanLane,
       kind,
-      label: `${labelForKind(kind)} (in progress)`,
+      label: semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
       start_ms: startMs,
       end_ms: session.maxElapsedMs,
       metadata: { in_progress: true, turn: spanTurn },
@@ -727,8 +735,52 @@ function liveSessionToViewerPayload(session) {
   return {
     title: "Live — Listenbury",
     streams: wordStreamLanes,
-    events: [...session.viewerEvents, ...inProgressEvents],
+    events: [
+      ...derivedTranscriptEventsFromSession(session),
+      ...session.viewerEvents.map((event) => projectLiveViewerEvent(session, event)),
+      ...inProgressEvents,
+    ],
     markers: session.viewerMarkers,
+  };
+}
+
+function derivedTranscriptEventsFromSession(session) {
+  const events = [];
+  for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
+    const label = turnTranscriptText(liveTurn);
+    const words = liveTurn.latestWordStream?.words;
+    if (!label || !words?.length) {
+      continue;
+    }
+
+    const offsetMs = liveTurn.wordStreamTimeOffsetMs ?? 0;
+    const bounds = measuredWordTimingBounds(words.map((word) => wordWithTimeOffset(word, offsetMs)));
+    if (!bounds) {
+      continue;
+    }
+
+    events.push({
+      id: `derived-transcript-${turnId}`,
+      lane: "ASR",
+      kind: "transcript_span",
+      label,
+      start_ms: bounds.minStart,
+      end_ms: Math.max(bounds.maxEnd, bounds.minStart + 1),
+      metadata: {
+        derived: true,
+        turn: turnId,
+        source: "asr_timed_word_stream",
+      },
+    });
+  }
+  return events;
+}
+
+function projectLiveViewerEvent(session, event) {
+  const turn = event.metadata?.turn;
+  return {
+    ...event,
+    label: semanticSpanLabel(session, event.kind, turn, event.label),
   };
 }
 
@@ -834,6 +886,103 @@ function applyLiveEvents() {
 
 function labelForKind(kind) {
   return kind.replace(/_/g, " ");
+}
+
+function isGeneratedSpeechEventKind(kind) {
+  return [
+    "first_safe_speech_unit_emitted",
+    "speech_unit_committed",
+    "speech_unit_cancelled",
+    "speculative_speech_updated",
+    "tts_enqueue_started",
+  ].includes(kind);
+}
+
+function semanticSpanLabel(session, kind, turnId, fallback) {
+  const liveTurn = session.turns.get(turnId);
+  switch (kind) {
+    case "speech_started":
+    case "asr_started":
+    case "breath_group":
+    case "breath_group_opened":
+      return turnTranscriptText(liveTurn) ?? fallback;
+    case "llm_generation_started":
+    case "playback_started":
+      return liveTurn?.generatedText ?? fallback;
+    case "self_hearing_suppression_started":
+      return liveTurn?.generatedText ?? "self-hearing suppression";
+    default:
+      return fallback;
+  }
+}
+
+function semanticEventLabel(event) {
+  return (
+    normalizeSemanticText(event.text) ??
+    transcriptCandidateText(event.artifact) ??
+    wordStreamText(event.artifact?.words) ??
+    null
+  );
+}
+
+function semanticLabelFromPayloadEntry(entry, fallback) {
+  return (
+    normalizeSemanticText(entry.text) ??
+    normalizeSemanticText(entry.metadata?.text) ??
+    normalizeSemanticText(entry.metadata?.event?.text) ??
+    transcriptCandidateText(entry.metadata?.artifact) ??
+    transcriptCandidateText(entry.metadata?.event?.artifact) ??
+    wordStreamText(entry.metadata?.artifact?.words) ??
+    wordStreamText(entry.metadata?.event?.artifact?.words) ??
+    fallback
+  );
+}
+
+function turnTranscriptText(liveTurn) {
+  if (!liveTurn) {
+    return null;
+  }
+  return (
+    normalizeSemanticText(liveTurn.finalTranscript) ??
+    wordStreamText(liveTurn.latestWordStream?.words) ??
+    transcriptCandidateText(liveTurn.transcriptCandidate)
+  );
+}
+
+function transcriptCandidateText(candidate) {
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  return joinSemanticText(candidate.stable_text, candidate.unstable_text);
+}
+
+function wordStreamText(words) {
+  if (!Array.isArray(words) || words.length === 0) {
+    return null;
+  }
+  return joinWordTexts(words.map((word) => word?.text));
+}
+
+function joinSemanticText(...parts) {
+  return normalizeSemanticText(parts.filter((part) => typeof part === "string" && part.trim()).join(" "));
+}
+
+function joinWordTexts(words) {
+  const text = words
+    .filter((word) => typeof word === "string" && word.trim())
+    .reduce((acc, word) => {
+      const trimmed = word.trim();
+      return acc + (/^[,.;:!?)]/.test(trimmed) ? trimmed : `${acc ? " " : ""}${trimmed}`);
+    }, "");
+  return normalizeSemanticText(text);
+}
+
+function normalizeSemanticText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = value.replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+  return text.length > 0 ? text : null;
 }
 
 function togglePlayback() {
@@ -965,7 +1114,7 @@ function normalizeEvents(events, markers) {
       id: entry.id ?? `event-${index + 1}`,
       lane: entry.lane ?? "Events",
       kind: entry.kind ?? "event",
-      label: entry.label ?? entry.kind ?? `Event ${index + 1}`,
+      label: semanticLabelFromPayloadEntry(entry, entry.label ?? entry.kind ?? `Event ${index + 1}`),
       start_ms: startMs,
       end_ms: endMs,
       metadata: entry.metadata ?? null,
@@ -986,7 +1135,7 @@ function normalizeEvents(events, markers) {
       id: entry.id ?? `marker-${index + 1}`,
       lane: entry.lane ?? "Markers",
       kind: entry.kind ?? "marker",
-      label: entry.label ?? entry.kind ?? `Marker ${index + 1}`,
+      label: semanticLabelFromPayloadEntry(entry, entry.label ?? entry.kind ?? `Marker ${index + 1}`),
       start_ms: atMs,
       end_ms: atMs,
       metadata: entry.metadata ?? null,
@@ -1186,7 +1335,7 @@ function renderCustomTimeline() {
     const labelEntryEl = document.createElement("div");
     labelEntryEl.className = `lane-label-entry${lane.type === "event" ? " event-lane" : ""}`;
     const laneHeader = document.createElement("div");
-    laneHeader.className = "lane-header";
+    laneHeader.className = ["lane-header", `lane-${classToken(lane.label)}`].join(" ");
     const h2El = document.createElement("h2");
     h2El.textContent = lane.label;
     laneHeader.append(h2El);
@@ -1203,7 +1352,13 @@ function renderCustomTimeline() {
 
     // Track entry
     const trackEl = document.createElement("div");
-    trackEl.className = `lane-track${lane.type === "event" ? " event-track" : ""}`;
+    trackEl.className = [
+      "lane-track",
+      lane.type === "event" ? "event-track" : "",
+      `lane-${classToken(lane.label)}`,
+    ]
+      .filter(Boolean)
+      .join(" ");
     trackEl.dataset.laneIndex = String(laneIndex);
 
     // Time-range selection overlay
@@ -1228,6 +1383,8 @@ function renderCustomTimeline() {
 
         const baseClass = [
           "timeline-chip word-chip",
+          `lane-${classToken(lane.label)}`,
+          `source-${classToken(lane.stream.source)}`,
           word.timingResolution === "fallback-layout" ? "fallback-timing" : "",
           `commit-${commitmentClass(word.commitment)}`,
           word._revisions?.length ? "was-revised" : "",
@@ -1247,7 +1404,7 @@ function renderCustomTimeline() {
         chip.style.left = `${pxForMs(startMs)}px`;
         chip.style.width = `${Math.max(2, pxForMs(endMs - startMs))}px`;
         chip.title = `${lane.label} · ${word.text} (${startMs}–${endMs} ms) · ${word.timingSourceDetail}`;
-        chip.textContent = word.text;
+        chip.append(createChipContent(word.text), createChipBadges([describeShortCommitment(word.commitment)]));
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
       });
@@ -1268,6 +1425,7 @@ function renderCustomTimeline() {
 
         const baseClass = [
           "timeline-chip event-chip",
+          `lane-${classToken(lane.label)}`,
           event.style,
           `kind-${classToken(event.kind)}`,
           event.kind === "overlap_detected" ? "overlap-region" : "",
@@ -1285,11 +1443,19 @@ function renderCustomTimeline() {
         chip.dataset.laneIndex = String(laneIndex);
         chip.dataset.itemIndex = String(eventIndex);
         chip.dataset.itemType = "event";
-        const widthPx = isMarker ? 8 : Math.max(4, pxForMs(event.end_ms - event.start_ms));
+        const widthPx = isMarker ? 10 : Math.max(12, pxForMs(event.end_ms - event.start_ms));
         chip.style.left = `${pxForMs(startMs)}px`;
         chip.style.width = `${widthPx}px`;
-        chip.title = `${lane.label} · ${event.kind} (${startMs}–${endMs} ms)`;
-        chip.textContent = event.label;
+        chip.title = `${lane.label} · ${event.label} · ${event.kind} (${startMs}–${endMs} ms)`;
+        if (isMarker) {
+          chip.setAttribute("aria-label", `${lane.label}: ${event.label}`);
+          const markerPin = document.createElement("span");
+          markerPin.className = "marker-pin";
+          markerPin.setAttribute("aria-hidden", "true");
+          chip.append(markerPin);
+        } else {
+          chip.append(createChipContent(event.label), createChipBadges([shortKindLabel(event.kind)]));
+        }
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
       });
@@ -1871,6 +2037,50 @@ function classToken(value) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function createChipContent(text) {
+  const content = document.createElement("span");
+  content.className = "chip-content";
+  content.textContent = text;
+  return content;
+}
+
+function createChipBadges(labels) {
+  const badges = document.createElement("span");
+  badges.className = "chip-badges";
+  labels.filter(Boolean).forEach((label) => {
+    const badge = document.createElement("span");
+    badge.className = "chip-badge";
+    badge.textContent = label;
+    badges.append(badge);
+  });
+  return badges;
+}
+
+function describeShortCommitment(commitment) {
+  switch (commitment) {
+    case "Hypothetical": return "Hyp";
+    case "StableText": return "Stable";
+    case "Prepared": return "Prep";
+    case "Playable": return "Ready";
+    case "Played": return "Played";
+    case "Final": return "Final";
+    case "Cancelled": return "Cancel";
+    default: return null;
+  }
+}
+
+function shortKindLabel(kind) {
+  switch (kind) {
+    case "speech_started": return "speech";
+    case "asr_started": return "asr";
+    case "llm_generation_started": return "llm";
+    case "playback_started": return "play";
+    case "breath_group": return "breath";
+    case "self_hearing_suppression_started": return "self";
+    default: return labelForKind(kind).split(" ").slice(0, 2).join(" ");
+  }
 }
 
 function escapeHtml(value) {

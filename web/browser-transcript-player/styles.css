@@ -394,18 +394,52 @@ h1 {
   z-index: 2;
   top: 50%;
   transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   max-width: 100%;
   min-width: 2rem;
   overflow: hidden;
-  padding: 0;
+  padding: 0 0.5rem;
+  border: 1px solid rgba(238, 243, 247, 0.22);
+  border-radius: 7px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chip-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-badges {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+  margin-left: auto;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.chip-badge {
+  max-width: 5.5rem;
+  overflow: hidden;
+  padding: 0.06rem 0.28rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: rgba(238, 243, 247, 0.66);
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
 }
 
 .word-chip {
   min-height: 3rem;
   border-color: rgba(238, 243, 247, 0.22);
-  border-radius: 7px;
   background:
     linear-gradient(90deg, rgba(99, 210, 255, 0.22), transparent),
     #18313a;
@@ -441,7 +475,6 @@ h1 {
 .event-chip {
   min-height: 2rem;
   border-color: rgba(142, 230, 168, 0.5);
-  border-radius: 7px;
   background:
     linear-gradient(135deg, rgba(142, 230, 168, 0.34), transparent),
     #1d2630;
@@ -452,7 +485,22 @@ h1 {
 
 .event-chip.marker {
   min-width: 0;
-  border-style: dashed;
+  min-height: 2.2rem;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.marker-pin {
+  display: block;
+  width: 10px;
+  height: 2.2rem;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
 }
 
 .event-chip:hover,
@@ -464,6 +512,27 @@ h1 {
   border-color: var(--warn);
   background: #3b2f19;
   color: #fff1cc;
+}
+
+.event-chip.marker:hover,
+.event-chip.marker.selected,
+.event-chip.marker.active {
+  background: transparent;
+  color: var(--lane-color, var(--warn));
+}
+
+.event-chip.marker:hover .marker-pin,
+.event-chip.marker.selected .marker-pin {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, currentColor 22%, transparent),
+    0 0 0 1px currentColor;
+}
+
+.event-chip.marker.active .marker-pin {
+  color: var(--warn);
+  box-shadow:
+    0 0 0 3px rgba(255, 209, 102, 0.22),
+    0 0 14px rgba(255, 209, 102, 0.34);
 }
 
 .event-chip.kind-overlap_started,
@@ -496,6 +565,71 @@ h1 {
   background:
     linear-gradient(135deg, rgba(255, 122, 144, 0.38), transparent),
     #331a22;
+}
+
+.lane-mic.word-chip,
+.lane-mic.event-chip,
+.lane-mic.lane-header {
+  --lane-color: #7db5ff;
+}
+
+.lane-asr.word-chip,
+.source-liveasr.word-chip,
+.lane-asr.event-chip,
+.lane-asr.lane-header {
+  --lane-color: #4fd1c5;
+}
+
+.lane-llm.word-chip,
+.source-generatedtext.word-chip,
+.lane-llm.event-chip,
+.lane-llm.lane-header {
+  --lane-color: #b794f4;
+}
+
+.lane-speaker.word-chip,
+.source-syntheticspeech.word-chip,
+.lane-speaker.event-chip,
+.lane-speaker.lane-header {
+  --lane-color: #8ee6a8;
+}
+
+.lane-events.word-chip,
+.lane-events.event-chip,
+.lane-events.lane-header,
+.lane-latency.word-chip,
+.lane-latency.event-chip,
+.lane-latency.lane-header {
+  --lane-color: #ffd166;
+}
+
+.timeline-chip.word-chip,
+.timeline-chip.event-chip:not(.marker) {
+  border-color: color-mix(in srgb, var(--lane-color, var(--accent)) 62%, rgba(238, 243, 247, 0.18));
+}
+
+.timeline-chip.word-chip {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--lane-color, var(--accent)) 28%, transparent), transparent 78%),
+    #16232b;
+}
+
+.timeline-chip.event-chip:not(.marker) {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--lane-color, var(--accent-2)) 32%, transparent), transparent 82%),
+    #1a2229;
+}
+
+.timeline-chip.marker {
+  color: var(--lane-color, var(--warn));
+}
+
+.lane-header {
+  border-left: 3px solid var(--lane-color, var(--line));
+}
+
+.lane-header h2 {
+  color: color-mix(in srgb, var(--lane-color, #d8e2ea) 40%, #d8e2ea);
 }
 
 .inspector {

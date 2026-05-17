@@ -59,6 +59,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       latestWordStream: null,
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(),
+      generatedText: null,
     });
   }
   return session.turns.get(turnId);
@@ -135,6 +136,82 @@ function labelForKind(kind) {
   return kind.replace(/_/g, " ");
 }
 
+function isGeneratedSpeechEventKind(kind) {
+  return [
+    "first_safe_speech_unit_emitted",
+    "speech_unit_committed",
+    "speech_unit_cancelled",
+    "speculative_speech_updated",
+    "tts_enqueue_started",
+  ].includes(kind);
+}
+
+function semanticSpanLabel(session, kind, turnId, fallback) {
+  const liveTurn = session.turns.get(turnId);
+  switch (kind) {
+    case "speech_started":
+    case "asr_started":
+    case "breath_group":
+    case "breath_group_opened":
+      return turnTranscriptText(liveTurn) ?? fallback;
+    case "llm_generation_started":
+    case "playback_started":
+      return liveTurn?.generatedText ?? fallback;
+    case "self_hearing_suppression_started":
+      return liveTurn?.generatedText ?? "self-hearing suppression";
+    default:
+      return fallback;
+  }
+}
+
+function semanticEventLabel(event) {
+  return (
+    normalizeSemanticText(event.text) ??
+    transcriptCandidateText(event.artifact) ??
+    wordStreamText(event.artifact?.words) ??
+    null
+  );
+}
+
+function turnTranscriptText(liveTurn) {
+  if (!liveTurn) return null;
+  return (
+    normalizeSemanticText(liveTurn.finalTranscript) ??
+    wordStreamText(liveTurn.latestWordStream?.words) ??
+    transcriptCandidateText(liveTurn.transcriptCandidate)
+  );
+}
+
+function transcriptCandidateText(candidate) {
+  if (!candidate || typeof candidate !== "object") return null;
+  return joinSemanticText(candidate.stable_text, candidate.unstable_text);
+}
+
+function wordStreamText(words) {
+  if (!Array.isArray(words) || words.length === 0) return null;
+  return joinWordTexts(words.map((word) => word?.text));
+}
+
+function joinSemanticText(...parts) {
+  return normalizeSemanticText(parts.filter((part) => typeof part === "string" && part.trim()).join(" "));
+}
+
+function joinWordTexts(words) {
+  const text = words
+    .filter((word) => typeof word === "string" && word.trim())
+    .reduce((acc, word) => {
+      const trimmed = word.trim();
+      return acc + (/^[,.;:!?)]/.test(trimmed) ? trimmed : `${acc ? " " : ""}${trimmed}`);
+    }, "");
+  return normalizeSemanticText(text);
+}
+
+function normalizeSemanticText(value) {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+  return text.length > 0 ? text : null;
+}
+
 function reduceLiveEvent(session, event) {
   session.maxElapsedMs = Math.max(session.maxElapsedMs, event.elapsed_ms);
   const turn = event.turn;
@@ -200,6 +277,11 @@ function reduceLiveEvent(session, event) {
     liveTurn.finalTranscript = event.text;
   }
 
+  if (event.text && isGeneratedSpeechEventKind(event.kind)) {
+    const liveTurn = sessionGetOrCreateTurn(session, turn);
+    liveTurn.generatedText = event.text;
+  }
+
   if (event.kind === "breath_group_opened") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
     session.openSpans.set(key, event.elapsed_ms);
@@ -215,10 +297,10 @@ function reduceLiveEvent(session, event) {
       session.viewerEvents.push({
         lane: "Mic",
         kind: "breath_group",
-        label: labelForKind("breath_group"),
+        label: semanticSpanLabel(session, "breath_group", turn, labelForKind("breath_group")),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: event,
+        metadata: { event, turn, start_kind: "breath_group_opened" },
       });
       log("commit", `Breath group committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
     }
@@ -241,15 +323,17 @@ function reduceLiveEvent(session, event) {
       session.viewerEvents.push({
         lane: startInfo.lane,
         kind: startInfo.startKind,
-        label: labelForKind(startInfo.startKind),
+        label: semanticSpanLabel(session, startInfo.startKind, turn, labelForKind(startInfo.startKind)),
         start_ms: spanStart,
         end_ms: event.elapsed_ms,
-        metadata: event,
+        metadata: { event, turn, start_kind: startInfo.startKind },
       });
       if (startInfo.startKind === "asr_started") {
         log("commit", `ASR span committed (turn ${turn}, ${event.elapsed_ms - spanStart}ms)`);
       }
-      return;
+      if (!SPAN_PAIRS[event.kind]) {
+        return;
+      }
     }
   }
 
@@ -270,7 +354,7 @@ function reduceLiveEvent(session, event) {
     playback_finished: "Speaker", asr_finished: "ASR", speech_stopped: "Mic",
   };
   const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
-  const label = event.text ? event.text.slice(0, 60) : labelForKind(event.kind);
+  const label = semanticEventLabel(event) ?? labelForKind(event.kind);
   session.viewerMarkers.push({ lane, kind: event.kind, label, at_ms: event.elapsed_ms, metadata: { event } });
 }
 
@@ -280,7 +364,7 @@ function liveSessionToViewerPayload(session) {
     const [spanLane, spanTurn, kind] = JSON.parse(key);
     inProgressEvents.push({
       lane: spanLane, kind,
-      label: `${labelForKind(kind)} (in progress)`,
+      label: semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
       start_ms: startMs, end_ms: session.maxElapsedMs,
       metadata: { in_progress: true, turn: spanTurn },
     });
@@ -315,8 +399,48 @@ function liveSessionToViewerPayload(session) {
   return {
     title: "Live — Listenbury",
     streams: wordStreamLanes,
-    events: [...session.viewerEvents, ...inProgressEvents],
+    events: [
+      ...derivedTranscriptEventsFromSession(session),
+      ...session.viewerEvents.map((event) => projectLiveViewerEvent(session, event)),
+      ...inProgressEvents,
+    ],
     markers: session.viewerMarkers,
+  };
+}
+
+function derivedTranscriptEventsFromSession(session) {
+  const events = [];
+  for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
+    const label = turnTranscriptText(liveTurn);
+    const words = liveTurn.latestWordStream?.words;
+    if (!label || !words?.length) continue;
+
+    const offsetMs = liveTurn.wordStreamTimeOffsetMs ?? 0;
+    const bounds = measuredWordTimingBounds(words.map((word) => wordWithTimeOffset(word, offsetMs)));
+    if (!bounds) continue;
+
+    events.push({
+      id: `derived-transcript-${turnId}`,
+      lane: "ASR",
+      kind: "transcript_span",
+      label,
+      start_ms: bounds.minStart,
+      end_ms: Math.max(bounds.maxEnd, bounds.minStart + 1),
+      metadata: {
+        derived: true,
+        turn: turnId,
+        source: "asr_timed_word_stream",
+      },
+    });
+  }
+  return events;
+}
+
+function projectLiveViewerEvent(session, event) {
+  const turn = event.metadata?.turn;
+  return {
+    ...event,
+    label: semanticSpanLabel(session, event.kind, turn, event.label),
   };
 }
 
@@ -559,6 +683,38 @@ console.log("\n── Scenario 8: half-duplex — sequential turns ──");
   assertEqual(payload.events.filter((e) => e.in_progress).length, 0, "no in-progress events in completed session");
 }
 
+console.log("\n── Scenario 8b: span labels prefer semantic content over event kinds ──");
+{
+  const s = createLiveSession();
+  reduceLiveEvent(s, mkEvent("speech_started", 1, 0));
+  reduceLiveEvent(s, mkEvent("asr_started", 1, 10));
+  reduceLiveEvent(s, mkEvent("asr_finished", 1, 300));
+  reduceLiveEvent(s, mkEvent("speech_stopped", 1, 320));
+  reduceLiveEvent(s, mkEvent("transcript", 1, 340, { text: "hello can you hear me" }));
+  reduceLiveEvent(s, mkEvent("llm_generation_started", 1, 360));
+  reduceLiveEvent(s, mkEvent("first_safe_speech_unit_emitted", 1, 420, { text: "Yes, I can hear you." }));
+  reduceLiveEvent(s, mkEvent("playback_started", 1, 500));
+  reduceLiveEvent(s, mkEvent("playback_finished", 1, 900));
+
+  const payload = liveSessionToViewerPayload(s);
+  assert(
+    payload.events.some((event) => event.kind === "asr_started" && event.label === "hello can you hear me"),
+    "ASR span label is transcript text",
+  );
+  assert(
+    payload.events.some((event) => event.kind === "speech_started" && event.label === "hello can you hear me"),
+    "Mic speech span label is transcript text",
+  );
+  assert(
+    payload.events.some((event) => event.kind === "llm_generation_started" && event.label === "Yes, I can hear you."),
+    "LLM span label is generated text",
+  );
+  assert(
+    payload.events.some((event) => event.kind === "playback_started" && event.label === "Yes, I can hear you."),
+    "Speaker playback span label is emitted speech text",
+  );
+}
+
 console.log("\n── Scenario 9: liveSessionToViewerPayload is pure ──");
 {
   const s = createLiveSession();
@@ -599,6 +755,11 @@ console.log("\n── Scenario 10: duplex ASR projects to one shared timeline la
   assertEqual(payload.streams[0].label, "ASR", "ASR lane is not labelled per turn");
   assertEqual(payload.streams[0].stream.words[0].timing.start_ms, 900, "turn 1 relative timing offset onto timeline");
   assertEqual(payload.streams[0].stream.words[1].timing.start_ms, 1800, "turn 2 relative timing offset onto timeline");
+  const transcriptSpans = payload.events.filter((event) => event.kind === "transcript_span");
+  assertEqual(transcriptSpans.length, 2, "ASR word streams project phrase-level transcript spans");
+  assertEqual(transcriptSpans[0].label, "first", "derived transcript span label uses word content");
+  assertEqual(transcriptSpans[0].start_ms, 900, "derived transcript span starts at spoken word start");
+  assertEqual(transcriptSpans[0].end_ms, 1200, "derived transcript span ends at spoken word end");
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────
