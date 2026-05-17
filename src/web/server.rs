@@ -399,7 +399,7 @@ mod tests {
         std::fs::write(&payload_path, r#"{"title":"custom"}"#).expect("write payload");
         std::fs::write(
             &trace_path,
-            include_str!("../../examples/browser-transcript-player/live-trace.sample.jsonl"),
+            include_str!("../../web/browser-transcript-player/live-trace.sample.jsonl"),
         )
         .expect("write trace");
 

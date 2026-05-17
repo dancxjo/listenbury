@@ -25,6 +25,7 @@ const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
 const ZOOM_FACTOR = 1.8;
+const WHEEL_ZOOM_FACTOR = 1.16;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
 
 // Live mode is activated by ?live=1 in the URL.
@@ -705,6 +706,7 @@ function jumpSelectedWord(delta) {
 
 function applyPayload(rawPayload, options = {}) {
   const previousSelection = options.preserveSelection ? state.selectedItem : null;
+  const previousViewport = options.preserveViewport ? captureViewportSnapshot() : null;
   if (!options.preserveViewport) {
     state.viewStartMs = null;
     state.viewEndMs = null;
@@ -734,6 +736,7 @@ function applyPayload(rawPayload, options = {}) {
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
   renderStaticTranscriptRibbon(normalized);
+  restoreViewportSnapshot(previousViewport);
   render();
 }
 
@@ -998,6 +1001,7 @@ function renderTimelineRuler() {
     audio.currentTime = (viewport.startMs + ratio * viewport.durationMs) / 1000;
     refreshPlaybackState();
   });
+  ruler.addEventListener("wheel", (event) => zoomTimelineFromWheel(event, ruler), { passive: false });
 
   return ruler;
 }
@@ -1286,16 +1290,35 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   renderSelection();
 }
 
-function zoomTimeline(factor) {
+function zoomTimeline(factor, focusMsOverride = null) {
   if (!state.lanes.length) {
     return;
   }
 
   const viewport = getViewport();
-  const focusMs = viewportFocusMs(viewport);
+  const focusMs = Number.isFinite(focusMsOverride) ? focusMsOverride : viewportFocusMs(viewport);
   const nextDuration = viewport.durationMs / factor;
   setViewportAround(focusMs, nextDuration);
   render();
+}
+
+function zoomTimelineFromWheel(event, surface) {
+  if (!state.lanes.length) {
+    return;
+  }
+
+  const wheelDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  if (!wheelDelta) {
+    return;
+  }
+
+  const focusMs = timeMsAtClientX(event.clientX, surface);
+  if (focusMs === null) {
+    return;
+  }
+
+  event.preventDefault();
+  zoomTimeline(wheelDelta < 0 ? WHEEL_ZOOM_FACTOR : 1 / WHEEL_ZOOM_FACTOR, focusMs);
 }
 
 function zoomToTimeSelection(selection) {
@@ -1374,6 +1397,40 @@ function setViewportRange(startMs, endMs) {
   const selectionDuration = Math.max(MIN_SELECTION_VIEW_MS, endMs - startMs);
   const centerMs = startMs + (endMs - startMs) / 2;
   setViewportAround(centerMs, selectionDuration);
+}
+
+function captureViewportSnapshot() {
+  const viewport = getViewport();
+  return {
+    startMs: viewport.startMs,
+    endMs: viewport.endMs,
+    durationMs: viewport.durationMs,
+    followsTimelineEnd: Math.abs(viewport.endMs - state.maxDurationMs) < 1,
+  };
+}
+
+function restoreViewportSnapshot(snapshot) {
+  if (!snapshot) {
+    return;
+  }
+
+  const durationMs = Math.max(
+    MIN_VIEW_DURATION_MS,
+    Math.min(state.maxDurationMs, snapshot.durationMs),
+  );
+
+  if (durationMs >= state.maxDurationMs) {
+    state.viewStartMs = null;
+    state.viewEndMs = null;
+    return;
+  }
+
+  const requestedStartMs = snapshot.followsTimelineEnd
+    ? state.maxDurationMs - durationMs
+    : snapshot.startMs;
+  const startMs = Math.max(0, Math.min(state.maxDurationMs - durationMs, requestedStartMs));
+  state.viewStartMs = startMs;
+  state.viewEndMs = startMs + durationMs;
 }
 
 function clampViewport() {

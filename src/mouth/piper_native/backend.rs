@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use anyhow::{Context, Result, bail, ensure};
+use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;

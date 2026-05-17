@@ -327,7 +327,7 @@ The repository now includes WaveDeck, a static full-width timeline viewer for se
 `TimedWordStream` payloads:
 
 ```text
-examples/browser-transcript-player/
+web/browser-transcript-player/
 ```
 
 Host it directly from Listenbury:
@@ -365,7 +365,7 @@ The hosted server exposes stable routes for the viewer and payload APIs:
 /healthz              simple health check
 ```
 
-The static example still works too. Launch it from the repository root with a
+The static interface still works too. Launch it from the repository root with a
 simple local server:
 
 ```bash
@@ -376,7 +376,7 @@ python -m http.server 8000
 Then open:
 
 ```text
-http://localhost:8000/examples/browser-transcript-player/
+http://localhost:8000/web/browser-transcript-player/
 ```
 
 Use **Load bundled demo** to inspect the included sample payload wired to
@@ -410,18 +410,18 @@ cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.
 Then load `out/live-trace.viewer.json` in the browser viewer with **Choose JSON
 file**.
 
-An example artifact is included:
+A sample artifact is included:
 
 ```text
-examples/browser-transcript-player/live-trace.sample.jsonl
+web/browser-transcript-player/live-trace.sample.jsonl
 ```
 
 You can generate its corresponding viewer payload locally:
 
 ```bash
 cargo run -- dev trace-viewer-export \
-  examples/browser-transcript-player/live-trace.sample.jsonl \
-  examples/browser-transcript-player/live-trace.sample.viewer.json
+  web/browser-transcript-player/live-trace.sample.jsonl \
+  web/browser-transcript-player/live-trace.sample.viewer.json
 ```
 
 ### Browser transcript player JSON format
