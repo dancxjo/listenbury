@@ -347,9 +347,50 @@ console.log("\n── Scenario 3: ASR word stream changes 'that' → 'what' ─�
   // Revision provenance must NOT mention 'Whisper' or probabilities
   assert(!revisedWord._revisions[0].provenance.includes("Whisper"), "no fabricated Whisper text in provenance");
   assert(!revisedWord._revisions[0].provenance.match(/p=\d/), "no fabricated probability in provenance");
+  // Words without id/lexical_span match by array index → approximate = true
+  assert(revisedWord._revisions[0].approximate === true, "index-based match is marked approximate");
   // Debug log has 1 revision entry
   const reviseEntries = s.debugLog.filter((e) => e.type === "revise");
   assertEqual(reviseEntries.length, 1, "exactly one revise debug entry");
+}
+
+console.log("\n── Scenario 3b: word revision via stable WordId is not approximate ──");
+{
+  const s = createLiveSession();
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 200, {
+    artifact: { words: [
+      { id: "w1", text: "that", commitment: "Hypothetical" },
+    ]},
+  }));
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 400, {
+    artifact: { words: [
+      { id: "w1", text: "what", commitment: "StableText" },
+    ]},
+  }));
+  const t1 = s.turns.get(1);
+  const revisedWord = t1.latestWordStream.words[0];
+  assertEqual(revisedWord.text, "what", "word updated to 'what' via stable id");
+  assert(revisedWord._revisions?.length === 1, "revision recorded via id");
+  assert(revisedWord._revisions[0].approximate === false, "id-based match is NOT approximate");
+}
+
+console.log("\n── Scenario 3c: word revision via lexical_span is not approximate ──");
+{
+  const s = createLiveSession();
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 200, {
+    artifact: { words: [
+      { lexical_span: { start: 0, end: 4 }, text: "that", commitment: "Hypothetical" },
+    ]},
+  }));
+  reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 400, {
+    artifact: { words: [
+      { lexical_span: { start: 0, end: 4 }, text: "what", commitment: "StableText" },
+    ]},
+  }));
+  const t1 = s.turns.get(1);
+  const revisedWord = t1.latestWordStream.words[0];
+  assertEqual(revisedWord.text, "what", "word updated via lexical_span");
+  assert(revisedWord._revisions?.[0].approximate === false, "lexical_span match is NOT approximate");
 }
 
 console.log("\n── Scenario 4: final transcript commits the turn ──");
@@ -395,9 +436,10 @@ console.log("\n── Scenario 6: out-of-order or repeated SSE events do not cor
   const t1 = s.turns.get(1);
   // Candidate should still be the same value
   assertEqual(t1.transcriptCandidate.stable_text, "ok", "candidate not corrupted by duplicate");
-  // Debug log records 2 stable entries (one per reduce call) — idempotency is
-  // the responsibility of the SSE transport; the reducer processes each call faithfully.
-  assertEqual(s.debugLog.filter((e) => e.type === "stable").length, 2, "two stable entries for two reduce calls");
+  // The reducer faithfully processes each call it receives — it does not deduplicate
+  // events.  Deduplication is the SSE transport's responsibility.  Two calls with the
+  // same event produce two debug entries, which is the intended and documented behaviour.
+  assertEqual(s.debugLog.filter((e) => e.type === "stable").length, 2, "two stable entries for two reduce calls (no dedup in reducer)");
 
   // Deliver an older asr_timed_word_stream after a newer one
   reduceLiveEvent(s, mkEvent("asr_timed_word_stream", 1, 300, {

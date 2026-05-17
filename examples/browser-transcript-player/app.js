@@ -541,10 +541,9 @@ function renderTranscriptRibbon(session) {
           const commitClass = `commit-${commitmentClass(word.commitment)}`;
           token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
           token.textContent = word.text;
-          if (word._revisions?.length) {
-            const firstRev = word._revisions[0];
-            // Display the actual provenance from the model (not fabricated).
-            token.title = `↩ Revised from "${firstRev.fromText}" — ${firstRev.provenance}`;
+          const revTooltip = formatRevisionTooltip(word);
+          if (revTooltip) {
+            token.title = revTooltip;
           }
           fragment.append(token, " ");
         }
@@ -592,6 +591,19 @@ function commitmentClass(commitment) {
   }
   // Normalize Rust PascalCase to lowercase with no separator (matches CSS class names).
   return String(commitment).toLowerCase().replace(/[^a-z]/g, "");
+}
+
+// Build a tooltip string showing all revisions for a word (oldest → newest).
+function formatRevisionTooltip(word) {
+  const revs = word._revisions;
+  if (!revs?.length) {
+    return null;
+  }
+  const lines = revs.map(
+    (rev, i) =>
+      `${i + 1}. "${rev.fromText}" → "${word.text}" — ${rev.provenance}${rev.approximate ? " (approx)" : ""}`,
+  );
+  return `↩ ${revs.length} revision${revs.length === 1 ? "" : "s"}:\n${lines.join("\n")}`;
 }
 
 function applyLiveEvents() {
@@ -749,9 +761,9 @@ function renderStaticTranscriptRibbon(normalized) {
       const commitClass = `commit-${commitmentClass(word.commitment)}`;
       token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
       token.textContent = word.text;
-      if (word._revisions?.length) {
-        const firstRev = word._revisions[0];
-        token.title = `↩ Revised from "${firstRev.fromText}" — ${firstRev.reason ?? ""}`;
+      const revTooltip = formatRevisionTooltip(word);
+      if (revTooltip) {
+        token.title = revTooltip;
       }
       fragment.append(token, " ");
     }
