@@ -12,6 +12,7 @@ mod speech_cache;
 mod trace_viewer_export;
 mod transcribe;
 mod vad_trace;
+mod web;
 
 pub(crate) use breath_transcribe::run_breath_transcribe;
 pub(crate) use continue_generation::run_continue;
@@ -29,6 +30,7 @@ pub(crate) use speech_cache::run_speech_cache;
 pub(crate) use trace_viewer_export::run_trace_viewer_export;
 pub(crate) use transcribe::run_transcribe;
 pub(crate) use vad_trace::run_vad_trace;
+pub(crate) use web::run_web;
 
 #[cfg(feature = "tts-piper")]
 pub(crate) use crate::cli::piper::run_say;
