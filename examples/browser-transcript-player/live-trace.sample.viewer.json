@@ -2,6 +2,86 @@
   "title": "Listenbury Live Trace",
   "streams": [
     {
+      "label": "User speech (ASR)",
+      "stream": {
+        "id": 10,
+        "source": "LiveAsr",
+        "words": [
+          {
+            "id": 1,
+            "text": "Can",
+            "lexical_span": null,
+            "timing": { "start_ms": 1120, "end_ms": 1260 },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 2,
+            "text": "you",
+            "lexical_span": null,
+            "timing": { "start_ms": 1265, "end_ms": 1390 },
+            "timing_confidence": 0.96,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 3,
+            "text": "explain",
+            "lexical_span": null,
+            "timing": { "start_ms": 1395, "end_ms": 1510 },
+            "timing_confidence": 0.94,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 4,
+            "text": "what",
+            "lexical_span": null,
+            "timing": { "start_ms": 1515, "end_ms": 1590 },
+            "timing_confidence": 0.93,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "_revisions": [{ "fromText": "that", "fromConfidence": 0.51, "at_ms": 1520, "reason": "Whisper re-score on full breath-group context: \"what\" (p=0.93) > \"that\" (p=0.51)" }]
+          },
+          {
+            "id": 5,
+            "text": "overlap",
+            "lexical_span": null,
+            "timing": { "start_ms": 1595, "end_ms": 1760 },
+            "timing_confidence": 0.89,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 6,
+            "text": "routing",
+            "lexical_span": null,
+            "timing": { "start_ms": 1765, "end_ms": 1940 },
+            "timing_confidence": 0.84,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          },
+          {
+            "id": 7,
+            "text": "means",
+            "lexical_span": null,
+            "timing": { "start_ms": 1945, "end_ms": 2080 },
+            "timing_confidence": 0.88,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null
+          }
+        ]
+      }
+    },
+    {
       "label": "Pete intended speech",
       "stream": {
         "id": 1,

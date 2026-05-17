@@ -64,6 +64,19 @@
       </section>
       <audio id="audio" controls preload="metadata"></audio>
     </header>
+
+    <!-- Live transcript ribbon: shows provisional → stable → committed words in real time -->
+    <div id="transcript-ribbon" class="transcript-ribbon" hidden aria-live="polite" aria-label="Live transcript">
+      <span class="transcript-ribbon-label">Transcript</span>
+      <span id="transcript-ribbon-text" class="transcript-ribbon-text"></span>
+      <span id="transcript-ribbon-hint" class="transcript-ribbon-hint">
+        <span class="span-legend-item span-state-hypothetical">Hypothesis</span>
+        <span class="span-legend-item span-state-stable">Stable</span>
+        <span class="span-legend-item span-state-committed">Committed</span>
+        <span class="span-legend-item span-state-revised">Revised</span>
+      </span>
+    </div>
+
     <main class="workspace">
       <section class="viewer-stage">
         <section id="viewer" class="viewer empty">
@@ -77,6 +90,14 @@
           Select a word or event to inspect timing and metadata.
         </div>
         <pre id="selection-json" class="selection-json">{}</pre>
+
+        <!-- Span debug log: shows span state transitions and revision reasons -->
+        <details id="span-debug-section" class="span-debug-section" open>
+          <summary class="span-debug-summary">Span debug log</summary>
+          <div id="span-debug-log" class="span-debug-log">
+            <p class="span-debug-empty">Span events will appear here during a live session.</p>
+          </div>
+        </details>
       </aside>
     </main>
 

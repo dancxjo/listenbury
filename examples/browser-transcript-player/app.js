@@ -17,6 +17,9 @@ const audio = document.getElementById("audio");
 const liveBanner = document.getElementById("live-banner");
 const liveEventCount = document.getElementById("live-event-count");
 const liveConnectionStatus = document.getElementById("live-connection-status");
+const transcriptRibbon = document.getElementById("transcript-ribbon");
+const transcriptRibbonText = document.getElementById("transcript-ribbon-text");
+const spanDebugLog = document.getElementById("span-debug-log");
 const queryParams = new URLSearchParams(window.location.search);
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
@@ -55,6 +58,10 @@ const liveEvents = [];
 let liveRenderScheduled = false;
 // Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
 const LIVE_RENDER_DEBOUNCE_MS = 80;
+
+// Accumulated span debug log entries (populated from asr_timed_word_stream revisions
+// and transcript_candidate state changes).
+const spanDebugEntries = [];
 
 const state = {
   payload: null,
@@ -137,6 +144,7 @@ async function bootstrap() {
 function enterLiveMode() {
   document.body.classList.add("live-mode");
   liveBanner.hidden = false;
+  transcriptRibbon.hidden = false;
   document.title = "WaveDeck · Live";
   viewerTitle.textContent = "Live — Listenbury";
   statusMessage.textContent = "Connecting to live event stream…";
@@ -183,10 +191,154 @@ function addLiveEvent(traceEvent) {
   }
 }
 
+// ── Span debug log helpers ────────────────────────────────────────────────
+
+// Entry types: "open" | "stable" | "commit" | "revise" | "cancel"
+function addSpanDebugEntry(elapsedMs, type, message) {
+  spanDebugEntries.push({ elapsedMs, type, message });
+  // Cap the log at 200 entries to avoid unbounded growth.
+  if (spanDebugEntries.length > 200) {
+    spanDebugEntries.splice(0, spanDebugEntries.length - 200);
+  }
+}
+
+function renderSpanDebugLog() {
+  if (!spanDebugLog || spanDebugEntries.length === 0) {
+    return;
+  }
+  // Show the 40 most-recent entries, newest first.
+  const entries = spanDebugEntries.slice(-40).reverse();
+  const fragment = document.createDocumentFragment();
+  for (const entry of entries) {
+    const el = document.createElement("div");
+    el.className = `span-debug-entry entry-${entry.type}`;
+    const time = document.createElement("span");
+    time.className = "span-debug-time";
+    time.textContent = `${(entry.elapsedMs / 1000).toFixed(3)}s`;
+    const msg = document.createElement("span");
+    msg.className = "span-debug-msg";
+    msg.textContent = entry.message;
+    el.append(time, msg);
+    fragment.append(el);
+  }
+  spanDebugLog.replaceChildren(fragment);
+}
+
+// ── Transcript ribbon ─────────────────────────────────────────────────────
+
+// Render the live transcript ribbon from the accumulated live events.
+// Sources used (in priority order):
+//   1. transcript_candidate.artifact → { stable_text, unstable_text }
+//   2. asr_timed_word_stream.artifact → word-by-word commitment states
+//   3. transcript events → committed final text for past turns
+function renderTranscriptRibbon(events) {
+  if (!transcriptRibbonText) {
+    return;
+  }
+
+  // Collect final transcript text per turn (committed).
+  const finalPerTurn = new Map(); // turn → text
+  // Track the latest transcript_candidate for the highest-numbered in-progress turn.
+  let latestCandidate = null;
+  let latestCandidateTurn = -1;
+  // Track the latest asr_timed_word_stream per turn (for word-level commitment states).
+  const wordStreamPerTurn = new Map(); // turn → { words: [] }
+
+  for (const event of events) {
+    if (event.kind === "transcript" && event.text) {
+      finalPerTurn.set(event.turn, event.text);
+    }
+    if (event.kind === "transcript_candidate" && event.artifact) {
+      if (event.turn > latestCandidateTurn) {
+        latestCandidate = event.artifact;
+        latestCandidateTurn = event.turn;
+      }
+    }
+    if (event.kind === "asr_timed_word_stream" && event.artifact?.words) {
+      wordStreamPerTurn.set(event.turn, event.artifact);
+    }
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  // Render past committed turns.
+  const sortedTurns = [...finalPerTurn.keys()].sort((a, b) => a - b);
+  for (const turn of sortedTurns) {
+    const text = finalPerTurn.get(turn);
+    if (!text) {
+      continue;
+    }
+    // Try to get word-level states from the last word stream for this turn.
+    const wordStream = wordStreamPerTurn.get(turn);
+    if (wordStream?.words?.length > 0) {
+      for (const word of wordStream.words) {
+        const token = document.createElement("span");
+        const commitClass = `commit-${commitmentClass(word.commitment)}`;
+        token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
+        token.textContent = word.text;
+        if (word._revisions?.length) {
+          const firstRev = word._revisions[0];
+          token.title = `↩ Revised from "${firstRev.fromText}" — ${firstRev.reason ?? ""}`;
+        }
+        fragment.append(token, " ");
+      }
+    } else {
+      // Fall back to plain committed text.
+      const token = document.createElement("span");
+      token.className = "transcript-token span-state-committed";
+      token.textContent = text;
+      fragment.append(token, " ");
+    }
+  }
+
+  // Render the current in-progress turn using transcript_candidate if available.
+  if (latestCandidate && !finalPerTurn.has(latestCandidateTurn)) {
+    const { stable_text, unstable_text } = latestCandidate;
+    if (stable_text) {
+      const stableToken = document.createElement("span");
+      stableToken.className = "transcript-token span-state-stable";
+      stableToken.textContent = stable_text;
+      fragment.append(stableToken, " ");
+    }
+    if (unstable_text) {
+      const provisionalToken = document.createElement("span");
+      provisionalToken.className = "transcript-token span-state-hypothetical";
+      provisionalToken.textContent = unstable_text;
+      fragment.append(provisionalToken);
+    }
+  } else if (!finalPerTurn.has(latestCandidateTurn)) {
+    // No transcript_candidate — fall back to word stream for current turn.
+    const inProgressTurn = Math.max(-1, ...wordStreamPerTurn.keys());
+    if (inProgressTurn >= 0 && !finalPerTurn.has(inProgressTurn)) {
+      const wordStream = wordStreamPerTurn.get(inProgressTurn);
+      for (const word of (wordStream?.words ?? [])) {
+        const token = document.createElement("span");
+        const commitClass = `commit-${commitmentClass(word.commitment)}`;
+        token.className = `transcript-token ${commitClass}`;
+        token.textContent = word.text;
+        fragment.append(token, " ");
+      }
+    }
+  }
+
+  transcriptRibbonText.replaceChildren(fragment);
+}
+
+// Map WordCommitment enum variant to a lowercase CSS class fragment.
+function commitmentClass(commitment) {
+  if (!commitment) {
+    return "unknown";
+  }
+  // Normalize Rust PascalCase to lowercase with no separator (matches CSS class names).
+  return String(commitment).toLowerCase().replace(/[^a-z]/g, "");
+}
+
 function applyLiveEvents() {
   const payload = buildLivePayload(liveEvents);
   applyPayload(payload, { preserveSelection: true, preserveViewport: true });
   viewerTitle.textContent = "Live — Listenbury";
+  renderTranscriptRibbon(liveEvents);
+  renderSpanDebugLog();
 }
 
 function buildLivePayload(events) {
@@ -213,8 +365,100 @@ function buildLivePayload(events) {
     return JSON.stringify([lane, turn ?? null, startKind]);
   }
 
+  // Per-turn word span tracking: extract from asr_timed_word_stream artifacts.
+  // Maps turn → { stream: TimedWordStream, wordRevisions: Map<wordIndex, [{fromText, at_ms}]> }
+  const turnWordData = new Map();
+
   for (const event of events) {
     const lane = LIVE_EVENT_LANE[event.kind] ?? "Events";
+
+    // ── Word span extraction ─────────────────────────────────────────────
+    if (event.kind === "asr_timed_word_stream" && event.artifact?.words) {
+      const newStream = event.artifact;
+      const prev = turnWordData.get(event.turn);
+      const wordRevisions = prev?.wordRevisions ?? new Map();
+
+      // Detect retroactive word corrections by diffing the new stream against the previous one.
+      if (prev?.stream?.words) {
+        const prevWords = prev.stream.words;
+        const newWords = newStream.words;
+        for (let i = 0; i < newWords.length; i++) {
+          const pw = prevWords[i];
+          const nw = newWords[i];
+          if (pw && nw && pw.text !== nw.text) {
+            const existing = wordRevisions.get(i) ?? [];
+            existing.push({
+              fromText: pw.text,
+              fromConfidence: pw.timing_confidence ?? null,
+              at_ms: event.elapsed_ms,
+              reason: `Whisper re-score: "${nw.text}" (p=${(nw.timing_confidence ?? 0).toFixed(2)}) > "${pw.text}" (p=${(pw.timing_confidence ?? 0).toFixed(2)})`,
+            });
+            wordRevisions.set(i, existing);
+            addSpanDebugEntry(event.elapsed_ms, "revise",
+              `↩ Revision turn ${event.turn} word[${i}]: "${pw.text}" → "${nw.text}" — ${existing[existing.length - 1].reason}`);
+          }
+        }
+      }
+
+      // Annotate each word with its revision history.
+      const annotatedWords = newStream.words.map((word, i) => {
+        const revs = wordRevisions.get(i);
+        return revs ? { ...word, _revisions: revs } : word;
+      });
+
+      turnWordData.set(event.turn, {
+        stream: { ...newStream, words: annotatedWords },
+        wordRevisions,
+        elapsed_ms: event.elapsed_ms,
+      });
+      continue; // handled; don't emit as a marker
+    }
+
+    // ── transcript_candidate: log stable/provisional boundary ────────────
+    if (event.kind === "transcript_candidate" && event.artifact) {
+      const { stable_text, unstable_text, confidence } = event.artifact;
+      if (stable_text || unstable_text) {
+        addSpanDebugEntry(event.elapsed_ms, "stable",
+          `Candidate turn ${event.turn}: stable="${stable_text ?? ""}" | provisional="${unstable_text ?? ""}" conf=${(confidence ?? 0).toFixed(2)}`);
+      }
+      // Fall through to emit as a marker in the ASR lane.
+    }
+
+    // ── Breath-group spans ────────────────────────────────────────────────
+    if (event.kind === "breath_group_opened") {
+      const key = openSpanKey("Mic", event.turn, "breath_group_opened");
+      openSpans.set(key, event.elapsed_ms);
+      addSpanDebugEntry(event.elapsed_ms, "open", `Breath group opened (turn ${event.turn})`);
+      continue;
+    }
+    if (event.kind === "breath_group_closed") {
+      const key = openSpanKey("Mic", event.turn, "breath_group_opened");
+      const spanStart = openSpans.get(key);
+      if (spanStart !== undefined) {
+        openSpans.delete(key);
+        viewerEvents.push({
+          lane: "Mic",
+          kind: "breath_group",
+          label: labelForKind("breath_group"),
+          start_ms: spanStart,
+          end_ms: event.elapsed_ms,
+          metadata: event,
+        });
+        addSpanDebugEntry(event.elapsed_ms, "commit",
+          `Breath group committed (turn ${event.turn}, ${event.elapsed_ms - spanStart}ms)`);
+        continue;
+      }
+    }
+
+    // ── speech_unit_committed ────────────────────────────────────────────
+    if (event.kind === "speech_unit_committed" && event.text) {
+      addSpanDebugEntry(event.elapsed_ms, "commit",
+        `Speech unit committed: "${event.text.slice(0, 60)}"`);
+    }
+    if (event.kind === "speech_unit_cancelled" && event.text) {
+      addSpanDebugEntry(event.elapsed_ms, "cancel",
+        `Speech unit cancelled: "${event.text.slice(0, 60)}"`);
+    }
 
     // Check if this closes a span.
     const startInfo = endToStart[event.kind];
@@ -231,6 +475,10 @@ function buildLivePayload(events) {
           end_ms: event.elapsed_ms,
           metadata: event,
         });
+        if (startInfo.startKind === "asr_started") {
+          addSpanDebugEntry(event.elapsed_ms, "commit",
+            `ASR span committed (turn ${event.turn}, ${event.elapsed_ms - spanStart}ms)`);
+        }
         continue;
       }
     }
@@ -239,6 +487,9 @@ function buildLivePayload(events) {
     if (spanPairs[event.kind]) {
       const spanKey = openSpanKey(lane, event.turn, event.kind);
       openSpans.set(spanKey, event.elapsed_ms);
+      if (event.kind === "asr_started") {
+        addSpanDebugEntry(event.elapsed_ms, "open", `ASR span opened (turn ${event.turn}) [Hypothesis]`);
+      }
       // Don't emit yet – wait for the closing event.
       continue;
     }
@@ -271,9 +522,25 @@ function buildLivePayload(events) {
     });
   }
 
+  // Build per-turn word stream lanes from extracted asr_timed_word_stream data.
+  const wordStreamLanes = [];
+  const sortedTurns = [...turnWordData.entries()].sort((a, b) => a[0] - b[0]);
+  for (const [turn, data] of sortedTurns) {
+    if (data.stream?.words?.length > 0) {
+      wordStreamLanes.push({
+        label: `ASR turn ${turn}`,
+        stream: {
+          id: turn,
+          source: "LiveAsr",
+          words: data.stream.words,
+        },
+      });
+    }
+  }
+
   return {
     title: "Live — Listenbury",
-    streams: [],
+    streams: wordStreamLanes,
     events: viewerEvents,
     markers: viewerMarkers,
   };
@@ -398,7 +665,42 @@ function applyPayload(rawPayload, options = {}) {
   clearPlaybackStop();
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
+  renderStaticTranscriptRibbon(normalized);
   render();
+}
+
+// Render the transcript ribbon for static (non-live) payloads.
+// Shows word streams that carry commitment information so the span lifecycle is visible
+// even when replaying a saved trace.
+function renderStaticTranscriptRibbon(normalized) {
+  if (!transcriptRibbon || !transcriptRibbonText) {
+    return;
+  }
+  // Only show if there's at least one word stream with commitment data.
+  const hasCommitmentData = normalized.streams.some(
+    (lane) => lane.stream?.words?.some((w) => w.commitment),
+  );
+  if (!hasCommitmentData) {
+    // Don't touch the ribbon — live mode manages it separately.
+    return;
+  }
+
+  transcriptRibbon.hidden = false;
+  const fragment = document.createDocumentFragment();
+  for (const lane of normalized.streams) {
+    for (const word of (lane.stream?.words ?? [])) {
+      const token = document.createElement("span");
+      const commitClass = `commit-${commitmentClass(word.commitment)}`;
+      token.className = `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`;
+      token.textContent = word.text;
+      if (word._revisions?.length) {
+        const firstRev = word._revisions[0];
+        token.title = `↩ Revised from "${firstRev.fromText}" — ${firstRev.reason ?? ""}`;
+      }
+      fragment.append(token, " ");
+    }
+  }
+  transcriptRibbonText.replaceChildren(fragment);
 }
 
 function normalizePayload(rawPayload) {
@@ -670,6 +972,14 @@ function renderWordLane(lane) {
     if (word.timingResolution === "fallback-layout") {
       chip.classList.add("fallback-timing");
     }
+    // Span state: style by WordCommitment (Hypothetical / StableText / Final / Cancelled …)
+    if (word.commitment) {
+      chip.classList.add(`commit-${commitmentClass(word.commitment)}`);
+    }
+    // Retroactive revision: word text was corrected in a later ASR pass.
+    if (word._revisions?.length > 0) {
+      chip.classList.add("was-revised");
+    }
     chip.dataset.key = itemKey("word", word.laneIndex, word.wordIndex);
     chip.dataset.itemType = "word";
     chip.dataset.startMs = String(word.resolvedTiming.start_ms);
@@ -835,6 +1145,8 @@ function renderSelection() {
     Timing source: <strong>${word.timingSourceDetail}</strong>
   `;
 
+  const revisionBlock = buildRevisionHistoryHtml(word);
+
   selectionJson.textContent = JSON.stringify(
     {
       lane: lane.label,
@@ -848,13 +1160,26 @@ function renderSelection() {
       timingSourceDetail: word.timingSourceDetail,
       confidence: word.timing_confidence,
       commitment: word.commitment,
+      spanState: describeSpanState(word.commitment),
       boundarySource: word.boundary_source,
       lexicalSpan: word.lexical_span,
       audioRef: word.audio_ref,
+      revisions: word._revisions ?? [],
     },
     null,
     2,
   );
+
+  // Show commitment state badge + revision history in the summary panel.
+  if (word.commitment) {
+    const badge = document.createElement("span");
+    badge.className = `inspector-span-state commit-${commitmentClass(word.commitment)}`;
+    badge.textContent = describeSpanState(word.commitment);
+    selectionSummary.prepend(badge);
+  }
+  if (revisionBlock) {
+    selectionSummary.insertAdjacentHTML("beforeend", revisionBlock);
+  }
 }
 
 function selectWord(laneIndex, wordIndex, seekAudio) {
@@ -1415,4 +1740,58 @@ function coerceMs(value, label) {
 
 function formatPlaybackTime() {
   return `${audio.currentTime.toFixed(3)}s / ${(state.maxDurationMs / 1000).toFixed(3)}s`;
+}
+
+// ── Span state helpers ────────────────────────────────────────────────────
+
+/**
+ * Return a human-readable description of a WordCommitment span state.
+ * Matches the values of the Rust `WordCommitment` enum (serialized as PascalCase strings).
+ */
+function describeSpanState(commitment) {
+  switch (commitment) {
+    case "Hypothetical": return "Hypothesis — text may change";
+    case "StableText":   return "Stable — text locked, not yet synthesised";
+    case "Prepared":     return "Prepared — queued for synthesis";
+    case "Playable":     return "Playable — audio ready, playback imminent";
+    case "Played":       return "Played — currently being spoken";
+    case "Final":        return "Committed — played and confirmed";
+    case "Cancelled":    return "Cancelled — abandoned before playback";
+    default:             return commitment ?? "Unknown";
+  }
+}
+
+/**
+ * Build an HTML fragment for the revision history of a word span.
+ * Returns an empty string when there are no revisions.
+ */
+function buildRevisionHistoryHtml(word) {
+  const revisions = word._revisions;
+  if (!revisions?.length) {
+    return "";
+  }
+  const rows = revisions
+    .map((rev) => {
+      const reason = rev.reason ? `<div class="inspector-revision-reason">${escapeHtml(rev.reason)}</div>` : "";
+      return `<div class="inspector-revision-entry">
+        <span>at ${rev.at_ms}ms:</span>
+        <del>${escapeHtml(rev.fromText)}</del>
+        <span>→</span>
+        <span class="revision-new">${escapeHtml(word.text)}</span>
+        ${reason}
+      </div>`;
+    })
+    .join("");
+  return `<div class="inspector-revision-history">
+    <strong>↩ Retroactive revision</strong>
+    ${rows}
+  </div>`;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
