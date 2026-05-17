@@ -785,7 +785,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                 eprintln!("embedded web server error: {e:#}");
             }
         });
-        println!("Listenbury web viewer available at {url}?live=1");
+        println!("Listenbury web viewer available at {url}");
         Some(bc)
     } else {
         None

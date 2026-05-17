@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Listenbury WaveDeck</title>
+    <title>WaveDeck — Live Listenbury Session</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,11 +15,10 @@
   <body>
     <header class="top-chrome">
       <div class="brand">
-        <p class="eyebrow">Listenbury timeline studio</p>
-        <h1>WaveDeck</h1>
+        <p class="eyebrow">Listenbury live session</p>
+        <h1>WaveDeck — Live Listenbury Session</h1>
         <p class="subtitle" id="header-subtitle">
-          Full-width timeline debugger for serialized TimedWordStream payloads
-          and event lanes.
+          Live event timeline for listenbury listen --web.
         </p>
       </div>
 
@@ -30,19 +29,6 @@
         <span id="live-event-count">0 events</span>
         <span id="live-connection-status" class="live-status-connecting">connecting…</span>
       </div>
-
-      <!-- File/demo toolbar (hidden in live mode) -->
-      <section class="toolbar" id="file-toolbar">
-        <button id="load-demo" type="button">Load bundled demo</button>
-        <label class="file-picker">
-          JSON payload
-          <input id="json-file" type="file" accept=".json,application/json" />
-        </label>
-        <label class="file-picker">
-          Audio override
-          <input id="audio-file" type="file" accept="audio/*" />
-        </label>
-      </section>
 
       <!-- Playback controls (always visible) -->
       <section class="toolbar" id="playback-toolbar">
@@ -58,8 +44,8 @@
       </section>
 
       <section class="status-bar">
-        <strong id="viewer-title">No stream loaded</strong>
-        <span id="status-message">Load the bundled demo or choose a local JSON payload.</span>
+        <strong id="viewer-title">Live — Listenbury</strong>
+        <span id="status-message">Connecting to live event stream…</span>
         <span id="playback-time">0.000s</span>
       </section>
       <audio id="audio" controls preload="metadata"></audio>
@@ -80,7 +66,7 @@
     <main class="workspace">
       <section class="viewer-stage">
         <section id="viewer" class="viewer empty">
-          <p>No streams loaded yet.</p>
+          <p>Waiting for live events…</p>
         </section>
       </section>
 

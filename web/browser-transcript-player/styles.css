@@ -595,10 +595,6 @@ h1 {
   color: #e53e3e;
 }
 
-body.live-mode #file-toolbar {
-  display: none;
-}
-
 /* ── Word commitment (span state) chip styles ──────────────────────────── */
 
 /* Hypothetical: dashed border, italic, faded — span is still provisional */

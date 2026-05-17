@@ -321,10 +321,9 @@ just cuda ask "Can you hear me?"
 just cuda listen
 ```
 
-## WaveDeck browser timeline demo
+## WaveDeck live browser timeline
 
-The repository now includes WaveDeck, a static full-width timeline viewer for serialized
-`TimedWordStream` payloads:
+The repository now includes WaveDeck, a live timeline viewer for `listenbury listen --web`:
 
 ```text
 web/browser-transcript-player/
@@ -346,18 +345,15 @@ Useful options:
 
 ```bash
 cargo run -- web --host 127.0.0.1 --port 8787
-cargo run -- web --payload out/viewer-payload.json
-cargo run -- web --trace out/live-trace.jsonl
 cargo run -- web --open
 ```
 
-The hosted server exposes stable routes for the viewer and payload APIs:
+The hosted server exposes stable routes for the viewer and event APIs:
 
 ```text
 /                     viewer UI
 /assets/...           bundled static assets
-/demo                 redirect to viewer with bundled demo selected
-/api/demo-payload     bundled demo JSON
+/api/demo-payload     bundled demo JSON fixture
 /api/payload          JSON from --payload (when provided)
 /api/trace            JSONL from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
@@ -365,28 +361,12 @@ The hosted server exposes stable routes for the viewer and payload APIs:
 /healthz              simple health check
 ```
 
-The static interface still works too. Launch it from the repository root with a
-simple local server:
-
-```bash
-cd /path/to/listenbury
-python -m http.server 8000
-```
-
-Then open:
-
-```text
-http://localhost:8000/web/browser-transcript-player/
-```
-
-Use **Load bundled demo** to inspect the included sample payload wired to
-`welcome.wav`, or choose your own local JSON/audio files with the file pickers.
-The viewer renders multiple streams vertically with a shared ruler, highlights
-the active word during playback, and lets you click chips/ruler positions to
-seek the shared audio timeline. Drag across the ruler or an empty lane region
-to mark a time range; releasing the mouse zooms directly into that range.
-The same toolbar can still zoom in or zoom out. It is a debug timeline workstation for
-inspecting recorded, generated, and playback speech lanes.
+Open the hosted WaveDeck page and it will immediately connect to `/api/live-events`
+for the active listen session. The viewer renders multiple streams vertically with
+a shared ruler, highlights the active word during playback, and lets you click
+chips/ruler positions to seek the shared audio timeline. Drag across the ruler or an
+empty lane region to mark a time range; releasing the mouse zooms directly into
+that range.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
 
@@ -407,8 +387,8 @@ write runtime trace lines as `LiveTraceEvent` JSONL. `dev continue` also emits
 cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.json
 ```
 
-Then load `out/live-trace.viewer.json` in the browser viewer with **Choose JSON
-file**.
+Then load `out/live-trace.viewer.json` in a separate fixture/dev harness (not the
+live WaveDeck page served by `listenbury listen --web`).
 
 A sample artifact is included:
 
@@ -558,7 +538,7 @@ just run listen --web
 The server prints the viewer URL on startup:
 
 ```text
-Listenbury web viewer available at http://127.0.0.1:8787/?live=1
+Listenbury web viewer available at http://127.0.0.1:8787/
 ```
 
 Open that URL in a browser to see a live event timeline that updates in real time as events happen on the mic and speakers.
@@ -571,7 +551,7 @@ Optional web flags:
 listenbury listen --web --web-host 0.0.0.0 --web-port 9000
 ```
 
-The live viewer disables the file-load toolbar and shows a pulsing **Live** indicator instead. Playback and timeline zoom controls stay available so you can drag-zoom into a time range as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
+WaveDeck is live-only and shows a pulsing **Live** indicator. Playback and timeline zoom controls stay available so you can drag-zoom into a time range as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
 
 | Lane | Events |
 |---|---|

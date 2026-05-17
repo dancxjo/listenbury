@@ -44,7 +44,7 @@ impl BoundServer {
             "Listenbury web viewer serving on http://{}",
             self.local_addr
         );
-        println!("Routes: /, /assets/*, /demo, /api/*, /api/live-events, /healthz");
+        println!("Routes: /, /assets/*, /api/*, /api/live-events, /healthz");
 
         for stream in self.listener.incoming() {
             let mut stream = match stream {
@@ -137,16 +137,6 @@ impl HttpResponse {
         }
     }
 
-    fn redirect(location: &str) -> Self {
-        Self {
-            status: 302,
-            reason: "Found",
-            content_type: "text/plain; charset=utf-8",
-            cache_control: "no-store",
-            body: format!("redirecting to {location}\n").into_bytes(),
-            headers: vec![("Location", location.to_string())],
-        }
-    }
 }
 
 pub fn serve(config: ServeConfig) -> Result<()> {
@@ -285,12 +275,8 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
 
     let path = target.split('?').next().unwrap_or("/");
     match path {
-        "/" if state.broadcaster.is_some() && !target.contains('?') => {
-            HttpResponse::redirect("/?live=1")
-        }
         "/" => HttpResponse::static_asset("text/html; charset=utf-8", assets::INDEX_HTML),
         "/healthz" => HttpResponse::ok("text/plain; charset=utf-8", "ok\n"),
-        "/demo" => HttpResponse::redirect("/?payload=demo"),
 
         "/app.js" | "/assets/app.js" => {
             HttpResponse::static_asset("application/javascript; charset=utf-8", assets::APP_JS)
@@ -469,32 +455,21 @@ mod tests {
     }
 
     #[test]
-    fn demo_route_redirects_to_demo_query() {
+    fn removed_demo_route_returns_404() {
         let response = route_request("GET", "/demo", &empty_state());
-        assert_eq!(response.status, 302);
-        assert!(
-            response
-                .headers
-                .iter()
-                .any(|(name, value)| *name == "Location" && value == "/?payload=demo")
-        );
+        assert_eq!(response.status, 404);
     }
 
     #[test]
-    fn live_server_root_redirects_to_live_mode() {
+    fn live_server_root_serves_index_without_query() {
         let response = route_request("GET", "/", &live_state());
-        assert_eq!(response.status, 302);
-        assert!(
-            response
-                .headers
-                .iter()
-                .any(|(name, value)| *name == "Location" && value == "/?live=1")
-        );
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "text/html; charset=utf-8");
     }
 
     #[test]
-    fn live_server_serves_index_when_live_query_is_present() {
-        let response = route_request("GET", "/?live=1", &live_state());
+    fn live_server_serves_index_with_unrelated_query_param() {
+        let response = route_request("GET", "/?foo=bar", &live_state());
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
     }
