@@ -76,6 +76,8 @@ function openSpanKey(lane, turn, startKind) {
   return JSON.stringify([lane, turn ?? null, startKind]);
 }
 
+// Convert elapsed session milliseconds to Date objects anchored to SESSION_EPOCH
+// so vis-timeline can render relative session time on a date-based axis.
 function msDate(elapsedMs) {
   return new Date(SESSION_EPOCH + Math.max(0, Math.round(elapsedMs)));
 }
