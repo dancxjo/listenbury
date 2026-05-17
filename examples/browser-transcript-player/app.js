@@ -391,11 +391,11 @@ function buildLivePayload(events) {
               fromText: pw.text,
               fromConfidence: pw.timing_confidence ?? null,
               at_ms: event.elapsed_ms,
-              reason: `Whisper re-score: "${nw.text}" (p=${(nw.timing_confidence ?? 0).toFixed(2)}) > "${pw.text}" (p=${(pw.timing_confidence ?? 0).toFixed(2)})`,
+              reason: `Whisper re-score on full breath-group context: "${nw.text}" (p=${(nw.timing_confidence ?? 0).toFixed(2)}) > "${pw.text}" (p=${(pw.timing_confidence ?? 0).toFixed(2)})`,
             });
             wordRevisions.set(i, existing);
             addSpanDebugEntry(event.elapsed_ms, "revise",
-              `↩ Revision turn ${event.turn} word[${i}]: "${pw.text}" → "${nw.text}" — ${existing[existing.length - 1].reason}`);
+              `↩ Revision turn ${event.turn} word[${i}]: "${pw.text}" → "${nw.text}" — Whisper re-score on full breath-group context: "${nw.text}" (p=${(nw.timing_confidence ?? 0).toFixed(2)}) > "${pw.text}" (p=${(pw.timing_confidence ?? 0).toFixed(2)})`);
           }
         }
       }
