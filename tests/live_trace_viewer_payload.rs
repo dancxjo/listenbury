@@ -71,6 +71,20 @@ fn sample_live_trace_jsonl_converts_to_mixed_word_and_event_lanes() {
             .any(|marker| marker.lane == "Latency" && marker.kind == "playback_started"),
         "playback timing marker should be preserved"
     );
+    assert!(
+        payload
+            .events
+            .iter()
+            .any(|event| event.kind == "overlap" && event.audio_ref.is_some()),
+        "overlap event should expose clip audio references when artifacts provide them"
+    );
+    assert!(
+        payload
+            .markers
+            .iter()
+            .any(|marker| marker.kind == "playback_started" && marker.audio_ref.is_some()),
+        "playback marker should expose clip audio references when artifacts provide them"
+    );
 }
 
 #[test]
@@ -93,5 +107,13 @@ fn sample_live_trace_viewer_json_has_word_and_event_lanes() {
     assert!(
         !streams.is_empty() && !events.is_empty() && !markers.is_empty(),
         "sample viewer payload should include streams, span events, and markers"
+    );
+    assert!(
+        events.iter().any(|event| event["audio_ref"].is_object()),
+        "sample viewer payload should include event clip references"
+    );
+    assert!(
+        markers.iter().any(|marker| marker["audio_ref"].is_object()),
+        "sample viewer payload should include marker clip references"
     );
 }

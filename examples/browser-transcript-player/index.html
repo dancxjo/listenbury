@@ -32,6 +32,7 @@
       <button id="jump-prev" type="button">Previous word</button>
       <button id="play-pause" type="button">Play</button>
       <button id="jump-next" type="button">Next word</button>
+      <button id="play-selection-clip" type="button" disabled>Play selected clip</button>
     </section>
 
     <section class="status-bar">
@@ -40,9 +41,9 @@
       <span id="playback-time">0.000s</span>
     </section>
     <p class="milestone-note">
-      Milestone note: this viewer now supports synchronized word and
-      event/span lanes on one shared audio timeline (`audio.url`). Real traces
-      may still require per-lane audio references.
+      Milestone note: this viewer supports synchronized word/event lanes on the
+      shared `audio.url` timeline and can also play event-level clip references
+      when payloads provide `audio_ref`.
     </p>
 
     <audio id="audio" controls preload="metadata"></audio>

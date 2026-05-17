@@ -321,7 +321,19 @@
       "start_ms": 2920,
       "end_ms": 3270,
       "label": "Overlap",
+      "audio_ref": {
+        "url": "../../welcome.wav",
+        "start_ms": 2920,
+        "end_ms": 3270
+      },
       "metadata": {
+        "artifact": {
+          "audio": {
+            "clip_end_ms": 3270,
+            "clip_start_ms": 2920,
+            "url": "../../welcome.wav"
+          }
+        },
         "reason": "external_speech_candidate",
         "t_unix_ns": 1715000003270000000,
         "turn": 1
@@ -441,7 +453,17 @@
       "kind": "playback_started",
       "at_ms": 2360,
       "label": "Playback Started",
+      "audio_ref": {
+        "url": "../../welcome.wav",
+        "start_ms": 2360,
+        "end_ms": 3460
+      },
       "metadata": {
+        "artifact": {
+          "end_ms": 3460,
+          "start_ms": 2360,
+          "url": "../../welcome.wav"
+        },
         "t_unix_ns": 1715000002360000000,
         "turn": 1
       }
@@ -451,7 +473,19 @@
       "kind": "overlap_started",
       "at_ms": 2920,
       "label": "Overlap Started",
+      "audio_ref": {
+        "url": "../../welcome.wav",
+        "start_ms": 2920,
+        "end_ms": 3270
+      },
       "metadata": {
+        "artifact": {
+          "audio": {
+            "clip_end_ms": 3270,
+            "clip_start_ms": 2920,
+            "url": "../../welcome.wav"
+          }
+        },
         "reason": "external_speech_candidate",
         "t_unix_ns": 1715000002920000000,
         "turn": 1

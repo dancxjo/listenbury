@@ -10,6 +10,7 @@ const audioFileInput = document.getElementById("audio-file");
 const playPauseButton = document.getElementById("play-pause");
 const jumpPrevButton = document.getElementById("jump-prev");
 const jumpNextButton = document.getElementById("jump-next");
+const playSelectionClipButton = document.getElementById("play-selection-clip");
 const audio = document.getElementById("audio");
 const queryParams = new URLSearchParams(window.location.search);
 
@@ -34,6 +35,7 @@ audioFileInput.addEventListener("change", (event) => readAudioFile(event.target.
 playPauseButton.addEventListener("click", () => togglePlayback());
 jumpPrevButton.addEventListener("click", () => jumpSelectedWord(-1));
 jumpNextButton.addEventListener("click", () => jumpSelectedWord(1));
+playSelectionClipButton.addEventListener("click", () => playSelectedClip());
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
@@ -276,6 +278,7 @@ function normalizeEvents(events, markers) {
       start_ms: startMs,
       end_ms: endMs,
       metadata: entry.metadata ?? null,
+      audio_ref: normalizeEventAudioRef(entry, startMs, endMs),
       style: endMs > startMs ? "span" : "marker",
       original: entry,
     });
@@ -296,6 +299,7 @@ function normalizeEvents(events, markers) {
       start_ms: atMs,
       end_ms: atMs,
       metadata: entry.metadata ?? null,
+      audio_ref: normalizeEventAudioRef(entry, atMs, atMs),
       style: "marker",
       original: entry,
     });
@@ -495,6 +499,8 @@ function refreshPlaybackState() {
 }
 
 function renderSelection() {
+  playSelectionClipButton.disabled = true;
+  playSelectionClipButton.textContent = "Play selected clip";
   if (!state.selectedItem) {
     selectionSummary.textContent = "Select a word or event to inspect timing and metadata.";
     selectionJson.textContent = "{}";
@@ -515,6 +521,10 @@ function renderSelection() {
       Event <strong>${event.label}</strong><br />
       ${event.start_ms}–${event.end_ms} ms · kind <strong>${event.kind}</strong>
     `;
+    if (event.audio_ref?.url) {
+      playSelectionClipButton.disabled = false;
+      playSelectionClipButton.textContent = "Play event clip";
+    }
 
     selectionJson.textContent = JSON.stringify(
       {
@@ -526,6 +536,7 @@ function renderSelection() {
         start_ms: event.start_ms,
         end_ms: event.end_ms,
         duration_ms: Math.max(0, event.end_ms - event.start_ms),
+        audioRef: event.audio_ref,
         metadata: event.metadata,
         original: event.original,
       },
@@ -597,8 +608,12 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   }
 
   state.selectedItem = { type: "event", laneIndex, itemIndex: eventIndex };
-  if (seekAudio && audio.src) {
-    audio.currentTime = event.start_ms / 1000;
+  if (seekAudio) {
+    if (event.audio_ref?.url) {
+      playAudioClip(event.audio_ref, event.start_ms, event.end_ms, false);
+    } else if (audio.src) {
+      audio.currentTime = event.start_ms / 1000;
+    }
   }
 
   state.stopAtMs = null;
@@ -664,6 +679,88 @@ function classToken(value) {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function normalizeEventAudioRef(entry, fallbackStartMs, fallbackEndMs) {
+  const candidate =
+    entry?.audio_ref ??
+    entry?.metadata?.audio_ref ??
+    entry?.metadata?.artifact?.audio_ref ??
+    entry?.metadata?.artifact?.audio ??
+    entry?.metadata?.artifact ??
+    null;
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const url =
+    normalizeAudioRefString(candidate.url) ??
+    normalizeAudioRefString(candidate.audio_url) ??
+    normalizeAudioRefString(candidate.path) ??
+    normalizeAudioRefString(candidate.audio_path);
+  if (!url) {
+    return null;
+  }
+
+  const startMs = normalizeAudioRefMs(
+    candidate.start_ms ?? candidate.clip_start_ms ?? candidate.at_ms,
+    fallbackStartMs,
+  );
+  const endMs = normalizeAudioRefMs(candidate.end_ms ?? candidate.clip_end_ms, fallbackEndMs);
+
+  return {
+    url,
+    start_ms: startMs,
+    end_ms: Math.max(startMs, endMs),
+  };
+}
+
+function normalizeAudioRefString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeAudioRefMs(value, fallbackValue) {
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : Math.max(0, Math.round(fallbackValue));
+}
+
+function playSelectedClip() {
+  if (state.selectedItem?.type !== "event") {
+    return;
+  }
+  const event = state.lanes[state.selectedItem.laneIndex]?.events?.[state.selectedItem.itemIndex];
+  if (!event?.audio_ref?.url) {
+    return;
+  }
+  playAudioClip(event.audio_ref, event.start_ms, event.end_ms, true);
+}
+
+function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
+  const startMs = normalizeAudioRefMs(audioRef?.start_ms, fallbackStartMs);
+  const endMs = normalizeAudioRefMs(audioRef?.end_ms, fallbackEndMs);
+  const targetUrl = audioRef?.url;
+  if (!targetUrl) {
+    return;
+  }
+
+  const seekAndMaybePlay = () => {
+    audio.currentTime = startMs / 1000;
+    state.stopAtMs = endMs > startMs ? endMs : null;
+    if (autoplay) {
+      void audio.play();
+    }
+    refreshPlaybackState();
+  };
+
+  if (audio.src !== targetUrl) {
+    audio.src = targetUrl;
+    audio.addEventListener("loadedmetadata", seekAndMaybePlay, { once: true });
+    statusMessage.textContent = `Loaded clip reference ${targetUrl}.`;
+    return;
+  }
+  seekAndMaybePlay();
 }
 
 function coerceMs(value, label) {

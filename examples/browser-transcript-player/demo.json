@@ -185,6 +185,11 @@
       "start_ms": 1240,
       "end_ms": 1510,
       "label": "User overlapped Pete",
+      "audio_ref": {
+        "url": "../../welcome.wav",
+        "start_ms": 1240,
+        "end_ms": 1510
+      },
       "metadata": {
         "routing": "MixedSelfAndExternal"
       }
@@ -196,6 +201,11 @@
       "start_ms": 1520,
       "end_ms": 1780,
       "label": "Fade then stop playback",
+      "audio_ref": {
+        "url": "../../welcome.wav",
+        "start_ms": 1520,
+        "end_ms": 1780
+      },
       "metadata": {
         "policy": "SustainedExternalSpeech",
         "action": "fade_then_stop"
