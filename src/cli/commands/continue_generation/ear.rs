@@ -45,6 +45,8 @@ pub(super) enum ContinueEarEvent {
     },
     Transcript {
         text: String,
+        timed_word_stream: TimedWordStream,
+        occurred_at: ExactTimestamp,
     },
     Error {
         message: String,
@@ -90,14 +92,14 @@ impl ContinueEarEvent {
             } => format!(
                 "Someone began speaking while Pete was speaking. self_confidence={self_confidence:.2} external_confidence={external_confidence:.2} duration_ms={duration_ms}"
             ),
-            Self::Transcript { text } => format!("Heard: {}", text.trim()),
+            Self::Transcript { text, .. } => format!("Heard: {}", text.trim()),
             Self::Error { message } => format!("error: {message}"),
         }
     }
 
     pub(super) fn direct_prompt_packet(&self) -> Option<PromptPacket> {
         match self {
-            Self::Transcript { text } => Some(PromptPacket::heard(text.clone())),
+            Self::Transcript { text, .. } => Some(PromptPacket::heard(text.clone())),
             Self::AuditoryObservation { text } => Some(PromptPacket::ear_observation(text.clone())),
             Self::EnvironmentalSound { sound } => {
                 Some(PromptPacket::ear_observation(sound.description.clone()))

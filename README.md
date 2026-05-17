@@ -389,8 +389,10 @@ lanes.
 
 ### Export runtime live trace JSONL into viewer payload JSON
 
-`listenbury listen --jsonl ...` writes runtime trace lines as `LiveTraceEvent`
-JSONL. Convert that JSONL into the browser viewer payload with:
+`listenbury listen --jsonl ...` and `listenbury dev continue --jsonl ...`
+write runtime trace lines as `LiveTraceEvent` JSONL. `dev continue` also emits
+`asr_timed_word_stream` artifacts carrying serialized live ASR
+`TimedWordStream` objects. Convert JSONL into the browser viewer payload with:
 
 ```bash
 cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.json

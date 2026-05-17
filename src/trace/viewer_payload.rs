@@ -123,7 +123,12 @@ enum TextLaneKind {
 
 fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
     let mut lane_events: BTreeMap<&'static str, Vec<(u64, String)>> = BTreeMap::new();
+    let mut live_asr_streams = Vec::<(u64, TimedWordStream)>::new();
     for event in events {
+        if let Some(stream) = live_asr_timed_word_stream_from_event(event) {
+            live_asr_streams.push((event.elapsed_ms, stream));
+            continue;
+        }
         let Some(text) = event.text.as_ref().map(|text| text.trim()) else {
             continue;
         };
@@ -143,11 +148,36 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
             .or_default()
             .push((event.elapsed_ms, text.to_string()));
     }
+    if !live_asr_streams.is_empty() {
+        lane_events.entry("User transcript").or_default();
+    }
 
     lane_events
         .into_iter()
         .enumerate()
         .map(|(stream_index, (label, snippets))| {
+            if label == "User transcript" && !live_asr_streams.is_empty() {
+                let mut streams = live_asr_streams.iter().collect::<Vec<_>>();
+                streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
+                let mut words = Vec::new();
+                let mut next_word_id = 1u64;
+                for (_elapsed_ms, stream) in streams {
+                    for mut word in stream.words.iter().cloned() {
+                        word.id = WordId(next_word_id);
+                        next_word_id = next_word_id.saturating_add(1);
+                        words.push(word);
+                    }
+                }
+                return ViewerWordLane {
+                    label: label.to_string(),
+                    stream: TimedWordStream {
+                        id: WordStreamId(stream_index as u64 + 1),
+                        source: WordStreamSource::LiveAsr,
+                        words,
+                    },
+                };
+            }
+
             let source = if label == "User transcript" {
                 WordStreamSource::RecordedAudio
             } else {
@@ -266,6 +296,9 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
     let mut pending_starts: HashMap<(u64, String), (u64, Option<Value>)> = HashMap::new();
 
     for event in events {
+        if event.kind == "asr_timed_word_stream" {
+            continue;
+        }
         let lane = lane_for_kind(&event.kind).to_string();
         let metadata = Some(metadata_from_event(event));
 
@@ -414,7 +447,18 @@ fn metadata_from_event(event: &LiveTraceEvent) -> Value {
             Value::from(expected_until_unix_ns),
         );
     }
+    if let Some(artifact) = event.artifact.as_ref() {
+        metadata.insert("artifact".to_string(), artifact.clone());
+    }
     Value::Object(metadata)
+}
+
+fn live_asr_timed_word_stream_from_event(event: &LiveTraceEvent) -> Option<TimedWordStream> {
+    if event.kind != "asr_timed_word_stream" {
+        return None;
+    }
+    let artifact = event.artifact.as_ref()?;
+    serde_json::from_value(artifact.clone()).ok()
 }
 
 fn humanize_kind(kind: &str) -> String {
@@ -448,6 +492,7 @@ mod tests {
             face: None,
             unit_kind: None,
             expected_until_unix_ns: None,
+            artifact: None,
         }
     }
 
@@ -524,5 +569,48 @@ mod tests {
         let payload = live_trace_jsonl_to_viewer_payload(jsonl).expect("jsonl should parse");
         assert!(!payload.streams.is_empty());
         assert!(!payload.markers.is_empty());
+    }
+
+    #[test]
+    fn uses_live_asr_timed_word_stream_artifact_for_user_lane() {
+        let mut stream_event = event(1, "asr_timed_word_stream", 300);
+        let artifact_stream = TimedWordStream {
+            id: WordStreamId(9),
+            source: WordStreamSource::LiveAsr,
+            words: vec![WordNode {
+                id: WordId(1),
+                text: "hello".to_string(),
+                lexical_span: Some(TextSpan { start: 0, end: 5 }),
+                timing: Some(WordTiming {
+                    start_ms: 100,
+                    end_ms: 260,
+                }),
+                timing_confidence: Some(0.91),
+                commitment: WordCommitment::Final,
+                boundary_source: BoundarySource::Whisper,
+                audio_ref: None,
+            }],
+        };
+        stream_event.artifact = Some(serde_json::to_value(artifact_stream).unwrap());
+        let mut transcript = event(1, "transcript", 300);
+        transcript.text = Some("hello".to_string());
+
+        let payload = live_trace_events_to_viewer_payload(&[transcript, stream_event]);
+        let lane = payload
+            .streams
+            .iter()
+            .find(|lane| lane.label == "User transcript")
+            .expect("user transcript lane should be present");
+        assert_eq!(lane.stream.source, WordStreamSource::LiveAsr);
+        assert_eq!(lane.stream.words.len(), 1);
+        assert_eq!(lane.stream.words[0].text, "hello");
+        assert_eq!(
+            lane.stream.words[0].timing,
+            Some(WordTiming {
+                start_ms: 100,
+                end_ms: 260
+            })
+        );
+        assert_eq!(lane.stream.words[0].timing_confidence, Some(0.91));
     }
 }
