@@ -321,7 +321,9 @@ use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
         feature = "tts-piper"
     )
 ))]
-use prompt::{ContinuePromptGate, ContinuePromptGateConfig};
+use prompt::ContinuePromptGate;
+#[cfg(test)]
+use prompt::ContinuePromptGateConfig;
 #[cfg(any(
     test,
     all(
