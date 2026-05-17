@@ -11,6 +11,7 @@ const playPauseButton = document.getElementById("play-pause");
 const jumpPrevButton = document.getElementById("jump-prev");
 const jumpNextButton = document.getElementById("jump-next");
 const audio = document.getElementById("audio");
+const queryParams = new URLSearchParams(window.location.search);
 
 const state = {
   payload: null,
@@ -48,21 +49,56 @@ audio.addEventListener("loadedmetadata", () => {
   render();
 });
 
-void loadDemo();
+void bootstrap();
+
+async function bootstrap() {
+  const payloadMode = queryParams.get("payload");
+  if (payloadMode === "demo") {
+    await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");
+    return;
+  }
+  if (payloadMode === "provided") {
+    const loaded = await loadPayloadFromUrls(["/api/payload"], "Loaded --payload JSON.");
+    if (loaded) {
+      return;
+    }
+  }
+  if (payloadMode === "trace") {
+    const loaded = await loadPayloadFromUrls(
+      ["/api/trace-viewer-payload"],
+      "Loaded --trace viewer payload conversion.",
+    );
+    if (loaded) {
+      return;
+    }
+  }
+  await loadDemo();
+}
 
 async function loadDemo() {
+  await loadPayloadFromUrls(["/api/demo-payload", "./demo.json"], "Loaded bundled demo.");
+}
+
+async function loadPayloadFromUrls(urls, successMessage) {
   try {
-    const response = await fetch("./demo.json");
-    if (!response.ok) {
-      throw new Error(`demo fetch failed (${response.status})`);
+    const failures = [];
+    for (const url of urls) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        failures.push(`${url} (${response.status})`);
+        continue;
+      }
+      const payload = await response.json();
+      applyPayload(payload);
+      statusMessage.textContent = successMessage;
+      return true;
     }
-    const payload = await response.json();
-    applyPayload(payload);
-    statusMessage.textContent = "Loaded bundled demo.";
+    throw new Error(`failed to load payload from ${failures.join(", ") || urls.join(", ")}`);
   } catch (error) {
     statusMessage.textContent =
-      "Unable to auto-load demo. Serve the repository over local HTTP or choose a JSON file manually.";
+      `Unable to auto-load demo (${error?.message ?? "unknown error"}). Serve the repository over local HTTP or choose a JSON file manually.`;
     console.error(error);
+    return false;
   }
 }
 

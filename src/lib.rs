@@ -15,6 +15,7 @@ pub mod text_stability;
 pub mod time;
 pub mod trace;
 pub mod vision;
+pub mod web;
 pub mod word;
 
 pub use audio::frame::AudioFrame;

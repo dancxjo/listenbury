@@ -325,7 +325,42 @@ The repository now includes a static debug viewer for serialized
 examples/browser-transcript-player/
 ```
 
-Launch it from the repository root with a simple local server:
+Host it directly from Listenbury:
+
+```bash
+cargo run -- web
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787/
+```
+
+Useful options:
+
+```bash
+cargo run -- web --host 127.0.0.1 --port 8787
+cargo run -- web --payload out/viewer-payload.json
+cargo run -- web --trace out/live-trace.jsonl
+cargo run -- web --open
+```
+
+The hosted server exposes stable routes for the viewer and payload APIs:
+
+```text
+/                     viewer UI
+/assets/...           bundled static assets
+/demo                 redirect to viewer with bundled demo selected
+/api/demo-payload     bundled demo JSON
+/api/payload          JSON from --payload (when provided)
+/api/trace            JSONL from --trace (when provided)
+/api/trace-viewer-payload  converted viewer payload from --trace (when provided)
+/healthz              simple health check
+```
+
+The static example still works too. Launch it from the repository root with a
+simple local server:
 
 ```bash
 cd /path/to/listenbury

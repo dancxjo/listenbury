@@ -39,6 +39,8 @@ enum Command {
     Complete(LlamaTurnCommand),
     #[command(alias = "round-trip-wav", about = "Reply to a WAV file with speech")]
     Reply(RoundTripWavCommand),
+    #[command(about = "Host the browser transcript viewer as a local web UI")]
+    Web(WebCommand),
     #[command(about = "Fetch and inspect local model assets")]
     Models {
         #[command(subcommand)]
@@ -187,6 +189,20 @@ pub(crate) struct TraceViewerExportCommand {
     pub(crate) input_jsonl: PathBuf,
     /// Destination browser viewer payload JSON.
     pub(crate) output_json: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WebCommand {
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) host: String,
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) port: u16,
+    #[arg(long)]
+    pub(crate) payload: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) trace: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) open: bool,
 }
 
 #[derive(Debug, Args)]
@@ -396,6 +412,7 @@ pub(crate) fn run() -> Result<()> {
             commands::run_llama_turn(cmd)
         }
         Command::Reply(cmd) => commands::run_round_trip_wav(cmd),
+        Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::Dev { command } => run_dev(command),
     }
@@ -882,6 +899,50 @@ mod tests {
     }
 
     #[test]
+    fn web_command_parses_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "web"]).expect("web should parse defaults");
+
+        let Some(Command::Web(command)) = cli.command else {
+            panic!("expected web command");
+        };
+        assert_eq!(command.host, "127.0.0.1");
+        assert_eq!(command.port, 8787);
+        assert!(command.payload.is_none());
+        assert!(command.trace.is_none());
+        assert!(!command.open);
+    }
+
+    #[test]
+    fn web_command_parses_all_flags() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "web",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9090",
+            "--payload",
+            "out/viewer-payload.json",
+            "--trace",
+            "out/live.jsonl",
+            "--open",
+        ])
+        .expect("web should parse optional flags");
+
+        let Some(Command::Web(command)) = cli.command else {
+            panic!("expected web command");
+        };
+        assert_eq!(command.host, "0.0.0.0");
+        assert_eq!(command.port, 9090);
+        assert_eq!(
+            command.payload,
+            Some(PathBuf::from("out/viewer-payload.json"))
+        );
+        assert_eq!(command.trace, Some(PathBuf::from("out/live.jsonl")));
+        assert!(command.open);
+    }
+
+    #[test]
     fn dogfood_two_parses_all_flags() {
         let cli = Cli::try_parse_from([
             "listenbury",
@@ -939,7 +1000,15 @@ mod tests {
         let mut command = Cli::command();
         let help = command.render_help().to_string();
 
-        for visible in ["transcribe", "say", "listen", "ask", "reply", "models"] {
+        for visible in [
+            "transcribe",
+            "say",
+            "listen",
+            "ask",
+            "reply",
+            "web",
+            "models",
+        ] {
             assert!(
                 help.contains(visible),
                 "missing {visible} from help:\n{help}"
