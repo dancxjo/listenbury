@@ -9,8 +9,10 @@ pub mod text;
 pub use backend::{NativePiperBackend, NativePiperPcm, PiperModelContract};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
 pub use g2p::{
-    G2pError, GraphemeToPhoneme, PhoneLengthClass, PhoneLengthHint, PhonemizedUnit,
-    SimpleEnglishG2p,
+    G2pError, GraphemeToPhoneme, PhoneLengthClass, PhoneLengthHint, PhoneTimingHint,
+    PhonemeProsodyCandidate, PhonemeProsodyCandidateEvent, PhonemeProsodyCandidateTracker,
+    PhonemeProsodyPhonemizer, PhonemizedUnit, SimpleEnglishG2p, SpeechCandidateId,
+    TimingHintSource, WordTimingHint,
 };
 pub use phoneme::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeIdConversionError, PiperPhonemeSequence,

@@ -5,6 +5,7 @@ use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, TextNormalizationError, TextNormalizer,
 };
+use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
 const PHRASE_BREAK_SYMBOL: &str = "|";
@@ -31,6 +32,86 @@ pub enum PhoneLengthClass {
 pub struct PhoneLengthHint {
     pub symbol: String,
     pub class: PhoneLengthClass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpeechCandidateId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingHintSource {
+    HeuristicFromPhonemeClass,
+    HeuristicFromWordLength,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhoneTimingHint {
+    pub phoneme_index: usize,
+    pub approximate_duration_ms: Option<u64>,
+    pub source: TimingHintSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordTimingHint {
+    pub word_index: usize,
+    pub approximate_duration_ms: Option<u64>,
+    pub source: TimingHintSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhonemeProsodyCandidate {
+    pub id: SpeechCandidateId,
+    pub text: String,
+    pub phonemes: PiperPhonemeSequence,
+    pub phone_hints: Vec<PhoneTimingHint>,
+    pub word_hints: Vec<WordTimingHint>,
+    pub boundary_hint: ProsodyBoundaryHint,
+    pub commitment: ProsodyCommitment,
+    pub stable_prefix_len: usize,
+}
+
+impl PhonemeProsodyCandidate {
+    pub fn mark_prepared(&mut self) {
+        if !matches!(self.commitment, ProsodyCommitment::Cancelled) {
+            self.commitment = ProsodyCommitment::Prepared;
+        }
+    }
+
+    pub fn mark_playable(&mut self) {
+        if !matches!(self.commitment, ProsodyCommitment::Cancelled) {
+            self.commitment = ProsodyCommitment::Playable;
+        }
+    }
+
+    pub fn mark_committed(&mut self) {
+        if !matches!(self.commitment, ProsodyCommitment::Cancelled) {
+            self.commitment = ProsodyCommitment::Committed;
+            if matches!(self.boundary_hint, ProsodyBoundaryHint::PossibleSentenceEnd) {
+                self.boundary_hint = ProsodyBoundaryHint::FinalSentenceEnd;
+            }
+        }
+    }
+
+    pub fn cancel(&mut self) {
+        self.commitment = ProsodyCommitment::Cancelled;
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhonemeProsodyCandidateEvent {
+    CandidateStarted {
+        id: SpeechCandidateId,
+    },
+    CandidateUpdated {
+        candidate: PhonemeProsodyCandidate,
+    },
+    CandidateReplaced {
+        old: SpeechCandidateId,
+        new: SpeechCandidateId,
+        stable_prefix_len: usize,
+    },
+    CandidateCancelled {
+        id: SpeechCandidateId,
+    },
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -90,7 +171,7 @@ impl SimpleEnglishG2p {
 
         if matches!(
             normalized.boundary,
-            ProsodyBoundaryHint::SentenceTerminalCandidate
+            ProsodyBoundaryHint::PossibleSentenceEnd
         ) && !matches!(symbols.last(), Some(last) if last == PHRASE_BREAK_SYMBOL)
         {
             symbols.push(PHRASE_BREAK_SYMBOL.to_string());
@@ -122,6 +203,138 @@ impl SimpleEnglishG2p {
 impl GraphemeToPhoneme for SimpleEnglishG2p {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence> {
         Ok(self.phonemize_unit(text)?.phonemes)
+    }
+}
+
+pub trait PhonemeProsodyPhonemizer {
+    fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError>;
+}
+
+impl PhonemeProsodyPhonemizer for SimpleEnglishG2p {
+    fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError> {
+        Self::phonemize_unit(self, text)
+    }
+}
+
+#[derive(Debug)]
+pub struct PhonemeProsodyCandidateTracker<P = SimpleEnglishG2p> {
+    next_id: u64,
+    active: Option<PhonemeProsodyCandidate>,
+    phonemizer: P,
+}
+
+impl<P: PhonemeProsodyPhonemizer + Default> Default for PhonemeProsodyCandidateTracker<P> {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            active: None,
+            phonemizer: P::default(),
+        }
+    }
+}
+
+impl<P: PhonemeProsodyPhonemizer> PhonemeProsodyCandidateTracker<P> {
+    pub fn new(phonemizer: P) -> Self {
+        Self {
+            next_id: 0,
+            active: None,
+            phonemizer,
+        }
+    }
+
+    pub fn active(&self) -> Option<&PhonemeProsodyCandidate> {
+        self.active.as_ref()
+    }
+
+    pub fn ingest_text(
+        &mut self,
+        text: impl Into<String>,
+    ) -> std::result::Result<Vec<PhonemeProsodyCandidateEvent>, G2pError> {
+        let text = text.into();
+        if text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut events = Vec::new();
+        let (id, stable_prefix_len) = if let Some(active) = self.active.as_ref() {
+            let stable = stable_prefix_len(&active.text, &text);
+            if stable < active.text.len() {
+                let old = active.id;
+                events.push(PhonemeProsodyCandidateEvent::CandidateCancelled { id: old });
+                let new = self.next_id();
+                events.push(PhonemeProsodyCandidateEvent::CandidateReplaced {
+                    old,
+                    new,
+                    stable_prefix_len: stable,
+                });
+                (new, stable)
+            } else {
+                (active.id, stable)
+            }
+        } else {
+            let id = self.next_id();
+            events.push(PhonemeProsodyCandidateEvent::CandidateStarted { id });
+            (id, 0)
+        };
+
+        let phonemized = self.phonemizer.phonemize_unit(&text)?;
+        let candidate = build_candidate(id, text, stable_prefix_len, phonemized);
+        self.active = Some(candidate.clone());
+        events.push(PhonemeProsodyCandidateEvent::CandidateUpdated { candidate });
+        Ok(events)
+    }
+}
+
+impl<P> PhonemeProsodyCandidateTracker<P> {
+    fn next_id(&mut self) -> SpeechCandidateId {
+        // IDs intentionally start at 1 to align with existing candidate trackers.
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("speech candidate id space exhausted");
+        SpeechCandidateId(self.next_id)
+    }
+}
+
+fn build_candidate(
+    id: SpeechCandidateId,
+    text: String,
+    stable_prefix_len: usize,
+    phonemized: PhonemizedUnit,
+) -> PhonemeProsodyCandidate {
+    let phone_hints = phonemized
+        .length_hints
+        .iter()
+        .enumerate()
+        .map(|(phoneme_index, hint)| PhoneTimingHint {
+            phoneme_index,
+            approximate_duration_ms: Some(match hint.class {
+                PhoneLengthClass::Short => 70,
+                PhoneLengthClass::Medium => 120,
+            }),
+            source: TimingHintSource::HeuristicFromPhonemeClass,
+        })
+        .collect();
+
+    let word_hints = text
+        .split_ascii_whitespace()
+        .enumerate()
+        .map(|(word_index, word)| WordTimingHint {
+            word_index,
+            approximate_duration_ms: Some((word.len() as u64).saturating_mul(90)),
+            source: TimingHintSource::HeuristicFromWordLength,
+        })
+        .collect();
+
+    PhonemeProsodyCandidate {
+        id,
+        text,
+        phonemes: phonemized.phonemes,
+        phone_hints,
+        word_hints,
+        boundary_hint: phonemized.boundary,
+        commitment: ProsodyCommitment::Provisional,
+        stable_prefix_len,
     }
 }
 
@@ -160,10 +373,7 @@ mod tests {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("Okay.").expect("phonemize");
         assert_eq!(symbols(&unit.phonemes), vec!["OW", "K", "EY", "|"]);
-        assert_eq!(
-            unit.boundary,
-            ProsodyBoundaryHint::SentenceTerminalCandidate
-        );
+        assert_eq!(unit.boundary, ProsodyBoundaryHint::PossibleSentenceEnd);
         assert_eq!(unit.commitment, ProsodyCommitment::Provisional);
     }
 
@@ -216,5 +426,129 @@ mod tests {
             error.to_string(),
             "unsupported word `xylophone` for native Piper simple English G2P"
         );
+    }
+
+    #[test]
+    fn candidate_complete_sentence_stays_provisional_until_committed() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let events = tracker.ingest_text("Okay.").expect("candidate");
+        let candidate = match events.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        assert_eq!(candidate.commitment, ProsodyCommitment::Provisional);
+        assert_eq!(
+            candidate.boundary_hint,
+            ProsodyBoundaryHint::PossibleSentenceEnd
+        );
+        assert_eq!(candidate.stable_prefix_len, 0);
+        assert!(!candidate.phone_hints.is_empty());
+        assert_eq!(candidate.word_hints.len(), 1);
+
+        let mut committed = candidate.clone();
+        committed.mark_prepared();
+        committed.mark_playable();
+        committed.mark_committed();
+        assert_eq!(committed.commitment, ProsodyCommitment::Committed);
+        assert_eq!(
+            committed.boundary_hint,
+            ProsodyBoundaryHint::FinalSentenceEnd
+        );
+    }
+
+    #[test]
+    fn candidate_delays_commitment_for_f_scott_fitzgerald() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let first = tracker.ingest_text("F.").expect("candidate");
+        let first_candidate = match first.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(first_candidate.boundary_hint, ProsodyBoundaryHint::None);
+        assert_eq!(first_candidate.commitment, ProsodyCommitment::Provisional);
+
+        let second = tracker
+            .ingest_text("F. Scott Fitzgerald.")
+            .expect("candidate");
+        let second_candidate = match second.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(second_candidate.id, first_candidate.id);
+        assert_eq!(
+            second_candidate.boundary_hint,
+            ProsodyBoundaryHint::PossibleSentenceEnd
+        );
+    }
+
+    #[test]
+    fn candidate_delays_commitment_for_dr_king() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let first = tracker.ingest_text("Dr.").expect("candidate");
+        let first_candidate = match first.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(first_candidate.boundary_hint, ProsodyBoundaryHint::None);
+
+        let second = tracker.ingest_text("Dr. King.").expect("candidate");
+        let second_candidate = match second.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(second_candidate.id, first_candidate.id);
+        assert_eq!(
+            second_candidate.boundary_hint,
+            ProsodyBoundaryHint::PossibleSentenceEnd
+        );
+    }
+
+    #[test]
+    fn candidate_extension_preserves_stable_prefix() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let first = tracker.ingest_text("I see.").expect("candidate");
+        let first_candidate = match first.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        let second = tracker.ingest_text("I see. Okay.").expect("candidate");
+        let second_candidate = match second.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        assert_eq!(second_candidate.id, first_candidate.id);
+        assert_eq!(second_candidate.stable_prefix_len, "I see.".len());
+    }
+
+    #[test]
+    fn candidate_head_change_cancels_and_replaces() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let first = tracker.ingest_text("Okay.").expect("candidate");
+        let first_id = match first.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.id,
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        let second = tracker.ingest_text("I see.").expect("candidate");
+        assert!(matches!(
+            second.first(),
+            Some(PhonemeProsodyCandidateEvent::CandidateCancelled { id }) if *id == first_id
+        ));
+        let replacement = second
+            .iter()
+            .find_map(|event| match event {
+                PhonemeProsodyCandidateEvent::CandidateReplaced {
+                    old,
+                    new,
+                    stable_prefix_len,
+                } => Some((*old, *new, *stable_prefix_len)),
+                _ => None,
+            })
+            .expect("replacement event");
+        assert_eq!(replacement.0, first_id);
+        assert_eq!(replacement.2, 0);
     }
 }
