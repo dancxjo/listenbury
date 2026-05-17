@@ -27,6 +27,7 @@ struct ServerState {
     broadcaster: Option<SseBroadcaster>,
 }
 
+#[derive(Debug)]
 pub struct BoundServer {
     listener: TcpListener,
     local_addr: SocketAddr,
