@@ -8,12 +8,19 @@ const audio = document.getElementById("audio");
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
 const MIN_SELECTION_VIEW_MS = 500;
-const WHEEL_ZOOM_FACTOR = 1.16;
 const RANGE_SELECTION_DRAG_THRESHOLD_PX = 12;
-const ZOOM_BUTTON_PERCENT = 0.25;
-const SESSION_EPOCH = Date.now();
-const TIMELINE_GROUP_IDS = ["Mic", "ASR", "LLM", "Speaker"];
-const visLib = window.vis;
+const MAX_RULER_TICKS = 200;
+// How long a point-in-time marker appears "active" during playback (ms).
+const MARKER_ACTIVE_DURATION_MS = 120;
+
+// Custom timeline renderer settings
+const DEFAULT_ZOOM_PX_PER_SECOND = 80;
+const MIN_ZOOM_PX_PER_SECOND = 4;
+const MAX_ZOOM_PX_PER_SECOND = 4000;
+const ZOOM_STEP_FACTOR = 1.3;
+const ZOOM_SELECTION_PADDING_FACTOR = 0.3;
+const ZOOM_SELECTION_PADDING_MIN_MS = 250;
+const ZOOM_LATEST_WINDOW_MS = 30_000;
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -64,11 +71,6 @@ function openSpanKey(lane, turn, startKind) {
   return JSON.stringify([lane, turn ?? null, startKind]);
 }
 
-// Convert elapsed session milliseconds to Date objects anchored to SESSION_EPOCH
-// so vis-timeline can render relative session time on a date-based axis.
-function msDate(elapsedMs) {
-  return new Date(SESSION_EPOCH + Math.max(0, Math.round(elapsedMs)));
-}
 
 // Accumulated live trace events (kept for error recovery / diagnostics).
 const liveEvents = [];
@@ -86,15 +88,13 @@ const state = {
   selectedItem: null,
   maxDurationMs: 1000,
   stopAtMs: null,
-  timeline: null,
-  timelineContainer: null,
-  timelineItemsDataSet: visLib ? new visLib.DataSet() : null,
-  timelineGroupsDataSet: visLib ? new visLib.DataSet() : null,
-  timelineSelectionById: new Map(),
-  timelineSelectionIdByKey: new Map(),
-  timelineItemBaseClassById: new Map(),
-  timelineItemTimingById: new Map(),
-  suppressTimelineSelectEvent: false,
+  // Custom timeline renderer state
+  zoomPxPerSecond: DEFAULT_ZOOM_PX_PER_SECOND,
+  followLatest: false,
+  dragSelection: null,
+  suppressTimelineClick: false,
+  itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
+  chipElementByKey: new Map(),  // itemKey → DOM element
 };
 
 const uiState = {
@@ -156,8 +156,20 @@ function ConnectionChrome({ projection }) {
     h(
       "section",
       { className: "toolbar zoom-toolbar", id: "zoom-toolbar", "aria-label": "Timeline zoom controls" },
-      h("button", { id: "zoom-out", type: "button", "aria-label": "Zoom out", disabled: !projection.canZoom, onClick: () => zoomTimelineOut() }, "Zoom -"),
-      h("button", { id: "zoom-in", type: "button", "aria-label": "Zoom in", disabled: !projection.canZoom, onClick: () => zoomTimelineIn() }, "Zoom +"),
+      h("button", { id: "zoom-out", type: "button", "aria-label": "Zoom out (−)", disabled: !projection.canZoom, onClick: () => zoomTimelineOut() }, "−"),
+      h("button", { id: "zoom-in", type: "button", "aria-label": "Zoom in (+)", disabled: !projection.canZoom, onClick: () => zoomTimelineIn() }, "+"),
+      h("button", { id: "zoom-to-sel", type: "button", "aria-label": "Zoom to selection (F)", disabled: !projection.hasSelection, onClick: () => zoomToSelection() }, "⌗ Sel"),
+      h("button", { id: "zoom-to-all", type: "button", "aria-label": "Zoom to full session (Shift+F)", onClick: () => zoomToFullSession() }, "↔ All"),
+      h("button", { id: "zoom-to-latest", type: "button", "aria-label": "Zoom to latest activity", onClick: () => zoomToLatest() }, "▶ Latest"),
+      h("button", {
+        id: "follow-toggle",
+        type: "button",
+        "aria-label": "Toggle follow latest (L)",
+        "aria-pressed": projection.followLatest,
+        className: projection.followLatest ? "active-toggle" : "",
+        onClick: () => toggleFollowLatest(),
+      }, projection.followLatest ? "⬤ Follow" : "○ Follow"),
+      h("button", { id: "zoom-reset", type: "button", "aria-label": "Reset zoom (0)", onClick: () => resetZoom() }, "⟳ Reset"),
     ),
     h(
       "section",
@@ -255,7 +267,9 @@ function buildShellProjection() {
     playPauseLabel: audio.paused ? "Play" : "Pause",
     canPlaySelectionClip: selectionProjection.canPlaySelectionClip,
     playSelectionClipLabel: selectionProjection.playSelectionClipLabel,
-    canZoom: state.lanes.length > 0 && Boolean(state.timeline),
+    canZoom: state.lanes.length > 0,
+    hasSelection: Boolean(state.selectedItem),
+    followLatest: state.followLatest,
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
     connectionStatusClass: uiState.connectionStatusClass,
@@ -965,210 +979,394 @@ function syncMaxDurationWithAudio() {
 function render() {
   if (!state.lanes.length) {
     viewer.className = "viewer empty";
-    if (state.timelineItemsDataSet) {
-      state.timelineItemsDataSet.clear();
-    }
-    if (state.timelineGroupsDataSet) {
-      state.timelineGroupsDataSet.clear();
-    }
+    state.chipElementByKey = new Map();
+    state.itemTimingByKey = new Map();
     viewer.innerHTML = "<p>No streams or events loaded yet.</p>";
     renderSelection();
+    renderShell();
     return;
   }
 
   viewer.className = "viewer";
-  if (!ensureTimeline()) {
-    viewer.className = "viewer empty";
-    viewer.innerHTML = "<p>vis-timeline failed to load.</p>";
-    return;
-  }
-  const timelineGroups = liveSessionToTimelineGroups(liveSession);
-  const timelineItems = liveSessionToTimelineItems(liveSession);
-  syncTimelineProjection(timelineGroups, timelineItems);
-  refreshPlaybackState();
+  renderCustomTimeline();
   renderSelection();
+  renderShell();
 }
 
-function ensureTimeline() {
-  if (!visLib || !state.timelineItemsDataSet || !state.timelineGroupsDataSet) {
-    return false;
-  }
-  if (!state.timelineContainer || !viewer.contains(state.timelineContainer)) {
-    viewer.replaceChildren();
-    const container = document.createElement("div");
-    container.className = "timeline-host";
-    viewer.append(container);
-    state.timelineContainer = container;
-  }
-  if (!state.timeline) {
-    state.timeline = new visLib.Timeline(state.timelineContainer, state.timelineItemsDataSet, state.timelineGroupsDataSet, {
-      stack: false,
-      horizontalScroll: true,
-      zoomKey: "ctrlKey",
-      orientation: "top",
-      selectable: true,
-      multiselect: false,
-      showCurrentTime: false,
-      margin: { item: 8, axis: 8 },
-      moveable: true,
-      zoomable: true,
-    });
-    state.timeline.on("select", ({ items }) => {
-      if (state.suppressTimelineSelectEvent) {
-        return;
-      }
-      if (!items?.length) {
-        return;
-      }
-      const selected = state.timelineSelectionById.get(String(items[0]));
-      if (!selected) {
-        return;
-      }
-      if (selected.type === "word") {
-        selectWord(selected.laneIndex, selected.itemIndex, true);
-      } else {
-        selectEvent(selected.laneIndex, selected.itemIndex, true);
-      }
-    });
-  }
-  return true;
+// ── Custom timeline renderer ───────────────────────────────────────────────
+
+let _programmaticScroll = false;
+
+function pxPerMs() {
+  return state.zoomPxPerSecond / 1000;
 }
 
-function liveSessionToTimelineGroups(_session) {
-  // Keep the session parameter in the signature to match the reducer→projection contract.
-  return TIMELINE_GROUP_IDS.map((id) => ({ id, content: id }));
+function pxForMs(ms) {
+  return ms * pxPerMs();
 }
 
-function liveSessionToTimelineItems(session) {
-  const payload = liveSessionToViewerPayload(session);
-  const normalized = normalizePayload(payload);
-  const lanes = buildLanes(normalized);
-  const items = [];
+function msForPx(px) {
+  return px / pxPerMs();
+}
 
-  lanes.forEach((lane) => {
+function clampZoom(pxPerSec) {
+  return Math.max(MIN_ZOOM_PX_PER_SECOND, Math.min(MAX_ZOOM_PX_PER_SECOND, pxPerSec));
+}
+
+function getScrollContainer() {
+  return document.getElementById("timeline-tracks-col");
+}
+
+function getTrackContentWidth() {
+  const col = getScrollContainer();
+  const viewWidth = col ? col.clientWidth : 600;
+  return Math.max(viewWidth, Math.ceil(state.maxDurationMs * pxPerMs()));
+}
+
+function getScrollViewport() {
+  const col = getScrollContainer();
+  if (!col) {
+    return { startMs: 0, endMs: state.maxDurationMs, durationMs: Math.max(MIN_VIEW_DURATION_MS, state.maxDurationMs) };
+  }
+  const startMs = Math.max(0, msForPx(col.scrollLeft));
+  const endMs = Math.min(state.maxDurationMs, msForPx(col.scrollLeft + col.clientWidth));
+  const durationMs = Math.max(MIN_VIEW_DURATION_MS, endMs - startMs);
+  return { startMs, endMs, durationMs };
+}
+
+function ensureCustomTimeline() {
+  if (document.getElementById("timeline-tracks-col")) return;
+
+  viewer.replaceChildren();
+
+  const host = document.createElement("div");
+  host.className = "timeline-host";
+  host.id = "timeline-host";
+
+  const labelsCol = document.createElement("div");
+  labelsCol.className = "timeline-labels-col";
+  labelsCol.id = "timeline-labels-col";
+
+  const tracksCol = document.createElement("div");
+  tracksCol.className = "timeline-tracks-col";
+  tracksCol.id = "timeline-tracks-col";
+
+  const scrollContent = document.createElement("div");
+  scrollContent.className = "timeline-scroll-content";
+  scrollContent.id = "timeline-scroll-content";
+  tracksCol.append(scrollContent);
+
+  host.append(labelsCol, tracksCol);
+  viewer.append(host);
+
+  tracksCol.addEventListener("scroll", onTracksScroll, { passive: true });
+  tracksCol.addEventListener("click", onTimelineClick);
+  tracksCol.addEventListener("pointerdown", startTimeRangeSelection);
+  tracksCol.addEventListener("pointermove", moveTimeRangeSelection);
+  tracksCol.addEventListener("pointerup", finishTimeRangeSelection);
+  tracksCol.addEventListener("pointercancel", cancelTimeRangeSelection);
+}
+
+function renderCustomTimeline() {
+  ensureCustomTimeline();
+
+  const trackContentWidth = getTrackContentWidth();
+  const labelsCol = document.getElementById("timeline-labels-col");
+  const scrollContent = document.getElementById("timeline-scroll-content");
+  if (!labelsCol || !scrollContent) return;
+
+  labelsCol.innerHTML = "";
+  scrollContent.innerHTML = "";
+  scrollContent.style.width = `${trackContentWidth}px`;
+
+  state.chipElementByKey = new Map();
+  state.itemTimingByKey = new Map();
+
+  const nowMs = Math.round(audio.currentTime * 1000);
+
+  // Ruler label (for the labels column)
+  const rulerLabelEl = document.createElement("div");
+  rulerLabelEl.className = "lane-ruler-label";
+  labelsCol.append(rulerLabelEl);
+
+  // Ruler track (for the tracks column) — ticks based on full session
+  const rulerEl = document.createElement("div");
+  rulerEl.className = "timeline-ruler";
+  const col = getScrollContainer();
+  const vpMs = col ? Math.max(MIN_VIEW_DURATION_MS, msForPx(col.clientWidth)) : state.maxDurationMs;
+  const rulerTicks = buildRulerTicks(state.maxDurationMs, vpMs);
+  rulerTicks.forEach((ms) => {
+    const tick = document.createElement("span");
+    tick.className = "ruler-tick";
+    tick.style.left = `${pxForMs(ms)}px`;
+    const label = document.createElement("span");
+    label.className = "ruler-label";
+    label.style.left = `${pxForMs(ms)}px`;
+    label.textContent = formatRulerLabel(ms);
+    rulerEl.append(tick, label);
+  });
+  scrollContent.append(rulerEl);
+
+  // Lane rows
+  state.lanes.forEach((lane, laneIndex) => {
+    // Label entry
+    const labelEntryEl = document.createElement("div");
+    labelEntryEl.className = `lane-label-entry${lane.type === "event" ? " event-lane" : ""}`;
+    const laneHeader = document.createElement("div");
+    laneHeader.className = "lane-header";
+    const h2El = document.createElement("h2");
+    h2El.textContent = lane.label;
+    laneHeader.append(h2El);
+    const metaEl = document.createElement("div");
+    metaEl.className = "lane-meta";
+    if (lane.type === "word") {
+      metaEl.textContent = `${lane.words.length} word${lane.words.length === 1 ? "" : "s"}`;
+    } else {
+      metaEl.textContent = `${lane.events.length} event${lane.events.length === 1 ? "" : "s"}`;
+    }
+    laneHeader.append(metaEl);
+    labelEntryEl.append(laneHeader);
+    labelsCol.append(labelEntryEl);
+
+    // Track entry
+    const trackEl = document.createElement("div");
+    trackEl.className = `lane-track${lane.type === "event" ? " event-track" : ""}`;
+    trackEl.dataset.laneIndex = String(laneIndex);
+
+    // Time-range selection overlay
+    const selOverlay = document.createElement("div");
+    selOverlay.className = "time-range-selection";
+    selOverlay.setAttribute("aria-hidden", "true");
+    selOverlay.hidden = true;
+    trackEl.append(selOverlay);
+
     if (lane.type === "word") {
       lane.words.forEach((word, wordIndex) => {
-        const timing = word.resolvedTiming;
-        const className = [
-          "word-item",
+        const key = itemKey("word", laneIndex, wordIndex);
+        const startMs = word.resolvedTiming.start_ms;
+        const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
+        state.itemTimingByKey.set(key, { startMs, endMs });
+
+        const isSelected =
+          state.selectedItem?.type === "word" &&
+          state.selectedItem.laneIndex === laneIndex &&
+          state.selectedItem.itemIndex === wordIndex;
+        const isActive = nowMs >= startMs && nowMs <= endMs;
+
+        const baseClass = [
+          "timeline-chip word-chip",
           word.timingResolution === "fallback-layout" ? "fallback-timing" : "",
           `commit-${commitmentClass(word.commitment)}`,
           word._revisions?.length ? "was-revised" : "",
         ]
           .filter(Boolean)
           .join(" ");
-        items.push({
-          id: timelineWordId(lane, word, wordIndex),
-          group: timelineGroupForWordLane(lane),
-          content: escapeHtml(word.text),
-          start: msDate(timing.start_ms),
-          end: msDate(Math.max(timing.start_ms + 1, timing.end_ms)),
-          type: "range",
-          className,
-          title: escapeHtml(
-            `${lane.label} · ${word.text} (${timing.start_ms}–${timing.end_ms} ms) · ${word.timingSourceDetail}`,
-          ),
-          _selection: { type: "word", laneIndex: word.laneIndex, itemIndex: word.wordIndex },
-          _baseClassName: className,
-          _timing: { startMs: timing.start_ms, endMs: timing.end_ms },
-        });
+
+        const chip = document.createElement("div");
+        chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+          .filter(Boolean)
+          .join(" ");
+        chip.dataset.baseClass = baseClass;
+        chip.dataset.itemKey = key;
+        chip.dataset.laneIndex = String(laneIndex);
+        chip.dataset.itemIndex = String(wordIndex);
+        chip.dataset.itemType = "word";
+        chip.style.left = `${pxForMs(startMs)}px`;
+        chip.style.width = `${Math.max(2, pxForMs(endMs - startMs))}px`;
+        chip.title = `${lane.label} · ${word.text} (${startMs}–${endMs} ms) · ${word.timingSourceDetail}`;
+        chip.textContent = word.text;
+        trackEl.append(chip);
+        state.chipElementByKey.set(key, chip);
       });
-      return;
+    } else {
+      lane.events.forEach((event, eventIndex) => {
+        const key = itemKey("event", laneIndex, eventIndex);
+        const isMarker = event.style === "marker" || event.start_ms === event.end_ms;
+        const startMs = event.start_ms;
+        const endMs = Math.max(event.end_ms, startMs + 1);
+        state.itemTimingByKey.set(key, { startMs, endMs });
+
+        const isSelected =
+          state.selectedItem?.type === "event" &&
+          state.selectedItem.laneIndex === laneIndex &&
+          state.selectedItem.itemIndex === eventIndex;
+        const activeEndMs = isMarker ? startMs + MARKER_ACTIVE_DURATION_MS : endMs;
+        const isActive = nowMs >= startMs && nowMs <= activeEndMs;
+
+        const baseClass = [
+          "timeline-chip event-chip",
+          event.style,
+          `kind-${classToken(event.kind)}`,
+          event.kind === "overlap_detected" ? "overlap-region" : "",
+          event.kind === "speech_unit_cancelled" ? "interruption-region" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+        const chip = document.createElement("div");
+        chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+          .filter(Boolean)
+          .join(" ");
+        chip.dataset.baseClass = baseClass;
+        chip.dataset.itemKey = key;
+        chip.dataset.laneIndex = String(laneIndex);
+        chip.dataset.itemIndex = String(eventIndex);
+        chip.dataset.itemType = "event";
+        const widthPx = isMarker ? 8 : Math.max(4, pxForMs(event.end_ms - event.start_ms));
+        chip.style.left = `${pxForMs(startMs)}px`;
+        chip.style.width = `${widthPx}px`;
+        chip.title = `${lane.label} · ${event.kind} (${startMs}–${endMs} ms)`;
+        chip.textContent = event.label;
+        trackEl.append(chip);
+        state.chipElementByKey.set(key, chip);
+      });
     }
 
-    lane.events.forEach((event) => {
-      const className = [
-        "event-item",
-        event.style,
-        `kind-${classToken(event.kind)}`,
-        event.kind === "overlap_detected" ? "overlap-region" : "",
-        event.kind === "speech_unit_cancelled" ? "interruption-region" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const isPoint = event.style === "marker" || event.start_ms === event.end_ms;
-      items.push({
-        id: timelineEventId(lane, event),
-        group: timelineGroupForEvent(event),
-        content: escapeHtml(event.label),
-        start: msDate(event.start_ms),
-        ...(isPoint ? {} : { end: msDate(event.end_ms), type: "range" }),
-        ...(isPoint ? { type: "point" } : {}),
-        className,
-        title: escapeHtml(`${lane.label} · ${event.kind} (${event.start_ms}–${event.end_ms} ms)`),
-        _selection: { type: "event", laneIndex: event.laneIndex, itemIndex: event.eventIndex },
-        _baseClassName: className,
-        _timing: { startMs: event.start_ms, endMs: event.end_ms },
-      });
-    });
+    scrollContent.append(trackEl);
   });
-  return items;
+
+  updateTimeRangeSelectionOverlays();
+
+  if (state.followLatest) {
+    applyFollowLatest();
+  }
 }
 
-function syncTimelineProjection(groups, items) {
-  const timelineRecords = items.map((item) => ({
-    ...item,
-    id: String(item.id),
-  }));
-  const nextGroupIds = new Set(groups.map((group) => String(group.id)));
-  const nextItemIds = new Set(timelineRecords.map((item) => item.id));
-
-  const existingGroupIds = new Set(
-    (state.timelineGroupsDataSet.getIds() ?? []).map((groupId) => String(groupId)),
-  );
-  const existingItemIds = new Set(
-    (state.timelineItemsDataSet.getIds() ?? []).map((itemId) => String(itemId)),
-  );
-
-  state.timelineGroupsDataSet.update(groups);
-  state.timelineItemsDataSet.update(
-    timelineRecords.map(({ _selection, _baseClassName, _timing, ...timelineItem }) => timelineItem),
-  );
-
-  const groupsToRemove = [...existingGroupIds].filter((groupId) => !nextGroupIds.has(groupId));
-  if (groupsToRemove.length) {
-    state.timelineGroupsDataSet.remove(groupsToRemove);
+// Update only active/selected classes on existing chips (no DOM rebuild).
+function updateChipStates() {
+  const nowMs = Math.round(audio.currentTime * 1000);
+  for (const [key, chip] of state.chipElementByKey.entries()) {
+    const timing = state.itemTimingByKey.get(key);
+    if (!timing) continue;
+    const { itemType, laneIndex, itemIndex } = parseItemKey(key);
+    const isMarker = timing.endMs <= timing.startMs;
+    const activeEndMs = isMarker ? timing.startMs + MARKER_ACTIVE_DURATION_MS : timing.endMs;
+    const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
+    const isSelected =
+      state.selectedItem?.type === itemType &&
+      state.selectedItem.laneIndex === laneIndex &&
+      state.selectedItem.itemIndex === itemIndex;
+    const baseClass = chip.dataset.baseClass ?? "";
+    const newClass = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+      .filter(Boolean)
+      .join(" ");
+    if (chip.className !== newClass) {
+      chip.className = newClass;
+    }
   }
-  const itemsToRemove = [...existingItemIds].filter((itemId) => !nextItemIds.has(itemId));
-  if (itemsToRemove.length) {
-    state.timelineItemsDataSet.remove(itemsToRemove);
-  }
-
-  state.timelineSelectionById = new Map(
-    timelineRecords.map((item) => [item.id, item._selection]),
-  );
-  state.timelineSelectionIdByKey = new Map(
-    timelineRecords.map((item) => [
-      itemKey(item._selection.type, item._selection.laneIndex, item._selection.itemIndex),
-      item.id,
-    ]),
-  );
-  state.timelineItemBaseClassById = new Map(timelineRecords.map((item) => [item.id, item._baseClassName]));
-  state.timelineItemTimingById = new Map(timelineRecords.map((item) => [item.id, item._timing]));
-  syncTimelineSelectionFromState();
 }
+
+// Build ruler tick timestamps covering [0..maxDurationMs].
+// Spacing is based on viewportMs so ~10 ticks appear per visible screen width.
+// Capped at MAX_RULER_TICKS to avoid excessive DOM nodes for long sessions.
+function buildRulerTicks(maxDurationMs, viewportMs) {
+  const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewportMs);
+  const targetSegments = 10;
+  // Candidate step sizes in ms: from fine-grained (25ms) to coarse (10min)
+  const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000];
+  const desiredStep = safeDuration / targetSegments;
+  // Enforce a minimum step to keep total tick count under MAX_RULER_TICKS
+  const minStepForMaxTicks = maxDurationMs / MAX_RULER_TICKS;
+  const effectiveDesiredStep = Math.max(desiredStep, minStepForMaxTicks);
+  // Candidate steps: 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s, 15s, 30s, 1min, 2min, 5min, 10min
+  const stepMs = preferredSteps.find((step) => step >= effectiveDesiredStep) ?? 600_000;
+
+  const ticks = [];
+  for (let at = 0; at <= maxDurationMs; at += stepMs) {
+    ticks.push(at);
+  }
+  if (!ticks.length || ticks[ticks.length - 1] !== maxDurationMs) {
+    ticks.push(maxDurationMs);
+  }
+  return [...new Set(ticks)];
+}
+
+// ── Event handlers for the custom timeline ──────────────────────────────────
+
+function onTracksScroll() {
+  if (_programmaticScroll) return;
+  if (state.followLatest) {
+    state.followLatest = false;
+    renderShell();
+  }
+}
+
+function onTimelineClick(event) {
+  if (state.suppressTimelineClick) return;
+  const chip = event.target?.closest(".timeline-chip");
+  if (!chip) return;
+  const laneIndex = parseInt(chip.dataset.laneIndex, 10);
+  const itemIndex = parseInt(chip.dataset.itemIndex, 10);
+  const itemType = chip.dataset.itemType;
+  if (itemType === "word") {
+    selectWord(laneIndex, itemIndex, true);
+  } else {
+    selectEvent(laneIndex, itemIndex, true);
+  }
+}
+
+// Keyboard shortcuts for DAW-style navigation.
+window.addEventListener("keydown", function onTimelineKeyDown(event) {
+  if (event.target?.tagName === "INPUT" || event.target?.tagName === "TEXTAREA" || event.target?.isContentEditable) return;
+
+  switch (event.key) {
+    case "f":
+      if (event.shiftKey) {
+        event.preventDefault();
+        zoomToFullSession();
+      } else if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        zoomToSelection();
+      }
+      break;
+    case "l":
+      if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        toggleFollowLatest();
+      }
+      break;
+    case "j":
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        jumpSelectedWord(-1);
+      }
+      break;
+    case "k":
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        jumpSelectedWord(1);
+      }
+      break;
+    case "0":
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        resetZoom();
+      }
+      break;
+    case "+":
+    case "=":
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        zoomTimelineIn();
+      }
+      break;
+    case "-":
+      if (!event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        zoomTimelineOut();
+      }
+      break;
+    case "Escape":
+      state.selectedItem = null;
+      updateChipStates();
+      renderSelection();
+      renderShell();
+      break;
+  }
+});
 
 function refreshPlaybackState() {
-  const nowMs = Math.round(audio.currentTime * 1000);
-  if (!state.timelineItemsDataSet) {
-    renderShell();
-    return;
-  }
-
-  const selectedId = selectedTimelineItemId();
-  const updates = [];
-  for (const [id, timing] of state.timelineItemTimingById.entries()) {
-    const baseClassName = state.timelineItemBaseClassById.get(id) ?? "";
-    const isMarker = timing.endMs <= timing.startMs;
-    const activeEndMs = isMarker ? timing.startMs + 120 : timing.endMs;
-    const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
-    const nextClassName = `${baseClassName}${isActive ? " active" : ""}${selectedId === id ? " selected" : ""}`;
-    updates.push({ id, className: nextClassName.trim() });
-  }
-  if (updates.length) {
-    state.timelineItemsDataSet.update(updates);
-  }
-  syncTimelineSelectionFromState();
+  updateChipStates();
   renderShell();
 }
 
@@ -1188,9 +1386,9 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
   }
 
   clearPlaybackStop();
-  refreshPlaybackState();
+  updateChipStates();
   renderSelection();
-  syncTimelineSelectionFromState();
+  renderShell();
 }
 
 function selectEvent(laneIndex, eventIndex, seekAudio) {
@@ -1209,35 +1407,99 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   }
 
   clearPlaybackStop();
-  refreshPlaybackState();
+  updateChipStates();
   renderSelection();
-  syncTimelineSelectionFromState();
+  renderShell();
 }
 
 function zoomTimelineIn() {
-  if (state.timeline) {
-    state.timeline.zoomIn(ZOOM_BUTTON_PERCENT);
-  }
+  state.zoomPxPerSecond = clampZoom(state.zoomPxPerSecond * ZOOM_STEP_FACTOR);
+  renderCustomTimeline();
   updateZoomControls();
 }
 
 function zoomTimelineOut() {
-  if (state.timeline) {
-    state.timeline.zoomOut(ZOOM_BUTTON_PERCENT);
-  }
+  state.zoomPxPerSecond = clampZoom(state.zoomPxPerSecond / ZOOM_STEP_FACTOR);
+  renderCustomTimeline();
   updateZoomControls();
 }
 
 function zoomToTimeSelection(selection) {
-  const timing = clampTimeSelection(selection);
-  if (!timing || !state.timeline) {
-    return;
+  const clamped = clampTimeSelection(selection);
+  if (!clamped) return;
+
+  const selMs = clamped.endMs - clamped.startMs;
+  const paddingMs = Math.max(ZOOM_SELECTION_PADDING_MIN_MS, selMs * ZOOM_SELECTION_PADDING_FACTOR);
+  const viewStartMs = Math.max(0, clamped.startMs - paddingMs);
+  const viewEndMs = Math.min(state.maxDurationMs, clamped.endMs + paddingMs);
+  const viewMs = viewEndMs - viewStartMs;
+
+  const col = getScrollContainer();
+  const trackPx = col ? col.clientWidth : 600;
+  state.zoomPxPerSecond = clampZoom((trackPx / Math.max(viewMs, 1)) * 1000);
+  renderCustomTimeline();
+
+  if (col) {
+    _programmaticScroll = true;
+    col.scrollLeft = pxForMs(viewStartMs);
+    requestAnimationFrame(() => {
+      _programmaticScroll = false;
+    });
   }
-  state.timeline.setWindow(msDate(timing.startMs), msDate(timing.endMs), { animation: false });
   updateZoomControls();
 }
 
-// Legacy manual viewport math is retired; vis-timeline now owns panning/zoom.
+function zoomToSelection() {
+  const timing = selectedItemTiming();
+  if (!timing) return;
+  zoomToTimeSelection(timing);
+}
+
+function zoomToFullSession() {
+  state.zoomPxPerSecond = DEFAULT_ZOOM_PX_PER_SECOND;
+  renderCustomTimeline();
+  const col = getScrollContainer();
+  if (col) {
+    _programmaticScroll = true;
+    col.scrollLeft = 0;
+    requestAnimationFrame(() => {
+      _programmaticScroll = false;
+    });
+  }
+  updateZoomControls();
+}
+
+function zoomToLatest() {
+  const endMs = state.maxDurationMs;
+  const startMs = Math.max(0, endMs - ZOOM_LATEST_WINDOW_MS);
+  zoomToTimeSelection({ startMs, endMs });
+}
+
+function resetZoom() {
+  state.zoomPxPerSecond = DEFAULT_ZOOM_PX_PER_SECOND;
+  renderCustomTimeline();
+  updateZoomControls();
+}
+
+function toggleFollowLatest() {
+  state.followLatest = !state.followLatest;
+  if (state.followLatest) {
+    applyFollowLatest();
+  }
+  renderShell();
+}
+
+function applyFollowLatest() {
+  const col = getScrollContainer();
+  if (!col) return;
+  const targetScroll = Math.max(0, getTrackContentWidth() - col.clientWidth);
+  _programmaticScroll = true;
+  col.scrollLeft = targetScroll;
+  requestAnimationFrame(() => {
+    _programmaticScroll = false;
+  });
+}
+
 function selectedItemTiming() {
   if (!state.selectedItem) {
     return null;
@@ -1265,171 +1527,20 @@ function selectedItemTiming() {
   };
 }
 
-function viewportFocusMs(viewport) {
-  const selection = selectedItemTiming();
-  if (selection) {
-    const selectionCenter = (selection.startMs + selection.endMs) / 2;
-    if (selectionCenter >= viewport.startMs && selectionCenter <= viewport.endMs) {
-      return selectionCenter;
-    }
-  }
-
-  const playheadMs = audio.currentTime * 1000;
-  if (Number.isFinite(playheadMs) && playheadMs >= viewport.startMs && playheadMs <= viewport.endMs) {
-    return playheadMs;
-  }
-
-  return viewport.startMs + viewport.durationMs / 2;
-}
-
-function setViewportAround(focusMs, requestedDurationMs) {
-  const nextDuration = Math.max(
-    MIN_VIEW_DURATION_MS,
-    Math.min(state.maxDurationMs, requestedDurationMs),
-  );
-
-  if (nextDuration >= state.maxDurationMs) {
-    state.viewStartMs = null;
-    state.viewEndMs = null;
-    return;
-  }
-
-  const unclampedStart = focusMs - nextDuration / 2;
-  const startMs = Math.max(0, Math.min(state.maxDurationMs - nextDuration, unclampedStart));
-  state.viewStartMs = startMs;
-  state.viewEndMs = startMs + nextDuration;
-}
-
-function setViewportRange(startMs, endMs) {
-  const selectionDuration = Math.max(MIN_SELECTION_VIEW_MS, endMs - startMs);
-  const centerMs = startMs + (endMs - startMs) / 2;
-  setViewportAround(centerMs, selectionDuration);
-}
-
-function captureViewportSnapshot() {
-  const viewport = getViewport();
-  return {
-    startMs: viewport.startMs,
-    endMs: viewport.endMs,
-    durationMs: viewport.durationMs,
-    followsTimelineEnd: Math.abs(viewport.endMs - state.maxDurationMs) < 1,
-  };
-}
-
-function restoreViewportSnapshot(snapshot) {
-  if (!snapshot) {
-    return;
-  }
-
-  const durationMs = Math.max(
-    MIN_VIEW_DURATION_MS,
-    Math.min(state.maxDurationMs, snapshot.durationMs),
-  );
-
-  if (durationMs >= state.maxDurationMs) {
-    state.viewStartMs = null;
-    state.viewEndMs = null;
-    return;
-  }
-
-  const requestedStartMs = snapshot.followsTimelineEnd
-    ? state.maxDurationMs - durationMs
-    : snapshot.startMs;
-  const startMs = Math.max(0, Math.min(state.maxDurationMs - durationMs, requestedStartMs));
-  state.viewStartMs = startMs;
-  state.viewEndMs = startMs + durationMs;
-}
-
-function clampViewport() {
-  if (state.viewStartMs === null || state.viewEndMs === null) {
-    state.viewStartMs = null;
-    state.viewEndMs = null;
-    return;
-  }
-
-  const durationMs = state.viewEndMs - state.viewStartMs;
-  if (durationMs >= state.maxDurationMs || durationMs < MIN_VIEW_DURATION_MS) {
-    state.viewStartMs = null;
-    state.viewEndMs = null;
-    return;
-  }
-
-  const startMs = Math.max(0, Math.min(state.maxDurationMs - durationMs, state.viewStartMs));
-  state.viewStartMs = startMs;
-  state.viewEndMs = startMs + durationMs;
-}
-
-function getViewport() {
-  const hasCustomViewport =
-    state.viewStartMs !== null &&
-    state.viewEndMs !== null &&
-    state.viewEndMs > state.viewStartMs;
-  const startMs = hasCustomViewport ? state.viewStartMs : 0;
-  const endMs = hasCustomViewport ? state.viewEndMs : state.maxDurationMs;
-  return {
-    startMs,
-    endMs,
-    durationMs: Math.max(MIN_VIEW_DURATION_MS, endMs - startMs),
-    isFullTimeline: !hasCustomViewport,
-  };
-}
-
-function visibleItemRange(startMs, endMs, viewport) {
-  const itemStartMs = Math.max(0, startMs);
-  const itemEndMs = Math.max(itemStartMs + 1, endMs);
-  if (itemEndMs < viewport.startMs || itemStartMs > viewport.endMs) {
-    return null;
-  }
-  return {
-    startMs: Math.max(itemStartMs, viewport.startMs),
-    endMs: Math.min(itemEndMs, viewport.endMs),
-  };
-}
-
-function msToViewportPercent(ms, viewport) {
-  return ((ms - viewport.startMs) / viewport.durationMs) * 100;
-}
-
-function durationToViewportPercent(durationMs, viewport) {
-  return (durationMs / viewport.durationMs) * 100;
-}
-
-function appendTimeRangeSelection(container, viewport) {
-  const overlay = document.createElement("div");
-  overlay.className = "time-range-selection";
-  overlay.setAttribute("aria-hidden", "true");
-  container.append(overlay);
-  updateTimeRangeSelectionOverlay(overlay, viewport);
-}
-
 function updateTimeRangeSelectionOverlays() {
-  const viewport = getViewport();
-  document.querySelectorAll(".time-range-selection").forEach((overlay) => {
-    updateTimeRangeSelectionOverlay(overlay, viewport);
+  const selection = activeTimeRangeSelection();
+  document.querySelectorAll(".lane-track .time-range-selection").forEach((overlay) => {
+    if (!selection) {
+      overlay.hidden = true;
+      return;
+    }
+    const startPx = pxForMs(selection.startMs);
+    const widthPx = Math.max(0, pxForMs(selection.endMs) - startPx);
+    overlay.hidden = false;
+    overlay.style.left = `${startPx}px`;
+    overlay.style.width = `${widthPx}px`;
   });
   updateZoomControls();
-}
-
-function updateTimeRangeSelectionOverlay(overlay, viewport) {
-  const selection = activeTimeRangeSelection();
-  if (!selection) {
-    overlay.hidden = true;
-    overlay.style.width = "0";
-    return;
-  }
-
-  const visibleRange = visibleItemRange(selection.startMs, selection.endMs, viewport);
-  if (!visibleRange) {
-    overlay.hidden = true;
-    overlay.style.width = "0";
-    return;
-  }
-
-  const left = Math.max(0, Math.min(100, msToViewportPercent(visibleRange.startMs, viewport)));
-  const right = Math.max(0, Math.min(100, msToViewportPercent(visibleRange.endMs, viewport)));
-  overlay.hidden = false;
-  overlay.style.left = `${left}%`;
-  overlay.style.width = `${Math.max(0, right - left)}%`;
 }
 
 function activeTimeRangeSelection() {
@@ -1450,7 +1561,7 @@ function startTimeRangeSelection(event) {
     return;
   }
 
-  const startMs = timeMsAtClientX(event.clientX, surface);
+  const startMs = clientXToTimelineMs(event.clientX);
   if (startMs === null) {
     return;
   }
@@ -1463,7 +1574,8 @@ function startTimeRangeSelection(event) {
     startMs,
     endMs: startMs,
   };
-  viewer.setPointerCapture(event.pointerId);
+  const col = getScrollContainer();
+  if (col) col.setPointerCapture(event.pointerId);
   updateTimeRangeSelectionOverlays();
 }
 
@@ -1472,7 +1584,7 @@ function moveTimeRangeSelection(event) {
     return;
   }
 
-  const endMs = timeMsAtClientX(event.clientX, state.dragSelection.surface);
+  const endMs = clientXToTimelineMs(event.clientX);
   if (endMs === null) {
     return;
   }
@@ -1486,14 +1598,15 @@ function finishTimeRangeSelection(event) {
   }
 
   const dragSelection = state.dragSelection;
-  const endMs = timeMsAtClientX(event.clientX, dragSelection.surface);
+  const endMs = clientXToTimelineMs(event.clientX);
   if (endMs !== null) {
     dragSelection.endMs = endMs;
   }
 
   state.dragSelection = null;
-  if (viewer.hasPointerCapture(event.pointerId)) {
-    viewer.releasePointerCapture(event.pointerId);
+  const col = getScrollContainer();
+  if (col && col.hasPointerCapture(event.pointerId)) {
+    col.releasePointerCapture(event.pointerId);
   }
 
   const delta = Math.abs(event.clientX - dragSelection.startClientX);
@@ -1525,20 +1638,20 @@ function cancelTimeRangeSelection(event) {
   }
 
   state.dragSelection = null;
-  if (viewer.hasPointerCapture(event.pointerId)) {
-    viewer.releasePointerCapture(event.pointerId);
+  const col = getScrollContainer();
+  if (col && col.hasPointerCapture(event.pointerId)) {
+    col.releasePointerCapture(event.pointerId);
   }
   updateTimeRangeSelectionOverlays();
 }
 
-function timeMsAtClientX(clientX, surface) {
-  const viewport = getViewport();
-  const rect = surface.getBoundingClientRect();
-  if (!rect.width) {
-    return null;
-  }
-  const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-  return viewport.startMs + ratio * viewport.durationMs;
+function clientXToTimelineMs(clientX) {
+  const col = getScrollContainer();
+  if (!col) return null;
+  const rect = col.getBoundingClientRect();
+  if (!rect.width) return null;
+  const xInContent = clientX - rect.left + col.scrollLeft;
+  return Math.max(0, Math.min(state.maxDurationMs, msForPx(xInContent)));
 }
 
 function normalizeTimeSelection(startMs, endMs) {
@@ -1629,61 +1742,9 @@ function itemKey(itemType, laneIndex, itemIndex) {
   return `${itemType}:${laneIndex}:${itemIndex}`;
 }
 
-function selectedTimelineItemId() {
-  if (!state.selectedItem) {
-    return null;
-  }
-  const key = itemKey(state.selectedItem.type, state.selectedItem.laneIndex, state.selectedItem.itemIndex);
-  return state.timelineSelectionIdByKey.get(key) ?? null;
-}
-
-function syncTimelineSelectionFromState() {
-  if (!state.timeline) {
-    return;
-  }
-  const selectedId = selectedTimelineItemId();
-  state.suppressTimelineSelectEvent = true;
-  if (!selectedId) {
-    state.timeline.setSelection([]);
-    state.suppressTimelineSelectEvent = false;
-    return;
-  }
-  state.timeline.setSelection([selectedId], { focus: false });
-  state.suppressTimelineSelectEvent = false;
-}
-
-function timelineWordId(lane, word, wordIndex) {
-  const stableId = word.id ?? (word.lexical_span ? JSON.stringify(word.lexical_span) : `idx:${wordIndex}`);
-  return `word:${lane.stream.id}:${stableId}`;
-}
-
-function timelineEventId(lane, event) {
-  return `event:${lane.label}:${event.id ?? `${event.kind}:${event.start_ms}:${event.end_ms}`}`;
-}
-
-function timelineGroupForWordLane(lane) {
-  if (lane.stream?.source === "SyntheticSpeech") {
-    return "Speaker";
-  }
-  if (lane.stream?.source === "GeneratedText") {
-    return "LLM";
-  }
-  if (lane.stream?.source === "RecordedAudio") {
-    return "Mic";
-  }
-  return "ASR";
-}
-
-function timelineGroupForEvent(event) {
-  if (TIMELINE_GROUP_IDS.includes(event.lane)) {
-    return event.lane;
-  }
-  const metadataEventKind = event.metadata?.event?.kind;
-  const mappedLane = metadataEventKind ? LIVE_EVENT_LANE[metadataEventKind] : null;
-  if (mappedLane && TIMELINE_GROUP_IDS.includes(mappedLane)) {
-    return mappedLane;
-  }
-  return "ASR";
+function parseItemKey(key) {
+  const [itemType, laneStr, itemStr] = key.split(":");
+  return { itemType, laneIndex: parseInt(laneStr, 10), itemIndex: parseInt(itemStr, 10) };
 }
 
 function classToken(value) {
@@ -1791,26 +1852,6 @@ function setPlaybackStop(startMs, endMs) {
 
 function clearPlaybackStop() {
   state.stopAtMs = null;
-}
-
-function buildRulerTicks(viewport) {
-  const safeDuration = Math.max(MIN_VIEW_DURATION_MS, viewport.durationMs);
-  const targetSegments = 10;
-  const preferredSteps = [25, 50, 100, 250, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000];
-  const desiredStep = safeDuration / targetSegments;
-  const stepMs = preferredSteps.find((step) => step >= desiredStep) ?? 120_000;
-  const ticks = [];
-  const firstTick = Math.ceil(viewport.startMs / stepMs) * stepMs;
-  if (viewport.startMs > 0) {
-    ticks.push(viewport.startMs);
-  }
-  for (let at = firstTick; at <= viewport.endMs; at += stepMs) {
-    ticks.push(at);
-  }
-  if (ticks[ticks.length - 1] !== viewport.endMs) {
-    ticks.push(viewport.endMs);
-  }
-  return [...new Set(ticks)];
 }
 
 function formatRulerLabel(ms) {
