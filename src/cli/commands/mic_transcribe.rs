@@ -360,6 +360,15 @@ pub(super) fn transcribe_group(
     frames: &[AudioFrame],
     recognizer: &mut WhisperSpeechRecognizer,
 ) -> Result<TranscribeGroupOutput> {
+    transcribe_group_with_finality(frames, recognizer, true)
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+pub(super) fn transcribe_group_with_finality(
+    frames: &[AudioFrame],
+    recognizer: &mut WhisperSpeechRecognizer,
+    is_final: bool,
+) -> Result<TranscribeGroupOutput> {
     let whisper_frames = prepare_whisper_frames(frames, WHISPER_FRAME_SAMPLES)?;
     if whisper_frames.is_empty() {
         return Ok(TranscribeGroupOutput {
@@ -370,7 +379,7 @@ pub(super) fn transcribe_group(
     for frame in &whisper_frames {
         recognizer.push_frame(frame)?;
     }
-    let candidate_events = recognizer.poll_candidate_events()?;
+    let candidate_events = recognizer.poll_candidate_events_with_finality(is_final)?;
     let text = candidate_events
         .iter()
         .filter_map(|event| match event {

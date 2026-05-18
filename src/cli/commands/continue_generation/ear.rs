@@ -286,12 +286,14 @@ impl ContinueEarEvent {
             Self::EnvironmentalSound { sound } => {
                 Some(PromptPacket::ear_observation(sound.description.clone()))
             }
+            Self::SpeechStopped => Some(PromptPacket::ear_observation(
+                "External speech stopped; prepare a response if appropriate, but wait for the quiet turn gap before speaking.".to_string(),
+            )),
             Self::SelfVoiceHeard { .. } | Self::OverlapDetected { .. } => {
                 Some(PromptPacket::ear_observation(self.to_message()))
             }
             Self::ListeningStarted { .. }
             | Self::SpeechStarted
-            | Self::SpeechStopped
             | Self::TranscriptCandidate { .. }
             | Self::Error { .. } => None,
         }

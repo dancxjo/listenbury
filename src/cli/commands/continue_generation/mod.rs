@@ -17,7 +17,7 @@ use crate::cli::commands::llama::build_prompt;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::commands::mic_transcribe::transcribe_group;
+use crate::cli::commands::mic_transcribe::transcribe_group_with_finality;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -2849,6 +2849,8 @@ struct DuplexTurnController {
     external_speech_started_at: Option<Instant>,
     paused_for_external_speech: bool,
     listen_deadline: Option<Instant>,
+    turn_gap_deadline: Option<Instant>,
+    holding_turn_gap_speech: bool,
 }
 
 #[cfg(all(
@@ -2878,6 +2880,8 @@ impl DuplexTurnController {
             external_speech_started_at: None,
             paused_for_external_speech: false,
             listen_deadline: None,
+            turn_gap_deadline: None,
+            holding_turn_gap_speech: false,
         }
     }
 
@@ -2896,11 +2900,9 @@ impl DuplexTurnController {
                 self.mark_external_speech_stopped(now);
             }
             ContinueEarEvent::Transcript { .. } => {
-                // A transcript means ASR already observed enough sustained external speech to
-                // produce text, so treat the pause grace window as already elapsed.
-                self.external_speech_active = true;
-                self.external_speech_started_at =
-                    Some(now.checked_sub(self.config.pause_after).unwrap_or(now));
+                if !self.external_speech_active && self.turn_gap_deadline.is_none() {
+                    self.turn_gap_deadline = Some(now + self.config.listen_for);
+                }
             }
             ContinueEarEvent::TranscriptCandidate { .. } => {}
             ContinueEarEvent::ListeningStarted { .. }
@@ -2944,13 +2946,20 @@ impl DuplexTurnController {
             return Ok(());
         };
         match action {
-            DuplexTurnAction::Pause => self.pause_for_external_speech(
-                mouth,
-                llm_session,
-                defer_live_events,
-                deferred_live_events,
-                "TTS start deferred because external speech is currently detected.",
-            )?,
+            DuplexTurnAction::Pause => {
+                let message = if self.holding_turn_gap_speech {
+                    "TTS prepared during the quiet turn gap; playback is held until the gap stays quiet."
+                } else {
+                    "TTS start deferred because external speech is currently detected."
+                };
+                self.pause_for_external_speech(
+                    mouth,
+                    llm_session,
+                    defer_live_events,
+                    deferred_live_events,
+                    message,
+                )?
+            }
             DuplexTurnAction::Resume => self.resume_after_external_speech(
                 mouth,
                 llm_session,
@@ -2972,6 +2981,12 @@ impl DuplexTurnController {
                 interrupt: false, ..
             } if self.external_speech_active && !self.paused_for_external_speech => {
                 self.listen_deadline = None;
+                Some(DuplexTurnAction::Pause)
+            }
+            ContinueRuntimeEvent::UtteranceCompleted {
+                interrupt: false, ..
+            } if self.should_hold_for_turn_gap() => {
+                self.holding_turn_gap_speech = true;
                 Some(DuplexTurnAction::Pause)
             }
             ContinueRuntimeEvent::UtteranceCompleted { .. }
@@ -3029,7 +3044,15 @@ impl DuplexTurnController {
         self.external_speech_started_at = None;
         if self.paused_for_external_speech {
             self.listen_deadline = Some(now + self.config.listen_for);
+        } else {
+            self.turn_gap_deadline = Some(now + self.config.listen_for);
         }
+    }
+
+    fn should_hold_for_turn_gap(&self) -> bool {
+        self.turn_gap_deadline
+            .is_some_and(|deadline| Instant::now() < deadline)
+            && !self.paused_for_external_speech
     }
 
     fn next_action(
@@ -3040,7 +3063,28 @@ impl DuplexTurnController {
         if pending_mouth_utterances == 0 {
             self.paused_for_external_speech = false;
             self.listen_deadline = None;
+            self.holding_turn_gap_speech = false;
             return None;
+        }
+
+        if self.holding_turn_gap_speech {
+            if self.external_speech_active {
+                self.holding_turn_gap_speech = false;
+                self.turn_gap_deadline = None;
+                self.paused_for_external_speech = false;
+                self.listen_deadline = None;
+                return Some(DuplexTurnAction::Clear);
+            }
+            if self
+                .turn_gap_deadline
+                .is_some_and(|deadline| now >= deadline)
+            {
+                self.holding_turn_gap_speech = false;
+                self.turn_gap_deadline = None;
+                self.paused_for_external_speech = false;
+                self.listen_deadline = None;
+                return Some(DuplexTurnAction::Resume);
+            }
         }
 
         if self.external_speech_active && !self.paused_for_external_speech {
@@ -3097,6 +3141,8 @@ impl DuplexTurnController {
     ) -> Result<()> {
         self.paused_for_external_speech = false;
         self.listen_deadline = None;
+        self.turn_gap_deadline = None;
+        self.holding_turn_gap_speech = false;
         send_duplex_turn_control(
             mouth,
             llm_session,
@@ -3117,6 +3163,8 @@ impl DuplexTurnController {
     ) -> Result<()> {
         self.paused_for_external_speech = false;
         self.listen_deadline = None;
+        self.turn_gap_deadline = None;
+        self.holding_turn_gap_speech = false;
         send_duplex_turn_control(
             mouth,
             llm_session,
@@ -3397,7 +3445,7 @@ impl ContinueEar {
 
         let stop = Arc::new(AtomicBool::new(false));
         let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(CALLBACK_SAMPLE_CAPACITY);
-        let (asr_tx, asr_rx) = crossbeam_channel::bounded::<Vec<AudioFrame>>(8);
+        let (asr_tx, asr_rx) = crossbeam_channel::bounded::<ContinueAsrWorkItem>(8);
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<ContinueEarEvent>();
         let dropped_in_callback = Arc::new(AtomicUsize::new(0));
         let err_fn = |err| eprintln!("input stream error: {err}");
@@ -3510,7 +3558,11 @@ impl ContinueEar {
                 let mut speculative_planner = TranscriptSpeculativePlanner::default();
                 while !stop_for_asr.load(Ordering::Relaxed) {
                     match asr_rx.recv_timeout(Duration::from_millis(20)) {
-                        Ok(frames) => match transcribe_group(&frames, &mut recognizer) {
+                        Ok(work) => match transcribe_group_with_finality(
+                            &work.frames,
+                            &mut recognizer,
+                            work.is_final,
+                        ) {
                             Ok(output) => {
                                 let observed_at = ExactTimestamp::now();
                                 for event in output.candidate_events {
@@ -3618,13 +3670,52 @@ impl Drop for ContinueEar {
 struct ContinueEarState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
-    active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    active_groups: HashMap<BreathGroupId, ActiveAsrGroup>,
     environment: EnvironmentalSoundObserver,
     auditory_scene: AuditorySceneAnalyzer,
     frame_time_ms: u64,
     vad_observation: VadObservationState,
     last_self_hearing_observation_ms: Option<u64>,
     last_overlap_observation_ms: Option<u64>,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone)]
+struct ActiveAsrGroup {
+    frames: Vec<AudioFrame>,
+    next_prospective_at_ms: u64,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl ActiveAsrGroup {
+    fn new(opened_at_ms: u64) -> Self {
+        Self {
+            frames: Vec::new(),
+            next_prospective_at_ms: opened_at_ms.saturating_add(PROSPECTIVE_ASR_INITIAL_MS),
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone)]
+struct ContinueAsrWorkItem {
+    frames: Vec<AudioFrame>,
+    is_final: bool,
 }
 
 #[cfg(any(
@@ -3687,9 +3778,25 @@ const ENVIRONMENTAL_ASR_SILENCE_PADDING_MS: u64 = 250;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+const PROSPECTIVE_ASR_INITIAL_MS: u64 = 300;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const PROSPECTIVE_ASR_INTERVAL_MS: u64 = 250;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn run_continue_ear_processor(
     sample_rx: crossbeam_channel::Receiver<f32>,
-    asr_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: crossbeam_channel::Sender<ContinueEarEvent>,
     stop: Arc<AtomicBool>,
     vad_backend: VadBackendKind,
@@ -3753,8 +3860,8 @@ fn run_continue_ear_processor(
         &asr_tx,
         &event_tx,
     )?;
-    for (_, frames) in state.active_groups.drain() {
-        if !frames.is_empty() && asr_tx.send(frames).is_err() {
+    for (_, group) in state.active_groups.drain() {
+        if !queue_final_asr_work(&asr_tx, group.frames) {
             break;
         }
     }
@@ -3776,7 +3883,7 @@ fn drain_pending_continue_ear_frames(
     frame_sample_rate_hz: u32,
     frame_channels: u16,
     state: &mut ContinueEarState,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     while pending.len() >= input_frame_samples {
@@ -3885,7 +3992,7 @@ fn send_vad_observation_transition(
 fn process_continue_ear_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
@@ -3952,7 +4059,7 @@ fn process_continue_ear_frame(
 ))]
 fn send_environmental_sound_clip(
     clip: EnvironmentalSoundClip,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) {
     let EnvironmentalSoundClip { sound, frames } = clip;
@@ -3962,7 +4069,10 @@ fn send_environmental_sound_clip(
     if should_transcribe {
         let frames = padded_environmental_asr_frames(&frames, ENVIRONMENTAL_ASR_SILENCE_PADDING_MS);
         if !frames.is_empty() {
-            let _ = asr_tx.send(frames);
+            let _ = asr_tx.send(ContinueAsrWorkItem {
+                frames,
+                is_final: true,
+            });
         }
     }
 }
@@ -4040,7 +4150,7 @@ fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
 fn process_continue_vad_and_asr_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let vad_result = state.vad.process_frame(&frame)?;
@@ -4063,7 +4173,7 @@ fn process_continue_vad_and_asr_frame(
 fn process_continue_segmenter_silence_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
     let events = state.segmenter.process(VadResult {
@@ -4082,7 +4192,7 @@ fn process_continue_segmenter_silence_frame(
 fn process_continue_segmenter_events(
     frame: AudioFrame,
     state: &mut ContinueEarState,
-    asr_tx: &crossbeam_channel::Sender<Vec<AudioFrame>>,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
     events: Vec<HearingEvent>,
 ) -> Result<()> {
@@ -4093,7 +4203,10 @@ fn process_continue_segmenter_events(
                 let _ = event_tx.send(ContinueEarEvent::SpeechStarted);
             }
             HearingEvent::BreathGroupOpened { id } => {
-                state.active_groups.entry(*id).or_default();
+                state
+                    .active_groups
+                    .entry(*id)
+                    .or_insert_with(|| ActiveAsrGroup::new(state.frame_time_ms));
             }
             HearingEvent::BreathGroupClosed { .. } => {
                 let _ = event_tx.send(ContinueEarEvent::SpeechStopped);
@@ -4103,18 +4216,68 @@ fn process_continue_segmenter_events(
         }
     }
     for group in state.active_groups.values_mut() {
-        group.push(frame.clone());
+        group.frames.push(frame.clone());
     }
     for event in events {
         if let HearingEvent::BreathGroupClosed { id, .. } = event {
-            if let Some(group_frames) = state.active_groups.remove(&id) {
-                if !group_frames.is_empty() && asr_tx.send(group_frames).is_err() {
+            if let Some(group) = state.active_groups.remove(&id) {
+                if !queue_final_asr_work(asr_tx, group.frames) {
                     return Ok(());
                 }
             }
         }
     }
+    let frame_end_ms = state
+        .frame_time_ms
+        .saturating_add(frame_duration_ms(&frame));
+    for group in state.active_groups.values_mut() {
+        if group.frames.is_empty() || frame_end_ms < group.next_prospective_at_ms {
+            continue;
+        }
+        queue_prospective_asr_snapshot(asr_tx, group.frames.clone());
+        group.next_prospective_at_ms = frame_end_ms.saturating_add(PROSPECTIVE_ASR_INTERVAL_MS);
+    }
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn queue_final_asr_work(
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
+    frames: Vec<AudioFrame>,
+) -> bool {
+    if frames.is_empty() {
+        return true;
+    }
+    asr_tx
+        .send(ContinueAsrWorkItem {
+            frames,
+            is_final: true,
+        })
+        .is_ok()
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn queue_prospective_asr_snapshot(
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
+    frames: Vec<AudioFrame>,
+) {
+    if frames.is_empty() {
+        return;
+    }
+    let _ = asr_tx.try_send(ContinueAsrWorkItem {
+        frames,
+        is_final: false,
+    });
 }
 
 #[cfg(all(
@@ -5709,6 +5872,22 @@ mod tests {
     }
 
     #[test]
+    fn prompt_gate_treats_speech_stopped_as_response_prep_signal() {
+        let mut gate = ContinuePromptGate::new(ContinuePromptGateConfig {
+            duplicate_suppression_window: std::time::Duration::from_secs(30),
+            auditory_min_interval: std::time::Duration::from_millis(0),
+            overlap_summary_threshold: 3,
+        });
+
+        let packets =
+            gate.consider_ear_event(&ContinueEarEvent::SpeechStopped, std::time::Instant::now());
+
+        assert_eq!(packets.len(), 1);
+        assert!(packets[0].text.contains("External speech stopped"));
+        assert!(packets[0].text.contains("prepare a response"));
+    }
+
+    #[test]
     fn environmental_asr_padding_adds_silence_before_and_after_clip() {
         let clip = vec![AudioFrame {
             captured_at: ExactTimestamp { unix_nanos: 0 },
@@ -6382,6 +6561,76 @@ grepSource("build_initial_prompt", 1)"#,
         assert_eq!(
             controller.next_action(started_at + std::time::Duration::from_millis(500), 1),
             Some(super::DuplexTurnAction::Resume)
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_holds_prepared_tts_during_turn_gap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let stopped_at = std::time::Instant::now();
+
+        controller.observe_ear_event(&super::ContinueEarEvent::SpeechStopped, stopped_at);
+        assert_eq!(
+            controller.prepare_runtime_action(&super::ContinueRuntimeEvent::UtteranceCompleted {
+                id: 7,
+                content: "Okay.".to_string(),
+                interrupt: false,
+            }),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        controller.paused_for_external_speech = true;
+
+        assert_eq!(
+            controller.next_action(stopped_at + std::time::Duration::from_millis(299), 1),
+            None
+        );
+        assert_eq!(
+            controller.next_action(stopped_at + std::time::Duration::from_millis(300), 1),
+            Some(super::DuplexTurnAction::Resume)
+        );
+    }
+
+    #[cfg(all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    ))]
+    #[test]
+    fn duplex_controller_cancels_prepared_tts_when_speech_resumes_during_turn_gap() {
+        let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
+            pause_after: std::time::Duration::from_millis(150),
+            listen_for: std::time::Duration::from_millis(300),
+        });
+        let stopped_at = std::time::Instant::now();
+
+        controller.observe_ear_event(&super::ContinueEarEvent::SpeechStopped, stopped_at);
+        assert_eq!(
+            controller.prepare_runtime_action(&super::ContinueRuntimeEvent::UtteranceCompleted {
+                id: 7,
+                content: "Okay.".to_string(),
+                interrupt: false,
+            }),
+            Some(super::DuplexTurnAction::Pause)
+        );
+        controller.paused_for_external_speech = true;
+        controller.observe_ear_event(
+            &super::ContinueEarEvent::SpeechStarted,
+            stopped_at + std::time::Duration::from_millis(120),
+        );
+
+        assert_eq!(
+            controller.next_action(stopped_at + std::time::Duration::from_millis(121), 1),
+            Some(super::DuplexTurnAction::Clear)
         );
     }
 

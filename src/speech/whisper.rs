@@ -82,11 +82,20 @@ impl WhisperSpeechRecognizer {
     /// Callers must treat them as alternative polling APIs and should not call both expecting
     /// duplicated output for the same buffered frames.
     pub fn poll_candidate_events(&mut self) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
+        self.poll_candidate_events_with_finality(true)
+    }
+
+    pub fn poll_candidate_events_with_finality(
+        &mut self,
+        is_final: bool,
+    ) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
         let Some(text) = self.poll_transcript_text()? else {
             return Ok(Vec::new());
         };
 
-        Ok(self.candidate_tracker.ingest_candidate(text, None, true))
+        Ok(self
+            .candidate_tracker
+            .ingest_candidate(text, None, is_final))
     }
 }
 
