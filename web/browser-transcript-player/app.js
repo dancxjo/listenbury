@@ -607,6 +607,65 @@ function wordWithTimeOffset(word, offsetMs) {
   };
 }
 
+function transcriptWords(text, commitment = "Confirmed") {
+  return textContent(text).match(/\S+/g)?.map((word) => ({ text: word, commitment })) ?? [];
+}
+
+function committedAsrWordsThrough(session, elapsedMs) {
+  const words = [];
+  const turns = [...session.turns.values()].sort((left, right) => left.id - right.id);
+  for (const turn of turns) {
+    if (turn.id === 0 || turn.finalTranscript == null) {
+      continue;
+    }
+    if (turn.finalTranscriptElapsedMs != null && turn.finalTranscriptElapsedMs > elapsedMs) {
+      continue;
+    }
+    if (turn.latestWordStream?.words?.length) {
+      words.push(...turn.latestWordStream.words);
+    } else {
+      words.push(...transcriptWords(turn.finalTranscript, "Final"));
+    }
+  }
+  return words;
+}
+
+function confirmedTranscriptWords(text, previousWords, elapsedMs) {
+  return transcriptWords(text, "Confirmed").map((word, index) => {
+    const previous = previousWords[index];
+    if (!previous || previous.text === word.text) {
+      return word;
+    }
+    return {
+      ...word,
+      _revisions: [
+        ...(previous._revisions ?? []),
+        {
+          fromText: previous.text,
+          at_ms: elapsedMs,
+          provenance: "confirmed by broader ASR context",
+          approximate: true,
+        },
+      ],
+    };
+  });
+}
+
+function applyConfirmedTranscript(session, event) {
+  const text = textContent(event.text);
+  if (!text) {
+    return;
+  }
+  const previousWords = committedAsrWordsThrough(session, event.elapsed_ms);
+  session.refinedTranscript = {
+    text,
+    elapsedMs: event.elapsed_ms ?? 0,
+    source: textContent(event.artifact?.source) || "refinement",
+    segmentCount: Number.isFinite(event.artifact?.segment_count) ? event.artifact.segment_count : null,
+    words: confirmedTranscriptWords(text, previousWords, event.elapsed_ms ?? 0),
+  };
+}
+
 // Reduce one LiveTraceEvent into the session.  All state mutations happen
 // here; projection functions must not mutate the session.
 function reduceLiveEvent(session, event) {
@@ -686,10 +745,9 @@ function reduceLiveEvent(session, event) {
     // Fall through to also emit as a lane marker below.
   }
 
-  if (event.kind === "transcript_proposition" && event.text) {
-    const liveTurn = sessionGetOrCreateTurn(session, turn);
-    liveTurn.transcriptProposition = event.text;
-    log("stable", `Refined proposition: "${event.text}"`);
+  if ((event.kind === "transcript_proposition" || event.kind === "transcript_confirmed") && event.text) {
+    applyConfirmedTranscript(session, event);
+    log("stable", `Confirmed transcript: "${event.text}"`);
     // Fall through to emit as a lane marker below.
   }
 
@@ -697,6 +755,7 @@ function reduceLiveEvent(session, event) {
   if (event.kind === "transcript" && event.text) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
     liveTurn.finalTranscript = event.text;
+    liveTurn.finalTranscriptElapsedMs = event.elapsed_ms ?? null;
     // Fall through to emit as a lane marker below.
   }
 
