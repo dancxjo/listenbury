@@ -231,7 +231,9 @@ pub enum PronunciationLookupStatus {
 ///   "status": "exact"
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Intentionally not `Eq`: backend phone segmentation includes floating-point
+// confidence values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WordPronunciation {
     /// Pronunciation source identifier, e.g. `"cmudict"`.
@@ -248,6 +250,50 @@ pub struct WordPronunciation {
     pub stress_pattern: String,
     /// How the pronunciation was resolved.
     pub status: PronunciationLookupStatus,
+    /// Optional backend-computed phone segmentation metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_segmentation: Option<WordPhoneSegmentation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordPhoneSegmentation {
+    pub word: String,
+    pub word_start_ms: u64,
+    pub word_end_ms: u64,
+    pub pronunciation: Vec<String>,
+    pub candidate_pronunciation_id: Option<String>,
+    #[serde(default)]
+    pub pronunciation_scores: Vec<PronunciationCandidateScore>,
+    #[serde(default)]
+    pub phone_spans: Vec<WordPhoneSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PronunciationCandidateScore {
+    pub id: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordPhoneSpan {
+    pub source_symbol: String,
+    pub phone: String,
+    pub phone_class: String,
+    pub prior_start_ms: u64,
+    pub prior_end_ms: u64,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub resolved_start_ms: u64,
+    pub resolved_end_ms: u64,
+    pub method: String,
+    pub confidence: f32,
+    #[serde(default)]
+    pub features_used: Vec<String>,
+    pub boundary_uncertainty_ms: u64,
+    pub candidate_pronunciation_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -320,12 +366,10 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::RecordedAudio);
         assert_eq!(stream.words.len(), 3);
         assert!(stream.words.iter().all(|w| w.timing.is_some()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::Final)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::Final));
     }
 
     /// Verify that a generated-text stream can be constructed *without* timing
@@ -371,12 +415,10 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::GeneratedText);
         assert_eq!(stream.words.len(), 4);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(
-            stream
-                .words
-                .iter()
-                .all(|w| w.commitment == WordCommitment::StableText)
-        );
+        assert!(stream
+            .words
+            .iter()
+            .all(|w| w.commitment == WordCommitment::StableText));
     }
 
     /// Verify that a synthetic-speech stream can be constructed with playback

@@ -90,6 +90,8 @@ const WAVEFORM_SPAN_ROW_HEIGHT_PX = 20;
 const WAVEFORM_SPAN_ROW_GAP_PX = 2;
 const WAVEFORM_SPAN_ROW_STRIDE_PX = WAVEFORM_SPAN_ROW_HEIGHT_PX + WAVEFORM_SPAN_ROW_GAP_PX;
 const WAVEFORM_SPAN_ROW_MARGIN_PX = 4;
+const PROJECTED_PHONE_CONFIDENCE = 0.35;
+const PROJECTED_PHONE_BOUNDARY_UNCERTAINTY_MS = 30;
 
 // Serialize an open-span map key as [lane, turn, startKind].
 function openSpanKey(lane, turn, startKind) {
@@ -3296,6 +3298,9 @@ function addGraphWord(nodes, edges, nodeIds, edgeIds, item) {
       realizedIpa: phoneme.realization?.ipa ?? null,
       realizationMethod: phoneme.realization?.method ?? null,
       realizationRule: phoneme.realization?.rule ?? null,
+      timingMethod: phoneme.method ?? phoneme.timingSource ?? null,
+      timingConfidence: phoneme.confidence ?? null,
+      featuresUsed: phoneme.features_used ?? [],
     });
     pushGraphEdge(edges, edgeIds, {
       id: `edge:${phonemeNodeId}:${wordNodeId}:alignment`,
@@ -5309,21 +5314,11 @@ function appendWordChipContent(chip, word, includeBadges) {
  * via the `data-timing-source` attribute and aria-label.
  */
 function createPhonemeStrip(word) {
-  const phonemes = word.pronunciation?.phonemes;
-  if (!Array.isArray(phonemes) || phonemes.length === 0) return null;
-
-  const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
-  const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-
-  const spans = projectPhonemesIntoWordInterval(
-    phonemes,
-    startMs,
-    endMs,
-    "cmudict.proportional",
-    { allophoneRules: { enabled: true, dialect: "american_english" } },
-  );
+  const spans = buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }) ?? [];
   if (!spans.length) return null;
+  const phonemes = spans.map((span) => span.sourceSymbol ?? span.symbol);
+  const startMs = spans[0].start_ms;
+  const endMs = spans[spans.length - 1].end_ms;
 
   const duration = endMs - startMs;
   const defaultIpaSequence = spans
@@ -5356,7 +5351,9 @@ function createPhonemeStrip(word) {
       `default: /${defaultIpa}/`,
       `realized: [${realizedIpa}]`,
       span.realization?.rule ? `rule: ${span.realization.rule}` : null,
-      `${span.start_ms}–${span.end_ms} ms · ${span.timingSource}`,
+      `method: ${span.method ?? span.timingSource ?? "projected.proportional"}`,
+      `confidence: ${Math.round((span.confidence ?? 0.4) * 100)}%`,
+      `${span.start_ms}–${span.end_ms} ms`,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -5983,6 +5980,8 @@ function buildSelectionProjection() {
     };
   }
   const target = wordPlaybackTarget(word);
+  const phoneSegmentation = buildPhoneSegmentationForWord(word, { allophoneRulesEnabled: true });
+  const segmentedPhoneSpans = phoneSegmentation?.phoneSpans ?? null;
   return {
     canPlaySelectionClip: canPlaySelectionTarget(target),
     playSelectionClipLabel: canPlaySelectionTarget(target) ? "Play word clip" : "Play selected clip",
@@ -6029,7 +6028,9 @@ function buildSelectionProjection() {
         audioRef: word.audio_ref,
         revisions: word._revisions ?? [],
         pronunciation: word.pronunciation ?? null,
-        phonemeSpans: buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }),
+        phoneSegmentation,
+        phoneSpans: segmentedPhoneSpans,
+        phonemeSpans: segmentedPhoneSpans,
       },
       null,
       2,
@@ -6122,13 +6123,18 @@ function buildPronunciationSummaryParts(word) {
   ];
 
   if (Array.isArray(pron.phonemes) && pron.phonemes.length > 0) {
-    const spans = buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }) ?? [];
+    const segmentation = buildPhoneSegmentationForWord(word, { allophoneRulesEnabled: true });
+    const spans = segmentation?.phoneSpans ?? [];
     const sourceSymbols = spans.map((span) => span.sourceSymbol ?? span.symbol).join(" ");
     const defaultIpa = spans
       .map((span) => span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?")
       .join(" ");
     const realizedIpa = spans.map((span) => span.realization?.ipa ?? "?").join(" ");
     const appliedRules = [...new Set(spans.map((span) => span.realization?.rule).filter(Boolean))];
+    const methods = [...new Set(spans.map((span) => span.method).filter(Boolean))];
+    const averageConfidence = spans.length
+      ? spans.reduce((sum, span) => sum + (Number(span.confidence) || 0), 0) / spans.length
+      : null;
     parts.push(
       h("br"),
       h("span", { className: "inspector-phoneme-sequence", title: "Projected phoneme sequence — timing is estimated, not measured" },
@@ -6139,6 +6145,15 @@ function buildPronunciationSummaryParts(word) {
       `Default IPA: /${defaultIpa}/`,
       h("br"),
       `Realized IPA: [${realizedIpa}]`,
+      ...(methods.length > 0
+        ? [h("br"), `Segmentation method: ${methods.join(", ")}`]
+        : []),
+      ...(averageConfidence !== null
+        ? [h("br"), `Segmentation confidence: ${Math.round(averageConfidence * 100)}%`]
+        : []),
+      ...(segmentation?.candidate_pronunciation_id
+        ? [h("br"), `Pronunciation candidate: ${segmentation.candidate_pronunciation_id}`]
+        : []),
       ...(appliedRules.length > 0
         ? [h("br"), `Allophone rules: ${appliedRules.join(", ")}`]
         : []),
@@ -6153,23 +6168,60 @@ function buildPronunciationSummaryParts(word) {
  * the word has no usable pronunciation metadata.  Used in the inspector JSON.
  */
 function buildPhonemeSpansForInspector(word, options = {}) {
-  const phonemes = word.pronunciation?.phonemes;
+  return buildPhoneSegmentationForWord(word, options)?.phoneSpans ?? null;
+}
+
+function buildPhoneSegmentationForWord(word, options = {}) {
+  const pron = word.pronunciation;
+  const phonemes = pron?.phonemes;
   if (!Array.isArray(phonemes) || phonemes.length === 0) return null;
   const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
   const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-  return projectPhonemesIntoWordInterval(
+  if (pron?.phoneSegmentation?.phoneSpans?.length) {
+    return {
+      ...pron.phoneSegmentation,
+      phoneSpans: pron.phoneSegmentation.phoneSpans.map((span) => ({
+        ...span,
+        sourceSymbol: span.sourceSymbol ?? span.source_symbol ?? "?",
+      })),
+    };
+  }
+
+  const projected = projectPhonemesIntoWordInterval(
     phonemes,
     startMs,
     endMs,
-    "cmudict.proportional",
+    "projected.proportional",
     {
       allophoneRules: {
         enabled: options.allophoneRulesEnabled === true,
         dialect: "american_english",
       },
     },
-  );
+  ).map((span) => ({
+    ...span,
+    phone: span.realization?.ipa ?? span.defaultPhoneString?.[0]?.ipa ?? "?",
+    phoneClass: isVowel(span.sourceSymbol) ? "vowel" : "other",
+    prior_start_ms: span.start_ms,
+    prior_end_ms: span.end_ms,
+    resolved_start_ms: span.start_ms,
+    resolved_end_ms: span.end_ms,
+    method: "projected.proportional",
+    confidence: PROJECTED_PHONE_CONFIDENCE,
+    features_used: ["duration.prior"],
+    boundary_uncertainty_ms: PROJECTED_PHONE_BOUNDARY_UNCERTAINTY_MS,
+    candidate_pronunciation_id: "default",
+  }));
+  return {
+    word: word.text ?? null,
+    word_start_ms: startMs,
+    word_end_ms: endMs,
+    pronunciation: phonemes,
+    candidate_pronunciation_id: "default",
+    pronunciation_scores: [{ id: "default", score: 0.5 }],
+    phoneSpans: projected,
+  };
 }
 
 /**

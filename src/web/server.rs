@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 
 use crate::audio::{
-    AcousticAnalysis, AudioFrame, analyze_audio_frames, read_wav_frames, write_wav_bytes,
+    analyze_audio_frames, read_wav_frames, segment_pronunciation_with_acoustics, write_wav_bytes,
+    AcousticAnalysis, AudioFrame,
 };
-use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
-use crate::trace::viewer_payload::trace_session_to_viewer_payload;
+use crate::live_trace::{read_trace_jsonl, read_trace_session, SseBroadcaster};
+use crate::trace::viewer_payload::{trace_session_to_viewer_payload, ViewerPayload};
 
 use super::assets;
 
@@ -567,10 +568,67 @@ fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>
         return Ok(None);
     };
     let session = read_trace_session(path)?;
-    let payload = trace_session_to_viewer_payload(&session);
+    let mut payload = trace_session_to_viewer_payload(&session);
+    if let Some(analysis) = load_primary_trace_session_acoustic_analysis(path, &session)? {
+        enrich_payload_phone_segmentations(&mut payload, &analysis);
+    }
     let json = serde_json::to_vec_pretty(&payload)
         .with_context(|| format!("serialize viewer payload for {}", path.display()))?;
     Ok(Some(json))
+}
+
+fn enrich_payload_phone_segmentations(payload: &mut ViewerPayload, analysis: &AcousticAnalysis) {
+    for lane in &mut payload.streams {
+        for word in &mut lane.stream.words {
+            let Some(timing) = word.timing else {
+                continue;
+            };
+            let Some(pronunciation) = word.pronunciation.as_mut() else {
+                continue;
+            };
+            pronunciation.phone_segmentation = segment_pronunciation_with_acoustics(
+                &word.text,
+                timing.start_ms,
+                timing.end_ms,
+                pronunciation,
+                analysis,
+            );
+        }
+    }
+}
+
+fn load_primary_trace_session_acoustic_analysis(
+    trace_path: &PathBuf,
+    session: &crate::live_trace::TraceSessionEnvelope,
+) -> Result<Option<AcousticAnalysis>> {
+    let Some(artifact) = session.metadata.audio_artifacts.first() else {
+        return Ok(None);
+    };
+    let Some(acoustic_path) = artifact.acoustic_analysis_path.as_ref() else {
+        return Ok(None);
+    };
+    let base_dir = trace_path
+        .parent()
+        .filter(|_| {
+            trace_path
+                .file_name()
+                .is_some_and(|name| name == "metadata.json")
+        })
+        .unwrap_or(trace_path.as_path());
+    let analysis_path = base_dir.join(acoustic_path);
+    let bytes = std::fs::read(&analysis_path).with_context(|| {
+        format!(
+            "read trace-session acoustic analysis for payload enrichment {}",
+            analysis_path.display()
+        )
+    })?;
+    let analysis: AcousticAnalysis = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "deserialize trace-session acoustic analysis {}",
+            analysis_path.display()
+        )
+    })?;
+    Ok(Some(analysis))
 }
 
 fn load_live_session_audio(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
@@ -772,6 +830,11 @@ mod tests {
 
     use super::*;
     use crate::live_trace::LiveTraceSink;
+    use crate::trace::viewer_payload::{ViewerPayload, ViewerWordLane};
+    use crate::word::{
+        BoundarySource, PronunciationLookupStatus, TimedWordStream, WordCommitment, WordId,
+        WordNode, WordPronunciation, WordStreamId, WordStreamSource, WordTiming,
+    };
 
     fn empty_state() -> Arc<ServerState> {
         Arc::new(ServerState {
@@ -936,6 +999,62 @@ mod tests {
     }
 
     #[test]
+    fn enriches_payload_words_with_backend_phone_segmentation() {
+        let sample_rate_hz = 16_000;
+        let samples = (0..6400)
+            .map(|index| {
+                ((2.0 * std::f32::consts::PI * 220.0 * index as f32) / sample_rate_hz as f32).sin()
+            })
+            .collect::<Vec<_>>();
+        let analysis = crate::audio::analyze_mono_samples(&samples, sample_rate_hz);
+        let mut payload = ViewerPayload {
+            title: "test".to_string(),
+            audio: None,
+            streams: vec![ViewerWordLane {
+                label: "User transcript".to_string(),
+                stream: TimedWordStream {
+                    id: WordStreamId(1),
+                    source: WordStreamSource::RecordedAudio,
+                    words: vec![WordNode {
+                        id: WordId(1),
+                        text: "three".to_string(),
+                        lexical_span: None,
+                        timing: Some(WordTiming {
+                            start_ms: 1000,
+                            end_ms: 1300,
+                        }),
+                        timing_confidence: Some(0.9),
+                        commitment: WordCommitment::Final,
+                        boundary_source: BoundarySource::Whisper,
+                        audio_ref: None,
+                        pronunciation: Some(WordPronunciation {
+                            source: "cmudict".to_string(),
+                            lookup: "THREE".to_string(),
+                            phonemes: vec!["TH".to_string(), "R".to_string(), "IY1".to_string()],
+                            stress_pattern: "1".to_string(),
+                            status: PronunciationLookupStatus::Exact,
+                            phone_segmentation: None,
+                        }),
+                    }],
+                },
+            }],
+            events: Vec::new(),
+            markers: Vec::new(),
+        };
+
+        enrich_payload_phone_segmentations(&mut payload, &analysis);
+
+        let segmentation = payload.streams[0].stream.words[0]
+            .pronunciation
+            .as_ref()
+            .and_then(|pron| pron.phone_segmentation.as_ref())
+            .expect("backend phone segmentation should be attached");
+        assert_eq!(segmentation.phone_spans.len(), 3);
+        assert_eq!(segmentation.phone_spans[0].start_ms, 1000);
+        assert_eq!(segmentation.phone_spans[2].end_ms, 1300);
+    }
+
+    #[test]
     fn serves_session_audio_artifact_from_trace_session_metadata() {
         let root = temp_path("session-audio");
         let audio_dir = root.join("audio");
@@ -1088,18 +1207,14 @@ mod tests {
         assert_eq!(ranged.status, 206);
         assert_eq!(ranged.content_type, "audio/wav");
         assert_eq!(ranged.body, full.body[4..=11]);
-        assert!(
-            ranged
-                .headers
-                .iter()
-                .any(|(name, value)| { *name == "Accept-Ranges" && value == "bytes" })
-        );
-        assert!(
-            ranged
-                .headers
-                .iter()
-                .any(|(name, value)| { *name == "Content-Range" && value == "bytes 4-11/244" })
-        );
+        assert!(ranged
+            .headers
+            .iter()
+            .any(|(name, value)| { *name == "Accept-Ranges" && value == "bytes" }));
+        assert!(ranged
+            .headers
+            .iter()
+            .any(|(name, value)| { *name == "Content-Range" && value == "bytes 4-11/244" }));
     }
 
     #[test]
@@ -1111,12 +1226,10 @@ mod tests {
             Some("bytes=999999999-1000000000"),
         );
         assert_eq!(response.status, 416);
-        assert!(
-            response
-                .headers
-                .iter()
-                .any(|(name, value)| { *name == "Content-Range" && value.starts_with("bytes */") })
-        );
+        assert!(response
+            .headers
+            .iter()
+            .any(|(name, value)| { *name == "Content-Range" && value.starts_with("bytes */") }));
     }
 
     #[test]

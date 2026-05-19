@@ -10,7 +10,10 @@ pub mod voice_signature;
 pub mod wav;
 
 pub use crate::audio::frame::AudioFrame;
-pub use acoustic::{AcousticAnalysis, analyze_audio_frames, analyze_mono_samples};
+pub use acoustic::{
+    analyze_audio_frames, analyze_mono_samples, segment_pronunciation_with_acoustics,
+    AcousticAnalysis,
+};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };
