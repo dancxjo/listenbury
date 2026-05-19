@@ -1,5 +1,5 @@
 use crate::hearing::breath::{BreathGroupEndReason, BreathGroupId};
-use uuid::Uuid;
+pub use crate::speech_timeline::UtteranceId;
 
 #[derive(Debug, Clone)]
 pub enum PeteEvent {
@@ -85,19 +85,4 @@ pub enum MouthEvent {
 #[derive(Debug, Clone)]
 pub enum VisionEvent {
     FrameCaptured,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct UtteranceId(pub Uuid);
-
-impl UtteranceId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-impl Default for UtteranceId {
-    fn default() -> Self {
-        Self::new()
-    }
 }

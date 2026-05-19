@@ -526,6 +526,39 @@ fn metadata_from_event(event: &LiveTraceEvent) -> Value {
     if let Some(artifact) = event.artifact.as_ref() {
         metadata.insert("artifact".to_string(), artifact.clone());
     }
+    if let Some(session_id) = event.session_id {
+        metadata.insert(
+            "session_id".to_string(),
+            Value::from(session_id.0.to_string()),
+        );
+    }
+    if let Some(turn_id) = event.turn_id {
+        metadata.insert("turn_id".to_string(), Value::from(turn_id.0));
+    }
+    if let Some(utterance_id) = event.utterance_id {
+        metadata.insert(
+            "utterance_id".to_string(),
+            Value::from(utterance_id.0.to_string()),
+        );
+    }
+    if let Some(speech_unit_id) = event.speech_unit_id {
+        metadata.insert("speech_unit_id".to_string(), Value::from(speech_unit_id.0));
+    }
+    if let Some(transcript_revision_id) = event.transcript_revision_id {
+        metadata.insert(
+            "transcript_revision_id".to_string(),
+            Value::from(transcript_revision_id.0),
+        );
+    }
+    if let Some(span_id) = event.span_id {
+        metadata.insert("span_id".to_string(), Value::from(span_id.0.to_string()));
+    }
+    if let Some(audio_clip_id) = event.audio_clip_id {
+        metadata.insert(
+            "audio_clip_id".to_string(),
+            Value::from(audio_clip_id.0.to_string()),
+        );
+    }
     Value::Object(metadata)
 }
 
@@ -618,6 +651,13 @@ mod tests {
     fn event(turn: u64, kind: &str, elapsed_ms: u64) -> LiveTraceEvent {
         LiveTraceEvent {
             turn,
+            session_id: None,
+            turn_id: None,
+            utterance_id: None,
+            speech_unit_id: None,
+            transcript_revision_id: None,
+            span_id: None,
+            audio_clip_id: None,
             kind: kind.to_string(),
             t_unix_ns: elapsed_ms * 1_000_000,
             elapsed_ms,

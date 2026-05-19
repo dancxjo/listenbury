@@ -13,6 +13,7 @@ pub mod runtime;
 pub mod span;
 pub mod speculative;
 pub mod speech;
+pub mod speech_timeline;
 pub mod text_stability;
 pub mod time;
 pub mod trace;
@@ -55,5 +56,6 @@ pub use span::{
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
+pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};
 pub use time::{ExactTimestamp, Timed};

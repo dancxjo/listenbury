@@ -511,14 +511,16 @@ function sessionGetOrCreateTurn(session, turnId) {
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
       generatedText: null,
       generatedSpeechFragments: [],
+      speechUnitsById: new Map(),
+      generatedSpeechUnitOrder: [],
       transcriptProposition: null,
     });
   }
   return session.turns.get(turnId);
 }
 
-function openSpanRecord(startMs, label = null) {
-  return { start_ms: startMs, label };
+function openSpanRecord(startMs, label = null, speechUnitId = null) {
+  return { start_ms: startMs, label, speech_unit_id: speechUnitId };
 }
 
 function openSpanStartMs(record) {
@@ -529,9 +531,16 @@ function openSpanLabel(record) {
   return typeof record === "number" ? null : record?.label ?? null;
 }
 
+function openSpanSpeechUnitId(record) {
+  return typeof record === "number" ? null : record?.speech_unit_id ?? null;
+}
+
 // Returns a stable string key for a word, preferring:
 //   1. stable WordId  2. lexical span bounds  3. array-index fallback
 function stableWordKey(word, index) {
+  if (word.span_id != null) {
+    return `span-id:${word.span_id}`;
+  }
   if (word.id != null) {
     return `id:${word.id}`;
   }
@@ -544,14 +553,21 @@ function stableWordKey(word, index) {
 // Find the previous word that corresponds to newWord (at newIndex in a revised stream).
 // Returns { word, approximate } or null.
 function matchWordAcrossStreams(prevWords, newWord, newIndex) {
-  // 1. Stable WordId
+  // 1. Stable SpanId
+  if (newWord.span_id != null) {
+    const found = prevWords.find((w) => w.span_id != null && w.span_id === newWord.span_id);
+    if (found) {
+      return { word: found, approximate: false };
+    }
+  }
+  // 2. Stable WordId
   if (newWord.id != null) {
     const found = prevWords.find((w) => w.id != null && w.id === newWord.id);
     if (found) {
       return { word: found, approximate: false };
     }
   }
-  // 2. Lexical span / text-offset overlap
+  // 3. Lexical span / text-offset overlap
   if (newWord.lexical_span) {
     const found = prevWords.find(
       (w) =>
@@ -563,11 +579,28 @@ function matchWordAcrossStreams(prevWords, newWord, newIndex) {
       return { word: found, approximate: false };
     }
   }
-  // 3. Array index fallback (approximate — provenance is marked accordingly)
+  // 4. Array index fallback (approximate — provenance is marked accordingly)
   if (newIndex < prevWords.length) {
     return { word: prevWords[newIndex], approximate: true };
   }
   return null;
+}
+
+function normalizedId(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (typeof value === "object" && value !== null && "0" in value) {
+    return String(value[0]);
+  }
+  return JSON.stringify(value);
+}
+
+function speechUnitIdFromEvent(event) {
+  return normalizedId(event?.speech_unit_id ?? event?.artifact?.speech_unit_id);
 }
 
 function measuredWordTimingBounds(words) {
@@ -707,10 +740,19 @@ function reduceLiveEvent(session, event) {
   // ── breath_group_opened → open span
   if (event.kind === "breath_group_opened") {
     const key = openSpanKey("Mic", turn, "breath_group_opened");
-    session.openSpans.set(
-      key,
-      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, "breath_group_opened", turn, labelForKind("breath_group_opened"))),
-    );
+      session.openSpans.set(
+        key,
+        openSpanRecord(
+          event.elapsed_ms,
+          semanticSpanLabel(
+            session,
+            "breath_group_opened",
+            turn,
+            labelForKind("breath_group_opened"),
+            event,
+          ),
+        ),
+      );
     log("open", `Breath group opened (turn ${turn})`);
     return;
   }
@@ -774,7 +816,11 @@ function reduceLiveEvent(session, event) {
     const spanKey = openSpanKey(lane, turn, event.kind);
     session.openSpans.set(
       spanKey,
-      openSpanRecord(event.elapsed_ms, semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind))),
+      openSpanRecord(
+        event.elapsed_ms,
+        semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind), event),
+        event.kind === "playback_started" ? speechUnitIdFromEvent(event) : null,
+      ),
     );
     if (event.kind === "asr_started") {
       log("open", `ASR span opened (turn ${turn}) [Hypothesis]`);
@@ -807,10 +853,23 @@ function liveSessionToViewerPayload(session) {
     inProgressEvents.push({
       lane: spanLane,
       kind,
-      label: openSpanLabel(openSpan) ?? semanticSpanLabel(session, kind, spanTurn, `${labelForKind(kind)} (in progress)`),
+      label:
+        openSpanLabel(openSpan) ??
+        semanticSpanLabel(
+          session,
+          kind,
+          spanTurn,
+          `${labelForKind(kind)} (in progress)`,
+          null,
+          openSpan,
+        ),
       start_ms: startMs,
       end_ms: session.maxElapsedMs,
-      metadata: { in_progress: true, turn: spanTurn },
+      metadata: {
+        in_progress: true,
+        turn: spanTurn,
+        ...(openSpanSpeechUnitId(openSpan) ? { speech_unit_id: openSpanSpeechUnitId(openSpan) } : {}),
+      },
     });
   }
 
@@ -894,7 +953,7 @@ function projectLiveViewerEvent(session, event) {
   const turn = event.metadata?.turn;
   return {
     ...event,
-    label: semanticSpanLabel(session, event.kind, turn, event.label),
+    label: semanticSpanLabel(session, event.kind, turn, event.label, event.metadata?.event),
   };
 }
 
@@ -1022,8 +1081,23 @@ function updateGeneratedSpeechText(liveTurn, event) {
   if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
     return;
   }
+  const speechUnitId = speechUnitIdFromEvent(event);
+  if (speechUnitId) {
+    liveTurn.speechUnitsById.set(speechUnitId, event.text);
+  }
 
   if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
+    if (speechUnitId) {
+      if (!liveTurn.generatedSpeechUnitOrder.includes(speechUnitId)) {
+        liveTurn.generatedSpeechUnitOrder.push(speechUnitId);
+      }
+      const fragments = liveTurn.generatedSpeechUnitOrder
+        .map((id) => liveTurn.speechUnitsById.get(id))
+        .filter((text) => typeof text === "string" && text.trim());
+      liveTurn.generatedSpeechFragments = fragments;
+      liveTurn.generatedText = fragments.join(" ");
+      return;
+    }
     const fragments = liveTurn.generatedSpeechFragments;
     const last = fragments[fragments.length - 1];
     if (last !== event.text) {
@@ -1038,7 +1112,7 @@ function updateGeneratedSpeechText(liveTurn, event) {
   }
 }
 
-function semanticSpanLabel(session, kind, turnId, fallback) {
+function semanticSpanLabel(session, kind, turnId, fallback, sourceEvent = null, openSpan = null) {
   const liveTurn = session.turns.get(turnId);
   switch (kind) {
     case "speech_started":
@@ -1047,8 +1121,18 @@ function semanticSpanLabel(session, kind, turnId, fallback) {
     case "breath_group_opened":
       return turnTranscriptText(liveTurn) ?? fallback;
     case "llm_generation_started":
-    case "playback_started":
       return liveTurn?.generatedText ?? fallback;
+    case "playback_started": {
+      const speechUnitId =
+        openSpanSpeechUnitId(openSpan) ?? speechUnitIdFromEvent(sourceEvent);
+      if (speechUnitId) {
+        const speechUnitText = liveTurn?.speechUnitsById?.get(speechUnitId);
+        if (speechUnitText) {
+          return speechUnitText;
+        }
+      }
+      return liveTurn?.generatedText ?? fallback;
+    }
     case "self_hearing_suppression_started":
       return liveTurn?.generatedText ?? "self-hearing suppression";
     default:
@@ -1058,7 +1142,7 @@ function semanticSpanLabel(session, kind, turnId, fallback) {
 
 function closedSpanLabel(session, kind, turnId, openSpan) {
   const fallback = openSpanLabel(openSpan) ?? labelForKind(kind);
-  return semanticSpanLabel(session, kind, turnId, fallback);
+  return semanticSpanLabel(session, kind, turnId, fallback, null, openSpan);
 }
 
 function semanticEventLabel(event) {

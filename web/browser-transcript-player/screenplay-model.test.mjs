@@ -76,7 +76,7 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "transcript_revision"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "interruption"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "cancellation"));
-  assert.ok(episode.scenes[0].sourceEventIds.some((id) => id.startsWith("turn-1:transcript_candidate:140")));
+  assert.ok(episode.scenes[0].sourceEventIds.some((id) => id.startsWith("turn-turn:1:transcript_candidate:140")));
   assert.ok(episode.sceneList.every((scene) => scene.summary.length > 0), "scene summaries should be present");
   assert.match(episode.screenplayBody, /USER\nCan you explain what overlap routing means\?/);
   assert.match(episode.screenplayBody, /PETE\nSure\. Overlap routing decides whether Pete yields/);
@@ -122,4 +122,41 @@ test("episodes assemble into chapters and manuscript structure", () => {
   assert.equal(manuscript.chapters.length, 1, "matching episode arcs should share a chapter");
   assert.equal(manuscript.chapters[0].episodes.length, 2);
   assert.equal(manuscript.children[0].type, "chapter");
+});
+
+test("turn and speech-unit IDs are used when present", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, {
+    kind: "transcript",
+    turn: 1,
+    turn_id: 55,
+    elapsed_ms: 100,
+    text: "Can you hear me?",
+  });
+  reduceNarrativeEvent(session, {
+    kind: "speech_unit_committed",
+    turn: 1,
+    turn_id: 55,
+    speech_unit_id: 4001,
+    elapsed_ms: 140,
+    text: "Yes, clearly.",
+  });
+  reduceNarrativeEvent(session, {
+    kind: "speech_unit_cancelled",
+    turn: 1,
+    turn_id: 55,
+    speech_unit_id: 4001,
+    elapsed_ms: 150,
+  });
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const beatKinds = episode.scenes.flatMap((scene) => scene.beats.map((beat) => beat.kind));
+  assert.ok(
+    beatKinds.includes("cancellation"),
+    "speech-unit cancellation still keys into turn when text is omitted",
+  );
+  assert.ok(
+    episode.sourceEventIds.some((id) => id.startsWith("turn-tid:55:speech_unit_committed")),
+    "source ids are keyed by turn_id when available",
+  );
 });

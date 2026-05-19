@@ -7,11 +7,29 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::speech_timeline::{
+    AudioClipId, SessionId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId,
+    UtteranceId,
+};
 use crate::time::ExactTimestamp;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveTraceEvent {
     pub turn: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<TurnId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utterance_id: Option<UtteranceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speech_unit_id: Option<SpeechUnitId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript_revision_id: Option<TranscriptRevisionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_id: Option<TimelineSpanId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_clip_id: Option<AudioClipId>,
     pub kind: String,
     pub t_unix_ns: u64,
     pub elapsed_ms: u64,
@@ -35,6 +53,7 @@ pub struct LiveTraceEvent {
 
 impl LiveTraceEvent {
     pub fn new(
+        session_id: SessionId,
         turn: u64,
         kind: impl Into<String>,
         at: ExactTimestamp,
@@ -44,6 +63,13 @@ impl LiveTraceEvent {
         let started_unix_ns = unix_nanos_u64(session_started_at);
         Self {
             turn,
+            session_id: Some(session_id),
+            turn_id: Some(TurnId(turn)),
+            utterance_id: None,
+            speech_unit_id: None,
+            transcript_revision_id: None,
+            span_id: None,
+            audio_clip_id: None,
             kind: kind.into(),
             t_unix_ns,
             elapsed_ms: t_unix_ns
@@ -141,6 +167,7 @@ struct PendingTurn {
 
 #[derive(Debug)]
 pub struct LiveTraceRecorder<S> {
+    session_id: SessionId,
     session_started_at: ExactTimestamp,
     sink: S,
     pending_turn: Option<PendingTurn>,
@@ -153,6 +180,7 @@ where
 {
     pub fn new(session_started_at: ExactTimestamp, sink: S) -> Self {
         Self {
+            session_id: SessionId::new(),
             session_started_at,
             sink,
             pending_turn: None,
@@ -165,7 +193,7 @@ where
     }
 
     pub fn event(&self, turn: u64, kind: impl Into<String>, at: ExactTimestamp) -> LiveTraceEvent {
-        LiveTraceEvent::new(turn, kind, at, self.session_started_at)
+        LiveTraceEvent::new(self.session_id, turn, kind, at, self.session_started_at)
     }
 
     pub fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
@@ -392,13 +420,16 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         let mut writer = JsonlTraceWriter::create(&path).unwrap();
-        let mut event = LiveTraceEvent::new(1, "asr_finished", ts(1_250), ts(1_000));
+        let mut event =
+            LiveTraceEvent::new(SessionId::new(), 1, "asr_finished", ts(1_250), ts(1_000));
         event.text = Some("hello".to_string());
         writer.emit(event).unwrap();
 
         let raw = std::fs::read_to_string(&path).unwrap();
         let line: Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(line["turn"], 1);
+        assert!(line["session_id"].is_string());
+        assert_eq!(line["turn_id"], 1);
         assert_eq!(line["kind"], "asr_finished");
         assert_eq!(line["elapsed_ms"], 250);
         assert_eq!(line["text"], "hello");
@@ -412,6 +443,7 @@ mod tests {
         let mut broadcaster = SseBroadcaster::new();
         broadcaster
             .emit(LiveTraceEvent::new(
+                SessionId::new(),
                 0,
                 "capture_started",
                 ts(1_000),
@@ -425,6 +457,7 @@ mod tests {
 
         broadcaster
             .emit(LiveTraceEvent::new(
+                SessionId::new(),
                 1,
                 "speech_started",
                 ts(1_100),
