@@ -1,6 +1,7 @@
 use anyhow::Result;
 use thiserror::Error;
 
+use crate::linguistic::cmudict;
 use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -150,7 +151,7 @@ impl SimpleEnglishG2p {
                 NormalizedToken::Word(word) => {
                     let word_symbols = word_to_phones(word)
                         .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
-                    symbols.extend(word_symbols.iter().copied().map(String::from));
+                    symbols.extend(word_symbols);
                     emitted_pronounceable += 1;
                     if emitted_pronounceable < pronounceable_count {
                         symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
@@ -344,17 +345,9 @@ fn build_candidate(
     }
 }
 
-fn word_to_phones(word: &str) -> Option<&'static [&'static str]> {
-    match word {
-        "okay" => Some(&["OW", "K", "EY"]),
-        "i" => Some(&["AY"]),
-        "see" => Some(&["S", "IY"]),
-        "doctor" => Some(&["D", "AA", "K", "T", "ER"]),
-        "king" => Some(&["K", "IH", "NG"]),
-        "scott" => Some(&["S", "K", "AA", "T"]),
-        "fitzgerald" => Some(&["F", "IH", "TS", "JH", "EH", "R", "AH", "L", "D"]),
-        _ => None,
-    }
+fn word_to_phones(word: &str) -> Option<Vec<String>> {
+    let phones = cmudict::bundled().lookup(word)?;
+    Some(phones.iter().map(|p| p.base.clone()).collect())
 }
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
@@ -421,20 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_words_return_clear_errors() {
+    fn phonemizes_xylophone() {
         let g2p = SimpleEnglishG2p::default();
-        let error = g2p
-            .phonemize_unit("xylophone")
-            .expect_err("unknown word should fail");
+        let unit = g2p.phonemize_unit("xylophone").expect("phonemize");
         assert_eq!(
-            error,
-            G2pError::UnsupportedWord {
-                word: "xylophone".to_string()
-            }
-        );
-        assert_eq!(
-            error.to_string(),
-            "unsupported word `xylophone` for native Piper simple English G2P"
+            symbols(&unit.phonemes),
+            vec!["Z", "AY", "L", "AH", "F", "OW", "N"]
         );
     }
 
