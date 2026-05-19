@@ -8,6 +8,7 @@ pub mod dtw;
 pub mod features;
 pub mod frame;
 pub mod hypothesis;
+pub mod lattice;
 pub mod phone_class;
 pub mod ring;
 pub mod streaming_prosody;
@@ -25,6 +26,10 @@ pub use dtw::{DtwTemplate, DtwTemplateMatcher};
 pub use features::{build_feature_stream, AcousticFeatureFrame, AcousticFeatureStream};
 pub use hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
+};
+pub use lattice::{
+    fuse_hypotheses, FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind,
+    HypothesisLattice,
 };
 pub use phone_class::{classify_frame, generate_phone_class_hypotheses, CoarsePhoneClass};
 pub use viterbi::{viterbi_align_pronunciation, PhoneState};
