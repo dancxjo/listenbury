@@ -10,7 +10,7 @@ const PAUSE_THRESHOLD_DBFS: f32 = -44.0;
 const PAUSE_MIN_MS: u64 = 120;
 const ACCENT_DELTA_THRESHOLD: f32 = 0.04;
 const MODEL_HISTORY_LIMIT: usize = 12;
-const NANOS_PER_MILLI: u128 = 1_000_000;
+const NANOS_PER_MS: u128 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -390,7 +390,7 @@ fn push_with_limit<T>(values: &mut Vec<T>, value: T, limit: usize) {
 
 pub fn saturating_elapsed_ms(start: ExactTimestamp, end: ExactTimestamp) -> u64 {
     let nanos = end.unix_nanos.saturating_sub(start.unix_nanos);
-    u64::try_from(nanos / NANOS_PER_MILLI).unwrap_or(u64::MAX)
+    u64::try_from(nanos / NANOS_PER_MS).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -410,7 +410,7 @@ mod tests {
         let linear = 10f32.powf(dbfs / 20.0);
         AudioFrame {
             captured_at: ExactTimestamp {
-                unix_nanos: captured_ms.saturating_mul(NANOS_PER_MILLI),
+                unix_nanos: captured_ms.saturating_mul(NANOS_PER_MS),
             },
             sample_rate_hz,
             channels,
@@ -436,7 +436,7 @@ mod tests {
         }
         AudioFrame {
             captured_at: ExactTimestamp {
-                unix_nanos: captured_ms.saturating_mul(NANOS_PER_MILLI),
+                unix_nanos: captured_ms.saturating_mul(NANOS_PER_MS),
             },
             sample_rate_hz,
             channels: 1,

@@ -1880,8 +1880,7 @@ fn emit_streaming_prosody_events(
     }
 
     let mut frame_event = trace.event(turn_id, "prosody.frame", ExactTimestamp::now());
-    frame_event.reason =
-        Some(format!("provenance={:?}", update.frame.provenance).to_ascii_lowercase());
+    frame_event.reason = Some(format!("provenance={:?}", update.frame.provenance));
     frame_event.artifact = Some(serde_json::to_value(&update)?);
     trace.emit(frame_event)?;
 
