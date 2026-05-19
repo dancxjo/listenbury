@@ -76,7 +76,7 @@ export function reduceNarrativeEvent(session, event) {
   const sourceEvent = normalizeSourceEvent(event, session.nextSourceSequence++);
   session.sourceEvents.push(sourceEvent);
 
-  const turn = getTurn(session, event.turn ?? 0);
+  const turn = getTurn(session, eventTurnKey(event), eventTurnNumber(event));
   turn.sourceEventIds.push(sourceEvent.sourceId);
   turn.eventKinds.add(sourceEvent.kind);
   turn.startedAtMs = minNumber(turn.startedAtMs, numericMs(sourceEvent.elapsed_ms));
@@ -112,7 +112,10 @@ export function reduceNarrativeEvent(session, event) {
     return;
   }
 
-  if (isLlmTextEvent(sourceEvent.kind) && textContent(sourceEvent.text)) {
+  if (
+    isLlmTextEvent(sourceEvent.kind) &&
+    (textContent(sourceEvent.text) || speechUnitIdFromEvent(sourceEvent))
+  ) {
     applyLlmTextEvent(turn, sourceEvent);
     return;
   }
@@ -249,10 +252,11 @@ export function turnHasNarrativeMaterial(turn) {
   return turnHasUserDialogue(turn) || turnHasLlmDialogue(turn) || turn.flags.interruption || turn.flags.cancelled;
 }
 
-function getTurn(session, turnId) {
-  if (!session.turns.has(turnId)) {
-    session.turns.set(turnId, {
-      id: turnId,
+function getTurn(session, turnKey, turnNumber) {
+  if (!session.turns.has(turnKey)) {
+    session.turns.set(turnKey, {
+      key: turnKey,
+      id: turnNumber,
       sourceEventIds: [],
       eventKinds: new Set(),
       startedAtMs: null,
@@ -274,18 +278,22 @@ function getTurn(session, turnId) {
         revised: false,
         prospective: false,
       },
+      speechUnitsById: new Map(),
     });
   }
-  return session.turns.get(turnId);
+  return session.turns.get(turnKey);
 }
 
 function normalizeSourceEvent(event, sequence) {
-  const turn = event.turn ?? 0;
+  const turn = eventTurnNumber(event);
+  const turnKey = eventTurnKey(event);
   const elapsedMs = numericMs(event.elapsed_ms);
   return {
     ...event,
     sourceId:
-      event.source_id ?? event.id ?? `turn-${turn}:${String(event.kind ?? "event")}:${Number.isFinite(elapsedMs) ? elapsedMs : "na"}:${sequence}`,
+      event.source_id ??
+      event.id ??
+      `turn-${turnKey}:${String(event.kind ?? "event")}:${Number.isFinite(elapsedMs) ? elapsedMs : "na"}:${sequence}`,
   };
 }
 
@@ -404,15 +412,22 @@ function applyTtsWordStreamRevision(turn, event) {
 }
 
 function applyLlmTextEvent(turn, event) {
-  const text = textContent(event.text);
+  const speechUnitId = speechUnitIdFromEvent(event);
+  const text = speechUnitText(turn, event);
   if (!text) {
     return;
+  }
+  if (speechUnitId) {
+    turn.speechUnitsById.set(speechUnitId, text);
   }
 
   if (event.kind === "speech_unit_cancelled") {
     turn.flags.cancelled = true;
     recordDeletedText(turn.llmDeleted, [text], event.elapsed_ms);
     removeLlmFragment(turn, text);
+    if (speechUnitId) {
+      turn.speechUnitsById.delete(speechUnitId);
+    }
     return;
   }
 
@@ -438,6 +453,22 @@ function isLlmTextEvent(kind) {
     "speculative_speech_updated",
     "tts_enqueue_started",
   ].includes(kind);
+}
+
+function speechUnitIdFromEvent(event) {
+  return normalizedId(event?.speech_unit_id ?? event?.artifact?.speech_unit_id);
+}
+
+function speechUnitText(turn, event) {
+  const direct = textContent(event?.text);
+  if (direct) {
+    return direct;
+  }
+  const speechUnitId = speechUnitIdFromEvent(event);
+  if (!speechUnitId) {
+    return "";
+  }
+  return textContent(turn.speechUnitsById.get(speechUnitId));
 }
 
 function addLlmFragment(turn, text) {
@@ -933,6 +964,32 @@ function textContent(value) {
     .replace(/\s+/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
     .trim();
+}
+
+function eventTurnNumber(event) {
+  const turn = Number(event?.turn ?? 0);
+  return Number.isFinite(turn) ? turn : 0;
+}
+
+function eventTurnKey(event) {
+  const turnId = normalizedId(event?.turn_id);
+  if (turnId) {
+    return `tid:${turnId}`;
+  }
+  return `turn:${eventTurnNumber(event)}`;
+}
+
+function normalizedId(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (typeof value === "object" && value !== null && "0" in value) {
+    return String(value[0]);
+  }
+  return JSON.stringify(value);
 }
 
 function unique(values) {
