@@ -51,6 +51,11 @@ import {
   boundaryHypothesesFromLandmarks,
   drawBoundaryHypotheses,
 } from "/assets/mechanical-asr.mjs";
+import {
+  HypothesisLattice,
+  fuseHypotheses,
+  drawHypothesisConfidenceHeatmap,
+} from "/assets/hypothesis-lattice.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -4228,6 +4233,22 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
       mechanicalHyps,
       (ms) => msToCanvasX({ cssHeight, canvasWidthPx, renderedWidthPx }, ms),
     );
+
+    // Hypothesis lattice confidence heatmap: fuse boundary hypotheses into a
+    // lattice and draw a colour-coded confidence band along the bottom of the
+    // waveform panel so the user can see which boundaries have strong evidence.
+    if (mechanicalHyps.length > 0) {
+      const lattice = new HypothesisLattice();
+      for (const hyp of mechanicalHyps) lattice.add(hyp);
+      const fusionResult = fuseHypotheses(lattice);
+      drawHypothesisConfidenceHeatmap(
+        ctx,
+        { cssHeight, canvasWidthPx, renderedWidthPx },
+        lattice,
+        fusionResult,
+        (ms) => msToCanvasX({ cssHeight, canvasWidthPx, renderedWidthPx }, ms),
+      );
+    }
   }
   canvas.dataset.waveformSignature = signature;
   delete canvas.dataset.pendingWaveformSignature;

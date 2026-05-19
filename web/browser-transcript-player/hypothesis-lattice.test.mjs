@@ -260,13 +260,10 @@ describe("fuseHypotheses", () => {
 
   it("explicit supports edge marks candidate as supporting", () => {
     const lattice = new HypothesisLattice();
-    // Non-overlapping spans: one is a boundary, one is a word.
     const word = makeWordCandidate("testing", 1000, 1300, 0.72);
-    const boundary = makeBoundary("speech_start", 1000, 0.65);
-    boundary.endMs = 1000; // point boundary, no overlap with word [1000,1300]? actually it does overlap
-    // Make boundary non-overlapping to avoid the fallback conflict rule
-    boundary.startMs = 500;
-    boundary.endMs = 500;
+    // Use a point boundary at 500ms so it does not overlap with the word [1000, 1300].
+    // This ensures the "supports" edge (not the temporal-overlap fallback) determines classification.
+    const boundary = makeBoundary("speech_start", 500, 0.65);
     lattice.add(word);
     lattice.add(boundary);
     lattice.connect(boundary.id, word.id, "supports", 0.8);
@@ -341,7 +338,7 @@ describe("drawHypothesisConfidenceHeatmap", () => {
     const ctx = makeMockCtx();
     const lattice = new HypothesisLattice();
     drawHypothesisConfidenceHeatmap(ctx, { cssHeight: 100 }, lattice, null, (ms) => ms);
-    assert.ok(!ctx.ops.includes("fillRect"));
+    assert.equal(ctx.ops.filter((op) => op.startsWith("fillRect")).length, 0);
   });
 
   it("draws a heatmap band for each active hypothesis", () => {

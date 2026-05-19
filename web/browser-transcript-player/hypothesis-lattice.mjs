@@ -162,7 +162,7 @@ export function weightedConfidence(input) {
   let totalWeight = 0;
   let weightedSum = 0;
   for (const [value, weight] of signals) {
-    if (value != null) {
+    if (value !== null && value !== undefined) {
       weightedSum += value * weight;
       totalWeight += weight;
     }
