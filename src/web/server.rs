@@ -297,6 +297,10 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_MODEL_JS,
         ),
+        "/scene-heading.mjs" | "/assets/scene-heading.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SCENE_HEADING_MJS,
+        ),
         // Shared live-event model modules
         "/assets/shared/events/schema.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
@@ -550,6 +554,10 @@ mod tests {
         let model = route_request("GET", "/assets/screenplay-model.mjs", &state);
         assert_eq!(model.status, 200);
         assert_eq!(model.content_type, "application/javascript; charset=utf-8");
+
+        let scene_heading = route_request("GET", "/assets/scene-heading.mjs", &state);
+        assert_eq!(scene_heading.status, 200);
+        assert_eq!(scene_heading.content_type, "application/javascript; charset=utf-8");
 
         let styles = route_request("GET", "/assets/screenplay.css", &state);
         assert_eq!(styles.status, 200);

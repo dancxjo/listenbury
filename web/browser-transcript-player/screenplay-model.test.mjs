@@ -201,8 +201,8 @@ test("scene heading is a proper screenplay slugline, not a runtime label", () =>
   for (const scene of episode.scenes) {
     // Must start with INT., EXT., or INT./EXT.
     assert.match(scene.heading, /^(?:INT\.|EXT\.|INT\.\/EXT\.) /, `scene heading should start with INT./EXT.: ${scene.heading}`);
-    // Must contain a time-of-day separator
-    assert.match(scene.heading, / - /, `scene heading should contain a time-of-day separator: ${scene.heading}`);
+    // Must contain a time-of-day separator with a valid label
+    assert.match(scene.heading, / - (?:DAY|NIGHT|AFTERNOON|EVENING|PRESENT)$/, `scene heading should end with a valid time-of-day label: ${scene.heading}`);
     // Must NOT contain runtime labels
     assert.ok(!scene.heading.includes("LISTENBURY RUNTIME"), `slugline must not include LISTENBURY RUNTIME: ${scene.heading}`);
     assert.ok(!scene.heading.includes("QUIET GRIEF"), `mood label must not appear in slugline: ${scene.heading}`);

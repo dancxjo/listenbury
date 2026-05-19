@@ -4,6 +4,7 @@ import {
   createNarrativeSession,
   reduceNarrativeEvent,
 } from "/assets/screenplay-model.mjs";
+import { toTitleCase } from "/assets/scene-heading.mjs";
 
 const scriptRoot = document.getElementById("script");
 const statusEl = document.getElementById("connection-status");
@@ -187,12 +188,6 @@ function sceneSection(scene) {
   }
 
   return section;
-}
-
-function toTitleCase(text) {
-  return String(text ?? "")
-    .toLowerCase()
-    .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }
 
 function sceneHeading(text) {

@@ -1,5 +1,5 @@
 import { SpanModality } from "./shared-span-model.mjs";
-import { resolveSlugline } from "./scene-heading.mjs";
+import { resolveSlugline, toTitleCase } from "./scene-heading.mjs";
 import {
   MAX_DELETED_SNIPPETS,
   textContent,
@@ -825,10 +825,4 @@ function joinWithCommas(parts) {
     return `${parts[0]} and ${parts[1]}`;
   }
   return `${parts.slice(0, -1).join(", ")}, and ${parts[parts.length - 1]}`;
-}
-
-function toTitleCase(text) {
-  return String(text ?? "")
-    .toLowerCase()
-    .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }

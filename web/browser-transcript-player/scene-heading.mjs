@@ -91,17 +91,24 @@ export function resolveLocation(context = {}) {
 }
 
 /**
+ * Minimum millisecond value that is treated as a real wall-clock epoch timestamp.
+ * Values below this threshold are assumed to be elapsed-time offsets (e.g. session
+ * elapsed_ms counters starting near zero) rather than actual Date.now() timestamps.
+ */
+const MIN_EPOCH_MS = 86_400_000; // 24 hours since Unix epoch (1970-01-02)
+
+/**
  * Infer a time-of-day label from an epoch millisecond timestamp.
  *
  * Falls back to "DAY" when no real wall-clock timestamp is available.
- * Values smaller than 24 hours of milliseconds (86400000) are treated as
- * elapsed-time offsets rather than real epoch timestamps and return "DAY".
+ * Values smaller than MIN_EPOCH_MS are treated as elapsed-time offsets rather
+ * than real epoch timestamps and return "DAY".
  *
  * @param {number|null} [timestampMs=null]
  * @returns {"DAY"|"AFTERNOON"|"EVENING"|"NIGHT"}
  */
 export function resolveTimeOfDay(timestampMs = null) {
-  if (timestampMs == null || !Number.isFinite(timestampMs) || timestampMs < 86_400_000) {
+  if (timestampMs == null || !Number.isFinite(timestampMs) || timestampMs < MIN_EPOCH_MS) {
     return "DAY";
   }
   const hour = new Date(timestampMs).getHours();
@@ -121,6 +128,19 @@ export function resolveTimeOfDay(timestampMs = null) {
  */
 export function formatSlugline(interiorExterior, place, timeOfDay) {
   return `${interiorExterior} ${place} - ${timeOfDay}`;
+}
+
+/**
+ * Convert an UPPER CASE or mixed string to Title Case.
+ * e.g. "QUIET GRIEF" → "Quiet Grief", "PHONOLOGY WORKBENCH" → "Phonology Workbench"
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function toTitleCase(text) {
+  return String(text ?? "")
+    .toLowerCase()
+    .replace(/(?:^|\s|-)\S/g, (char) => char.toUpperCase());
 }
 
 /**
