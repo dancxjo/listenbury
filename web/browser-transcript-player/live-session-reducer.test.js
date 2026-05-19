@@ -175,6 +175,16 @@ function eventChipDisplayLabel(lane, event, startMs, endMs) {
   return event?.label ?? labelForKind(event?.kind ?? "event");
 }
 
+function scrollLeftForTimingFocus(bounds, viewportStartPx, viewportWidthPx, contentWidthPx) {
+  const viewportEndPx = viewportStartPx + viewportWidthPx;
+  if (bounds.startPx >= viewportStartPx && bounds.endPx <= viewportEndPx) {
+    return null;
+  }
+  const centerPx = (bounds.startPx + bounds.endPx) / 2;
+  const maxScrollLeft = Math.max(0, contentWidthPx - viewportWidthPx);
+  return Math.max(0, Math.min(maxScrollLeft, centerPx - viewportWidthPx / 2));
+}
+
 function isGeneratedSpeechEventKind(kind) {
   return [
     "first_safe_speech_unit_emitted",
@@ -880,6 +890,25 @@ console.log("\n── Scenario 10: duplex ASR projects to one shared timeline la
   assertEqual(transcriptSpans[0].label, "first", "derived transcript span label uses word content");
   assertEqual(transcriptSpans[0].start_ms, 900, "derived transcript span starts at spoken word start");
   assertEqual(transcriptSpans[0].end_ms, 1200, "derived transcript span ends at spoken word end");
+}
+
+console.log("\n── Scenario 11: timeline focus chooses correct scroll target ──");
+{
+  assertEqual(
+    scrollLeftForTimingFocus({ startPx: 200, endPx: 280 }, 0, 500, 1600),
+    null,
+    "returns null when timing is already visible",
+  );
+  assertEqual(
+    scrollLeftForTimingFocus({ startPx: 900, endPx: 1000 }, 0, 500, 1600),
+    700,
+    "centers off-screen timing region",
+  );
+  assertEqual(
+    scrollLeftForTimingFocus({ startPx: 1500, endPx: 1600 }, 0, 500, 1600),
+    1100,
+    "clamps scroll target to right edge",
+  );
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────
