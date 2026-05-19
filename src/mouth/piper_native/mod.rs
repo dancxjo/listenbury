@@ -1,6 +1,7 @@
 #[cfg(feature = "tts-piper-native")]
 pub mod backend;
 pub mod config;
+pub mod encoder;
 pub mod g2p;
 pub mod phoneme;
 pub mod prosody_planner;
@@ -9,6 +10,7 @@ pub mod text;
 #[cfg(feature = "tts-piper-native")]
 pub use backend::{NativePiperBackend, NativePiperPcm, PiperModelContract};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
+pub use encoder::PiperEncoder;
 pub use g2p::{
     G2pError, GraphemeToPhoneme, PhoneLengthClass, PhoneLengthHint, PhoneTimingHint,
     PhonemeProsodyCandidate, PhonemeProsodyCandidateEvent, PhonemeProsodyCandidateTracker,

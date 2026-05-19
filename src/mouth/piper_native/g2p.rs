@@ -2,6 +2,10 @@ use anyhow::Result;
 use thiserror::Error;
 
 use crate::linguistic::cmudict;
+use crate::linguistic::orthography::OrthographicWord;
+use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
+use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
+use crate::linguistic::variety::LinguisticVariety;
 use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -209,6 +213,86 @@ impl SimpleEnglishG2p {
 impl GraphemeToPhoneme for SimpleEnglishG2p {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence> {
         Ok(self.phonemize_unit(text)?.phonemes)
+    }
+}
+
+impl OrthographyToPhonemes for SimpleEnglishG2p {
+    fn realize_word(
+        &self,
+        _variety: &LinguisticVariety,
+        word: &OrthographicWord,
+    ) -> Result<PhonemeSeq, PhonologyError> {
+        let phones = word_to_phones(&word.text)
+            .ok_or_else(|| PhonologyError::UnsupportedWord { word: word.text.clone() })?;
+        Ok(PhonemeSeq::new(
+            phones.into_iter().map(Phoneme::new).collect(),
+        ))
+    }
+
+    fn realize_text(
+        &self,
+        variety: &LinguisticVariety,
+        text: &str,
+    ) -> Result<PhonemeText, PhonologyError> {
+        let normalized = self
+            .normalizer
+            .normalize(text)
+            .map_err(|e| PhonologyError::Message { message: e.to_string() })?;
+
+        let mut units: Vec<PhonemeTextUnit> = Vec::new();
+        let mut pending_word_boundary = false;
+
+        for token in &normalized.tokens {
+            match token {
+                NormalizedToken::Word(word) => {
+                    let ortho = OrthographicWord::new(word.as_str());
+                    let seq = self.realize_word(variety, &ortho)?;
+                    if pending_word_boundary {
+                        units.push(PhonemeTextUnit::WordBoundary);
+                    }
+                    units.push(PhonemeTextUnit::Word {
+                        orthography: ortho,
+                        phonemes: seq,
+                    });
+                    pending_word_boundary = true;
+                }
+                NormalizedToken::Initial(initial) => {
+                    let initial_phones = initial_to_phones(*initial).ok_or_else(|| {
+                        PhonologyError::Message {
+                            message: format!("unsupported initial '{initial}'"),
+                        }
+                    })?;
+                    let ortho = OrthographicWord::new(&initial.to_string());
+                    let seq = PhonemeSeq::new(
+                        initial_phones
+                            .iter()
+                            .copied()
+                            .map(Phoneme::new)
+                            .collect(),
+                    );
+                    if pending_word_boundary {
+                        units.push(PhonemeTextUnit::WordBoundary);
+                    }
+                    units.push(PhonemeTextUnit::Word {
+                        orthography: ortho,
+                        phonemes: seq,
+                    });
+                    pending_word_boundary = true;
+                }
+                NormalizedToken::PhraseBreak => {
+                    units.push(PhonemeTextUnit::PhraseBoundary);
+                    pending_word_boundary = false;
+                }
+            }
+        }
+
+        if matches!(normalized.boundary, ProsodyBoundaryHint::PossibleSentenceEnd)
+            && !matches!(units.last(), Some(PhonemeTextUnit::PhraseBoundary))
+        {
+            units.push(PhonemeTextUnit::PhraseBoundary);
+        }
+
+        Ok(PhonemeText::new(units))
     }
 }
 
@@ -557,5 +641,83 @@ mod tests {
             .expect("replacement event");
         assert_eq!(replacement.0, first_id);
         assert_eq!(replacement.2, 0);
+    }
+
+    mod realize_text {
+        use super::*;
+        use crate::linguistic::phoneme::PhonemeTextUnit;
+        use crate::linguistic::variety::{LinguisticVariety, Phonology, VarietyTag};
+        use crate::mouth::piper_native::encoder::PiperEncoder;
+
+        fn en_us() -> LinguisticVariety {
+            LinguisticVariety::tagged(
+                VarietyTag::new("en_US"),
+                "English (US)",
+                Phonology::new("General American"),
+            )
+        }
+
+        fn piper_seq(text: &str) -> PiperPhonemeSequence {
+            let g2p = SimpleEnglishG2p::default();
+            let phoneme_text = g2p.realize_text(&en_us(), text).expect("realize_text");
+            PiperEncoder.encode(&phoneme_text)
+        }
+
+        fn sym(seq: &PiperPhonemeSequence) -> Vec<&str> {
+            seq.phonemes.iter().map(|p| p.0.as_str()).collect()
+        }
+
+        #[test]
+        fn realize_text_okay_matches_phonemize_unit() {
+            let seq = piper_seq("Okay.");
+            assert_eq!(sym(&seq), vec!["OW", "K", "EY", "|"]);
+        }
+
+        #[test]
+        fn realize_text_i_see_matches_phonemize_unit() {
+            let seq = piper_seq("I see.");
+            assert_eq!(sym(&seq), vec!["AY", " ", "S", "IY", "|"]);
+        }
+
+        #[test]
+        fn realize_text_honorific_matches_phonemize_unit() {
+            let seq = piper_seq("Dr. King");
+            assert_eq!(
+                sym(&seq),
+                vec!["D", "AA", "K", "T", "ER", " ", "K", "IH", "NG"]
+            );
+        }
+
+        #[test]
+        fn realize_text_initials_and_words_matches_phonemize_unit() {
+            let seq = piper_seq("F. Scott Fitzgerald");
+            assert_eq!(
+                sym(&seq),
+                vec![
+                    "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "TS", "JH", "EH", "R",
+                    "AH", "L", "D"
+                ]
+            );
+        }
+
+        #[test]
+        fn realize_text_phrase_boundary_unit_present() {
+            let g2p = SimpleEnglishG2p::default();
+            let phoneme_text = g2p.realize_text(&en_us(), "Okay.").expect("realize_text");
+            assert!(
+                phoneme_text.units.last() == Some(&PhonemeTextUnit::PhraseBoundary),
+                "trailing PhraseBoundary expected for sentence-ending text"
+            );
+        }
+
+        #[test]
+        fn realize_text_no_trailing_boundary_for_incomplete_phrase() {
+            let g2p = SimpleEnglishG2p::default();
+            let phoneme_text = g2p.realize_text(&en_us(), "Dr. King").expect("realize_text");
+            assert!(
+                !matches!(phoneme_text.units.last(), Some(PhonemeTextUnit::PhraseBoundary)),
+                "no trailing PhraseBoundary expected for non-sentence-ending text"
+            );
+        }
     }
 }
