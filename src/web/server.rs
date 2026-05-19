@@ -379,6 +379,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::TIMELINE_VIEWPORT_MJS,
         ),
+        "/energy-timing.mjs" | "/assets/energy-timing.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::ENERGY_TIMING_MJS,
+        ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_JS,
@@ -738,6 +742,13 @@ mod tests {
         let module = route_request("GET", "/assets/timeline-viewport.mjs", &empty_state());
         assert_eq!(module.status, 200);
         assert_eq!(module.content_type, "application/javascript; charset=utf-8");
+
+        let energy_module = route_request("GET", "/assets/energy-timing.mjs", &empty_state());
+        assert_eq!(energy_module.status, 200);
+        assert_eq!(
+            energy_module.content_type,
+            "application/javascript; charset=utf-8"
+        );
     }
 
     #[test]
