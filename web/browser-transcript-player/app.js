@@ -3472,10 +3472,10 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
   ctx.beginPath();
   for (let x = 0; x < canvasWidthPx; x++) {
     const window = waveformWindowAtCanvasX(x, canvasWidthPx, renderedWidthPx, level);
-    const minAmp = Math.max(0, Math.abs(window.min) * maxAmp);
+    const minAmpPx = Math.max(0, Math.abs(window.min) * maxAmp);
     const maxAmpPx = Math.max(0, Math.abs(window.max) * maxAmp);
     ctx.moveTo(x + 0.5, centerY - Math.max(1, maxAmpPx));
-    ctx.lineTo(x + 0.5, centerY + Math.max(1, minAmp));
+    ctx.lineTo(x + 0.5, centerY + Math.max(1, minAmpPx));
   }
   ctx.stroke();
 }
@@ -3661,7 +3661,7 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
   for (let x = 0; x < canvasWidthPx; x++) {
     const window = waveformWindowAtCanvasX(x, canvasWidthPx, renderedWidthPx, level);
     topY[x] = centerY - Math.max(0, window.max * maxAmp);
-    botY[x] = centerY - Math.min(0, window.min * maxAmp);
+    botY[x] = centerY + Math.max(0, Math.abs(window.min) * maxAmp);
   }
 
   // Filled waveform envelope
