@@ -3,9 +3,15 @@
 //! They should only move PCM through bounded realtime-safe buffers.
 
 pub mod acoustic;
+pub mod boundary;
+pub mod dtw;
+pub mod features;
 pub mod frame;
+pub mod hypothesis;
+pub mod phone_class;
 pub mod ring;
 pub mod streaming_prosody;
+pub mod viterbi;
 pub mod voice_signature;
 pub mod wav;
 
@@ -14,6 +20,14 @@ pub use acoustic::{
     analyze_audio_frames, analyze_mono_samples, segment_pronunciation_with_acoustics,
     AcousticAnalysis,
 };
+pub use boundary::generate_boundary_hypotheses;
+pub use dtw::{DtwTemplate, DtwTemplateMatcher};
+pub use features::{build_feature_stream, AcousticFeatureFrame, AcousticFeatureStream};
+pub use hypothesis::{
+    HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
+};
+pub use phone_class::{classify_frame, generate_phone_class_hypotheses, CoarsePhoneClass};
+pub use viterbi::{viterbi_align_pronunciation, PhoneState};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };

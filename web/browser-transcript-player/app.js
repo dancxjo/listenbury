@@ -47,6 +47,10 @@ import {
   projectPhonemesIntoWordInterval,
   stressPattern,
 } from "/assets/phoneme-projection.mjs";
+import {
+  boundaryHypothesesFromLandmarks,
+  drawBoundaryHypotheses,
+} from "/assets/mechanical-asr.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -4212,6 +4216,18 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
       canvasWidthPx,
       renderedWidthPx,
     });
+  }
+
+  // Mechanical ASR boundary-hypothesis overlay (always shown when landmarks are available).
+  const landmarks = state.waveform.energyLandmarks;
+  if (landmarks) {
+    const mechanicalHyps = boundaryHypothesesFromLandmarks(landmarks);
+    drawBoundaryHypotheses(
+      ctx,
+      { cssHeight, canvasWidthPx, renderedWidthPx },
+      mechanicalHyps,
+      (ms) => msToCanvasX({ cssHeight, canvasWidthPx, renderedWidthPx }, ms),
+    );
   }
   canvas.dataset.waveformSignature = signature;
   delete canvas.dataset.pendingWaveformSignature;
