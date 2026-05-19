@@ -180,12 +180,10 @@ fn word_position(index: usize, len: usize) -> WordPosition {
 }
 
 fn split_arpabet_symbol(symbol: &str) -> (String, Option<Stress>) {
-    let mut chars = symbol.chars();
-    let last = chars.next_back();
-    match last {
-        Some('1') => (chars.collect(), Some(Stress::Primary)),
-        Some('2') => (chars.collect(), Some(Stress::Secondary)),
-        Some('0') => (chars.collect(), Some(Stress::Unstressed)),
+    match symbol.chars().last() {
+        Some('1') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Primary)),
+        Some('2') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Secondary)),
+        Some('0') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Unstressed)),
         _ => (symbol.to_string(), None),
     }
 }

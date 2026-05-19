@@ -81,6 +81,7 @@ const STRESS_BY_DIGIT = {
   1: "primary",
   2: "secondary",
 };
+const STRESS_DIGITS = new Set(["0", "1", "2"]);
 
 /**
  * @typedef {"word_initial"|"word_medial"|"word_final"|"singleton"} WordPosition
@@ -131,10 +132,18 @@ export function isVowel(symbol) {
 }
 
 function isStressDigit(char) {
-  return char === "0" || char === "1" || char === "2";
+  return STRESS_DIGITS.has(char);
 }
 
 function parseArpabetToken(token) {
+  if (token == null) {
+    return {
+      sourceSymbol: "",
+      symbol: "",
+      stressDigit: null,
+      stress: null,
+    };
+  }
   const raw = String(token ?? "").trim();
   const last = raw[raw.length - 1];
   const hasStress = isStressDigit(last);
@@ -163,11 +172,12 @@ function wordPosition(index, length) {
 }
 
 function defaultEnvironment(index, sequenceLength, sequence) {
+  const phoneIpa = (entry) => entry?.realization?.ipa ?? entry?.defaultPhoneString?.[0]?.ipa ?? null;
   const left = sequence[index - 1] ?? null;
   const right = sequence[index + 1] ?? null;
   return {
-    left_phone: left?.realization?.ipa ?? left?.defaultPhoneString?.[0]?.ipa ?? null,
-    right_phone: right?.realization?.ipa ?? right?.defaultPhoneString?.[0]?.ipa ?? null,
+    left_phone: phoneIpa(left),
+    right_phone: phoneIpa(right),
     left_class: left ? (isVowel(left.sourceSymbol) ? "vowel" : "consonant") : null,
     right_class: right ? (isVowel(right.sourceSymbol) ? "vowel" : "consonant") : null,
     word_position: wordPosition(index, sequenceLength),
