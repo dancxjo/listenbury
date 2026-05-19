@@ -221,11 +221,6 @@ function sceneSection(scene) {
   summary.textContent = scene.summary;
   section.append(summary);
 
-  const sources = document.createElement("p");
-  sources.className = "source-line";
-  sources.textContent = `Source trace IDs: ${scene.sourceEventIds.join(", ")}`;
-  section.append(sources);
-
   for (const beat of scene.beats) {
     if (beat.role) {
       const block = document.createElement("section");

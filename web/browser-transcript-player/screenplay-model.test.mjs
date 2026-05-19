@@ -80,13 +80,15 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
   assert.equal(episode.scenes[0].topicLabel, "WAVEDECK INSPECTION");
   assert.equal(episode.scenes[1].topicLabel, "QUIET GRIEF");
 
-  assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "transcript_revision"));
+  assert.ok(!episode.scenes[0].beats.some((beat) => beat.kind === "transcript_revision"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "interruption"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "cancellation"));
   assert.ok(episode.scenes[0].sourceEventIds.some((id) => id.startsWith("turn-turn:1:transcript_candidate:140")));
   assert.ok(episode.sceneList.every((scene) => scene.summary.length > 0), "scene summaries should be present");
   assert.match(episode.screenplayBody, /USER\nCan you explain what overlap routing means\?/);
   assert.match(episode.screenplayBody, /PETE\nSure\. Overlap routing decides whether Pete yields/);
+  assert.ok(!episode.screenplayBody.includes("The transcript revises itself"));
+  assert.ok(!episode.screenplayBody.includes("Source trace IDs:"));
 });
 
 test("scene boundaries revise retroactively as more context arrives", () => {
@@ -117,6 +119,24 @@ test("transcript propositions stay available without becoming screenplay beats",
     ["worl"],
   );
   assert.equal(episode.scenes.length, 0);
+});
+
+test("consecutive utterances by the same speaker are consolidated", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "First user thought." }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 2, 140, { text: "Second user thought." }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 220, { text: "Pete answers after both." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const dialogueBeats = episode.scenes[0].beats.filter((beat) => beat.role);
+
+  assert.deepEqual(
+    dialogueBeats.map((beat) => beat.role),
+    ["USER", "PETE"],
+  );
+  assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
+  assert.equal(dialogueBeats[0].turnIds, undefined);
+  assert.equal((episode.screenplayBody.match(/\nUSER\n/g) ?? []).length, 1);
 });
 
 test("episodes assemble into chapters and manuscript structure", () => {
