@@ -139,6 +139,11 @@ test("consecutive utterances by the same speaker are consolidated", () => {
   assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
   assert.equal(dialogueBeats[0].turnIds, undefined);
   assert.equal((episode.screenplayBody.match(/\nUNKNOWN VOICE #1\n/g) ?? []).length, 1);
+    ["USER", "PETE"],
+  );
+  assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
+  assert.equal(dialogueBeats[0].turnIds, undefined);
+  assert.equal((episode.screenplayBody.match(/\nUSER\n/g) ?? []).length, 1);
 });
 
 test("episodes assemble into chapters and manuscript structure", () => {
