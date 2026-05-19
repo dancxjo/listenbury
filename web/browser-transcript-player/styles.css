@@ -1239,6 +1239,17 @@ h1 {
   box-shadow: 0 0 0 1px rgba(99, 210, 255, 0.25);
 }
 
+/* Confirmed: high-quality pass over broader context */
+.word-chip.commit-confirmed {
+  border-color: rgba(142, 230, 168, 0.95);
+  background:
+    linear-gradient(90deg, rgba(142, 230, 168, 0.34), transparent),
+    #13271a;
+  color: #e0ffe9;
+  font-weight: 800;
+  box-shadow: 0 0 0 1px rgba(142, 230, 168, 0.32);
+}
+
 /* Cancelled: abandoned before playback */
 .word-chip.commit-cancelled {
   border-style: dashed;
