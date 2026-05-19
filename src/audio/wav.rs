@@ -61,6 +61,7 @@ fn read_wav_as_mono_16khz_frames(path: &Path, frame_samples: usize) -> Result<Ve
             sample_rate_hz: WHISPER_SAMPLE_RATE_HZ,
             channels: MONO_CHANNELS,
             samples: chunk.to_vec(),
+            voice_signatures: Vec::new(),
         })
         .collect())
 }
@@ -128,6 +129,7 @@ pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFra
             sample_rate_hz: spec.sample_rate,
             channels: spec.channels,
             samples: chunk.to_vec(),
+            voice_signatures: Vec::new(),
         })
         .collect())
 }
@@ -238,12 +240,14 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![-1.0, -0.25],
+                voice_signatures: Vec::new(),
             },
             AudioFrame {
                 captured_at: ExactTimestamp::now(),
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![0.0, 0.5, 1.0],
+                voice_signatures: Vec::new(),
             },
         ];
 

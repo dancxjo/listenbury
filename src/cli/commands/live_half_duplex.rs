@@ -2177,6 +2177,7 @@ fn drain_pending_into_ring(
             sample_rate_hz: frame_sample_rate_hz,
             channels: frame_channels,
             samples,
+            voice_signatures: Vec::new(),
         };
         if ring_tx.try_push(frame).is_err() {
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);

@@ -295,6 +295,7 @@ fn read_wav_frames(path: &Path) -> Result<Vec<AudioFrame>> {
             .into_iter()
             .map(|sample| sample as f32 / 32768.0)
             .collect(),
+        voice_signatures: Vec::new(),
     }])
 }
 
@@ -318,6 +319,7 @@ mod tests {
                 sample_rate_hz: 22_050,
                 channels: 1,
                 samples: vec![0.2, 0.1],
+                voice_signatures: Vec::new(),
             }]);
             Ok(())
         }
@@ -341,6 +343,7 @@ mod tests {
             sample_rate_hz: 22_050,
             channels: 1,
             samples: vec![0.3, 0.2],
+            voice_signatures: Vec::new(),
         };
         cache
             .put(&unit, &[warmed_frame.clone()])
@@ -403,6 +406,7 @@ mod tests {
             sample_rate_hz: 22_050,
             channels: 1,
             samples: vec![0.25, -0.25],
+            voice_signatures: Vec::new(),
         };
         cache
             .put(&unit, &[frame])

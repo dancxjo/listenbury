@@ -411,12 +411,14 @@ fn decompose_frame(
             sample_rate_hz: frame.sample_rate_hz,
             channels: frame.channels,
             samples: self_samples,
+            voice_signatures: Vec::new(),
         },
         AudioFrame {
             captured_at: frame.captured_at,
             sample_rate_hz: frame.sample_rate_hz,
             channels: frame.channels,
             samples: residual_samples,
+            voice_signatures: Vec::new(),
         },
     )
 }
@@ -450,6 +452,7 @@ fn empty_speaker_reference_decision(
         sample_rate_hz: frame.sample_rate_hz,
         channels: frame.channels,
         samples: vec![0.0; frame.samples.len()],
+        voice_signatures: Vec::new(),
     };
     speaker_reference_decision(decision, 0.0, 1.0, 0, 0.0, frame.clone(), self_frame)
 }
@@ -656,6 +659,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: reference.clone(),
+            voice_signatures: Vec::new(),
         }];
         let mut mask = SpeakerReferenceMask::new();
         mask.mark_output_started(&frames, started_at);
@@ -672,6 +676,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: mic,
+            voice_signatures: Vec::new(),
         });
 
         assert_eq!(decision.decision, SuppressionDecision::Suppress);
@@ -691,6 +696,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: reference.clone(),
+            voice_signatures: Vec::new(),
         }];
         let mut mask = SpeakerReferenceMask::new();
         mask.mark_output_started(&frames, started_at);
@@ -709,6 +715,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: mic,
+            voice_signatures: Vec::new(),
         });
 
         assert_eq!(decision.decision, SuppressionDecision::Allow);

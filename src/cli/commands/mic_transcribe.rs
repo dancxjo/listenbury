@@ -865,6 +865,7 @@ fn drain_pending_into_ring(
             sample_rate_hz: frame_sample_rate_hz,
             channels: frame_channels,
             samples,
+            voice_signatures: Vec::new(),
         };
         if ring_tx.try_push(frame).is_err() {
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);
@@ -1228,6 +1229,7 @@ fn prepare_whisper_frames(frames: &[AudioFrame], frame_samples: usize) -> Result
             sample_rate_hz: WHISPER_SAMPLE_RATE_HZ,
             channels: 1,
             samples: chunk.to_vec(),
+            voice_signatures: Vec::new(),
         })
         .collect())
 }

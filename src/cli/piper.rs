@@ -789,6 +789,7 @@ mod tests {
                 sample_rate_hz: 20,
                 channels: 1,
                 samples: vec![0.0, 0.5, -1.0, 0.5],
+                voice_signatures: Vec::new(),
             }],
             "test",
         )

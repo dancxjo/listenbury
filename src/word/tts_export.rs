@@ -522,6 +522,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: vec![0.0f32; 22_050],
+            voice_signatures: Vec::new(),
         };
 
         let mut stream = generated_text_to_word_stream(WordStreamId(30), "one two three");

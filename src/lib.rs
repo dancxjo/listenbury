@@ -22,7 +22,10 @@ pub mod web;
 pub mod word;
 
 pub use audio::frame::AudioFrame;
-pub use audio::{AudioInput, AudioOutput};
+pub use audio::{
+    AudioInput, AudioOutput, VoiceSignature, VoiceSignatureId, VoiceSignatureLabel,
+    VoiceSignatureSource,
+};
 pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
     VisionEvent,

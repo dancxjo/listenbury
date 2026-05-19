@@ -484,6 +484,7 @@ fn frames_from_samples(config: &PiperConfig, samples: Vec<f32>) -> Vec<AudioFram
             sample_rate_hz: config.sample_rate_hz,
             channels: config.channels,
             samples: chunk.to_vec(),
+            voice_signatures: Vec::new(),
         })
         .collect()
 }

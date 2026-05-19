@@ -422,6 +422,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples,
+            voice_signatures: Vec::new(),
         }
     }
 

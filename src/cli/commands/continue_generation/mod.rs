@@ -3908,6 +3908,7 @@ fn drain_pending_continue_ear_frames(
             sample_rate_hz: frame_sample_rate_hz,
             channels: frame_channels,
             samples,
+            voice_signatures: Vec::new(),
         };
         process_continue_ear_frame(frame, state, asr_tx, event_tx)?;
     }
@@ -4101,6 +4102,7 @@ fn padded_environmental_asr_frames(frames: &[AudioFrame], padding_ms: u64) -> Ve
         sample_rate_hz: first.sample_rate_hz,
         channels: first.channels,
         samples: vec![0.0; first.samples.len()],
+        voice_signatures: Vec::new(),
     };
 
     let mut padded = Vec::with_capacity(frames.len().saturating_add(padding_frames * 2));
@@ -5894,6 +5896,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![0.5; 160],
+            voice_signatures: Vec::new(),
         }];
 
         let padded = padded_environmental_asr_frames(&clip, 20);

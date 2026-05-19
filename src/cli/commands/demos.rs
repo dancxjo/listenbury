@@ -71,6 +71,7 @@ pub(crate) fn run_demo_vad() -> Result<()> {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![amp; 160],
+            voice_signatures: Vec::new(),
         };
         let vad_result = vad.process_frame(&frame)?;
         for event in segmenter.process(vad_result) {
