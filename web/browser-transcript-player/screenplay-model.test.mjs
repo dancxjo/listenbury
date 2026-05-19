@@ -160,3 +160,27 @@ test("turn and speech-unit IDs are used when present", () => {
     "source ids are keyed by turn_id when available",
   );
 });
+
+test("dialogue segments optionally carry span metadata", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("asr_timed_word_stream", 1, 100, {
+    artifact: {
+      words: [
+        { id: 1, span_id: 101, text: "hello", commitment: "StableText", timing: { start_ms: 100, end_ms: 170 } },
+      ],
+    },
+  }));
+  reduceNarrativeEvent(session, mkEvent("tts_timed_word_stream_revision", 1, 200, {
+    artifact: {
+      words: [
+        { id: 2, span_id: 202, text: "hi", commitment: "Played", timing: { start_ms: 240, end_ms: 300 } },
+      ],
+    },
+  }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const userBeat = episode.scenes[0].beats.find((beat) => beat.kind === "user_dialogue");
+  const llmBeat = episode.scenes[0].beats.find((beat) => beat.kind === "llm_dialogue");
+  assert.ok(userBeat.segments[0].spanMetadata?.length, "user segment should include optional span metadata");
+  assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
+});
