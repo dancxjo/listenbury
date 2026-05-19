@@ -1,3 +1,6 @@
+const MIN_BUCKET_DURATION_MS = 0.0001;
+const FLOAT_TOLERANCE = 0.000001;
+
 export class TimeScale {
   constructor({ pxPerSecond, durationMs }) {
     this.pxPerSecond = clampFinite(pxPerSecond, 1);
@@ -163,12 +166,12 @@ export function selectWaveformResolutionLevel(levels, options = {}) {
   let bestLevel = levels[0];
   let bestError = Number.POSITIVE_INFINITY;
   for (const level of levels) {
-    const durationMs = Math.max(0.0001, clampFinite(level?.bucketDurationMs, 0.0001));
+    const durationMs = Math.max(MIN_BUCKET_DURATION_MS, clampFinite(level?.bucketDurationMs, MIN_BUCKET_DURATION_MS));
     const error = Math.abs(Math.log(durationMs / desiredBucketDurationMs));
     if (
-      error < bestError - 0.000001 ||
-      (Math.abs(error - bestError) <= 0.000001 &&
-        durationMs < Math.max(0.0001, clampFinite(bestLevel?.bucketDurationMs, 0.0001)))
+      error < bestError - FLOAT_TOLERANCE ||
+      (Math.abs(error - bestError) <= FLOAT_TOLERANCE &&
+        durationMs < Math.max(MIN_BUCKET_DURATION_MS, clampFinite(bestLevel?.bucketDurationMs, MIN_BUCKET_DURATION_MS)))
     ) {
       bestLevel = level;
       bestError = error;
@@ -186,7 +189,7 @@ export function waveformBucketToPx(scale, bucket, minWidthPx = 0) {
 }
 
 export function formatWaveformBucketDuration(bucketDurationMs) {
-  const durationMs = Math.max(0.0001, clampFinite(bucketDurationMs, 0.0001));
+  const durationMs = Math.max(MIN_BUCKET_DURATION_MS, clampFinite(bucketDurationMs, MIN_BUCKET_DURATION_MS));
   if (durationMs >= 1000) {
     return `${stripTrailingZeros((durationMs / 1000).toFixed(2))}s buckets`;
   }

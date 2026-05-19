@@ -3384,7 +3384,7 @@ function waveformBucketIndexAtTimelinePx(timelinePx, level) {
     return null;
   }
   const timeMs = currentTimeScale().pxToMs(timelinePx);
-  if (timeMs < 0 || timeMs > state.waveform.durationMs) {
+  if (timeMs < 0 || timeMs >= state.waveform.durationMs) {
     return null;
   }
   return Math.min(bucketCount - 1, Math.floor((timeMs / state.waveform.durationMs) * bucketCount));
@@ -3407,13 +3407,13 @@ function waveformWindowAtCanvasX(canvasX, canvasWidthPx, renderedWidthPx, level)
     return { min: 0, max: 0, rms: 0 };
   }
 
-  const first = Math.max(0, Math.min(startIndex, endIndex));
-  const last = Math.min(level.buckets.length - 1, Math.max(first, endIndex));
+  const firstBucketIndex = Math.max(0, Math.min(startIndex, endIndex));
+  const lastBucketIndex = Math.min(level.buckets.length - 1, Math.max(firstBucketIndex, endIndex));
   let min = 0;
   let max = 0;
   let rms = 0;
   let count = 0;
-  for (let index = first; index <= last; index++) {
+  for (let index = firstBucketIndex; index <= lastBucketIndex; index++) {
     const bucket = level.buckets[index];
     min = count === 0 ? (bucket?.min_sample ?? 0) : Math.min(min, bucket?.min_sample ?? 0);
     max = count === 0 ? (bucket?.max_sample ?? 0) : Math.max(max, bucket?.max_sample ?? 0);
