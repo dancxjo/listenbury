@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::live_trace::LiveTraceEvent;
+use crate::live_trace::{TraceSessionAudioArtifact, TraceSessionEnvelope};
 use crate::word::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
     WordStreamSource, WordTiming,
@@ -13,6 +14,8 @@ use crate::word::{
 
 const DEFAULT_WORD_SLOT_MS: u64 = 240;
 const DEFAULT_LANE_TAIL_BUFFER_MS: u64 = 200;
+const USER_TRANSCRIPT_LANE: &str = "User transcript";
+const PETE_INTENDED_SPEECH_LANE: &str = "Pete intended speech";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewerPayload {
@@ -31,6 +34,12 @@ pub struct ViewerAudio {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate_hz: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,6 +137,23 @@ pub fn live_trace_events_to_viewer_payload(events: &[LiveTraceEvent]) -> ViewerP
     }
 }
 
+pub fn trace_session_to_viewer_payload(session: &TraceSessionEnvelope) -> ViewerPayload {
+    let mut payload = live_trace_events_to_viewer_payload(&session.events);
+    payload.audio = canonical_session_audio(&session.metadata.audio_artifacts);
+    payload
+}
+
+fn canonical_session_audio(artifacts: &[TraceSessionAudioArtifact]) -> Option<ViewerAudio> {
+    let artifact = artifacts.first()?;
+    Some(ViewerAudio {
+        url: format!("/api/session-audio/{}", artifact.artifact_id),
+        duration_ms: Some(artifact.duration_ms),
+        artifact_id: Some(artifact.artifact_id.clone()),
+        sample_rate_hz: Some(artifact.sample_rate_hz),
+        channels: Some(artifact.channels),
+    })
+}
+
 #[derive(Clone, Copy)]
 enum TextLaneKind {
     UnknownVoice,
@@ -158,8 +184,8 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
         };
 
         let key = match kind {
-            TextLaneKind::UnknownVoice => "UNKNOWN VOICE #1",
-            TextLaneKind::PeteVoice => "PETE",
+            TextLaneKind::UnknownVoice => USER_TRANSCRIPT_LANE,
+            TextLaneKind::PeteVoice => PETE_INTENDED_SPEECH_LANE,
         };
         lane_events
             .entry(key)
@@ -167,17 +193,17 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
             .push((event.elapsed_ms, text.to_string()));
     }
     if !live_asr_streams.is_empty() {
-        lane_events.entry("UNKNOWN VOICE #1").or_default();
+        lane_events.entry(USER_TRANSCRIPT_LANE).or_default();
     }
     if !live_tts_revision_streams.is_empty() {
-        lane_events.entry("PETE").or_default();
+        lane_events.entry(PETE_INTENDED_SPEECH_LANE).or_default();
     }
 
     lane_events
         .into_iter()
         .enumerate()
         .map(|(stream_index, (label, snippets))| {
-            if label == "UNKNOWN VOICE #1" && !live_asr_streams.is_empty() {
+            if label == USER_TRANSCRIPT_LANE && !live_asr_streams.is_empty() {
                 let mut streams = live_asr_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
@@ -198,7 +224,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                     },
                 };
             }
-            if label == "PETE" && !live_tts_revision_streams.is_empty() {
+            if label == PETE_INTENDED_SPEECH_LANE && !live_tts_revision_streams.is_empty() {
                 let mut streams = live_tts_revision_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
@@ -220,17 +246,17 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                 };
             }
 
-            let source = if label == "UNKNOWN VOICE #1" {
+            let source = if label == USER_TRANSCRIPT_LANE {
                 WordStreamSource::RecordedAudio
             } else {
                 WordStreamSource::GeneratedText
             };
-            let commitment = if label == "UNKNOWN VOICE #1" {
+            let commitment = if label == USER_TRANSCRIPT_LANE {
                 WordCommitment::Final
             } else {
                 WordCommitment::StableText
             };
-            let boundary_source = if label == "UNKNOWN VOICE #1" {
+            let boundary_source = if label == USER_TRANSCRIPT_LANE {
                 BoundarySource::Whisper
             } else {
                 BoundarySource::Predicted
@@ -705,14 +731,14 @@ mod tests {
             payload
                 .streams
                 .iter()
-                .any(|lane| lane.label == "UNKNOWN VOICE #1"),
+                .any(|lane| lane.label == USER_TRANSCRIPT_LANE),
             "unknown voice lane should be present"
         );
         assert!(
             payload
                 .streams
                 .iter()
-                .any(|lane| lane.label == "PETE"),
+                .any(|lane| lane.label == PETE_INTENDED_SPEECH_LANE),
             "pete lane should be present"
         );
         assert!(
@@ -779,7 +805,7 @@ mod tests {
         let lane = payload
             .streams
             .iter()
-            .find(|lane| lane.label == "UNKNOWN VOICE #1")
+            .find(|lane| lane.label == USER_TRANSCRIPT_LANE)
             .expect("unknown voice lane should be present");
         assert_eq!(lane.stream.source, WordStreamSource::LiveAsr);
         assert_eq!(lane.stream.words.len(), 1);
@@ -846,7 +872,7 @@ mod tests {
         let lane = payload
             .streams
             .iter()
-            .find(|lane| lane.label == "PETE")
+            .find(|lane| lane.label == PETE_INTENDED_SPEECH_LANE)
             .expect("pete lane should be present");
         assert_eq!(lane.stream.source, WordStreamSource::SyntheticSpeech);
         assert!(
@@ -920,5 +946,38 @@ mod tests {
                 end_ms: Some(210),
             })
         );
+    }
+
+    #[test]
+    fn trace_session_payload_exposes_canonical_session_audio() {
+        let session_id = crate::live_trace::SessionId::new();
+        let session = TraceSessionEnvelope {
+            metadata: crate::live_trace::TraceSessionMetadata {
+                format: crate::live_trace::TRACE_SESSION_FORMAT.to_string(),
+                session_id,
+                session_started_at_unix_ns: 1_000,
+                recorded_at_unix_ns: 2_000,
+                events_path: crate::live_trace::TRACE_SESSION_EVENTS_FILE.to_string(),
+                audio_artifacts: vec![TraceSessionAudioArtifact {
+                    session_id,
+                    artifact_id: "session-audio".to_string(),
+                    path: "audio/session.wav".to_string(),
+                    duration_ms: 2_500,
+                    sample_rate_hz: 16_000,
+                    channels: 1,
+                    created_at_unix_ns: 2_000,
+                }],
+                runtime: crate::live_trace::TraceRuntimeMetadata::new("test"),
+            },
+            events: vec![],
+        };
+
+        let payload = trace_session_to_viewer_payload(&session);
+        let audio = payload.audio.expect("session audio should be exposed");
+
+        assert_eq!(audio.url, "/api/session-audio/session-audio");
+        assert_eq!(audio.duration_ms, Some(2_500));
+        assert_eq!(audio.sample_rate_hz, Some(16_000));
+        assert_eq!(audio.channels, Some(1));
     }
 }

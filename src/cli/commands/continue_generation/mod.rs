@@ -3668,10 +3668,19 @@ impl ContinueEar {
                                 }
 
                                 if !output.text.is_empty() {
-                                    let timed_word_stream = live_asr_text_to_word_stream(
-                                        WordStreamId(next_stream_id),
-                                        &output.text,
-                                    );
+                                    let timed_word_stream = if output.words.is_empty() {
+                                        live_asr_text_to_word_stream(
+                                            WordStreamId(next_stream_id),
+                                            &output.text,
+                                        )
+                                    } else {
+                                        let mut stream = transcript_to_word_stream(
+                                            WordStreamId(next_stream_id),
+                                            &output.words,
+                                        );
+                                        stream.source = WordStreamSource::LiveAsr;
+                                        stream
+                                    };
                                     next_stream_id = next_stream_id.saturating_add(1);
                                     if event_tx_for_asr
                                         .send(ContinueEarEvent::Transcript {

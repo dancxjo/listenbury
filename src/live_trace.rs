@@ -18,6 +18,8 @@ use crate::time::ExactTimestamp;
 pub const TRACE_SESSION_FORMAT: &str = "listenbury.live-session.v1";
 pub const TRACE_SESSION_METADATA_FILE: &str = "metadata.json";
 pub const TRACE_SESSION_EVENTS_FILE: &str = "events.jsonl";
+pub const TRACE_SESSION_AUDIO_DIR: &str = "audio";
+pub const TRACE_SESSION_AUDIO_FILE: &str = "session.wav";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveTraceEvent {
@@ -131,7 +133,20 @@ pub struct TraceSessionMetadata {
     pub session_started_at_unix_ns: u64,
     pub recorded_at_unix_ns: u64,
     pub events_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_artifacts: Vec<TraceSessionAudioArtifact>,
     pub runtime: TraceRuntimeMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceSessionAudioArtifact {
+    pub session_id: SessionId,
+    pub artifact_id: String,
+    pub path: String,
+    pub duration_ms: u64,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub created_at_unix_ns: u64,
 }
 
 impl TraceSessionMetadata {
@@ -147,6 +162,7 @@ impl TraceSessionMetadata {
             session_started_at_unix_ns,
             recorded_at_unix_ns: session_started_at_unix_ns,
             events_path: TRACE_SESSION_EVENTS_FILE.to_string(),
+            audio_artifacts: Vec::new(),
             runtime,
         }
     }
@@ -261,6 +277,31 @@ impl TraceSessionWriter {
     {
         self.events.write(value)
     }
+}
+
+pub fn add_trace_session_audio_artifact(
+    session_path: &Path,
+    artifact: TraceSessionAudioArtifact,
+) -> anyhow::Result<TraceSessionMetadata> {
+    let mut metadata = read_trace_session_metadata(session_path)?;
+    metadata
+        .audio_artifacts
+        .retain(|existing| existing.artifact_id != artifact.artifact_id);
+    metadata.audio_artifacts.push(artifact);
+    write_trace_session_metadata(session_path, &metadata)?;
+    Ok(metadata)
+}
+
+pub fn write_trace_session_metadata(
+    session_path: &Path,
+    metadata: &TraceSessionMetadata,
+) -> anyhow::Result<()> {
+    let metadata_path = trace_session_metadata_path(session_path)
+        .ok_or_else(|| anyhow::anyhow!("{} is not a trace session path", session_path.display()))?;
+    let metadata_json =
+        serde_json::to_vec_pretty(metadata).context("serialize trace session metadata")?;
+    std::fs::write(&metadata_path, metadata_json)
+        .with_context(|| format!("write trace metadata {}", metadata_path.display()))
 }
 
 impl LiveTraceSink for TraceSessionWriter {
@@ -659,6 +700,7 @@ fn synthesize_trace_session_metadata(
             .and_then(OsStr::to_str)
             .unwrap_or(TRACE_SESSION_EVENTS_FILE)
             .to_string(),
+        audio_artifacts: Vec::new(),
         runtime,
     }
 }
@@ -744,6 +786,34 @@ mod tests {
         assert_eq!(envelope.metadata, metadata);
         assert_eq!(envelope.events.len(), 1);
         assert_eq!(envelope.events[0].text.as_deref(), Some("hello"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn trace_session_metadata_tracks_audio_artifact() {
+        let root =
+            std::env::temp_dir().join(format!("listenbury-live-session-{}", uuid::Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let metadata =
+            TraceSessionMetadata::new(session_id, ts(1_000), TraceRuntimeMetadata::new("test"));
+        let _writer = TraceSessionWriter::create(&root, metadata).unwrap();
+
+        let artifact = TraceSessionAudioArtifact {
+            session_id,
+            artifact_id: "session-audio".to_string(),
+            path: "audio/session.wav".to_string(),
+            duration_ms: 1500,
+            sample_rate_hz: 16_000,
+            channels: 1,
+            created_at_unix_ns: 1_000_000_000,
+        };
+        let updated = add_trace_session_audio_artifact(&root, artifact.clone()).unwrap();
+
+        assert_eq!(updated.audio_artifacts, vec![artifact]);
+        let read_back = read_trace_session_metadata(&root).unwrap();
+        assert_eq!(read_back.audio_artifacts.len(), 1);
+        assert_eq!(read_back.audio_artifacts[0].artifact_id, "session-audio");
 
         std::fs::remove_dir_all(root).unwrap();
     }

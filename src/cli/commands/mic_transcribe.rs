@@ -799,6 +799,7 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 pub(super) struct TranscribeGroupOutput {
     pub(super) text: String,
+    pub(super) words: Vec<TranscriptWord>,
     pub(super) candidate_events: Vec<TranscriptCandidateEvent>,
 }
 
@@ -820,13 +821,22 @@ pub(super) fn transcribe_group_with_finality(
     if whisper_frames.is_empty() {
         return Ok(TranscribeGroupOutput {
             text: String::new(),
+            words: Vec::new(),
             candidate_events: Vec::new(),
         });
     }
     for frame in &whisper_frames {
         recognizer.push_frame(frame)?;
     }
-    let candidate_events = recognizer.poll_candidate_events_with_finality(is_final)?;
+    let Some((transcript, candidate_events)) =
+        recognizer.poll_timed_transcript_with_finality(is_final)?
+    else {
+        return Ok(TranscribeGroupOutput {
+            text: String::new(),
+            words: Vec::new(),
+            candidate_events: Vec::new(),
+        });
+    };
     let text = candidate_events
         .iter()
         .filter_map(|event| match event {
@@ -837,6 +847,7 @@ pub(super) fn transcribe_group_with_finality(
         .join(" ");
     Ok(TranscribeGroupOutput {
         text: text.trim().to_string(),
+        words: transcript.words,
         candidate_events,
     })
 }
@@ -1025,7 +1036,14 @@ fn emit_web_transcribe_output(
             state.groups_closed, output.text
         );
 
-        let stream = live_asr_text_to_word_stream(WordStreamId(state.next_stream_id), &output.text);
+        let stream = if output.words.is_empty() {
+            live_asr_text_to_word_stream(WordStreamId(state.next_stream_id), &output.text)
+        } else {
+            let mut stream =
+                transcript_to_word_stream(WordStreamId(state.next_stream_id), &output.words);
+            stream.source = WordStreamSource::LiveAsr;
+            stream
+        };
         state.next_stream_id = state.next_stream_id.saturating_add(1);
 
         let mut transcript_event = state.live_trace.event(turn, "transcript", occurred_at);

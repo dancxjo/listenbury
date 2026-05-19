@@ -6,14 +6,14 @@ use anyhow::{Context, Result};
 use crate::cli::TraceViewerExportCommand;
 
 pub(crate) fn run_trace_viewer_export(command: TraceViewerExportCommand) -> Result<()> {
-    let events = listenbury::live_trace::read_live_trace_events(&command.input_jsonl)
-        .with_context(|| {
+    let session =
+        listenbury::live_trace::read_trace_session(&command.input_jsonl).with_context(|| {
             format!(
-                "read live trace events from {}",
+                "read live trace session from {}",
                 command.input_jsonl.display()
             )
         })?;
-    let payload = listenbury::trace::viewer_payload::live_trace_events_to_viewer_payload(&events);
+    let payload = listenbury::trace::viewer_payload::trace_session_to_viewer_payload(&session);
 
     if let Some(parent) = command
         .output_json

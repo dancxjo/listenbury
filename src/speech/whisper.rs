@@ -4,8 +4,16 @@ use crate::speech::recognizer::SpeechRecognizer;
 use crate::speech::transcript::{
     TranscriptCandidateEvent, TranscriptCandidateTracker, TranscriptChunk,
 };
+use crate::word::TranscriptWord;
 use std::sync::OnceLock;
 use whisper_cpp_plus::whisper_cpp_plus_sys as whisper_ffi;
+use whisper_cpp_plus::{FullParams, SamplingStrategy, WhisperState};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhisperTranscript {
+    pub text: String,
+    pub words: Vec<TranscriptWord>,
+}
 
 pub struct WhisperSpeechRecognizer {
     ctx: whisper_cpp_plus::WhisperContext,
@@ -82,22 +90,30 @@ impl WhisperSpeechRecognizer {
         Ok(())
     }
 
-    fn poll_transcript_text(&mut self) -> anyhow::Result<Option<String>> {
+    fn poll_transcript(&mut self) -> anyhow::Result<Option<WhisperTranscript>> {
         if self.pending.is_empty() {
             return Ok(None);
         }
 
         let audio = std::mem::take(&mut self.pending);
-        let audio =
-            pad_samples_with_silence(audio, self.sample_rate_hz, self.input_silence_padding_ms);
-        let text = self.ctx.transcribe(&audio)?;
-        let text = text.trim();
+        let padding_ms = self.input_silence_padding_ms;
+        let audio = pad_samples_with_silence(audio, self.sample_rate_hz, padding_ms);
+        let mut state = WhisperState::new(&self.ctx)?;
+        let params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+            .token_timestamps(true)
+            .split_on_word(true);
+        state.full(params, &audio)?;
+        let transcript = transcript_from_whisper_state(&state, padding_ms)?;
+        let text = transcript.text.trim();
 
         if text.is_empty() {
             return Ok(None);
         }
 
-        Ok(Some(text.to_owned()))
+        Ok(Some(WhisperTranscript {
+            text: text.to_owned(),
+            words: transcript.words,
+        }))
     }
 
     /// Emits candidate lifecycle events for recognized audio.
@@ -117,13 +133,26 @@ impl WhisperSpeechRecognizer {
         &mut self,
         is_final: bool,
     ) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
-        let Some(text) = self.poll_transcript_text()? else {
+        let Some(transcript) = self.poll_transcript()? else {
             return Ok(Vec::new());
         };
 
         Ok(self
             .candidate_tracker
-            .ingest_candidate(text, None, is_final))
+            .ingest_candidate(transcript.text, None, is_final))
+    }
+
+    pub fn poll_timed_transcript_with_finality(
+        &mut self,
+        is_final: bool,
+    ) -> anyhow::Result<Option<(WhisperTranscript, Vec<TranscriptCandidateEvent>)>> {
+        let Some(transcript) = self.poll_transcript()? else {
+            return Ok(None);
+        };
+        let events =
+            self.candidate_tracker
+                .ingest_candidate(transcript.text.clone(), None, is_final);
+        Ok(Some((transcript, events)))
     }
 }
 
@@ -155,6 +184,49 @@ fn configure_whisper_logging(suppress_logs: bool) {
             whisper_ffi::whisper_log_set(Some(drop_whisper_log), std::ptr::null_mut());
         });
     }
+}
+
+fn transcript_from_whisper_state(
+    state: &WhisperState,
+    padding_ms: u64,
+) -> anyhow::Result<WhisperTranscript> {
+    let n_segments = state.full_n_segments();
+    let mut text = String::new();
+    let mut words = Vec::new();
+
+    for segment_index in 0..n_segments {
+        let segment_text = state.full_get_segment_text(segment_index)?;
+        if !segment_text.trim().is_empty() {
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(segment_text.trim());
+        }
+        for token_index in 0..state.full_n_tokens(segment_index) {
+            let token_text = state.full_get_token_text(segment_index, token_index)?;
+            let token_text = token_text.trim();
+            if token_text.is_empty() || token_text.starts_with('[') {
+                continue;
+            }
+            let Some(token) = state.full_get_token_data(segment_index, token_index) else {
+                continue;
+            };
+            let start_ms = whisper_time_to_ms(token.t0).saturating_sub(padding_ms);
+            let end_ms = whisper_time_to_ms(token.t1).saturating_sub(padding_ms);
+            words.push(TranscriptWord {
+                text: token_text.to_string(),
+                start_ms: Some(start_ms),
+                end_ms: Some(end_ms.max(start_ms.saturating_add(1))),
+                confidence: token.p.is_finite().then(|| token.p.clamp(0.0, 1.0)),
+            });
+        }
+    }
+
+    Ok(WhisperTranscript { text, words })
+}
+
+fn whisper_time_to_ms(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or_default().saturating_mul(10)
 }
 
 #[cfg(test)]
@@ -204,12 +276,12 @@ impl SpeechRecognizer for WhisperSpeechRecognizer {
     /// Prefer `poll_candidate_events` for new integrations and use this method as
     /// compatibility sugar until a unified transcript event stream fully replaces chunk polling.
     fn poll_chunks(&mut self) -> anyhow::Result<Vec<TranscriptChunk>> {
-        let Some(text) = self.poll_transcript_text()? else {
+        let Some(transcript) = self.poll_transcript()? else {
             return Ok(Vec::new());
         };
 
         Ok(vec![TranscriptChunk {
-            text,
+            text: transcript.text,
             is_final: true,
         }])
     }

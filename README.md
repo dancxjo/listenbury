@@ -352,6 +352,7 @@ The hosted server exposes stable routes for the viewer and event APIs:
 
 ```text
 /                     live WaveDeck viewer (connects to SSE immediately)
+/wavedeck             canonical session WaveDeck view (loads --trace when attached)
 /replay               trace replay / fixture tooling (offline, deterministic)
 /screenplay           narrative screenplay view
 /assets/...           bundled static assets
@@ -361,6 +362,7 @@ The hosted server exposes stable routes for the viewer and event APIs:
 /api/trace            JSONL from --trace (when provided)
 /api/trace-session    structured recorded session JSON from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
+/api/session-audio/{artifact_id}  full-session audio artifact from structured --trace
 /api/live-events      SSE stream of live LiveTraceEvent JSON (requires listen --web)
 /healthz              simple health check
 ```
@@ -385,17 +387,19 @@ chips/ruler positions to seek the shared audio timeline. Drag across the ruler o
 empty lane region to mark a time range; releasing the mouse zooms directly into
 that range.
 
-When `listenbury web` is started with `--trace <path>`, both `/replay` and
-`/screenplay` automatically load the recorded trace/session instead of waiting
-for live SSE events.
+When `listenbury web` is started with `--trace <path>`, `/wavedeck` loads the
+recorded session as the canonical waveform timeline. `/replay` and `/screenplay`
+also load the recorded trace/session instead of waiting for live SSE events.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
 
 Words without `timing` are displayed with fallback layout timing so they are
 visibly distinct from measured/aligned timings.
 
-Current milestone audio model still supports one shared `audio.url` timeline
-for all lanes, with optional event/marker `audio_ref` clip playback.
+Structured trace-session directories can include a durable full-session audio
+artifact recorded in `metadata.json` under `audio_artifacts`. WaveDeck serves
+that artifact through `/api/session-audio/{artifact_id}` and uses it as the
+shared waveform ruler, with optional event/marker `audio_ref` clip playback.
 
 ### Fixture files
 
@@ -421,13 +425,17 @@ structured session directory when the output path is not a `.jsonl` file:
 session/
   metadata.json
   events.jsonl
+  audio/
+    session.wav
 ```
 
 `metadata.json` preserves the session ID, start time, event stream path, and
-runtime configuration. `dev continue` also emits `asr_timed_word_stream`
-artifacts carrying serialized live ASR `TimedWordStream` objects. Convert a
-JSONL file or a structured session directory into the browser viewer payload
-with:
+runtime configuration. For structured sessions, `listenbury listen --jsonl
+<session-dir>` also records the full session WAV as a durable audio artifact
+with duration, sample rate, channel count, creation time, and session linkage in
+`metadata.json`. `dev continue` also emits `asr_timed_word_stream` artifacts
+carrying serialized live ASR `TimedWordStream` objects. Convert a JSONL file or a
+structured session directory into the browser viewer payload with:
 
 ```bash
 cargo run -- dev trace-viewer-export out/live-session out/live-trace.viewer.json

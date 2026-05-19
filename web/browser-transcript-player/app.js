@@ -1,5 +1,6 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 import cytoscape from "https://esm.sh/cytoscape@3.30.2";
+import { createTimeScale, createTimelineViewport } from "/assets/timeline-viewport.mjs";
 import {
   AlignmentKind,
   SpanModality,
@@ -358,6 +359,10 @@ async function bootstrap() {
     renderShell();
     return;
   }
+  if (window.location.pathname === "/wavedeck" || window.location.pathname === "/wavedeck/") {
+    enterSessionInspectionMode();
+    return;
+  }
   enterLiveMode();
 }
 
@@ -384,6 +389,30 @@ function enterLiveMode() {
   renderShell();
 
   connectLiveEvents();
+}
+
+async function enterSessionInspectionMode() {
+  document.body.classList.add("session-mode");
+  uiState.liveMode = false;
+  document.title = "WaveDeck · Session";
+  uiState.statusMessage = "Loading recorded session timeline…";
+  renderShell();
+
+  try {
+    const response = await fetch("/api/trace-viewer-payload");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    applyPayload(payload);
+    uiState.statusMessage = "Loaded recorded session WaveDeck timeline.";
+    renderShell();
+  } catch (err) {
+    console.warn("Unable to load recorded session payload; falling back to live mode:", err);
+    uiState.statusMessage = "No recorded trace is attached; connecting to live events…";
+    renderShell();
+    enterLiveMode();
+  }
 }
 
 function connectLiveEvents() {
@@ -1768,15 +1797,37 @@ function setSurfaceMode(mode) {
 let _programmaticScroll = false;
 
 function pxPerMs() {
-  return state.zoomPxPerSecond / 1000;
+  return currentTimeScale().pxPerMs;
 }
 
 function pxForMs(ms) {
-  return ms * pxPerMs();
+  return currentTimeScale().msToPx(ms);
 }
 
 function msForPx(px) {
-  return px / pxPerMs();
+  return currentTimeScale().pxToMs(px);
+}
+
+function currentTimeScale() {
+  return createTimeScale({
+    pxPerSecond: state.zoomPxPerSecond,
+    durationMs: state.maxDurationMs,
+  });
+}
+
+function currentTimelineViewport() {
+  const col = getScrollContainer();
+  return createTimelineViewport({
+    pxPerSecond: state.zoomPxPerSecond,
+    durationMs: state.maxDurationMs,
+    viewportWidthPx: col ? col.clientWidth : 600,
+    scrollLeftPx: col ? col.scrollLeft : 0,
+  });
+}
+
+function intervalToCss(startMs, endMs, minWidthPx = 0) {
+  const { leftPx, widthPx } = currentTimeScale().intervalToPx({ startMs, endMs, minWidthPx });
+  return { left: `${leftPx}px`, width: `${widthPx}px`, widthPx };
 }
 
 function clampZoom(pxPerSec) {
@@ -1788,20 +1839,11 @@ function getScrollContainer() {
 }
 
 function getTrackContentWidth() {
-  const col = getScrollContainer();
-  const viewWidth = col ? col.clientWidth : 600;
-  return Math.max(viewWidth, Math.ceil(state.maxDurationMs * pxPerMs()));
+  return currentTimelineViewport().contentWidthPx();
 }
 
 function getScrollViewport() {
-  const col = getScrollContainer();
-  if (!col) {
-    return { startMs: 0, endMs: state.maxDurationMs, durationMs: Math.max(MIN_VIEW_DURATION_MS, state.maxDurationMs) };
-  }
-  const startMs = Math.max(0, msForPx(col.scrollLeft));
-  const endMs = Math.min(state.maxDurationMs, msForPx(col.scrollLeft + col.clientWidth));
-  const durationMs = Math.max(MIN_VIEW_DURATION_MS, endMs - startMs);
-  return { startMs, endMs, durationMs };
+  return currentTimelineViewport().visibleRangeMs({ minDurationMs: MIN_VIEW_DURATION_MS });
 }
 
 function ensureCustomTimeline() {
@@ -1957,7 +1999,8 @@ function renderCustomTimeline() {
           state.selectedItem.laneIndex === laneIndex &&
           state.selectedItem.itemIndex === wordIndex;
         const isActive = nowMs >= startMs && nowMs <= endMs;
-        const widthPx = Math.max(2, pxForMs(endMs - startMs));
+        const wordCss = intervalToCss(startMs, endMs, 2);
+        const widthPx = wordCss.widthPx;
         const prosodyLevel = prosodyLevelForWord(word);
         const densityClass =
           widthPx < WORD_DENSITY_LABEL_MIN_PX
@@ -1988,8 +2031,8 @@ function renderCustomTimeline() {
         chip.dataset.laneIndex = String(laneIndex);
         chip.dataset.itemIndex = String(wordIndex);
         chip.dataset.itemType = "word";
-        chip.style.left = `${pxForMs(startMs)}px`;
-        chip.style.width = `${widthPx}px`;
+        chip.style.left = wordCss.left;
+        chip.style.width = wordCss.width;
         if (prosodyLevel !== null) {
           chip.style.setProperty("--prosody-level", String(prosodyLevel));
         }
@@ -2045,9 +2088,9 @@ function renderCustomTimeline() {
         chip.dataset.laneIndex = String(laneIndex);
         chip.dataset.itemIndex = String(eventIndex);
         chip.dataset.itemType = "event";
-        const widthPx = isMarker ? 10 : Math.max(12, pxForMs(visualEndMs - visualStartMs));
-        chip.style.left = `${pxForMs(visualStartMs)}px`;
-        chip.style.width = `${widthPx}px`;
+        const eventCss = intervalToCss(visualStartMs, visualEndMs, isMarker ? 10 : 12);
+        chip.style.left = eventCss.left;
+        chip.style.width = eventCss.width;
         const displayLabel = eventChipDisplayLabel(lane, event, startMs, endMs);
         chip.title = [
           `${lane.label} · ${event.label} · ${event.kind}`,
@@ -2807,19 +2850,24 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   trackEl.append(canvas);
   requestAnimationFrame(() => drawCentralWaveform(canvas, trackContentWidth));
 
-  // Compact span overlays: one row per word lane, stacked from the bottom up.
+  const wordDeck = document.createElement("div");
+  wordDeck.className = "waveform-word-deck";
+  wordDeck.style.width = `${trackContentWidth}px`;
+  trackEl.append(wordDeck);
+
+  // Word chips: one row per word lane, stacked directly beneath the waveform.
   // Up to WAVEFORM_PANEL_MAX_SPAN_ROWS lanes are shown to keep the panel readable.
   const maxRows = Math.min(wordLanes.length, WAVEFORM_PANEL_MAX_SPAN_ROWS);
   for (let relIdx = 0; relIdx < maxRows; relIdx++) {
     const lane = wordLanes[relIdx];
     const laneIndex = state.lanes.indexOf(lane);
-    const bottomPx = WAVEFORM_SPAN_ROW_MARGIN_PX + relIdx * WAVEFORM_SPAN_ROW_STRIDE_PX;
+    const topPx = WAVEFORM_SPAN_ROW_MARGIN_PX + relIdx * WAVEFORM_SPAN_ROW_STRIDE_PX;
 
     lane.words.forEach((word, wordIndex) => {
       const key = itemKey("word", laneIndex, wordIndex);
       const startMs = word.resolvedTiming.start_ms;
       const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
-      const widthPx = Math.max(2, pxForMs(endMs - startMs));
+      const wordCss = intervalToCss(startMs, endMs, 2);
 
       const isSelected =
         state.selectedItem?.type === "word" &&
@@ -2847,12 +2895,13 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
       chip.dataset.laneIndex = String(laneIndex);
       chip.dataset.itemIndex = String(wordIndex);
       chip.dataset.itemType = "word";
-      chip.style.left = `${pxForMs(startMs)}px`;
-      chip.style.width = `${widthPx}px`;
-      chip.style.bottom = `${bottomPx}px`;
+      chip.style.left = wordCss.left;
+      chip.style.width = wordCss.width;
+      chip.style.top = `${topPx}px`;
       chip.title = `${lane.label}: ${word.text} (${startMs}–${endMs} ms)`;
       chip.setAttribute("aria-label", `${lane.label}: ${word.text}`);
-      trackEl.append(chip);
+      chip.append(createChipContent(word.text));
+      wordDeck.append(chip);
       state.waveformChipElements.set(key, chip);
     });
   }

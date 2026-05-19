@@ -79,6 +79,13 @@ use listenbury::audio::ring::make_audio_ring;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::audio::write_wav;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::event::HearingEvent;
 #[cfg(all(
     feature = "audio-cpal",
@@ -109,8 +116,9 @@ use listenbury::hearing::{SelfHearingState, SuppressionDecision};
     feature = "tts-piper"
 ))]
 use listenbury::live_trace::{
-    DiskTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink, TraceRuntimeMetadata,
-    TraceSessionMetadata,
+    DiskTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TRACE_SESSION_AUDIO_DIR,
+    TRACE_SESSION_AUDIO_FILE, TeeSink, TraceRuntimeMetadata, TraceSessionAudioArtifact,
+    TraceSessionMetadata, add_trace_session_audio_artifact,
 };
 #[cfg(any(
     test,
@@ -172,7 +180,7 @@ use listenbury::word::tts_export::generated_text_to_word_stream;
         feature = "tts-piper"
     )
 ))]
-use listenbury::word::{TimedWordStream, WordCommitment, WordStreamId};
+use listenbury::word::{TimedWordStream, WordCommitment, WordStreamId, transcript_to_word_stream};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -358,6 +366,7 @@ struct LiveHalfDuplexState {
     self_hearing: SelfHearingState,
     controller: ConversationController,
     trace: LiveTrace,
+    session_audio_frames: Vec<AudioFrame>,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
 }
@@ -377,6 +386,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("self_hearing", &self.self_hearing)
             .field("controller", &self.controller)
             .field("trace", &"live trace recorder")
+            .field("session_audio_frames", &self.session_audio_frames.len())
             .field("frame_time_ms", &self.frame_time_ms)
             .field("last_vad_state", &self.last_vad_state)
             .finish()
@@ -742,6 +752,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         self_hearing: SelfHearingState::default(),
         controller: ConversationController::default(),
         trace,
+        session_audio_frames: Vec::new(),
         frame_time_ms: 0,
         last_vad_state: None,
     };
@@ -772,8 +783,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             state
                 .trace
                 .buffer_now(turn_id, "asr_started", ExactTimestamp::now());
-            let transcript = transcribe_group(&group_frames, &mut recognizer)?.text;
-            let transcript = transcript.trim();
+            let asr_output = transcribe_group(&group_frames, &mut recognizer)?;
+            let transcript = asr_output.text.trim();
             state
                 .trace
                 .buffer_now(turn_id, "asr_finished", ExactTimestamp::now());
@@ -787,6 +798,20 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                     .event(turn_id, "transcript", ExactTimestamp::now());
             transcript_event.text = Some(transcript.to_string());
             state.trace.buffer(transcript_event);
+            if !asr_output.words.is_empty() {
+                let mut stream =
+                    transcript_to_word_stream(WordStreamId(turn_id), &asr_output.words);
+                stream.source = listenbury::word::WordStreamSource::LiveAsr;
+                let mut stream_event =
+                    state
+                        .trace
+                        .event(turn_id, "asr_timed_word_stream", ExactTimestamp::now());
+                stream_event.artifact = Some(
+                    serde_json::to_value(stream)
+                        .context("serialize ASR TimedWordStream artifact")?,
+                );
+                state.trace.buffer(stream_event);
+            }
             state.trace.commit_turn(turn_id)?;
 
             println!("Heard: {transcript}");
@@ -837,6 +862,11 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
 
     drop(stream);
     state.trace.maybe_end_suppression(ExactTimestamp::now())?;
+    persist_session_audio_artifact(
+        command.jsonl.as_deref(),
+        trace_session_id,
+        &state.session_audio_frames,
+    )?;
 
     println!(
         "live-half-duplex finished: turns={}, callback_drops={}, ring_drops={}",
@@ -845,6 +875,62 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         dropped_in_ring.load(Ordering::Relaxed),
     );
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn persist_session_audio_artifact(
+    trace_path: Option<&Path>,
+    session_id: SessionId,
+    frames: &[AudioFrame],
+) -> Result<()> {
+    let Some(trace_path) = trace_path else {
+        return Ok(());
+    };
+    if listenbury::live_trace::trace_path_looks_like_jsonl(trace_path) || frames.is_empty() {
+        return Ok(());
+    }
+
+    let Some(first_frame) = frames.first() else {
+        return Ok(());
+    };
+    let audio_dir = trace_path.join(TRACE_SESSION_AUDIO_DIR);
+    std::fs::create_dir_all(&audio_dir)
+        .with_context(|| format!("create session audio directory {}", audio_dir.display()))?;
+    let audio_path = audio_dir.join(TRACE_SESSION_AUDIO_FILE);
+    write_wav(&audio_path, frames)
+        .with_context(|| format!("write full session audio {}", audio_path.display()))?;
+
+    let duration_ms = frames.iter().fold(0u64, |sum, frame| {
+        sum.saturating_add(frame_duration_ms(frame))
+    });
+    let artifact = TraceSessionAudioArtifact {
+        session_id,
+        artifact_id: "session-audio".to_string(),
+        path: format!("{TRACE_SESSION_AUDIO_DIR}/{TRACE_SESSION_AUDIO_FILE}"),
+        duration_ms,
+        sample_rate_hz: first_frame.sample_rate_hz,
+        channels: first_frame.channels,
+        created_at_unix_ns: unix_nanos_u64(ExactTimestamp::now().unix_nanos),
+    };
+    add_trace_session_audio_artifact(trace_path, artifact)
+        .with_context(|| format!("record session audio metadata in {}", trace_path.display()))?;
+    println!("persisted full session audio at {}", audio_path.display());
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn unix_nanos_u64(unix_nanos: u128) -> u64 {
+    u64::try_from(unix_nanos).unwrap_or(u64::MAX)
 }
 
 #[cfg(not(all(
@@ -870,6 +956,7 @@ fn process_live_frame(
     state: &mut LiveHalfDuplexState,
     turn_id: u64,
 ) -> Result<LiveFrameProcessingResult> {
+    state.session_audio_frames.push(frame.clone());
     state.trace.maybe_end_suppression(frame.captured_at)?;
     if state
         .self_hearing

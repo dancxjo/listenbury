@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
-use crate::trace::viewer_payload::live_trace_events_to_viewer_payload;
+use crate::trace::viewer_payload::trace_session_to_viewer_payload;
 
 use super::assets;
 
@@ -44,7 +44,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-events, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/session-audio/*, /api/live-events, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -275,7 +275,9 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
 
     let path = target.split('?').next().unwrap_or("/");
     match path {
-        "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
+        "/" | "/wavedeck" | "/wavedeck/" => {
+            HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML)
+        }
         "/replay" | "/replay/" => HttpResponse::ok("text/html; charset=utf-8", assets::REPLAY_HTML),
         "/screenplay" | "/screenplay/" => {
             HttpResponse::ok("text/html; charset=utf-8", assets::SCREENPLAY_HTML)
@@ -291,6 +293,10 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/trace-session.mjs" | "/assets/trace-session.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::TRACE_SESSION_MJS,
+        ),
+        "/timeline-viewport.mjs" | "/assets/timeline-viewport.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::TIMELINE_VIEWPORT_MJS,
         ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
@@ -372,6 +378,11 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
 
+        _ if path.starts_with("/api/session-audio/") => match load_session_audio(path, state) {
+            Ok(Some(audio)) => HttpResponse::static_asset("audio/wav", audio),
+            Ok(None) => HttpResponse::not_found("session audio artifact not found\n"),
+            Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+        },
         _ => HttpResponse::not_found("not found\n"),
     }
 }
@@ -408,10 +419,46 @@ fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>
         return Ok(None);
     };
     let session = read_trace_session(path)?;
-    let payload = live_trace_events_to_viewer_payload(&session.events);
+    let payload = trace_session_to_viewer_payload(&session);
     let json = serde_json::to_vec_pretty(&payload)
         .with_context(|| format!("serialize viewer payload for {}", path.display()))?;
     Ok(Some(json))
+}
+
+fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(trace_path) = state.trace.as_ref() else {
+        return Ok(None);
+    };
+    let artifact_id = path
+        .trim_start_matches("/api/session-audio/")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    if artifact_id.is_empty() || artifact_id.contains("..") {
+        return Ok(None);
+    }
+
+    let session = read_trace_session(trace_path)?;
+    let Some(artifact) = session
+        .metadata
+        .audio_artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == artifact_id)
+    else {
+        return Ok(None);
+    };
+    let base_dir = trace_path
+        .parent()
+        .filter(|_| {
+            trace_path
+                .file_name()
+                .is_some_and(|name| name == "metadata.json")
+        })
+        .unwrap_or(trace_path.as_path());
+    let audio_path = base_dir.join(&artifact.path);
+    let audio = std::fs::read(&audio_path)
+        .with_context(|| format!("read session audio artifact {}", audio_path.display()))?;
+    Ok(Some(audio))
 }
 
 #[cfg(test)]
@@ -505,6 +552,19 @@ mod tests {
     }
 
     #[test]
+    fn serves_wavedeck_route_and_timeline_viewport_module() {
+        let page = route_request("GET", "/wavedeck", &empty_state());
+        assert_eq!(page.status, 200);
+        assert_eq!(page.content_type, "text/html; charset=utf-8");
+        let body = String::from_utf8(page.body).expect("utf8 wavedeck page");
+        assert!(body.contains("WaveDeck"));
+
+        let module = route_request("GET", "/assets/timeline-viewport.mjs", &empty_state());
+        assert_eq!(module.status, 200);
+        assert_eq!(module.content_type, "application/javascript; charset=utf-8");
+    }
+
+    #[test]
     fn payload_endpoint_requires_flag() {
         let response = route_request("GET", "/api/payload", &empty_state());
         assert_eq!(response.status, 404);
@@ -554,6 +614,53 @@ mod tests {
 
         let _ = std::fs::remove_file(payload_path);
         let _ = std::fs::remove_file(trace_path);
+    }
+
+    #[test]
+    fn serves_session_audio_artifact_from_trace_session_metadata() {
+        let root = temp_path("session-audio");
+        let audio_dir = root.join("audio");
+        std::fs::create_dir_all(&audio_dir).expect("create audio dir");
+        std::fs::write(audio_dir.join("session.wav"), b"RIFFtest").expect("write audio");
+
+        let session_id = crate::live_trace::SessionId::new();
+        let mut metadata = crate::live_trace::TraceSessionMetadata::new(
+            session_id,
+            crate::time::ExactTimestamp {
+                unix_nanos: 1_000_000_000,
+            },
+            crate::live_trace::TraceRuntimeMetadata::new("test"),
+        );
+        metadata
+            .audio_artifacts
+            .push(crate::live_trace::TraceSessionAudioArtifact {
+                session_id,
+                artifact_id: "session-audio".to_string(),
+                path: "audio/session.wav".to_string(),
+                duration_ms: 100,
+                sample_rate_hz: 16_000,
+                channels: 1,
+                created_at_unix_ns: 1_000_000_000,
+            });
+        std::fs::write(
+            root.join(crate::live_trace::TRACE_SESSION_METADATA_FILE),
+            serde_json::to_vec_pretty(&metadata).expect("metadata json"),
+        )
+        .expect("write metadata");
+        std::fs::write(root.join(crate::live_trace::TRACE_SESSION_EVENTS_FILE), "")
+            .expect("write events");
+
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: Some(root.clone()),
+            broadcaster: None,
+        });
+        let response = route_request("GET", "/api/session-audio/session-audio", &state);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "audio/wav");
+        assert_eq!(response.body, b"RIFFtest");
+
+        std::fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]
