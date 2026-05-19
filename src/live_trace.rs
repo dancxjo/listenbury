@@ -8,9 +8,9 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
-    AudioClipId, SessionId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId,
-    UtteranceId,
+    AudioClipId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId, UtteranceId,
 };
 use crate::time::ExactTimestamp;
 
