@@ -4,6 +4,7 @@ import {
   createNarrativeSession,
   reduceNarrativeEvent,
 } from "/assets/screenplay-model.mjs";
+import { toTitleCase } from "/assets/scene-heading.mjs";
 
 const scriptRoot = document.getElementById("script");
 const statusEl = document.getElementById("connection-status");
@@ -12,7 +13,7 @@ const dotEl = document.getElementById("connection-dot");
 
 const RENDER_DEBOUNCE_MS = 60;
 const MAX_DELETED_SNIPPETS = 8;
-const PLACEHOLDER_SCENE_HEADING = "INT./EXT. LISTENBURY RUNTIME - PRESENT";
+const PLACEHOLDER_SCENE_HEADING = "INT./EXT. UNKNOWN LOCATION - PRESENT";
 const PLACEHOLDER_ACTION =
   "Scene headings and action are provisional until enough live context arrives to form scenes and an episode.";
 
@@ -155,6 +156,13 @@ function sceneSection(scene) {
   section.id = scene.id;
 
   section.append(sceneHeading(scene.heading), actionLine(scene.action));
+
+  if (scene.topicLabel) {
+    const topicNote = document.createElement("p");
+    topicNote.className = "soft-note";
+    topicNote.textContent = `Topic: ${toTitleCase(scene.topicLabel)}`;
+    section.append(topicNote);
+  }
 
   const summary = document.createElement("p");
   summary.className = "soft-note";

@@ -297,6 +297,10 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_MODEL_JS,
         ),
+        "/scene-heading.mjs" | "/assets/scene-heading.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SCENE_HEADING_MJS,
+        ),
         "/shared-span-model.mjs" | "/assets/shared-span-model.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SHARED_SPAN_MODEL_MJS,
@@ -568,6 +572,9 @@ mod tests {
         assert_eq!(model.status, 200);
         assert_eq!(model.content_type, "application/javascript; charset=utf-8");
 
+        let scene_heading = route_request("GET", "/assets/scene-heading.mjs", &state);
+        assert_eq!(scene_heading.status, 200);
+        assert_eq!(scene_heading.content_type, "application/javascript; charset=utf-8");
         let shared_span_model = route_request("GET", "/assets/shared-span-model.mjs", &state);
         assert_eq!(shared_span_model.status, 200);
         assert_eq!(

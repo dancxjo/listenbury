@@ -1,4 +1,5 @@
 import { SpanModality } from "./shared-span-model.mjs";
+import { resolveSlugline, toTitleCase } from "./scene-heading.mjs";
 import {
   MAX_DELETED_SNIPPETS,
   textContent,
@@ -34,7 +35,7 @@ import {
 const TOPIC_CATALOG = [
   {
     key: "memory-manuscript",
-    heading: "INT. LISTENBURY RUNTIME - MEMORY, DECOUPAGE, AND MANUSCRIPT",
+    topicLabel: "MEMORY, DECOUPAGE, AND MANUSCRIPT",
     chapterTitle: "Memory, Découpage, and Manuscript",
     action:
       "Pete and the user shape live traces into something that can be read later as narrative memory.",
@@ -42,7 +43,7 @@ const TOPIC_CATALOG = [
   },
   {
     key: "phonology-workbench",
-    heading: "INT. LISTENBURY RUNTIME - PHONOLOGY WORKBENCH",
+    topicLabel: "PHONOLOGY WORKBENCH",
     chapterTitle: "Phonology and the Native Piper Spine",
     action:
       "The conversation narrows to speech mechanics, phonology, and the shape of Pete's own mouth and ear.",
@@ -50,7 +51,7 @@ const TOPIC_CATALOG = [
   },
   {
     key: "cuda-bring-up",
-    heading: "INT. LISTENBURY RUNTIME - CUDA BRING-UP",
+    topicLabel: "CUDA BRING-UP",
     chapterTitle: "Building the Mouth",
     action:
       "A technical bring-up scene gathers around the GPU path and the machinery needed to make Pete speak.",
@@ -58,7 +59,7 @@ const TOPIC_CATALOG = [
   },
   {
     key: "wavedeck-inspection",
-    heading: "INT. LISTENBURY RUNTIME - WAVEDECK INSPECTION",
+    topicLabel: "WAVEDECK INSPECTION",
     chapterTitle: "The WaveDeck Era",
     action:
       "Pete and the user watch the session machinery in motion, following traces, overlap, and routing decisions.",
@@ -66,7 +67,7 @@ const TOPIC_CATALOG = [
   },
   {
     key: "quiet-grief",
-    heading: "INT. LISTENBURY RUNTIME - QUIET GRIEF",
+    topicLabel: "QUIET GRIEF",
     chapterTitle: "Teaching Pete to Hear Himself",
     action:
       "The room softens. The talk turns inward and careful, with room for loss, apology, or tenderness.",
@@ -74,7 +75,7 @@ const TOPIC_CATALOG = [
   },
   {
     key: "interruption-handoff",
-    heading: "INT. LISTENBURY RUNTIME - INTERRUPTION HANDOFF",
+    topicLabel: "INTERRUPTION HANDOFF",
     chapterTitle: "The WaveDeck Era",
     action:
       "An interruption cuts across the session and the narrative briefly reorients around overlap, yielding, and cancellation.",
@@ -84,9 +85,9 @@ const TOPIC_CATALOG = [
 
 const FALLBACK_TOPIC = {
   key: "live-session",
-  heading: "INT. LISTENBURY RUNTIME - PRESENT",
+  topicLabel: null,
   chapterTitle: "The WaveDeck Era",
-  action: "Pete and the user remain in the live runtime, gathering the next beat of the session as it arrives.",
+  action: "Pete and the user remain in the live session, gathering the next beat as it arrives.",
 };
 
 export function createNarrativeSession() {
@@ -180,14 +181,17 @@ export function buildNarrativeEpisode(session, options = {}) {
     .filter((turn) => turnHasNarrativeMaterial(turn))
     .sort((left, right) => left.id - right.id);
 
-  const scenes = buildScenes(turns);
+  const locationContext = options.locationContext ?? {};
+  const scenes = buildScenes(turns, locationContext);
   const startedAtMs = turns.length ? turns[0].startedAtMs ?? 0 : 0;
   const endedAtMs = turns.length ? turns[turns.length - 1].endedAtMs ?? startedAtMs : startedAtMs;
   const leadScene = scenes[0] ?? null;
   const episodeNumber = options.episodeNumber ?? 1;
   const title =
     options.title ??
-    (leadScene ? `Episode ${episodeNumber}: ${shortHeading(leadScene.heading)}` : `Episode ${episodeNumber}: Live Session`);
+    (leadScene
+      ? `Episode ${episodeNumber}: ${leadScene.topicLabel ?? shortHeading(leadScene.heading)}`
+      : `Episode ${episodeNumber}: Live Session`);
   const summary =
     scenes.length > 0
       ? summarizeEpisode(scenes)
@@ -280,7 +284,11 @@ export function renderEpisodeScreenplay(episode) {
   );
 
   for (const scene of episode.scenes) {
-    lines.push(scene.heading, scene.action, `Source trace IDs: ${scene.sourceEventIds.join(", ") || "none"}`, "");
+    lines.push(scene.heading);
+    if (scene.topicLabel) {
+      lines.push(`Soft-note: Topic: ${toTitleCase(scene.topicLabel)}.`);
+    }
+    lines.push(scene.action, `Source trace IDs: ${scene.sourceEventIds.join(", ") || "none"}`, "");
     for (const beat of scene.beats) {
       if (beat.role) {
         lines.push(beat.role, stringifySegments(beat.segments), "");
@@ -362,7 +370,7 @@ function registerEventSignals(turn, event) {
   }
 }
 
-function buildScenes(turns) {
+function buildScenes(turns, locationContext = {}) {
   const grouped = [];
   for (const turn of turns) {
     const sceneKey = classifyTopic(turn);
@@ -378,7 +386,7 @@ function buildScenes(turns) {
   }
 
   const merged = mergeWeakScenes(grouped);
-  return merged.map((group, index) => buildScene(group.turns, index, group.key));
+  return merged.map((group, index) => buildScene(group.turns, index, group.key, locationContext));
 }
 
 function shouldStartNewScene(currentGroup, turn, nextSceneKey) {
@@ -409,8 +417,13 @@ function mergeWeakScenes(groups) {
   return merged;
 }
 
-function buildScene(turns, index, sceneKey) {
+function buildScene(turns, index, sceneKey, locationContext = {}) {
   const topic = topicForKey(sceneKey);
+  const sceneContext = {
+    ...locationContext,
+    timestampMs: turns[0]?.startedAtMs ?? locationContext.timestampMs ?? null,
+  };
+  const heading = resolveSlugline(sceneContext);
   const beats = turns.flatMap((turn) => turnToBeats(turn));
   const sourceEventIds = unique(turns.flatMap((turn) => turn.sourceEventIds));
   const summary = summarizeScene(turns, topic, beats);
@@ -418,7 +431,8 @@ function buildScene(turns, index, sceneKey) {
     id: `scene-${index + 1}`,
     type: "scene",
     topicKey: sceneKey,
-    heading: topic.heading,
+    topicLabel: topic.topicLabel,
+    heading,
     action: describeSceneAction(turns, topic),
     summary,
     turnIds: turns.map((turn) => turn.id),
@@ -561,16 +575,17 @@ function summarizeScene(turns, topic, beats) {
     notes.push("an interruption changes the cadence");
   }
 
+  const sceneLabel = topic.topicLabel ?? shortHeading(topic.key);
   const lead = stripTerminalPunctuation(userLine || peteLine || "The live session continues");
   const noteText = notes.length ? ` ${capitalize(joinWithCommas(notes))}.` : "";
-  return `${shortHeading(topic.heading)} holds ${beats.length} beat${beats.length === 1 ? "" : "s"} around ${lead}.${noteText}`;
+  return `${sceneLabel} holds ${beats.length} beat${beats.length === 1 ? "" : "s"} around ${lead}.${noteText}`;
 }
 
 function summarizeEpisode(scenes) {
   if (scenes.length === 1) {
     return scenes[0].summary;
   }
-  return scenes.map((scene) => shortHeading(scene.heading)).join(" → ");
+  return scenes.map((scene) => scene.topicLabel ?? shortHeading(scene.heading)).join(" → ");
 }
 
 function describeSceneAction(turns, topic) {
@@ -584,7 +599,8 @@ function describeSceneAction(turns, topic) {
   if (turns.some((turn) => turn.flags.interruption)) {
     notes.push("An interruption cuts through the exchange.");
   }
-  return [topic.action, ...notes].join(" ").trim();
+  const topicNote = topic.topicLabel ? `Topic: ${toTitleCase(topic.topicLabel)}.` : null;
+  return [topic.action, ...notes, topicNote].filter(Boolean).join(" ").trim();
 }
 
 function dominantChapterTitle(scenes) {
@@ -596,7 +612,9 @@ function dominantChapterTitle(scenes) {
 }
 
 function shortHeading(heading) {
-  return heading.replace(/^INT\. LISTENBURY RUNTIME - /, "").replace(/^INT\.\/EXT\. LISTENBURY RUNTIME - /, "");
+  // Extract the place name from a slugline like "INT. LIVING ROOM - NIGHT" → "LIVING ROOM"
+  const match = heading.match(/^(?:INT\.|EXT\.|INT\.\/EXT\.) (.+?) - /);
+  return match ? match[1] : heading;
 }
 
 function deletedSummary(entries) {
