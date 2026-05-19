@@ -79,6 +79,16 @@ use listenbury::audio::ring::make_audio_ring;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::audio::streaming_prosody::{
+    ECHO_PLANNING_LATENCY_TARGET_MS, PROSODY_FEATURE_LATENCY_TARGET_MS, StreamingProsodyAnalyzer,
+    saturating_elapsed_ms,
+};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::audio::{analyze_audio_frames, write_wav};
 #[cfg(all(
     feature = "audio-cpal",
@@ -369,6 +379,7 @@ struct LiveHalfDuplexState {
     controller: ConversationController,
     trace: LiveTrace,
     session_audio_frames: Vec<AudioFrame>,
+    prosody: StreamingProsodyAnalyzer,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
 }
@@ -389,6 +400,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("controller", &self.controller)
             .field("trace", &"live trace recorder")
             .field("session_audio_frames", &self.session_audio_frames.len())
+            .field("prosody", &self.prosody.latest_model())
             .field("frame_time_ms", &self.frame_time_ms)
             .field("last_vad_state", &self.last_vad_state)
             .finish()
@@ -756,6 +768,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         controller: ConversationController::default(),
         trace,
         session_audio_frames: Vec::new(),
+        prosody: StreamingProsodyAnalyzer::default(),
         frame_time_ms: 0,
         last_vad_state: None,
     };
@@ -989,6 +1002,13 @@ fn process_live_frame(
         return Ok(LiveFrameProcessingResult::default());
     }
     let frame_duration_ms = frame_duration_ms(&frame);
+    emit_streaming_prosody_events(
+        &mut state.trace,
+        turn_id,
+        &mut state.prosody,
+        &frame,
+        state.frame_time_ms,
+    )?;
     let vad_result = state.vad.process_frame(&frame)?;
     if listenbury::developer_diagnostics_enabled()
         && state.last_vad_state != Some(vad_result.is_speech)
@@ -1010,6 +1030,14 @@ fn process_live_frame(
                 state
                     .trace
                     .buffer_now(turn_id, "speech_started", frame.captured_at);
+                emit_echo_planning_trace(
+                    &mut state.trace,
+                    turn_id,
+                    frame.captured_at,
+                    state.prosody.last_evidence_at(),
+                    None,
+                    false,
+                )?;
                 state
                     .controller
                     .record_runtime_packet(RuntimePacket::UserStartedSpeaking);
@@ -1197,6 +1225,7 @@ fn stream_speech_to_tts(
                         user_turn_id,
                         &filler_plan,
                         ExactTimestamp::now(),
+                        state.prosody.last_evidence_at(),
                     )?;
                     tts.enqueue(filler_plan)?;
                     state.trace.emit_now(
@@ -1284,6 +1313,7 @@ fn stream_speech_to_tts(
                         user_turn_id,
                         &plan,
                         ExactTimestamp::now(),
+                        state.prosody.last_evidence_at(),
                     )?;
                     tts.enqueue(plan)?;
                     state.trace.emit_now(
@@ -1397,6 +1427,7 @@ fn stream_speech_to_tts(
             user_turn_id,
             &fallback_plan,
             ExactTimestamp::now(),
+            state.prosody.last_evidence_at(),
         )?;
         tts.enqueue(fallback_plan)?;
         state
@@ -1830,12 +1861,127 @@ fn maybe_plan_cached_backchannel(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn emit_streaming_prosody_events(
+    trace: &mut LiveTrace,
+    turn_id: u64,
+    analyzer: &mut StreamingProsodyAnalyzer,
+    frame: &AudioFrame,
+    frame_start_ms: u64,
+) -> Result<()> {
+    let Some(update) = analyzer.ingest_frame(frame, frame_start_ms) else {
+        return Ok(());
+    };
+    if update.observed_feature_latency_ms > PROSODY_FEATURE_LATENCY_TARGET_MS {
+        tracing::warn!(
+            observed_latency_ms = update.observed_feature_latency_ms,
+            latency_target_ms = PROSODY_FEATURE_LATENCY_TARGET_MS,
+            "streaming prosody latency exceeded target"
+        );
+    }
+
+    let mut frame_event = trace.event(turn_id, "prosody.frame", ExactTimestamp::now());
+    frame_event.reason = Some(format!("provenance={:?}", update.frame.provenance));
+    frame_event.artifact = Some(serde_json::to_value(&update)?);
+    trace.emit(frame_event)?;
+
+    if let Some(contour) = update.contour {
+        let mut contour_event = trace.event(turn_id, "prosody.contour", ExactTimestamp::now());
+        contour_event.artifact = Some(json!({
+            "frameStartMs": update.frame.frame_start_ms,
+            "frameEndMs": update.frame.frame_end_ms,
+            "contour": contour,
+            "loudnessDbfs": update.frame.loudness_dbfs,
+            "revision": update.model.revision,
+            "provenance": update.model.provenance,
+        }));
+        trace.emit(contour_event)?;
+    }
+    if let Some(pause) = update.pause {
+        let mut pause_event = trace.event(turn_id, "prosody.pause", ExactTimestamp::now());
+        pause_event.reason = Some("pause_candidate".to_string());
+        pause_event.artifact = Some(serde_json::to_value(pause)?);
+        trace.emit(pause_event)?;
+    }
+    if let Some(phrase) = update.phrase_candidate {
+        let mut phrase_event =
+            trace.event(turn_id, "prosody.phrase_candidate", ExactTimestamp::now());
+        phrase_event.artifact = Some(serde_json::to_value(phrase)?);
+        trace.emit(phrase_event)?;
+    }
+    if let Some(accent) = update.accent_candidate {
+        let mut accent_event =
+            trace.event(turn_id, "prosody.accent_candidate", ExactTimestamp::now());
+        accent_event.artifact = Some(serde_json::to_value(accent)?);
+        trace.emit(accent_event)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_echo_planning_trace(
+    trace: &mut LiveTrace,
+    turn_id: u64,
+    at: ExactTimestamp,
+    stable_evidence_at: Option<ExactTimestamp>,
+    transcript: Option<&str>,
+    has_phoneme_projection: bool,
+) -> Result<()> {
+    let observed_latency_ms = stable_evidence_at.map(|start| saturating_elapsed_ms(start, at));
+    if let Some(observed_latency_ms) = observed_latency_ms {
+        if observed_latency_ms > ECHO_PLANNING_LATENCY_TARGET_MS {
+            tracing::warn!(
+                observed_latency_ms,
+                latency_target_ms = ECHO_PLANNING_LATENCY_TARGET_MS,
+                "echo planning latency exceeded target"
+            );
+        }
+    }
+    let mode = if transcript.is_some_and(|text| !text.trim().is_empty()) {
+        "partial_asr_words"
+    } else if has_phoneme_projection {
+        "phoneme_projection"
+    } else {
+        "contour_placeholder"
+    };
+    let mut event = trace.event(turn_id, "echo_planning_started", at);
+    event.artifact = Some(json!({
+        "mode": mode,
+        "latencyTargetMs": ECHO_PLANNING_LATENCY_TARGET_MS,
+        "observedLatencyMs": observed_latency_ms,
+        "prosodyLatencyTargetMs": PROSODY_FEATURE_LATENCY_TARGET_MS,
+        "stableEvidenceAtUnixNs": stable_evidence_at.map(|stamp| stamp.unix_nanos),
+        "policy": "update_future_output_only",
+        "provisional": true,
+    }));
+    trace.emit(event)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn emit_speech_plan_trace(
     trace: &mut LiveTrace,
     turn_id: u64,
     plan: &SpeechPlan,
     at: ExactTimestamp,
+    stable_evidence_at: Option<ExactTimestamp>,
 ) -> Result<()> {
+    emit_echo_planning_trace(
+        trace,
+        turn_id,
+        at,
+        stable_evidence_at,
+        Some(plan.text()),
+        false,
+    )?;
     emit_read_aloud_timed_word_stream_revision(
         trace,
         turn_id,
