@@ -775,7 +775,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         return Ok(());
     }
 
-    let model_path = resolve_llm_model(command.llm_model)?;
+    let model_path = resolve_llm_model(command.llm_model.clone())?;
     let llm_placement = llm_runtime_placement(
         &model_path,
         command.llm_gpu_layers,
@@ -801,9 +801,9 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         command.verbatim_turns,
     )
     .context("failed to start continued llama.cpp generation")?;
-    let piper_bin = resolve_piper_bin(command.piper_bin)?;
-    let piper_voice = resolve_piper_voice(command.piper_voice)?;
-    let whisper_model = resolve_whisper_model(command.whisper_model)?;
+    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
+    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+    let whisper_model = resolve_whisper_model(command.whisper_model.clone())?;
     let vad_backend = command.vad.as_backend_kind();
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let speaker_reference = Arc::new(Mutex::new(SpeakerReferenceMask::default()));
