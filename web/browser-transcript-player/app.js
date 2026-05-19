@@ -55,6 +55,12 @@ const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
 const WAVEFORM_PEAK_BUCKETS = 2_400;
 const GRAPH_MAX_RENDER_NODES = 180;
 const GRAPH_MAX_RENDER_EDGES = 260;
+// Central waveform panel layout constants
+const WAVEFORM_PANEL_MAX_SPAN_ROWS = 4;
+const WAVEFORM_SPAN_ROW_HEIGHT_PX = 16;
+const WAVEFORM_SPAN_ROW_GAP_PX = 2;
+const WAVEFORM_SPAN_ROW_STRIDE_PX = WAVEFORM_SPAN_ROW_HEIGHT_PX + WAVEFORM_SPAN_ROW_GAP_PX;
+const WAVEFORM_SPAN_ROW_MARGIN_PX = 4;
 
 // Serialize an open-span map key as [lane, turn, startKind].
 function openSpanKey(lane, turn, startKind) {
@@ -87,6 +93,7 @@ const state = {
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
+  waveformChipElements: new Map(), // itemKey → waveform panel span element
   playbackCursorElements: [],
   surfaceMode: "timeline",
   graphFilters: {
@@ -1768,6 +1775,7 @@ function renderCustomTimeline() {
 
   state.chipElementByKey = new Map();
   state.itemTimingByKey = new Map();
+  state.waveformChipElements = new Map();
   state.playbackCursorElements = [];
 
   const nowMs = currentPlaybackTimeMs();
@@ -1794,6 +1802,9 @@ function renderCustomTimeline() {
     rulerEl.append(tick, label);
   });
   scrollContent.append(rulerEl);
+
+  // Central waveform/oscilloscope panel — shared timebase anchor for all lanes
+  appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs);
 
   // Lane rows
   state.lanes.forEach((lane, laneIndex) => {
@@ -2671,28 +2682,235 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
   ctx.stroke();
 }
 
+// ── Central waveform / oscilloscope panel ─────────────────────────────────────
+
+/**
+ * Append the central waveform panel to the timeline.  This panel is the shared
+ * timebase anchor: it shows the amplitude waveform prominently and overlays
+ * compact span chips for every word lane so ASR and TTS timing can be
+ * correlated at a glance.
+ */
+function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs) {
+  const wordLanes = state.lanes.filter((lane) => lane.type === "word");
+
+  // Labels column entry
+  const labelEl = document.createElement("div");
+  labelEl.className = "lane-label-entry waveform-lane-label";
+  const headerEl = document.createElement("div");
+  headerEl.className = "lane-header waveform-panel-header";
+  const h2El = document.createElement("h2");
+  h2El.textContent = "Waveform";
+  headerEl.append(h2El);
+  const metaEl = document.createElement("div");
+  metaEl.className = "lane-meta";
+  if (state.waveform.status === "ready") {
+    metaEl.textContent = `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
+  } else if (state.waveform.status === "loading") {
+    metaEl.textContent = "Loading audio…";
+  } else {
+    metaEl.textContent = "No audio loaded";
+  }
+  headerEl.append(metaEl);
+  labelEl.append(headerEl);
+  labelsCol.append(labelEl);
+
+  // Track element
+  const trackEl = document.createElement("div");
+  trackEl.className = "lane-track waveform-track";
+  trackEl.id = "waveform-panel";
+
+  // Waveform canvas — fills the full panel height as background
+  const canvas = document.createElement("canvas");
+  canvas.className = "waveform-panel-canvas";
+  canvas.setAttribute("aria-hidden", "true");
+  canvas.style.width = `${trackContentWidth}px`;
+  trackEl.append(canvas);
+  requestAnimationFrame(() => drawCentralWaveform(canvas, trackContentWidth));
+
+  // Compact span overlays: one row per word lane, stacked from the bottom up.
+  // Up to WAVEFORM_PANEL_MAX_SPAN_ROWS lanes are shown to keep the panel readable.
+  const maxRows = Math.min(wordLanes.length, WAVEFORM_PANEL_MAX_SPAN_ROWS);
+  for (let relIdx = 0; relIdx < maxRows; relIdx++) {
+    const lane = wordLanes[relIdx];
+    const laneIndex = state.lanes.indexOf(lane);
+    const bottomPx = WAVEFORM_SPAN_ROW_MARGIN_PX + relIdx * WAVEFORM_SPAN_ROW_STRIDE_PX;
+
+    lane.words.forEach((word, wordIndex) => {
+      const key = itemKey("word", laneIndex, wordIndex);
+      const startMs = word.resolvedTiming.start_ms;
+      const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
+      const widthPx = Math.max(2, pxForMs(endMs - startMs));
+
+      const isSelected =
+        state.selectedItem?.type === "word" &&
+        state.selectedItem.laneIndex === laneIndex &&
+        state.selectedItem.itemIndex === wordIndex;
+      const isActive = nowMs >= startMs && nowMs <= endMs;
+
+      const baseClass = [
+        "timeline-chip",
+        "waveform-span",
+        `lane-${classToken(lane.label)}`,
+        `source-${classToken(lane.stream.source)}`,
+        `commit-${commitmentClass(word.commitment)}`,
+        word._revisions?.length ? "was-revised" : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      const chip = document.createElement("div");
+      chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+        .filter(Boolean)
+        .join(" ");
+      chip.dataset.baseClass = baseClass;
+      chip.dataset.itemKey = key;
+      chip.dataset.laneIndex = String(laneIndex);
+      chip.dataset.itemIndex = String(wordIndex);
+      chip.dataset.itemType = "word";
+      chip.style.left = `${pxForMs(startMs)}px`;
+      chip.style.width = `${widthPx}px`;
+      chip.style.bottom = `${bottomPx}px`;
+      chip.title = `${lane.label}: ${word.text} (${startMs}–${endMs} ms)`;
+      chip.setAttribute("aria-label", `${lane.label}: ${word.text}`);
+      trackEl.append(chip);
+      state.waveformChipElements.set(key, chip);
+    });
+  }
+
+  // Time-range selection overlay
+  const selOverlay = document.createElement("div");
+  selOverlay.className = "time-range-selection";
+  selOverlay.setAttribute("aria-hidden", "true");
+  selOverlay.hidden = true;
+  const selLabel = document.createElement("span");
+  selLabel.className = "time-range-selection-label";
+  selOverlay.append(selLabel);
+  trackEl.append(selOverlay);
+
+  const focusOverlay = document.createElement("div");
+  focusOverlay.className = "selection-focus-overlay";
+  focusOverlay.setAttribute("aria-hidden", "true");
+  focusOverlay.hidden = true;
+  trackEl.append(focusOverlay);
+
+  const cursor = document.createElement("div");
+  cursor.className = "playback-cursor";
+  cursor.setAttribute("aria-hidden", "true");
+  cursor.hidden = true;
+  trackEl.append(cursor);
+  state.playbackCursorElements.push(cursor);
+
+  scrollContent.append(trackEl);
+}
+
+/**
+ * Draw the central waveform onto its canvas.
+ * Unlike the faint waveform-overlay on individual word lanes, this uses a
+ * prominent filled envelope and stroked outline so it serves as the primary
+ * visual timebase reference.
+ */
+function drawCentralWaveform(canvas, trackContentWidth) {
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = Math.max(1, Math.min(trackContentWidth, WAVEFORM_CANVAS_MAX_WIDTH_PX));
+  const cssHeight = Math.max(1, rect.height || 120);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const peaks = state.waveform.peaks;
+  if (!peaks?.length) {
+    // Flat zero-line placeholder when no audio is loaded
+    ctx.strokeStyle = "rgba(157, 171, 186, 0.28)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, cssHeight / 2);
+    ctx.lineTo(cssWidth, cssHeight / 2);
+    ctx.stroke();
+    return;
+  }
+
+  const centerY = cssHeight / 2;
+  const maxAmp = cssHeight * 0.44;
+  const durationScale = state.maxDurationMs / Math.max(1, state.waveform.durationMs);
+
+  // Pre-compute upper/lower envelope y-values
+  const topY = new Array(cssWidth);
+  const botY = new Array(cssWidth);
+  for (let x = 0; x < cssWidth; x++) {
+    const timelineRatio = x / Math.max(1, cssWidth);
+    const audioRatio = Math.min(1, timelineRatio * durationScale);
+    const peakIndex = Math.min(peaks.length - 1, Math.floor(audioRatio * peaks.length));
+    const amp = Math.max(1, peaks[peakIndex] * maxAmp);
+    topY[x] = centerY - amp;
+    botY[x] = centerY + amp;
+  }
+
+  // Filled waveform envelope
+  ctx.fillStyle = "rgba(99, 210, 255, 0.10)";
+  ctx.beginPath();
+  ctx.moveTo(0.5, topY[0]);
+  for (let x = 1; x < cssWidth; x++) {
+    ctx.lineTo(x + 0.5, topY[x]);
+  }
+  for (let x = cssWidth - 1; x >= 0; x--) {
+    ctx.lineTo(x + 0.5, botY[x]);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  // Stroked upper outline
+  ctx.strokeStyle = "rgba(99, 210, 255, 0.72)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0.5, topY[0]);
+  for (let x = 1; x < cssWidth; x++) {
+    ctx.lineTo(x + 0.5, topY[x]);
+  }
+  ctx.stroke();
+
+  // Stroked lower outline
+  ctx.beginPath();
+  ctx.moveTo(0.5, botY[0]);
+  for (let x = 1; x < cssWidth; x++) {
+    ctx.lineTo(x + 0.5, botY[x]);
+  }
+  ctx.stroke();
+}
+
 // Update only active/selected classes on existing chips (no DOM rebuild).
 function updateChipStates() {
   const nowMs = currentPlaybackTimeMs();
-  for (const [key, chip] of state.chipElementByKey.entries()) {
-    const timing = state.itemTimingByKey.get(key);
-    if (!timing) continue;
-    const { itemType, laneIndex, itemIndex } = parseItemKey(key);
-    const isMarker = timing.endMs <= timing.startMs;
-    const activeEndMs = isMarker ? timing.startMs + MARKER_ACTIVE_DURATION_MS : timing.endMs;
-    const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
-    const isSelected =
-      state.selectedItem?.type === itemType &&
-      state.selectedItem.laneIndex === laneIndex &&
-      state.selectedItem.itemIndex === itemIndex;
-    const baseClass = chip.dataset.baseClass ?? "";
-    const newClass = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
-      .filter(Boolean)
-      .join(" ");
-    if (chip.className !== newClass) {
-      chip.className = newClass;
+  function refreshChipMap(map, getTimingForKey) {
+    for (const [key, chip] of map.entries()) {
+      const timing = getTimingForKey(key);
+      if (!timing) continue;
+      const { itemType, laneIndex, itemIndex } = parseItemKey(key);
+      const isMarker = timing.endMs <= timing.startMs;
+      const activeEndMs = isMarker ? timing.startMs + MARKER_ACTIVE_DURATION_MS : timing.endMs;
+      const isActive = nowMs >= timing.startMs && nowMs <= activeEndMs;
+      const isSelected =
+        state.selectedItem?.type === itemType &&
+        state.selectedItem.laneIndex === laneIndex &&
+        state.selectedItem.itemIndex === itemIndex;
+      const baseClass = chip.dataset.baseClass ?? "";
+      const newClass = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+        .filter(Boolean)
+        .join(" ");
+      if (chip.className !== newClass) {
+        chip.className = newClass;
+      }
     }
   }
+  refreshChipMap(state.chipElementByKey, (key) => state.itemTimingByKey.get(key));
+  // Waveform panel chips share itemTimingByKey for word chips
+  refreshChipMap(state.waveformChipElements, (key) => state.itemTimingByKey.get(key));
 }
 
 // Build ruler tick timestamps covering [0..maxDurationMs].
