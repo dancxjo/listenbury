@@ -34,6 +34,7 @@ import {
   refineWordTimingsWithEnergy,
 } from "/assets/energy-timing.mjs";
 import {
+  isVowel,
   projectPhonemesIntoWordInterval,
   stressPattern,
 } from "/assets/phoneme-projection.mjs";
@@ -4661,7 +4662,7 @@ function createPhonemeStrip(word) {
 
   for (const span of spans) {
     const tick = document.createElement("span");
-    const isVowelTick = isVowelPhoneme(span.symbol);
+    const isVowelTick = isVowel(span.symbol);
     tick.className = ["phoneme-tick", isVowelTick ? "is-vowel" : ""].filter(Boolean).join(" ");
     tick.textContent = span.symbol.replace(/[012]$/, ""); // strip stress digit for display
     // Position proportionally within the chip.
@@ -4674,23 +4675,6 @@ function createPhonemeStrip(word) {
   }
 
   return strip;
-}
-
-/**
- * Return `true` when the ARPAbet symbol is a vowel (stress digit ignored).
- * Mirrors the logic in phoneme-projection.mjs without importing it here
- * because app.js uses the imported `isVowel` under the name `isVowelPhoneme`
- * to avoid conflicts with potential future local helpers.
- */
-const _VOWEL_BASES = new Set([
-  "AA", "AE", "AH", "AO", "AW", "AY",
-  "EH", "ER", "EY",
-  "IH", "IY",
-  "OW", "OY",
-  "UH", "UW",
-]);
-function isVowelPhoneme(symbol) {
-  return _VOWEL_BASES.has(symbol.replace(/[012]$/, ""));
 }
 
 function createProsodyStrip(level) {

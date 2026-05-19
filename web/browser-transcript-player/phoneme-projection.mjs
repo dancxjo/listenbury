@@ -62,7 +62,7 @@ const CONSONANT_WEIGHT = 1.0;
  *
  * @param {string[]} phonemes   ARPAbet symbols (e.g. `["TH", "R", "IY1"]`)
  * @param {number}   startMs   Word interval start in milliseconds (inclusive)
- * @param {number}   endMs     Word interval end in milliseconds (exclusive)
+ * @param {number}   endMs     Word interval end in milliseconds (inclusive end boundary; the last phoneme spans up to this value)
  * @param {string}   [source]  Provenance label (default: `"cmudict.proportional"`)
  * @returns {Array<{symbol: string, start_ms: number, end_ms: number, source: string}>}
  */
