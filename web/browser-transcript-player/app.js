@@ -280,10 +280,19 @@ function TranscriptRibbonPane({ projection }) {
     { id: "transcript-ribbon", className: "transcript-ribbon", hidden: !projection.liveMode, "aria-live": "polite", "aria-label": "Live transcript" },
     h("span", { className: "transcript-ribbon-label" }, "Transcript"),
     h(
-      "span",
-      { id: "transcript-ribbon-text", className: "transcript-ribbon-text" },
-      projection.transcriptTokens.flatMap((token, index) =>
-        index === projection.transcriptTokens.length - 1 ? [h(RibbonToken, { token })] : [h(RibbonToken, { token }), " "],
+      "div",
+      { className: "transcript-ribbon-body" },
+      h(
+        "div",
+        { id: "transcript-ribbon-literal", className: "transcript-ribbon-literal" },
+        projection.literalTranscriptText,
+      ),
+      h(
+        "span",
+        { id: "transcript-ribbon-text", className: "transcript-ribbon-text" },
+        projection.transcriptTokens.flatMap((token, index) =>
+          index === projection.transcriptTokens.length - 1 ? [h(RibbonToken, { token })] : [h(RibbonToken, { token }), " "],
+        ),
       ),
     ),
     h(
@@ -353,6 +362,7 @@ function InspectorPane({ projection }) {
 
 function buildShellProjection() {
   const selectionProjection = buildSelectionProjection();
+  const transcriptTokens = transcriptTokensFromSession(liveSession);
   return {
     liveMode: uiState.liveMode,
     viewerTitle: state.payload?.title ?? (uiState.liveMode ? "Live — Listenbury" : "No stream loaded"),
@@ -370,7 +380,8 @@ function buildShellProjection() {
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
     connectionStatusClass: uiState.connectionStatusClass,
-    transcriptTokens: transcriptTokensFromSession(liveSession),
+    transcriptTokens,
+    literalTranscriptText: literalTranscriptTextFromTokens(transcriptTokens),
     selectionBadge: selectionProjection.badge,
     selectionSummaryParts: selectionProjection.summaryParts,
     selectionRevisions: selectionProjection.revisions,
@@ -1345,6 +1356,12 @@ function transcriptTokensFromSession(session) {
     }
   }
   return tokens;
+}
+
+function literalTranscriptTextFromTokens(tokens) {
+  return tokens
+    .map((token) => String(token.text ?? "").replace(/\s+/g, ""))
+    .join("");
 }
 
 function transcriptTokenSelection(turnId, word, wordIndex, laneLabel) {

@@ -1461,6 +1461,23 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.transcript-ribbon-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.transcript-ribbon-literal {
+  min-height: 1.15rem;
+  color: rgba(238, 243, 247, 0.56);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .transcript-ribbon-hint {
   flex-shrink: 0;
   display: flex;
