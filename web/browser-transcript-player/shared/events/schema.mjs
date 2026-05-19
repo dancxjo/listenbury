@@ -1,5 +1,5 @@
 /**
- * web/shared/events/schema.mjs
+ * web/browser-transcript-player/shared/events/schema.mjs
  *
  * Shared live event schema: kind-to-lane routing, span pairing rules, and
  * commitment/event-kind classifiers.  Consumed by WaveDeck (app.js),

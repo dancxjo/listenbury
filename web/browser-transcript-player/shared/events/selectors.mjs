@@ -1,5 +1,5 @@
 /**
- * web/shared/events/selectors.mjs
+ * web/browser-transcript-player/shared/events/selectors.mjs
  *
  * Read-only derived-state selectors for the shared narrative turn model.
  * These functions never mutate their arguments and are safe to call during

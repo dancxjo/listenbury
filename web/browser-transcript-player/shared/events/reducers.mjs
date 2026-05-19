@@ -1,5 +1,5 @@
 /**
- * web/shared/events/reducers.mjs
+ * web/browser-transcript-player/shared/events/reducers.mjs
  *
  * Shared live event reduction layer: text normalisation utilities, turn-level
  * state reducers, and text-deletion helpers.

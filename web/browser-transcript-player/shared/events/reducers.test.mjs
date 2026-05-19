@@ -1,10 +1,10 @@
 /**
- * web/shared/events/reducers.test.mjs
+ * web/browser-transcript-player/shared/events/reducers.test.mjs
  *
  * Unit tests for the shared live-event reducer layer.
  *
  * Run with:
- *   node --test web/shared/events/reducers.test.mjs
+ *   node --test web/browser-transcript-player/shared/events/reducers.test.mjs
  *
  * Covers the acceptance criteria from the issue:
  *   - speculative → committed transitions
