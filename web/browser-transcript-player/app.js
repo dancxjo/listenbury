@@ -252,21 +252,24 @@ function ConnectionChrome({ projection }) {
 }
 
 function PlaybackToolbar({ projection }) {
+  const playPauseGlyph = projection.playPauseLabel === "Pause" ? "⏸" : "▶";
   return h(
     "section",
     { className: "toolbar playback-toolbar", id: "playback-toolbar", "aria-label": "Playback controls" },
-    h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", onClick: () => jumpSelectedWord(-1) }, "◀ Prev"),
-    h("button", { id: "play-pause", type: "button", onClick: () => togglePlayback() }, projection.playPauseLabel),
-    h("button", { id: "jump-next", type: "button", "aria-label": "Next word", onClick: () => jumpSelectedWord(1) }, "Next ▶"),
+    h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", title: "Previous word", onClick: () => jumpSelectedWord(-1) }, "⏮"),
+    h("button", { id: "play-pause", type: "button", "aria-label": projection.playPauseLabel, title: projection.playPauseLabel, onClick: () => togglePlayback() }, playPauseGlyph),
+    h("button", { id: "jump-next", type: "button", "aria-label": "Next word", title: "Next word", onClick: () => jumpSelectedWord(1) }, "⏭"),
     h(
       "button",
       {
         id: "play-selection-clip",
         type: "button",
+        "aria-label": projection.playSelectionClipLabel,
+        title: projection.playSelectionClipLabel,
         disabled: !projection.canPlaySelectionClip,
         onClick: () => playSelectedClip(),
       },
-      projection.playSelectionClipLabel,
+      "▶︎",
     ),
   );
 }
@@ -2246,8 +2249,8 @@ function syncMaxDurationWithAudio() {
 }
 
 function render() {
-  parkAudioElement();
   if (!state.lanes.length) {
+    parkAudioElement();
     viewer.className = "viewer empty";
     state.chipElementByKey = new Map();
     state.itemTimingByKey = new Map();
@@ -2346,7 +2349,9 @@ function getScrollViewport() {
 function ensureCustomTimeline() {
   if (document.getElementById("timeline-tracks-col")) return;
 
+  parkAudioElement();
   viewer.replaceChildren();
+  viewer.append(createTimelinePlaybackDeck());
 
   const host = document.createElement("div");
   host.className = "timeline-host";
@@ -2422,8 +2427,6 @@ function renderCustomTimeline() {
     rulerEl.append(tick, label);
   });
   scrollContent.append(rulerEl);
-
-  appendTimelinePlaybackDeck(labelsCol, scrollContent, trackContentWidth);
 
   // Central waveform/oscilloscope panel — shared timebase anchor for all lanes
   appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs, {
@@ -2649,6 +2652,7 @@ function renderCustomTimeline() {
 function renderGraphInspectionMode() {
   const host = ensureGraphModeHost();
   if (viewer.firstElementChild !== host) {
+    parkAudioElement();
     viewer.replaceChildren(host);
   }
   bindGraphControls();
@@ -3275,24 +3279,7 @@ function selectedGraphNodeId() {
   return `${state.selectedItem.type}:${state.selectedItem.laneIndex}:${state.selectedItem.itemIndex}`;
 }
 
-function appendTimelinePlaybackDeck(labelsCol, scrollContent, trackContentWidth) {
-  const labelEl = document.createElement("div");
-  labelEl.className = "lane-label-entry playback-controls-label";
-  const headerEl = document.createElement("div");
-  headerEl.className = "lane-header playback-controls-header";
-  const h2El = document.createElement("h2");
-  h2El.textContent = "Playback";
-  const metaEl = document.createElement("div");
-  metaEl.className = "lane-meta";
-  metaEl.textContent = "Controls";
-  headerEl.append(h2El, metaEl);
-  labelEl.append(headerEl);
-  labelsCol.append(labelEl);
-
-  const trackEl = document.createElement("div");
-  trackEl.className = "lane-track playback-controls-track";
-  trackEl.style.width = `${trackContentWidth}px`;
-
+function createTimelinePlaybackDeck() {
   const deckEl = document.createElement("div");
   deckEl.className = "timeline-playback-deck";
 
@@ -3306,8 +3293,7 @@ function appendTimelinePlaybackDeck(labelsCol, scrollContent, trackContentWidth)
   audioSlot.append(audio);
 
   deckEl.append(toolbarRoot, audioSlot);
-  trackEl.append(deckEl);
-  scrollContent.append(trackEl);
+  return deckEl;
 }
 
 function appendWaveformOverlay(trackEl, trackContentWidth) {
