@@ -1,11 +1,13 @@
 pub mod orthography;
 pub mod phoneme;
 pub mod pronounce;
+pub mod sound_it_out;
 pub mod variety;
 
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
+pub use sound_it_out::{Environment, GraphemeRule, SoundItOutPronouncer, SoundItOutRules};
 pub use variety::{Lexicon, LinguisticRuntimeProfile, LinguisticVariety, Phonology, VarietyTag};
 
 #[cfg(test)]
