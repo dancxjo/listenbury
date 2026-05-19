@@ -434,6 +434,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::MECHANICAL_ASR_MJS,
         ),
+        "/hypothesis-lattice.mjs" | "/assets/hypothesis-lattice.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::HYPOTHESIS_LATTICE_MJS,
+        ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_JS,
@@ -956,6 +960,17 @@ mod tests {
         );
         let body = String::from_utf8(mechanical_asr.body).expect("utf8");
         assert!(body.contains("boundaryHypothesesFromLandmarks"));
+
+        let hypothesis_lattice =
+            route_request("GET", "/assets/hypothesis-lattice.mjs", &empty_state());
+        assert_eq!(hypothesis_lattice.status, 200);
+        assert_eq!(
+            hypothesis_lattice.content_type,
+            "application/javascript; charset=utf-8"
+        );
+        let body = String::from_utf8(hypothesis_lattice.body).expect("utf8");
+        assert!(body.contains("HypothesisLattice"));
+        assert!(body.contains("fuseHypotheses"));
     }
 
     #[test]

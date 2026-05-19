@@ -28,6 +28,8 @@ pub(super) const PHONEME_PROJECTION_MJS: &str =
     include_str!("../../web/browser-transcript-player/phoneme-projection.mjs");
 pub(super) const MECHANICAL_ASR_MJS: &str =
     include_str!("../../web/browser-transcript-player/mechanical-asr.mjs");
+pub(super) const HYPOTHESIS_LATTICE_MJS: &str =
+    include_str!("../../web/browser-transcript-player/hypothesis-lattice.mjs");
 pub(super) const DEMO_JSON: &str =
     include_str!("../../examples/browser-transcript-player/fixtures/demo.json");
 pub(super) const LIVE_TRACE_SAMPLE_JSONL: &str =
