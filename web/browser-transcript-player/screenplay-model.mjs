@@ -1,3 +1,4 @@
+import { SpanModality } from "./shared-span-model.mjs";
 const MAX_DELETED_SNIPPETS = 8;
 
 const TOPIC_CATALOG = [
@@ -376,6 +377,8 @@ function applyAsrWordStream(turn, event) {
       text: textContent(word.text),
       commitment: String(word.commitment ?? ""),
       id: word.id ?? null,
+      span_id: word.span_id ?? null,
+      timing: word.timing ?? null,
     }));
   turn.userCandidateText = turn.userFinal || next;
   turn.flags.prospective ||= turn.userWords.some((word) => isProspectiveCommitment(word.commitment));
@@ -404,6 +407,8 @@ function applyTtsWordStreamRevision(turn, event) {
       text: textContent(word.text),
       commitment: String(word.commitment ?? ""),
       id: word.id ?? null,
+      span_id: word.span_id ?? null,
+      timing: word.timing ?? null,
     }));
   const playedPrefix = [];
   for (const word of turn.llmWords) {
@@ -806,13 +811,17 @@ function userSegments(turn) {
   const segments = [];
 
   if (turn.userFinal) {
-    segments.push({ text: turn.userFinal });
+    segments.push({
+      text: turn.userFinal,
+      spanMetadata: aggregateDialogueSpanMetadata(turn.userWords, turn.id, "asr_timed_word_stream"),
+    });
   } else if (turn.userWords.length) {
     for (const word of turn.userWords) {
       segments.push({
         text: word.text,
         className: isProspectiveCommitment(word.commitment) ? "prospective-asr" : "",
         word: true,
+        spanMetadata: dialogueSpanMetadata(word, turn.id, "asr_timed_word_stream"),
       });
     }
   } else {
@@ -834,7 +843,10 @@ function llmSegments(turn) {
   const prospectiveText = turn.llmProspective;
 
   if (finalText) {
-    segments.push({ text: finalText });
+    segments.push({
+      text: finalText,
+      spanMetadata: aggregateDialogueSpanMetadata(turn.llmWords, turn.id, "tts_timed_word_stream_revision"),
+    });
     const wordStreamText = turn.llmWords.length ? joinWords(turn.llmWords.map((word) => word.text)) : "";
     const tail = prospectiveTail(finalText, prospectiveText) || prospectiveTail(finalText, wordStreamText);
     if (tail) {
@@ -846,6 +858,7 @@ function llmSegments(turn) {
         text: word.text,
         className: isPlayedCommitment(word.commitment) ? "" : "prospective-llm",
         word: true,
+        spanMetadata: dialogueSpanMetadata(word, turn.id, "tts_timed_word_stream_revision"),
       });
     }
   } else if (prospectiveText) {
@@ -871,13 +884,52 @@ function compactSegments(segments) {
     const previous = result[result.length - 1];
     const needsSpace = previous && !/^\s|^[,.;:!?)]/.test(text) && !/\s$/.test(previous.text);
     const nextText = `${needsSpace ? " " : ""}${text}`;
+    const spanMetadata = normalizeSegmentSpanMetadata(segment.spanMetadata);
     if (previous && previous.className === segment.className && segment.word) {
       previous.text += nextText;
+      if (spanMetadata.length) {
+        previous.spanMetadata = previous.spanMetadata ?? [];
+        previous.spanMetadata.push(...spanMetadata);
+      }
     } else {
-      result.push({ text: nextText, className: segment.className || "" });
+      result.push({
+        text: nextText,
+        className: segment.className || "",
+        spanMetadata: spanMetadata.length ? spanMetadata : undefined,
+      });
     }
   }
   return result;
+}
+
+function normalizeSegmentSpanMetadata(spanMetadata) {
+  if (!spanMetadata) {
+    return [];
+  }
+  return Array.isArray(spanMetadata) ? spanMetadata.filter(Boolean) : [spanMetadata].filter(Boolean);
+}
+
+function dialogueSpanMetadata(word, turnId, source) {
+  const startMs = Number(word?.timing?.start_ms);
+  const endMs = Number(word?.timing?.end_ms);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return null;
+  }
+  return {
+    id: word?.span_id != null ? String(word.span_id) : `turn-${turnId}:${source}:${word?.id ?? word?.text ?? "word"}`,
+    modality: SpanModality.Word,
+    start_ms: startMs,
+    end_ms: endMs,
+    source,
+    turn: turnId,
+    text: word?.text ?? "",
+  };
+}
+
+function aggregateDialogueSpanMetadata(words, turnId, source) {
+  return (words ?? [])
+    .map((word) => dialogueSpanMetadata(word, turnId, source))
+    .filter(Boolean);
 }
 
 function stringifySegments(segments) {

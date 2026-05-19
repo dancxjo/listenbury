@@ -1,5 +1,14 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 import cytoscape from "https://esm.sh/cytoscape@3.30.2";
+import {
+  AlignmentKind,
+  SpanModality,
+  alignWordSpansToParentSpan,
+  buildSharedSpanModel,
+  createAlignment,
+  createSpan,
+  projectTimedWordsToSpans,
+} from "/assets/shared-span-model.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -507,6 +516,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       transcriptCandidate: null,
       finalTranscript: null,
       latestWordStream: null,
+      latestTtsWordStream: null,
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
       generatedText: null,
@@ -704,6 +714,13 @@ function reduceLiveEvent(session, event) {
     return;
   }
 
+  // ── tts_timed_word_stream_revision: update latest generated speech word stream
+  if (event.kind === "tts_timed_word_stream_revision" && event.artifact?.words) {
+    const liveTurn = sessionGetOrCreateTurn(session, turn);
+    liveTurn.latestTtsWordStream = event.artifact;
+    return;
+  }
+
   // ── transcript_candidate: update the current candidate for this turn
   if (event.kind === "transcript_candidate" && event.artifact) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
@@ -876,6 +893,7 @@ function liveSessionToViewerPayload(session) {
   // Live duplex ASR is one continuous timeline.  Keep reducer state per turn
   // for revision tracking, but project the latest ASR words onto one lane.
   const asrWords = [];
+  const ttsWords = [];
   let nextWordId = 1;
   for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
     if (liveTurn.latestWordStream?.words?.length > 0) {
@@ -883,6 +901,15 @@ function liveSessionToViewerPayload(session) {
       for (const word of liveTurn.latestWordStream.words) {
         asrWords.push({
           ...wordWithTimeOffset(word, offsetMs),
+          id: nextWordId++,
+          _turn: turnId,
+        });
+      }
+    }
+    if (liveTurn.latestTtsWordStream?.words?.length > 0) {
+      for (const word of liveTurn.latestTtsWordStream.words) {
+        ttsWords.push({
+          ...word,
           id: nextWordId++,
           _turn: turnId,
         });
@@ -904,16 +931,142 @@ function liveSessionToViewerPayload(session) {
         },
       }]
     : [];
+  if (ttsWords.length > 0) {
+    wordStreamLanes.push({
+      label: "TTS",
+      stream: {
+        id: wordStreamLanes.length + 1,
+        source: "SyntheticSpeech",
+        words: ttsWords,
+      },
+    });
+  }
+
+  const transcriptEvents = derivedTranscriptEventsFromSession(session);
+  const projectedViewerEvents = session.viewerEvents.map((event) => projectLiveViewerEvent(session, event));
+  const playbackEvents = projectedViewerEvents.filter((event) => event.kind === "playback_started");
+
+  const asrWordSpans = projectTimedWordsToSpans({
+    words: asrWords,
+    idPrefix: "asr-word",
+    modality: SpanModality.Word,
+    stream: "asr_timed_word_stream",
+  });
+  const ttsWordSpans = projectTimedWordsToSpans({
+    words: ttsWords,
+    idPrefix: "tts-word",
+    modality: SpanModality.Word,
+    stream: "tts_timed_word_stream_revision",
+  });
+  const transcriptSpans = transcriptEvents
+    .map((event) =>
+      createSpan({
+        id: event.id,
+        start_ms: event.start_ms,
+        end_ms: event.end_ms,
+        modality: SpanModality.Transcript,
+        metadata: {
+          lane: event.lane,
+          kind: event.kind,
+          turn: event.metadata?.turn ?? null,
+          text: event.label ?? null,
+          source: event.metadata?.source ?? null,
+        },
+      }))
+    .filter(Boolean);
+  const playbackSpans = playbackEvents
+    .map((event, index) =>
+      createSpan({
+        id: event.id ?? `playback-span:${index + 1}`,
+        start_ms: event.start_ms,
+        end_ms: event.end_ms,
+        modality: SpanModality.Playback,
+        metadata: {
+          lane: event.lane,
+          kind: event.kind,
+          turn: event.metadata?.turn ?? null,
+          speech_unit_id: event.metadata?.event?.speech_unit_id ?? event.metadata?.speech_unit_id ?? null,
+          text: event.label ?? null,
+          source: "playback_started",
+        },
+      }))
+    .filter(Boolean);
+
+  const asrAlignments = [];
+  for (const transcriptSpan of transcriptSpans) {
+    const turnId = transcriptSpan.metadata?.turn ?? null;
+    const turnWordSpans = asrWordSpans.filter((span) => (span.metadata?.turn ?? null) === turnId);
+    asrAlignments.push(
+      ...alignWordSpansToParentSpan(
+        turnWordSpans,
+        transcriptSpan,
+        AlignmentKind.AlignedTo,
+        0.9,
+      ),
+    );
+  }
+  const ttsAlignments = [];
+  for (const playbackSpan of playbackSpans) {
+    const turnId = playbackSpan.metadata?.turn ?? null;
+    const turnWordSpans = ttsWordSpans.filter((span) => (span.metadata?.turn ?? null) === turnId);
+    ttsAlignments.push(
+      ...alignWordSpansToParentSpan(
+        turnWordSpans,
+        playbackSpan,
+        AlignmentKind.PlayedAs,
+        0.85,
+      ),
+    );
+  }
+  const streamAlignments = [
+    ...asrWordSpans.map((span) =>
+      createAlignment({
+        source: span.id,
+        target: "stream:asr",
+        kind: AlignmentKind.DerivedFrom,
+        confidence: 1,
+      })),
+    ...ttsWordSpans.map((span) =>
+      createAlignment({
+        source: span.id,
+        target: "stream:tts",
+        kind: AlignmentKind.DerivedFrom,
+        confidence: 1,
+      })),
+  ].filter(Boolean);
 
   return {
     title: "Live — Listenbury",
     streams: wordStreamLanes,
     events: [
-      ...derivedTranscriptEventsFromSession(session),
-      ...session.viewerEvents.map((event) => projectLiveViewerEvent(session, event)),
+      ...transcriptEvents,
+      ...projectedViewerEvents,
       ...inProgressEvents,
     ],
     markers: session.viewerMarkers,
+    shared_span_model: buildSharedSpanModel({
+      spans: [
+        createSpan({
+          id: "stream:asr",
+          start_ms: asrWords[0]?.timing?.start_ms ?? 0,
+          end_ms: asrWords[asrWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
+          modality: SpanModality.Audio,
+          metadata: { stream: "asr_timed_word_stream", lane: "ASR" },
+        }),
+        createSpan({
+          id: "stream:tts",
+          start_ms: ttsWords[0]?.timing?.start_ms ?? 0,
+          end_ms: ttsWords[ttsWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
+          modality: SpanModality.Audio,
+          metadata: { stream: "tts_timed_word_stream_revision", lane: "TTS" },
+        }),
+        ...asrWordSpans,
+        ...ttsWordSpans,
+        ...transcriptSpans,
+        ...playbackSpans,
+      ].filter(Boolean),
+      alignments: [...asrAlignments, ...ttsAlignments, ...streamAlignments],
+    }),
   };
 }
 
@@ -1287,9 +1440,12 @@ function buildLanes(normalizedPayload) {
 }
 
 function normalizePayload(rawPayload) {
+  const sharedSpanProjection = projectSharedSpanModel(rawPayload?.shared_span_model);
+  const hasExplicitTimelinePayload =
+    Array.isArray(rawPayload?.streams) || Array.isArray(rawPayload?.events) || Array.isArray(rawPayload?.markers);
   if (
     rawPayload &&
-    (Array.isArray(rawPayload.streams) || Array.isArray(rawPayload.events) || Array.isArray(rawPayload.markers))
+    (hasExplicitTimelinePayload || sharedSpanProjection)
   ) {
     const streams = Array.isArray(rawPayload.streams)
       ? rawPayload.streams.map((entry, index) => {
@@ -1301,17 +1457,80 @@ function normalizePayload(rawPayload) {
           }
           throw new Error(`stream entry ${index} is not a TimedWordStream`);
         })
-      : [];
+      : sharedSpanProjection?.streams ?? [];
 
     return {
       title: rawPayload.title ?? VIEWER_NAME,
       audio: rawPayload.audio ?? null,
       streams,
-      events: normalizeEvents(rawPayload.events ?? [], rawPayload.markers ?? []),
+      events: normalizeEvents(
+        rawPayload.events ?? sharedSpanProjection?.events ?? [],
+        rawPayload.markers ?? sharedSpanProjection?.markers ?? [],
+      ),
     };
   }
 
   throw new Error("payload must be an object with streams/events");
+}
+
+function projectSharedSpanModel(sharedSpanModel) {
+  if (!sharedSpanModel || !Array.isArray(sharedSpanModel.spans)) {
+    return null;
+  }
+  const streamsByLabel = new Map();
+  const events = [];
+
+  for (const span of sharedSpanModel.spans) {
+    const startMs = Number(span?.start_ms);
+    const endMs = Number(span?.end_ms);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+      continue;
+    }
+    const modality = String(span?.modality ?? "");
+    const lane = span?.metadata?.lane ?? (modality || "Events");
+    if (modality === SpanModality.Word) {
+      const streamLabel = lane === "ASR" || span?.metadata?.stream === "asr_timed_word_stream"
+        ? "ASR"
+        : lane === "TTS" || span?.metadata?.stream === "tts_timed_word_stream_revision"
+          ? "TTS"
+          : "Word";
+      if (!streamsByLabel.has(streamLabel)) {
+        streamsByLabel.set(streamLabel, []);
+      }
+      streamsByLabel.get(streamLabel).push({
+        id: span?.metadata?.word_id ?? streamsByLabel.get(streamLabel).length + 1,
+        text: span?.metadata?.text ?? "",
+        timing: {
+          start_ms: Math.max(0, Math.round(startMs)),
+          end_ms: Math.max(Math.round(startMs), Math.round(endMs)),
+        },
+        commitment: "StableText",
+      });
+      continue;
+    }
+    events.push({
+      id: span.id,
+      lane,
+      kind: span?.metadata?.kind ?? String(modality || "span").toLowerCase(),
+      label: span?.metadata?.text ?? span?.id ?? "span",
+      start_ms: Math.max(0, Math.round(startMs)),
+      end_ms: Math.max(Math.round(startMs), Math.round(endMs)),
+      metadata: {
+        ...(span?.metadata ?? {}),
+        shared_span_id: span?.id ?? null,
+      },
+    });
+  }
+
+  const streams = [...streamsByLabel.entries()].map(([label, words], index) => ({
+    label,
+    stream: {
+      id: index + 1,
+      source: label === "ASR" ? "LiveAsr" : "SyntheticSpeech",
+      words,
+    },
+  }));
+  return { streams, events, markers: [] };
 }
 
 function normalizeWordLane(lane) {

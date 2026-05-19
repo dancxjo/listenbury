@@ -212,6 +212,10 @@ function dialogueLine(segments) {
       span.className = segment.className;
     }
     span.textContent = segment.text;
+    if (segment.spanMetadata?.length) {
+      span.dataset.spanMetadata = JSON.stringify(segment.spanMetadata);
+      span.title = `span metadata: ${segment.spanMetadata.length} item${segment.spanMetadata.length === 1 ? "" : "s"}`;
+    }
     line.append(span);
   }
   return line;
