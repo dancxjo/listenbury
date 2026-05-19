@@ -430,6 +430,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::PHONEME_PROJECTION_MJS,
         ),
+        "/mechanical-asr.mjs" | "/assets/mechanical-asr.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::MECHANICAL_ASR_MJS,
+        ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_JS,
@@ -943,6 +947,15 @@ mod tests {
             spectrogram_module.content_type,
             "application/javascript; charset=utf-8"
         );
+
+        let mechanical_asr = route_request("GET", "/assets/mechanical-asr.mjs", &empty_state());
+        assert_eq!(mechanical_asr.status, 200);
+        assert_eq!(
+            mechanical_asr.content_type,
+            "application/javascript; charset=utf-8"
+        );
+        let body = String::from_utf8(mechanical_asr.body).expect("utf8");
+        assert!(body.contains("boundaryHypothesesFromLandmarks"));
     }
 
     #[test]
