@@ -504,8 +504,8 @@ mod tests {
     }
 
     #[test]
-    fn old_demo_json_asset_route_returns_404() {
-        // demo.json is now served under /fixtures/demo.json, not /assets/demo.json
+    fn old_demo_routes_return_404() {
+        // demo.json is now served under /fixtures/demo.json, not /assets/demo.json or /demo
         let response = route_request("GET", "/assets/demo.json", &empty_state());
         assert_eq!(response.status, 404);
         let response = route_request("GET", "/demo", &empty_state());
