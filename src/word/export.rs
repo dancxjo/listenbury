@@ -28,7 +28,7 @@ use crate::word::stream::{
 };
 
 const MIN_REFINED_WORD_DURATION_MS: u64 = 20;
-const BOUNDARY_SEARCH_RADIUS_MS: u64 = 120;
+const WHISPER_BOUNDARY_TIE_BREAK_BIAS: f32 = 0.02;
 
 // ---------------------------------------------------------------------------
 // Input type
@@ -184,8 +184,10 @@ impl WordBoundaryRefiner for NoopWordBoundaryRefiner {
 
 /// First-pass heuristic acoustic boundary refiner.
 ///
-/// Uses a local energy-minimum search around each Whisper-adjacent boundary to
-/// nudge boundaries toward likely pause regions in the waveform.
+/// Uses energy minima between adjacent Whisper-timed words to nudge boundaries
+/// toward likely pause regions in the waveform. Whisper timing is treated as a
+/// weak tie-breaker only, so badly shifted ASR timestamps do not exclude a
+/// better acoustic boundary.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HeuristicAcousticWordBoundaryRefiner;
 
@@ -227,29 +229,26 @@ impl WordBoundaryRefiner for HeuristicAcousticWordBoundaryRefiner {
             }
 
             let original_boundary_ms = left_timing.end_ms.min(right_timing.start_ms);
-            let search_start = original_boundary_ms
-                .saturating_sub(BOUNDARY_SEARCH_RADIUS_MS)
-                .max(min_boundary_ms);
-            let search_end = original_boundary_ms
-                .saturating_add(BOUNDARY_SEARCH_RADIUS_MS)
-                .min(max_boundary_ms)
-                .min(energy_per_ms.len().saturating_sub(1) as u64);
+            let audio_end_ms = energy_per_ms.len().saturating_sub(1) as u64;
+            let search_start = min_boundary_ms;
+            let search_end = max_boundary_ms.min(audio_end_ms);
             if search_start > search_end {
                 continue;
             }
 
-            let mut best_boundary_ms = original_boundary_ms;
-            let mut best_energy = f32::INFINITY;
+            let whisper_anchor_ms = original_boundary_ms.clamp(search_start, search_end);
+            let search_span_ms = search_end.saturating_sub(search_start).max(1) as f32;
+            let mut best_boundary_ms = whisper_anchor_ms;
+            let mut best_score = f32::INFINITY;
             for boundary_ms in search_start..=search_end {
                 let energy = smoothed_energy_at_ms(&energy_per_ms, boundary_ms as usize);
-                if energy < best_energy {
-                    best_energy = energy;
+                let whisper_bias = boundary_ms.abs_diff(whisper_anchor_ms) as f32 / search_span_ms
+                    * WHISPER_BOUNDARY_TIE_BREAK_BIAS;
+                let score = energy + whisper_bias;
+                if score < best_score {
+                    best_score = score;
                     best_boundary_ms = boundary_ms;
                 }
-            }
-
-            if best_boundary_ms == left_timing.end_ms && best_boundary_ms == right_timing.start_ms {
-                continue;
             }
 
             let (left_slice, right_slice) = stream.words.split_at_mut(i + 1);
@@ -574,7 +573,7 @@ mod tests {
         let mut stream = transcript_to_word_stream(WordStreamId(9), &words);
 
         let mut samples = vec![1.0f32; 900];
-        samples[290..410].fill(0.0);
+        samples[390..470].fill(0.0);
         let audio = vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: 1_000,
@@ -589,7 +588,7 @@ mod tests {
         let right = stream.words[1].timing.expect("right timing");
         assert_ne!(left.end_ms, 330);
         assert_eq!(left.end_ms, right.start_ms);
-        assert!((290..=410).contains(&left.end_ms));
+        assert!((390..=470).contains(&left.end_ms));
         assert_eq!(
             stream.words[0].boundary_source,
             BoundarySource::RefinedAcoustic
@@ -597,6 +596,83 @@ mod tests {
         assert_eq!(
             stream.words[1].boundary_source,
             BoundarySource::RefinedAcoustic
+        );
+    }
+
+    #[test]
+    fn heuristic_refiner_can_escape_bad_whisper_boundary() {
+        let words = vec![
+            TranscriptWord {
+                text: "bad".into(),
+                start_ms: Some(0),
+                end_ms: Some(120),
+                confidence: Some(0.5),
+            },
+            TranscriptWord {
+                text: "anchor".into(),
+                start_ms: Some(120),
+                end_ms: Some(1_000),
+                confidence: Some(0.5),
+            },
+        ];
+        let mut stream = transcript_to_word_stream(WordStreamId(12), &words);
+
+        let mut samples = vec![0.9f32; 1_100];
+        samples[500..580].fill(0.0);
+        let audio = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 1_000,
+            channels: 1,
+            samples,
+            voice_signatures: Vec::new(),
+        }];
+
+        HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
+
+        let boundary = stream.words[0].timing.expect("left timing").end_ms;
+        assert!((500..=580).contains(&boundary));
+        assert_eq!(
+            boundary,
+            stream.words[1].timing.expect("right timing").start_ms
+        );
+        assert_eq!(
+            stream.words[0].boundary_source,
+            BoundarySource::RefinedAcoustic
+        );
+    }
+
+    #[test]
+    fn heuristic_refiner_uses_whisper_only_as_equal_energy_tie_breaker() {
+        let words = vec![
+            TranscriptWord {
+                text: "all".into(),
+                start_ms: Some(0),
+                end_ms: Some(250),
+                confidence: None,
+            },
+            TranscriptWord {
+                text: "quiet".into(),
+                start_ms: Some(250),
+                end_ms: Some(600),
+                confidence: None,
+            },
+        ];
+        let mut stream = transcript_to_word_stream(WordStreamId(13), &words);
+        let audio = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 1_000,
+            channels: 1,
+            samples: vec![0.0; 700],
+            voice_signatures: Vec::new(),
+        }];
+
+        HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
+
+        let boundary = stream.words[0].timing.expect("left timing").end_ms;
+        assert_eq!(boundary, 250);
+        assert_eq!(
+            boundary,
+            stream.words[1].timing.expect("right timing").start_ms
         );
     }
 
