@@ -64,7 +64,7 @@ const GRAPH_MAX_RENDER_NODES = 180;
 const GRAPH_MAX_RENDER_EDGES = 260;
 // Central waveform panel layout constants
 const WAVEFORM_PANEL_MAX_SPAN_ROWS = 4;
-const WAVEFORM_SPAN_ROW_HEIGHT_PX = 16;
+const WAVEFORM_SPAN_ROW_HEIGHT_PX = 20;
 const WAVEFORM_SPAN_ROW_GAP_PX = 2;
 const WAVEFORM_SPAN_ROW_STRIDE_PX = WAVEFORM_SPAN_ROW_HEIGHT_PX + WAVEFORM_SPAN_ROW_GAP_PX;
 const WAVEFORM_SPAN_ROW_MARGIN_PX = 4;
@@ -125,6 +125,7 @@ const uiState = {
   connectionStatusClass: "live-status-connecting",
   connectionStatusText: "connecting…",
   statusMessage: "Connecting to live event stream…",
+  diagnosticsExpanded: false,
 };
 
 const sourceLabels = {
@@ -211,6 +212,14 @@ function ConnectionChrome({ projection }) {
         "aria-pressed": projection.surfaceMode === "graph",
         onClick: () => setSurfaceMode("graph"),
       }, "Graph"),
+      h("button", {
+        id: "diagnostics-toggle",
+        type: "button",
+        className: projection.diagnosticsExpanded ? "active-toggle" : "",
+        "aria-pressed": projection.diagnosticsExpanded,
+        disabled: !projection.diagnosticLaneCount,
+        onClick: () => toggleDiagnostics(),
+      }, projection.diagnosticsExpanded ? "Hide Diagnostics" : `Diagnostics (${projection.diagnosticLaneCount})`),
     ),
     h(
       "section",
@@ -313,6 +322,8 @@ function buildShellProjection() {
     hasSelection: Boolean(state.selectedItem || state.brushSelection),
     followLatest: state.followLatest,
     surfaceMode: state.surfaceMode,
+    diagnosticsExpanded: uiState.diagnosticsExpanded,
+    diagnosticLaneCount: state.lanes.filter((lane) => lane.type === "event").length,
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
     connectionStatusClass: uiState.connectionStatusClass,
@@ -941,8 +952,8 @@ function liveSessionToViewerPayload(session) {
     return leftStart - rightStart || (left._turn ?? 0) - (right._turn ?? 0);
   });
   const wordStreamLanes = asrWords.length > 0
-    ? [{
-        label: "ASR",
+      ? [{
+        label: "Transcript Words",
         stream: {
           id: 1,
           source: "LiveAsr",
@@ -1060,7 +1071,7 @@ function liveSessionToViewerPayload(session) {
           start_ms: asrWords[0]?.timing?.start_ms ?? 0,
           end_ms: asrWords[asrWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
           modality: SpanModality.Audio,
-          metadata: { stream: "asr_timed_word_stream", lane: "ASR" },
+          metadata: { stream: "asr_timed_word_stream", lane: "Transcript Words" },
         })
       : null,
     ttsWords.length
@@ -1538,7 +1549,7 @@ function projectSharedSpanModel(sharedSpanModel) {
     label,
     stream: {
       id: index + 1,
-      source: label === "ASR" ? "LiveAsr" : "SyntheticSpeech",
+      source: label === "Transcript Words" ? "LiveAsr" : "SyntheticSpeech",
       words,
     },
   }));
@@ -1546,8 +1557,8 @@ function projectSharedSpanModel(sharedSpanModel) {
 }
 
 function streamLabelForWordSpan(lane, streamName) {
-  if (lane === "ASR" || streamName === "asr_timed_word_stream") {
-    return "ASR";
+  if (lane === "ASR" || lane === "Transcript Words" || streamName === "asr_timed_word_stream") {
+    return "Transcript Words";
   }
   if (lane === "TTS" || streamName === "tts_timed_word_stream_revision") {
     return "TTS";
@@ -1635,7 +1646,7 @@ function normalizeEventLanes(events) {
   const grouped = new Map();
 
   events.forEach((event) => {
-    const laneLabel = event.lane ?? "Events";
+    const laneLabel = displayLaneLabel(event.lane ?? "Events");
     if (!grouped.has(laneLabel)) {
       grouped.set(laneLabel, []);
     }
@@ -1657,7 +1668,19 @@ function semanticLaneForEvent(explicitLane, kind, metadata) {
   if (normalizedKind.includes("token") && explicitLane === "Markers") {
     return "LLM";
   }
-  return explicitLane ?? "Events";
+  return displayLaneLabel(explicitLane ?? "Events");
+}
+
+function displayLaneLabel(label) {
+  switch (label) {
+    case "ASR":
+      return "ASR Events";
+    case "Mic":
+    case "MIC":
+      return "Mic / VAD";
+    default:
+      return label;
+  }
 }
 
 function inferPayloadDuration(stream) {
@@ -1980,6 +2003,11 @@ function setSurfaceMode(mode) {
   render();
 }
 
+function toggleDiagnostics() {
+  uiState.diagnosticsExpanded = !uiState.diagnosticsExpanded;
+  render();
+}
+
 // ── Custom timeline renderer ───────────────────────────────────────────────
 
 let _programmaticScroll = false;
@@ -2116,11 +2144,22 @@ function renderCustomTimeline() {
   // Central waveform/oscilloscope panel — shared timebase anchor for all lanes
   appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs);
 
+  const eventLanes = state.lanes.filter((lane) => lane.type === "event");
+  if (eventLanes.length > 0) {
+    appendDiagnosticsHeader(labelsCol, scrollContent, trackContentWidth, eventLanes);
+  }
+
   // Lane rows
   state.lanes.forEach((lane, laneIndex) => {
+    if (lane.type === "word") {
+      return;
+    }
+    if (lane.type === "event" && !uiState.diagnosticsExpanded) {
+      return;
+    }
     // Label entry
     const labelEntryEl = document.createElement("div");
-    labelEntryEl.className = `lane-label-entry${lane.type === "event" ? " event-lane" : ""}`;
+    labelEntryEl.className = `lane-label-entry event-lane diagnostic-lane-label`;
     const laneHeader = document.createElement("div");
     laneHeader.className = ["lane-header", `lane-${classToken(lane.label)}`].join(" ");
     const h2El = document.createElement("h2");
@@ -2141,16 +2180,13 @@ function renderCustomTimeline() {
     const trackEl = document.createElement("div");
     trackEl.className = [
       "lane-track",
-      lane.type === "event" ? "event-track" : "",
+      "event-track",
+      "diagnostic-track",
       `lane-${classToken(lane.label)}`,
     ]
       .filter(Boolean)
       .join(" ");
     trackEl.dataset.laneIndex = String(laneIndex);
-
-    if (lane.type === "word") {
-      appendWaveformOverlay(trackEl, trackContentWidth);
-    }
 
     // Time-range selection overlay
     const selOverlay = document.createElement("div");
@@ -2210,7 +2246,8 @@ function renderCustomTimeline() {
           .filter(Boolean)
           .join(" ");
 
-        const chip = document.createElement("div");
+        const chip = document.createElement("button");
+        chip.type = "button";
         chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
           .filter(Boolean)
           .join(" ");
@@ -2252,6 +2289,10 @@ function renderCustomTimeline() {
           state.selectedItem.itemIndex === eventIndex;
         const activeEndMs = isMarker ? startMs + MARKER_ACTIVE_DURATION_MS : endMs;
         const isActive = nowMs >= startMs && nowMs <= activeEndMs;
+        const isRelated = isRelatedDiagnosticEvent("event", laneIndex, eventIndex, {
+          startMs: visualStartMs,
+          endMs: visualEndMs,
+        });
 
         const baseClass = [
           "timeline-chip event-chip",
@@ -2267,8 +2308,14 @@ function renderCustomTimeline() {
           .filter(Boolean)
           .join(" ");
 
-        const chip = document.createElement("div");
-        chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = [
+          baseClass,
+          isRelated ? "related-to-selection" : "",
+          isActive ? "active" : "",
+          isSelected ? "selected" : "",
+        ]
           .filter(Boolean)
           .join(" ");
         chip.dataset.baseClass = baseClass;
@@ -2956,6 +3003,37 @@ function appendWaveformOverlay(trackEl, trackContentWidth) {
   requestAnimationFrame(() => drawWaveformOverlay(canvas, trackContentWidth));
 }
 
+function appendDiagnosticsHeader(labelsCol, scrollContent, trackContentWidth, eventLanes) {
+  const labelEl = document.createElement("div");
+  labelEl.className = "lane-label-entry diagnostics-section-label";
+  const headerEl = document.createElement("div");
+  headerEl.className = "lane-header diagnostics-section-header";
+  const h2El = document.createElement("h2");
+  h2El.textContent = "Diagnostics";
+  const metaEl = document.createElement("div");
+  metaEl.className = "lane-meta";
+  const eventCount = eventLanes.reduce((sum, lane) => sum + lane.events.length, 0);
+  metaEl.textContent = `${eventLanes.length} lane${eventLanes.length === 1 ? "" : "s"} · ${eventCount} event${eventCount === 1 ? "" : "s"}`;
+  headerEl.append(h2El, metaEl);
+  labelEl.append(headerEl);
+  labelsCol.append(labelEl);
+
+  const trackEl = document.createElement("div");
+  trackEl.className = "lane-track diagnostics-section-track";
+  trackEl.style.width = `${trackContentWidth}px`;
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "diagnostics-section-toggle";
+  toggle.setAttribute("aria-expanded", String(uiState.diagnosticsExpanded));
+  toggle.textContent = uiState.diagnosticsExpanded ? "Hide diagnostic event lanes" : "Show diagnostic event lanes";
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleDiagnostics();
+  });
+  trackEl.append(toggle);
+  scrollContent.append(trackEl);
+}
+
 function waveformCanvasMetrics(canvas, trackContentWidth, fallbackHeightPx) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -3074,6 +3152,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
       const key = itemKey("word", laneIndex, wordIndex);
       const startMs = word.resolvedTiming.start_ms;
       const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
+      state.itemTimingByKey.set(key, { startMs, endMs });
       const wordCss = intervalToCss(startMs, endMs, 2);
 
       const isSelected =
@@ -3093,7 +3172,8 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
         .filter(Boolean)
         .join(" ");
 
-      const chip = document.createElement("div");
+      const chip = document.createElement("button");
+      chip.type = "button";
       chip.className = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
         .filter(Boolean)
         .join(" ");
@@ -3230,8 +3310,14 @@ function updateChipStates() {
         state.selectedItem?.type === itemType &&
         state.selectedItem.laneIndex === laneIndex &&
         state.selectedItem.itemIndex === itemIndex;
+      const isRelated = isRelatedDiagnosticEvent(itemType, laneIndex, itemIndex, timing);
       const baseClass = chip.dataset.baseClass ?? "";
-      const newClass = [baseClass, isActive ? "active" : "", isSelected ? "selected" : ""]
+      const newClass = [
+        baseClass,
+        isRelated ? "related-to-selection" : "",
+        isActive ? "active" : "",
+        isSelected ? "selected" : "",
+      ]
         .filter(Boolean)
         .join(" ");
       if (chip.className !== newClass) {
@@ -3242,6 +3328,29 @@ function updateChipStates() {
   refreshChipMap(state.chipElementByKey, (key) => state.itemTimingByKey.get(key));
   // Waveform panel chips share itemTimingByKey for word chips
   refreshChipMap(state.waveformChipElements, (key) => state.itemTimingByKey.get(key));
+}
+
+function isRelatedDiagnosticEvent(itemType, laneIndex, itemIndex, timing) {
+  if (itemType !== "event" || state.selectedItem?.type !== "word") {
+    return false;
+  }
+  const selectedTiming = selectedItemTiming();
+  if (!selectedTiming) {
+    return false;
+  }
+  const lane = state.lanes[laneIndex];
+  const event = lane?.events?.[itemIndex];
+  if (!event) {
+    return false;
+  }
+  const selectedWord = state.lanes[state.selectedItem.laneIndex]?.words?.[state.selectedItem.itemIndex];
+  const selectedTurn = selectedWord?._turn ?? null;
+  const eventTurn = event.metadata?.turn ?? event.metadata?.event?.turn ?? null;
+  const overlaps =
+    Math.max(selectedTiming.startMs, timing.startMs) <=
+    Math.min(selectedTiming.endMs, timing.endMs);
+  const sameTurn = selectedTurn !== null && eventTurn !== null && selectedTurn === eventTurn;
+  return overlaps || sameTurn;
 }
 
 // Build ruler tick timestamps covering [0..maxDurationMs].
@@ -4021,12 +4130,15 @@ function createChipContent(text) {
 
 function eventChipDisplayLabel(lane, event, startMs, endMs) {
   if (
-    lane?.label === "Mic" &&
+    (lane?.label === "Mic" || lane?.label === "Mic / VAD") &&
     event?.kind === "speech_started" &&
     event?.metadata?.in_progress !== true &&
     endMs > startMs
   ) {
     return formatRulerLabel(endMs);
+  }
+  if (lane?.type === "event") {
+    return shortKindLabel(event?.kind ?? "event");
   }
   return event?.label ?? labelForKind(event?.kind ?? "event");
 }
@@ -4472,9 +4584,10 @@ function buildSelectionProjection() {
       canPlaySelectionClip: Boolean(event.audio_ref?.url),
       playSelectionClipLabel: event.audio_ref?.url ? "Play event clip" : "Play selected clip",
       summaryParts: [
+        h("strong", null, selectionKindLabel("event", lane, event)),
+        h("br"),
         h("strong", null, lane.label),
         h("br"),
-        "Event ",
         h("strong", null, event.label),
         h("br"),
         `${event.start_ms}–${event.end_ms} ms · kind `,
@@ -4500,7 +4613,10 @@ function buildSelectionProjection() {
         null,
         2,
       ),
-      badge: null,
+      badge: {
+        className: `inspector-span-state diagnostic-kind-${classToken(selectionKindLabel("event", lane, event))}`,
+        text: selectionKindLabel("event", lane, event),
+      },
       revisions: [],
     };
   }
@@ -4521,6 +4637,8 @@ function buildSelectionProjection() {
     canPlaySelectionClip: false,
     playSelectionClipLabel: "Play selected clip",
     summaryParts: [
+      h("strong", null, "Transcript word"),
+      h("br"),
       h("strong", null, lane.label),
       h("br"),
       "Word ",
@@ -4556,7 +4674,7 @@ function buildSelectionProjection() {
     badge: word.commitment
       ? {
           className: `inspector-span-state commit-${commitmentClass(word.commitment)}`,
-          text: describeSpanState(word.commitment),
+          text: `Word · ${describeSpanState(word.commitment)}`,
         }
       : null,
     revisions: (word._revisions ?? []).map((rev) => ({
@@ -4565,6 +4683,33 @@ function buildSelectionProjection() {
       toText: word.text,
     })),
   };
+}
+
+function selectionKindLabel(itemType, lane, item) {
+  if (itemType === "word") {
+    return "Transcript word";
+  }
+  const kind = String(item?.kind ?? "");
+  const laneLabel = lane?.label ?? "";
+  if (laneLabel === "Mic / VAD" || kind.includes("speech") || kind.includes("breath")) {
+    return "Mic / VAD event";
+  }
+  if (kind.includes("suppression")) {
+    return "Suppression event";
+  }
+  if (kind.includes("playback")) {
+    return "Playback event";
+  }
+  if (kind.includes("tts") || laneLabel === "TTS") {
+    return "TTS event";
+  }
+  if (kind.includes("llm") || laneLabel === "LLM") {
+    return "LLM event";
+  }
+  if (kind.includes("transcript") || kind.includes("asr") || laneLabel === "ASR Events") {
+    return "ASR event";
+  }
+  return "Diagnostic event";
 }
 
 // ── Span state helpers ────────────────────────────────────────────────────

@@ -502,7 +502,7 @@ h1 {
 /* ── Central waveform / oscilloscope panel ─────────────────────────────────── */
 
 .waveform-lane-label {
-  min-height: 12.5rem;
+  min-height: 14rem;
 }
 
 .waveform-panel-header {
@@ -510,7 +510,7 @@ h1 {
 }
 
 .waveform-track {
-  min-height: 12.5rem;
+  min-height: 14rem;
   background:
     linear-gradient(180deg, rgba(7, 10, 14, 0.96) 0%, rgba(12, 18, 24, 0.88) 100%);
   border-bottom: 2px solid rgba(99, 210, 255, 0.22);
@@ -520,7 +520,7 @@ h1 {
   position: absolute;
   top: 0;
   left: 0;
-  height: 7.5rem;
+  height: 8rem;
   z-index: 0;
   pointer-events: none;
 }
@@ -528,8 +528,8 @@ h1 {
 .waveform-word-deck {
   position: absolute;
   left: 0;
-  top: 7.5rem;
-  height: 5rem;
+  top: 8rem;
+  height: 6rem;
   z-index: 2;
   border-top: 1px solid rgba(99, 210, 255, 0.16);
   background: rgba(7, 9, 12, 0.46);
@@ -540,13 +540,13 @@ h1 {
    stacked from the bottom via inline `style.bottom`. */
 .timeline-chip.waveform-span {
   transform: none;
-  height: 16px;
+  height: 20px;
   min-height: 0;
   min-width: 2px;
   padding: 0 2px;
   border-radius: 3px;
   opacity: 0.86;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   overflow: hidden;
   background: color-mix(in srgb, var(--lane-color, var(--accent)) 55%, transparent);
   border-color: color-mix(in srgb, var(--lane-color, var(--accent)) 80%, transparent);
@@ -556,7 +556,7 @@ h1 {
 .timeline-chip.waveform-span:hover {
   opacity: 1;
   z-index: 3;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
 }
 
 .timeline-chip.waveform-span.selected {
@@ -581,8 +581,55 @@ h1 {
   min-height: 4.25rem;
 }
 
+.diagnostics-section-label,
+.diagnostics-section-track {
+  min-height: 3rem;
+}
+
+.diagnostics-section-header {
+  border-left: 3px solid rgba(157, 171, 186, 0.62);
+  background: #10151c;
+}
+
+.diagnostics-section-track {
+  display: flex;
+  align-items: center;
+  padding: 0 0.85rem;
+  border-bottom: 1px solid rgba(44, 55, 66, 0.7);
+  background:
+    linear-gradient(90deg, rgba(157, 171, 186, 0.08), transparent 45%),
+    rgba(9, 12, 16, 0.68);
+}
+
+.diagnostics-section-toggle {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  border: 1px solid rgba(157, 171, 186, 0.34);
+  border-radius: 6px;
+  background: rgba(18, 24, 32, 0.92);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.diagnostics-section-toggle:hover,
+.diagnostics-section-toggle:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.diagnostic-lane-label .lane-header,
+.diagnostic-track {
+  opacity: 0.76;
+}
+
+.diagnostic-track:hover,
+.diagnostic-lane-label:hover .lane-header {
+  opacity: 0.92;
+}
 
 .timeline-chip {
+  appearance: none;
   position: absolute;
   z-index: 2;
   top: 50%;
@@ -596,8 +643,15 @@ h1 {
   padding: 0 0.5rem;
   border: 1px solid rgba(238, 243, 247, 0.22);
   border-radius: 7px;
+  font: inherit;
+  cursor: pointer;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.timeline-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .alignment-handle {
@@ -844,6 +898,14 @@ h1 {
   color: #fff1cc;
 }
 
+.event-chip.related-to-selection {
+  opacity: 1;
+  border-color: rgba(99, 210, 255, 0.86);
+  box-shadow:
+    0 0 0 1px rgba(99, 210, 255, 0.34),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
 .event-chip.marker:hover,
 .event-chip.marker.selected,
 .event-chip.marker.active {
@@ -921,14 +983,21 @@ h1 {
 
 .lane-mic.word-chip,
 .lane-mic.event-chip,
-.lane-mic.lane-header {
+.lane-mic.lane-header,
+.lane-mic-vad.event-chip,
+.lane-mic-vad.lane-header {
   --lane-color: #7db5ff;
 }
 
 .lane-asr.word-chip,
 .source-liveasr.word-chip,
 .lane-asr.event-chip,
-.lane-asr.lane-header {
+.lane-asr.lane-header,
+.lane-asr-events.event-chip,
+.lane-asr-events.lane-header,
+.lane-transcript-words.word-chip,
+.lane-transcript-words.event-chip,
+.lane-transcript-words.lane-header {
   --lane-color: #4fd1c5;
 }
 
