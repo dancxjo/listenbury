@@ -307,6 +307,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![0.0; 160],
+            voice_signatures: Vec::new(),
         };
         assert_eq!(frame_duration_ms(&frame_10ms), 10);
 
@@ -315,6 +316,7 @@ mod tests {
             sample_rate_hz: 48_000,
             channels: 2,
             samples: vec![0.0; 960],
+            voice_signatures: Vec::new(),
         };
         assert_eq!(frame_duration_ms(&stereo_frame_10ms), 10);
 
@@ -323,6 +325,7 @@ mod tests {
             sample_rate_hz: 0,
             channels: 1,
             samples: vec![0.0; 160],
+            voice_signatures: Vec::new(),
         };
         assert_eq!(frame_duration_ms(&zero_rate), 0);
     }
@@ -345,24 +348,28 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![0.0; 160],
+                voice_signatures: Vec::new(),
             },
             AudioFrame {
                 captured_at: listenbury::ExactTimestamp::now(),
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![0.3; 160],
+                voice_signatures: Vec::new(),
             },
             AudioFrame {
                 captured_at: listenbury::ExactTimestamp::now(),
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![0.3; 160],
+                voice_signatures: Vec::new(),
             },
             AudioFrame {
                 captured_at: listenbury::ExactTimestamp::now(),
                 sample_rate_hz: 16_000,
                 channels: 1,
                 samples: vec![0.3; 160],
+                voice_signatures: Vec::new(),
             },
         ];
         let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();

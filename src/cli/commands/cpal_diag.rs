@@ -125,6 +125,7 @@ pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
         sample_rate_hz: sample_rate,
         channels,
         samples,
+        voice_signatures: Vec::new(),
     }];
     write_wav(&command.output_wav, &audio)?;
 
@@ -238,6 +239,7 @@ impl PreparedAudioPlayback {
             sample_rate_hz: self.sample_rate_hz,
             channels: self.channels,
             samples: self.samples.as_ref().clone(),
+            voice_signatures: Vec::new(),
         }
     }
 

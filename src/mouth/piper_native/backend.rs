@@ -608,6 +608,7 @@ fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<
                 .iter()
                 .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
                 .collect(),
+            voice_signatures: Vec::new(),
         })
         .collect()
 }

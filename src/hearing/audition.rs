@@ -656,6 +656,7 @@ mod tests {
             sample_rate_hz,
             channels: 1,
             samples: reference.clone(),
+            voice_signatures: Vec::new(),
         }];
         let mask = Arc::new(Mutex::new(SpeakerReferenceMask::new()));
         mask.lock()
@@ -670,6 +671,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples,
+            voice_signatures: Vec::new(),
         }
     }
 

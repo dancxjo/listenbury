@@ -265,6 +265,7 @@ fn mean_centered_frame(frame: &AudioFrame) -> AudioFrame {
             sample_rate_hz: frame.sample_rate_hz,
             channels: frame.channels,
             samples: Vec::new(),
+            voice_signatures: Vec::new(),
         };
     }
 
@@ -274,6 +275,7 @@ fn mean_centered_frame(frame: &AudioFrame) -> AudioFrame {
         sample_rate_hz: frame.sample_rate_hz,
         channels: frame.channels,
         samples: frame.samples.iter().map(|sample| sample - mean).collect(),
+        voice_signatures: Vec::new(),
     }
 }
 
@@ -290,6 +292,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![0.0; 160],
+            voice_signatures: Vec::new(),
         };
         let result = vad.process_frame(&frame).unwrap();
         assert!(!result.is_speech);
@@ -314,6 +317,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![0.0; 160],
+            voice_signatures: Vec::new(),
         };
         let result = vad.process_frame(&frame).unwrap();
         assert!(!result.is_speech);
@@ -330,6 +334,7 @@ mod tests {
             samples: (0..160)
                 .map(|index| if index % 2 == 0 { 0.10 } else { -0.10 })
                 .collect(),
+            voice_signatures: Vec::new(),
         };
 
         let result = vad.process_frame(&frame).unwrap();
@@ -347,6 +352,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             samples: vec![0.04; 160],
+            voice_signatures: Vec::new(),
         };
 
         let result = vad.process_frame(&frame).unwrap();
@@ -366,6 +372,7 @@ mod tests {
             samples: (0..160)
                 .map(|index| if index % 2 == 0 { 0.005 } else { -0.005 })
                 .collect(),
+            voice_signatures: Vec::new(),
         };
 
         let result = vad.process_frame(&frame).unwrap();
@@ -384,6 +391,7 @@ mod tests {
             samples: (0..160)
                 .map(|index| if index % 2 == 0 { 0.020 } else { -0.020 })
                 .collect(),
+            voice_signatures: Vec::new(),
         };
 
         let result = vad.process_frame(&frame).unwrap();

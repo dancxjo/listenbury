@@ -567,6 +567,7 @@ mod tests {
             sample_rate_hz: 1_000,
             channels: 1,
             samples,
+            voice_signatures: Vec::new(),
         }];
 
         HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
@@ -611,6 +612,7 @@ mod tests {
             sample_rate_hz: 1_000,
             channels: 1,
             samples: vec![0.0; 500],
+            voice_signatures: Vec::new(),
         }];
 
         HeuristicAcousticWordBoundaryRefiner.refine(&audio, &mut stream);
