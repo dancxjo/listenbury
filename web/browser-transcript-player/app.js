@@ -1455,7 +1455,7 @@ function renderCustomTimeline() {
   state.itemTimingByKey = new Map();
   state.playbackCursorElements = [];
 
-  const nowMs = Math.round(audio.currentTime * 1000);
+  const nowMs = currentPlaybackTimeMs();
 
   // Ruler label (for the labels column)
   const rulerLabelEl = document.createElement("div");
@@ -1727,7 +1727,7 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
 
 // Update only active/selected classes on existing chips (no DOM rebuild).
 function updateChipStates() {
-  const nowMs = Math.round(audio.currentTime * 1000);
+  const nowMs = currentPlaybackTimeMs();
   for (const [key, chip] of state.chipElementByKey.entries()) {
     const timing = state.itemTimingByKey.get(key);
     if (!timing) continue;
@@ -2241,22 +2241,22 @@ function selectedItemTiming() {
 }
 
 function updateTimeRangeSelectionOverlays() {
-  const brushSelection = activeTimeRangeSelection();
-  const selectedTiming = brushSelection ? null : selectedItemTiming();
+  const timeRangeSelection = activeTimeRangeSelection();
+  const selectedTiming = timeRangeSelection ? null : selectedItemTiming();
   document.querySelectorAll(".lane-track").forEach((trackEl) => {
     const overlay = trackEl.querySelector(".time-range-selection");
     if (overlay) {
-      if (!brushSelection) {
+      if (!timeRangeSelection) {
         overlay.hidden = true;
       } else {
-        const startPx = pxForMs(brushSelection.startMs);
-        const widthPx = Math.max(0, pxForMs(brushSelection.endMs) - startPx);
+        const startPx = pxForMs(timeRangeSelection.startMs);
+        const widthPx = Math.max(0, pxForMs(timeRangeSelection.endMs) - startPx);
         overlay.hidden = false;
         overlay.style.left = `${startPx}px`;
         overlay.style.width = `${widthPx}px`;
         const label = overlay.querySelector(".time-range-selection-label");
         if (label) {
-          label.textContent = `${formatRulerLabel(brushSelection.startMs)}–${formatRulerLabel(brushSelection.endMs)}`;
+          label.textContent = `${formatRulerLabel(timeRangeSelection.startMs)}–${formatRulerLabel(timeRangeSelection.endMs)}`;
         }
       }
     }
@@ -2282,12 +2282,16 @@ function updatePlaybackCursorOverlays() {
   if (!state.playbackCursorElements.length) {
     return;
   }
-  const nowMs = Math.max(0, Math.min(state.maxDurationMs, Math.round(audio.currentTime * 1000)));
+  const nowMs = currentPlaybackTimeMs();
   const leftPx = pxForMs(nowMs);
   for (const cursor of state.playbackCursorElements) {
     cursor.style.left = `${leftPx}px`;
     cursor.hidden = false;
   }
+}
+
+function currentPlaybackTimeMs() {
+  return Math.max(0, Math.min(state.maxDurationMs, Math.round(audio.currentTime * 1000)));
 }
 
 function activeTimeRangeSelection() {
