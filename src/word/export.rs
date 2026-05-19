@@ -124,6 +124,7 @@ pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> 
                 commitment: WordCommitment::Final,
                 boundary_source,
                 audio_ref: None,
+            pronunciation: None,
             }
         })
         .collect();

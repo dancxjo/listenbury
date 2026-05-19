@@ -763,6 +763,80 @@ h1 {
   transform-origin: left center;
 }
 
+/* ── Phoneme strip inside word chips ─────────────────────────────────────── */
+
+/**
+ * A row of proportionally-positioned phoneme ticks at the bottom of a word
+ * chip.  These ticks represent *projected* (dictionary-derived) pronunciation
+ * timings, not measured acoustic boundaries.
+ */
+.phoneme-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1.05rem;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.phoneme-tick {
+  position: absolute;
+  bottom: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 0.08rem;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: rgba(238, 243, 247, 0.45);
+  border-left: 1px solid rgba(238, 243, 247, 0.1);
+  overflow: hidden;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.phoneme-tick:first-child {
+  border-left: none;
+}
+
+/* Vowel phonemes get a subtle highlight to show syllable nuclei. */
+.phoneme-tick.is-vowel {
+  color: rgba(99, 210, 255, 0.6);
+  background: rgba(99, 210, 255, 0.04);
+}
+
+/* Hide the phoneme strip on tiny chips so it doesn't clutter. */
+.word-chip.density-word .phoneme-strip,
+.word-chip.compact-word .phoneme-strip {
+  display: none;
+}
+
+/* Inspector phoneme sequence display */
+.inspector-phoneme-sequence {
+  display: inline-block;
+  margin-top: 0.15rem;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid rgba(99, 210, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(99, 210, 255, 0.06);
+  color: rgba(238, 243, 247, 0.85);
+  font-family: monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+}
+
+.inspector-phoneme-provenance {
+  font-size: 0.68rem;
+  font-family: inherit;
+  color: rgba(238, 243, 247, 0.45);
+  font-style: italic;
+  margin-left: 0.25rem;
+}
+
 .word-chip.compact-word {
   min-height: 2.25rem;
   padding: 0 0.34rem;

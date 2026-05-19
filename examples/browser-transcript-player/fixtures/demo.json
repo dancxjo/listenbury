@@ -25,7 +25,14 @@
             "timing_confidence": 0.97,
             "commitment": "Final",
             "boundary_source": "Whisper",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "welcome",
+              "phonemes": ["W", "EH1", "L", "K", "AH0", "M"],
+              "stressPattern": "10",
+              "status": "exact"
+            }
           },
           {
             "id": 2,
@@ -41,7 +48,14 @@
             "timing_confidence": 0.89,
             "commitment": "Final",
             "boundary_source": "Whisper",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "to",
+              "phonemes": ["T", "UW1"],
+              "stressPattern": "1",
+              "status": "exact"
+            }
           },
           {
             "id": 3,
@@ -57,7 +71,14 @@
             "timing_confidence": 0.91,
             "commitment": "Final",
             "boundary_source": "Whisper",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "listenbury",
+              "phonemes": [],
+              "stressPattern": "",
+              "status": "missing"
+            }
           }
         ]
       }
@@ -82,7 +103,14 @@
             "timing_confidence": 0.62,
             "commitment": "StableText",
             "boundary_source": "Predicted",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "welcome",
+              "phonemes": ["W", "EH1", "L", "K", "AH0", "M"],
+              "stressPattern": "10",
+              "status": "exact"
+            }
           },
           {
             "id": 2,
@@ -95,7 +123,14 @@
             "timing_confidence": null,
             "commitment": "StableText",
             "boundary_source": "Predicted",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "to",
+              "phonemes": ["T", "UW1"],
+              "stressPattern": "1",
+              "status": "exact"
+            }
           },
           {
             "id": 3,
@@ -111,7 +146,14 @@
             "timing_confidence": 0.62,
             "commitment": "StableText",
             "boundary_source": "Predicted",
-            "audio_ref": null
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "listenbury",
+              "phonemes": [],
+              "stressPattern": "",
+              "status": "missing"
+            }
           }
         ]
       }
@@ -137,6 +179,13 @@
               "buffer_id": "welcome-demo",
               "byte_offset": 0,
               "byte_len": 32768
+            },
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "welcome",
+              "phonemes": ["W", "EH1", "L", "K", "AH0", "M"],
+              "stressPattern": "10",
+              "status": "exact"
             }
           },
           {
@@ -154,6 +203,13 @@
               "buffer_id": "welcome-demo",
               "byte_offset": 32768,
               "byte_len": 12288
+            },
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "to",
+              "phonemes": ["T", "UW1"],
+              "stressPattern": "1",
+              "status": "exact"
             }
           },
           {
@@ -171,6 +227,13 @@
               "buffer_id": "welcome-demo",
               "byte_offset": 45056,
               "byte_len": 61440
+            },
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "listenbury",
+              "phonemes": [],
+              "stressPattern": "",
+              "status": "missing"
             }
           }
         ]

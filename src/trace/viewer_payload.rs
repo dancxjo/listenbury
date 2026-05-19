@@ -307,6 +307,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                         commitment,
                         boundary_source,
                         audio_ref: None,
+                        pronunciation: None,
                     });
                     next_word_id = next_word_id.saturating_add(1);
                 }
@@ -795,6 +796,7 @@ mod tests {
                 commitment: WordCommitment::Final,
                 boundary_source: BoundarySource::Whisper,
                 audio_ref: None,
+                pronunciation: None,
             }],
         };
         stream_event.artifact = Some(serde_json::to_value(artifact_stream).unwrap());
@@ -836,6 +838,7 @@ mod tests {
                     commitment: WordCommitment::Hypothetical,
                     boundary_source: BoundarySource::Predicted,
                     audio_ref: None,
+                    pronunciation: None,
                 },
                 WordNode {
                     id: WordId(2),
@@ -846,6 +849,7 @@ mod tests {
                     commitment: WordCommitment::Cancelled,
                     boundary_source: BoundarySource::Predicted,
                     audio_ref: None,
+                    pronunciation: None,
                 },
             ],
         };
@@ -864,6 +868,7 @@ mod tests {
                 commitment: WordCommitment::Final,
                 boundary_source: BoundarySource::Predicted,
                 audio_ref: None,
+                pronunciation: None,
             }],
         };
         committed.artifact = Some(serde_json::to_value(committed_stream).unwrap());

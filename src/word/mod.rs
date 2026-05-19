@@ -26,6 +26,6 @@ pub use export::{
     WordBoundaryRefiner, transcript_to_word_stream,
 };
 pub use stream::{
-    AudioRef, BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode,
-    WordStreamId, WordStreamSource, WordTiming,
+    AudioRef, BoundarySource, PronunciationLookupStatus, TextSpan, TimedWordStream, WordCommitment,
+    WordId, WordNode, WordPronunciation, WordStreamId, WordStreamSource, WordTiming,
 };

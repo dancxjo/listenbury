@@ -383,6 +383,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::ENERGY_TIMING_MJS,
         ),
+        "/phoneme-projection.mjs" | "/assets/phoneme-projection.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::PHONEME_PROJECTION_MJS,
+        ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_JS,

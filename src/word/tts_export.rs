@@ -74,6 +74,7 @@ pub fn generated_text_to_word_stream(id: WordStreamId, text: &str) -> TimedWordS
             commitment: WordCommitment::StableText,
             boundary_source: BoundarySource::Predicted,
             audio_ref: None,
+            pronunciation: None,
         })
         .collect();
 
