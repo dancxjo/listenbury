@@ -22,6 +22,8 @@ pub(super) const TIMELINE_VIEWPORT_MJS: &str =
     include_str!("../../web/browser-transcript-player/timeline-viewport.mjs");
 pub(super) const ENERGY_TIMING_MJS: &str =
     include_str!("../../web/browser-transcript-player/energy-timing.mjs");
+pub(super) const SPECTROGRAM_MJS: &str =
+    include_str!("../../web/browser-transcript-player/spectrogram.mjs");
 pub(super) const PHONEME_PROJECTION_MJS: &str =
     include_str!("../../web/browser-transcript-player/phoneme-projection.mjs");
 pub(super) const DEMO_JSON: &str =
