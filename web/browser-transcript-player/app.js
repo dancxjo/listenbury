@@ -9,6 +9,20 @@ import {
   createSpan,
   projectTimedWordsToSpans,
 } from "/assets/shared-span-model.mjs";
+import {
+  LIVE_EVENT_LANE,
+  SPAN_PAIRS,
+  END_TO_START,
+  isLlmTextEvent as isGeneratedSpeechEventKind,
+} from "/assets/shared/events/schema.mjs";
+import {
+  normalizeSemanticText,
+  normalizedId,
+  speechUnitIdFromEvent,
+  transcriptCandidateText as _transcriptCandidateText,
+  wordStreamText as _wordStreamText,
+  textContent,
+} from "/assets/shared/events/reducers.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -41,61 +55,6 @@ const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
 const WAVEFORM_PEAK_BUCKETS = 2_400;
 const GRAPH_MAX_RENDER_NODES = 180;
 const GRAPH_MAX_RENDER_EDGES = 260;
-
-// Lane assignment for live trace event kinds.
-const LIVE_EVENT_LANE = {
-  capture_started: "Mic",
-  listening_started: "Mic",
-  speech_started: "Mic",
-  speech_stopped: "Mic",
-  breath_group_opened: "Mic",
-  breath_group_closed: "Mic",
-  auditory_observation: "Mic",
-  environmental_sound: "Mic",
-  self_voice_heard: "Speaker",
-  overlap_detected: "Mic",
-  asr_started: "ASR",
-  asr_finished: "ASR",
-  transcript: "ASR",
-  transcript_candidate: "ASR",
-  transcript_proposition: "ASR",
-  transcription_refinement_error: "ASR",
-  asr_timed_word_stream: "ASR",
-  llm_generation_started: "LLM",
-  first_llm_token: "LLM",
-  llm_token: "LLM",
-  llm_token_delta: "LLM",
-  token_emitted: "LLM",
-  first_safe_speech_unit_emitted: "LLM",
-  speech_unit_committed: "LLM",
-  speech_unit_cancelled: "LLM",
-  speculative_speech_updated: "LLM",
-  first_tts_audio_frame_available: "Speaker",
-  playback_started: "Speaker",
-  playback_finished: "Speaker",
-  self_hearing_suppression_started: "Speaker",
-  self_hearing_suppression_ended: "Speaker",
-  face_expression: "Emotion",
-  face_state: "Emotion",
-  facial_expression: "Emotion",
-  expression_changed: "Emotion",
-  emotion_state: "Emotion",
-  affect_state: "Emotion",
-};
-
-// Span pairing rules: maps start-event kind → { end-event kind, lane }.
-// Used by both the live-session reducer and the projection function.
-const SPAN_PAIRS = {
-  speech_started: { end: "speech_stopped", lane: "Mic" },
-  asr_started: { end: "asr_finished", lane: "ASR" },
-  playback_started: { end: "playback_finished", lane: "Speaker" },
-  llm_generation_started: { end: "playback_started", lane: "LLM" },
-  self_hearing_suppression_started: { end: "self_hearing_suppression_ended", lane: "Speaker" },
-};
-// Reverse mapping: end-event kind → { startKind, lane }.
-const END_TO_START = Object.fromEntries(
-  Object.entries(SPAN_PAIRS).map(([startKind, info]) => [info.end, { startKind, lane: info.lane }]),
-);
 
 // Serialize an open-span map key as [lane, turn, startKind].
 function openSpanKey(lane, turn, startKind) {
@@ -594,23 +553,6 @@ function matchWordAcrossStreams(prevWords, newWord, newIndex) {
     return { word: prevWords[newIndex], approximate: true };
   }
   return null;
-}
-
-function normalizedId(value) {
-  if (value == null) {
-    return null;
-  }
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  if (typeof value === "object" && value !== null && "0" in value) {
-    return String(value[0]);
-  }
-  return JSON.stringify(value);
-}
-
-function speechUnitIdFromEvent(event) {
-  return normalizedId(event?.speech_unit_id ?? event?.artifact?.speech_unit_id);
 }
 
 function measuredWordTimingBounds(words) {
@@ -1227,16 +1169,6 @@ function labelForKind(kind) {
   return kind.replace(/_/g, " ");
 }
 
-function isGeneratedSpeechEventKind(kind) {
-  return [
-    "first_safe_speech_unit_emitted",
-    "speech_unit_committed",
-    "speech_unit_cancelled",
-    "speculative_speech_updated",
-    "tts_enqueue_started",
-  ].includes(kind);
-}
-
 function updateGeneratedSpeechText(liveTurn, event) {
   if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
     return;
@@ -1334,6 +1266,17 @@ function semanticLabelFromPayloadEntry(entry, fallback) {
   );
 }
 
+// Null-returning wrappers over shared text utilities.
+// app.js uses these in `??` chains where an absent value must short-circuit
+// to the next candidate; the shared versions return "" for absent.
+function transcriptCandidateText(candidate) {
+  return normalizeSemanticText(_transcriptCandidateText(candidate));
+}
+
+function wordStreamText(words) {
+  return normalizeSemanticText(_wordStreamText(words));
+}
+
 function turnTranscriptText(liveTurn) {
   if (!liveTurn) {
     return null;
@@ -1343,42 +1286,6 @@ function turnTranscriptText(liveTurn) {
     wordStreamText(liveTurn.latestWordStream?.words) ??
     transcriptCandidateText(liveTurn.transcriptCandidate)
   );
-}
-
-function transcriptCandidateText(candidate) {
-  if (!candidate || typeof candidate !== "object") {
-    return null;
-  }
-  return joinSemanticText(candidate.stable_text, candidate.unstable_text);
-}
-
-function wordStreamText(words) {
-  if (!Array.isArray(words) || words.length === 0) {
-    return null;
-  }
-  return joinWordTexts(words.map((word) => word?.text));
-}
-
-function joinSemanticText(...parts) {
-  return normalizeSemanticText(parts.filter((part) => typeof part === "string" && part.trim()).join(" "));
-}
-
-function joinWordTexts(words) {
-  const text = words
-    .filter((word) => typeof word === "string" && word.trim())
-    .reduce((acc, word) => {
-      const trimmed = word.trim();
-      return acc + (/^[,.;:!?)]/.test(trimmed) ? trimmed : `${acc ? " " : ""}${trimmed}`);
-    }, "");
-  return normalizeSemanticText(text);
-}
-
-function normalizeSemanticText(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const text = value.replace(/\s+/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
-  return text.length > 0 ? text : null;
 }
 
 function togglePlayback() {

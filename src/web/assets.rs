@@ -20,3 +20,13 @@ pub(super) const LIVE_TRACE_SAMPLE_VIEWER_JSON: &str = include_str!(
     "../../examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json"
 );
 pub(super) const WELCOME_WAV: &[u8] = include_bytes!("../../welcome.wav");
+// Shared live-event model (web/browser-transcript-player/shared/events/)
+pub(super) const SHARED_EVENTS_SCHEMA_MJS: &str = include_str!(
+    "../../web/browser-transcript-player/shared/events/schema.mjs"
+);
+pub(super) const SHARED_EVENTS_REDUCERS_MJS: &str = include_str!(
+    "../../web/browser-transcript-player/shared/events/reducers.mjs"
+);
+pub(super) const SHARED_EVENTS_SELECTORS_MJS: &str = include_str!(
+    "../../web/browser-transcript-player/shared/events/selectors.mjs"
+);

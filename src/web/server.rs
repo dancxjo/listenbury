@@ -297,6 +297,19 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_MODEL_JS,
         ),
+        // Shared live-event model modules
+        "/assets/shared/events/schema.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SHARED_EVENTS_SCHEMA_MJS,
+        ),
+        "/assets/shared/events/reducers.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SHARED_EVENTS_REDUCERS_MJS,
+        ),
+        "/assets/shared/events/selectors.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SHARED_EVENTS_SELECTORS_MJS,
+        ),
         "/styles.css" | "/assets/styles.css" => {
             HttpResponse::ok("text/css; charset=utf-8", assets::STYLES_CSS)
         }
@@ -541,6 +554,23 @@ mod tests {
         let styles = route_request("GET", "/assets/screenplay.css", &state);
         assert_eq!(styles.status, 200);
         assert_eq!(styles.content_type, "text/css; charset=utf-8");
+    }
+
+    #[test]
+    fn serves_shared_live_events_modules() {
+        let state = live_state();
+
+        let schema = route_request("GET", "/assets/shared/events/schema.mjs", &state);
+        assert_eq!(schema.status, 200);
+        assert_eq!(schema.content_type, "application/javascript; charset=utf-8");
+
+        let reducers = route_request("GET", "/assets/shared/events/reducers.mjs", &state);
+        assert_eq!(reducers.status, 200);
+        assert_eq!(reducers.content_type, "application/javascript; charset=utf-8");
+
+        let selectors = route_request("GET", "/assets/shared/events/selectors.mjs", &state);
+        assert_eq!(selectors.status, 200);
+        assert_eq!(selectors.content_type, "application/javascript; charset=utf-8");
     }
 
     #[test]
