@@ -292,5 +292,5 @@ function reverseBits(value, width) {
 }
 
 function nearestPowerOfTwo(value) {
-  return 2 ** Math.ceil(Math.log2(Math.max(2, value)));
+  return 2 ** Math.ceil(Math.log2(Math.max(1, value)));
 }

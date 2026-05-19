@@ -3708,12 +3708,14 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   const headerEl = document.createElement("div");
   headerEl.className = "lane-header waveform-panel-header";
   const h2El = document.createElement("h2");
-  h2El.textContent = "Waveform + Spectrogram";
+  h2El.textContent = "Waveform & Spectrogram";
   headerEl.append(h2El);
   const metaEl = document.createElement("div");
   metaEl.className = "lane-meta";
   if (state.waveform.status === "ready") {
-    metaEl.textContent = `${(state.waveform.durationMs / 1000).toFixed(2)} s · ${spectrogramLevel?.fftSize ?? "FFT"} FFT`;
+    metaEl.textContent = spectrogramLevel
+      ? `${(state.waveform.durationMs / 1000).toFixed(2)} s · ${spectrogramLevel.fftSize} FFT`
+      : `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
   } else if (state.waveform.status === "loading") {
     metaEl.textContent = "Loading audio…";
   } else if (uiState.liveMode && state.payload?.audio?.url) {
