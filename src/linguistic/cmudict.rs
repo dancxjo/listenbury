@@ -188,6 +188,17 @@ impl OrthographyToPhonemes for CmudictPronouncer {
         ))
     }
 
+    /// Realize free-form text into phoneme text units.
+    ///
+    /// Tokenization rules:
+    /// - Alphabetic characters accumulate into the current word token.
+    /// - ASCII whitespace flushes the current word and inserts a
+    ///   [`PhonemeTextUnit::WordBoundary`] *between* consecutive words.
+    /// - `.`, `,`, `;`, `:`, `!`, `?` flush the current word and insert a
+    ///   [`PhonemeTextUnit::PhraseBoundary`].
+    /// - All other characters (digits, apostrophes, hyphens, etc.) are
+    ///   silently skipped.  Words that straddle such characters are treated as
+    ///   separate tokens (e.g. `"it's"` becomes two tokens: `"it"` and `"s"`).
     fn realize_text(
         &self,
         variety: &LinguisticVariety,
