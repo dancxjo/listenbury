@@ -3082,7 +3082,8 @@ function onTimelineClick(event) {
   const itemIndex = parseInt(chip.dataset.itemIndex, 10);
   const itemType = chip.dataset.itemType;
   if (itemType === "word") {
-    selectWord(laneIndex, itemIndex, true);
+    selectWord(laneIndex, itemIndex, false);
+    autoplayWordClip(laneIndex, itemIndex);
   } else {
     selectEvent(laneIndex, itemIndex, true);
   }
@@ -4119,6 +4120,19 @@ function playSelectedClip() {
     return;
   }
   playAudioClip(event.audio_ref, event.start_ms, event.end_ms, true);
+}
+
+function autoplayWordClip(laneIndex, wordIndex) {
+  const word = state.lanes[laneIndex]?.words?.[wordIndex];
+  if (!word || !audio.src) {
+    return;
+  }
+  const startMs = word.resolvedTiming.start_ms;
+  const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
+  audio.currentTime = startMs / 1000;
+  setPlaybackStop(startMs, endMs);
+  void audio.play();
+  refreshPlaybackState();
 }
 
 function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
