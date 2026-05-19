@@ -11,6 +11,7 @@ const eventCountEl = document.getElementById("event-count");
 const dotEl = document.getElementById("connection-dot");
 
 const RENDER_DEBOUNCE_MS = 60;
+const MAX_DELETED_SNIPPETS = 8;
 const PLACEHOLDER_SCENE_HEADING = "INT./EXT. LISTENBURY RUNTIME - PRESENT";
 const PLACEHOLDER_ACTION =
   "Scene headings and action are provisional until enough live context arrives to form scenes and an episode.";
@@ -92,6 +93,7 @@ function render() {
   scriptRoot.replaceChildren();
   if (!episode.scenes.length) {
     scriptRoot.append(sceneHeading(PLACEHOLDER_SCENE_HEADING), actionLine(PLACEHOLDER_ACTION));
+    appendPropositionBlock(scriptRoot);
     const empty = document.createElement("p");
     empty.className = "empty-page";
     empty.textContent = pageState.message;
@@ -99,6 +101,7 @@ function render() {
     return;
   }
 
+  appendPropositionBlock(scriptRoot);
   scriptRoot.append(episodeHeader(episode, manuscript));
   for (const scene of episode.scenes) {
     scriptRoot.append(sceneSection(scene));
@@ -212,6 +215,27 @@ function dialogueLine(segments) {
     line.append(span);
   }
   return line;
+}
+
+function appendPropositionBlock(parent) {
+  if (!session.proposition?.text) {
+    return;
+  }
+
+  const block = document.createElement("section");
+  block.className = "turn proposition-turn";
+  block.append(characterCue("PROPOSITION"), dialogueLine(propositionSegments()));
+  parent.append(block);
+}
+
+function propositionSegments() {
+  const segments = [{ text: session.proposition.text, className: "prospective-asr" }];
+  for (const item of session.propositionDeleted.slice(-MAX_DELETED_SNIPPETS)) {
+    if (item.text) {
+      segments.push({ text: item.text, className: "deleted" });
+    }
+  }
+  return segments;
 }
 
 function formatEpisodeMetadata(episode, manuscript) {

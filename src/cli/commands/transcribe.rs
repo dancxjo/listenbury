@@ -18,9 +18,19 @@ pub(crate) fn run_transcribe(command: TranscribeCommand) -> Result<()> {
             seconds: command.seconds,
             until_ctrl_c: command.until_ctrl_c,
             whisper_model: command.whisper_model,
+            refine_whisper_model: command.refine_whisper_model,
+            refine_window_seconds: command.refine_window_seconds,
+            refine_interval_ms: command.refine_interval_ms,
             vad: command.vad,
+            web: command.web,
+            web_host: command.web_host,
+            web_port: command.web_port,
         });
     };
+    anyhow::ensure!(
+        !command.web,
+        "`transcribe --web` is microphone-only; omit the input WAV path"
+    );
 
     let model_path = resolve_whisper_model(command.whisper_model)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&model_path)

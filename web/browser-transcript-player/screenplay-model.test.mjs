@@ -98,6 +98,20 @@ test("scene boundaries revise retroactively as more context arrives", () => {
   assert.match(revisedEpisode.summary, /WAVEDECK INSPECTION → QUIET GRIEF/);
 });
 
+test("transcript propositions stay available without becoming screenplay beats", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript_proposition", 1, 100, { text: "hello worl" }));
+  reduceNarrativeEvent(session, mkEvent("transcript_proposition", 1, 120, { text: "hello world" }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  assert.equal(session.proposition.text, "hello world");
+  assert.deepEqual(
+    session.propositionDeleted.map((entry) => entry.text),
+    ["worl"],
+  );
+  assert.equal(episode.scenes.length, 0);
+});
+
 test("episodes assemble into chapters and manuscript structure", () => {
   const episode1 = buildWaveDeckEpisode(1);
   const episode2 = buildWaveDeckEpisode(2);

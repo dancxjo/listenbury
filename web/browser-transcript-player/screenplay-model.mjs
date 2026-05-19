@@ -61,6 +61,8 @@ const FALLBACK_TOPIC = {
 export function createNarrativeSession() {
   return {
     turns: new Map(),
+    proposition: null,
+    propositionDeleted: [],
     sourceEvents: [],
     eventCount: 0,
     nextSourceSequence: 1,
@@ -82,6 +84,18 @@ export function reduceNarrativeEvent(session, event) {
   turn.startedAtMs = minNumber(turn.startedAtMs, numericMs(sourceEvent.elapsed_ms));
   turn.endedAtMs = maxNumber(turn.endedAtMs, numericMs(sourceEvent.elapsed_ms));
   registerEventSignals(turn, sourceEvent);
+
+  if (sourceEvent.kind === "transcript_proposition" && textContent(sourceEvent.text)) {
+    const next = textContent(sourceEvent.text);
+    recordDeletedText(session.propositionDeleted, deletedTextBetween(session.proposition?.text ?? "", next), sourceEvent.elapsed_ms);
+    session.proposition = {
+      text: next,
+      source: textContent(sourceEvent.artifact?.source) || "refinement",
+      elapsedMs: sourceEvent.elapsed_ms ?? 0,
+      sourceId: sourceEvent.sourceId,
+    };
+    return;
+  }
 
   if (sourceEvent.kind === "transcript_candidate") {
     applyTranscriptCandidate(turn, sourceEvent);
