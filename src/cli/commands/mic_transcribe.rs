@@ -14,7 +14,9 @@ use listenbury::audio::ring::make_audio_ring;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::event::HearingEvent;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+use listenbury::hearing::breath::{
+    BreathGroupConfig, BreathGroupId, BreathGroupSegmenter, DEFAULT_VAD_FRAME_MS,
+};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -57,6 +59,8 @@ const MONO_CHANNELS: u16 = 1;
 const WEB_TRANSCRIBE_PROSPECTIVE_INITIAL_MS: u64 = 300;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 const WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS: u64 = 250;
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+const WEB_TRANSCRIBE_MAX_GROUP_MS: u64 = 6_000;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct MicTranscribeState {
@@ -639,7 +643,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let mut state = WebTranscribeState {
         vad: create_vad_backend(vad_backend)?,
-        segmenter: BreathGroupSegmenter::default(),
+        segmenter: BreathGroupSegmenter::new(web_transcribe_breath_group_config()),
         active_groups: HashMap::new(),
         frame_time_ms: 0,
         last_vad_state: None,
@@ -733,7 +737,9 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
     let frame_duration_ms = frame_duration_ms(&frame);
     let vad_result = state.vad.process_frame(&frame)?;
 
-    if state.last_vad_state != Some(vad_result.is_speech) {
+    if listenbury::developer_diagnostics_enabled()
+        && state.last_vad_state != Some(vad_result.is_speech)
+    {
         println!(
             "vad t_ms={} speech={} prob={:.3}",
             state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
@@ -903,10 +909,12 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
         let mut event = state.live_trace.event(turn, kind, ExactTimestamp::now());
         event.confidence = Some(vad_result.speech_prob);
         state.live_trace.emit(event)?;
-        println!(
-            "vad t_ms={} speech={} prob={:.3}",
-            state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
-        );
+        if listenbury::developer_diagnostics_enabled() {
+            println!(
+                "vad t_ms={} speech={} prob={:.3}",
+                state.frame_time_ms, vad_result.is_speech, vad_result.speech_prob
+            );
+        }
         state.last_vad_state = Some(vad_result.is_speech);
     }
 
@@ -1010,6 +1018,18 @@ fn emit_web_transcribe_output(
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn web_transcribe_breath_group_config() -> BreathGroupConfig {
+    let mut config = BreathGroupConfig::default();
+    config.max_group_frames = Some(
+        WEB_TRANSCRIBE_MAX_GROUP_MS
+            .div_ceil(DEFAULT_VAD_FRAME_MS)
+            .try_into()
+            .unwrap_or(usize::MAX),
+    );
+    config
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]

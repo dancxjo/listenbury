@@ -5,7 +5,15 @@ use anyhow::Context;
 #[cfg(feature = "vad-webrtc")]
 const WEBRTC_ENERGY_FALLBACK_THRESHOLD_RMS: f32 = 0.08;
 #[cfg(feature = "vad-webrtc")]
-const WEBRTC_MIN_SPEECH_RMS: f32 = 0.015;
+const WEBRTC_MIN_SPEECH_RMS: f32 = 0.025;
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_INITIAL_NOISE_FLOOR_RMS: f32 = 0.006;
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_NOISE_GATE_MULTIPLIER: f32 = 1.8;
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_NOISE_GATE_MARGIN_RMS: f32 = 0.006;
+#[cfg(feature = "vad-webrtc")]
+const WEBRTC_NOISE_FLOOR_ALPHA: f32 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VadBackendKind {
@@ -117,6 +125,7 @@ pub struct WebRtcVad {
     engine: webrtc_vad::Vad,
     sample_rate_hz: Option<u32>,
     energy_fallback: EnergyVad,
+    noise_floor_rms: f32,
 }
 
 #[cfg(feature = "vad-webrtc")]
@@ -126,7 +135,24 @@ impl Default for WebRtcVad {
             engine: webrtc_vad::Vad::new_with_mode(webrtc_vad::VadMode::VeryAggressive),
             sample_rate_hz: None,
             energy_fallback: EnergyVad::new(WEBRTC_ENERGY_FALLBACK_THRESHOLD_RMS),
+            noise_floor_rms: WEBRTC_INITIAL_NOISE_FLOOR_RMS,
         }
+    }
+}
+
+#[cfg(feature = "vad-webrtc")]
+impl WebRtcVad {
+    fn speech_gate_rms(&self) -> f32 {
+        WEBRTC_MIN_SPEECH_RMS.max(
+            self.noise_floor_rms
+                .mul_add(WEBRTC_NOISE_GATE_MULTIPLIER, WEBRTC_NOISE_GATE_MARGIN_RMS),
+        )
+    }
+
+    fn observe_noise_floor(&mut self, rms: f32) {
+        self.noise_floor_rms =
+            (self.noise_floor_rms * (1.0 - WEBRTC_NOISE_FLOOR_ALPHA))
+                + (rms * WEBRTC_NOISE_FLOOR_ALPHA);
     }
 }
 
@@ -168,11 +194,15 @@ impl VoiceActivityDetector for WebRtcVad {
             .is_voice_segment(&mono_i16)
             .map_err(|_| anyhow::anyhow!("invalid WebRTC VAD frame length"))?;
         let fallback = self.energy_fallback.process_frame(&centered_frame)?;
-        let is_speech =
-            (is_webrtc_speech && centered_rms >= WEBRTC_MIN_SPEECH_RMS) || fallback.is_speech;
+        let speech_gate_rms = self.speech_gate_rms();
+        let is_gated_webrtc_speech = is_webrtc_speech && centered_rms >= speech_gate_rms;
+        let is_speech = is_gated_webrtc_speech || fallback.is_speech;
+        if !is_speech {
+            self.observe_noise_floor(centered_rms);
+        }
         Ok(VadResult {
             speech_prob: if is_webrtc_speech {
-                (centered_rms / WEBRTC_MIN_SPEECH_RMS).clamp(0.0, 1.0)
+                (centered_rms / speech_gate_rms).clamp(0.0, 1.0)
             } else {
                 fallback.speech_prob
             },
@@ -341,6 +371,42 @@ mod tests {
         let result = vad.process_frame(&frame).unwrap();
 
         assert!(!result.is_speech);
+    }
+
+    #[cfg(feature = "vad-webrtc")]
+    #[test]
+    fn webrtc_backend_rejects_fan_level_steady_energy() {
+        let mut vad = create_vad_backend(VadBackendKind::WebRtc).unwrap();
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: (0..160)
+                .map(|index| if index % 2 == 0 { 0.020 } else { -0.020 })
+                .collect(),
+        };
+
+        let result = vad.process_frame(&frame).unwrap();
+
+        assert!(!result.is_speech);
+        assert!(result.speech_prob < 1.0);
+    }
+
+    #[cfg(feature = "vad-webrtc")]
+    #[test]
+    fn webrtc_noise_gate_adapts_above_steady_background() {
+        let mut vad = WebRtcVad::default();
+        let initial_gate = vad.speech_gate_rms();
+
+        for _ in 0..100 {
+            vad.observe_noise_floor(0.020);
+        }
+
+        let adapted_gate = vad.speech_gate_rms();
+        assert!(initial_gate >= WEBRTC_MIN_SPEECH_RMS);
+        assert!(adapted_gate > initial_gate);
+        assert!(adapted_gate > 0.040);
+        assert!(adapted_gate < 0.045);
     }
 
     #[cfg(not(feature = "vad-webrtc"))]

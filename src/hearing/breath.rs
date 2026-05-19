@@ -21,6 +21,7 @@ pub enum BreathGroupEndReason {
 pub struct BreathGroupConfig {
     pub open_after_speech_frames: usize,
     pub close_after_silence_frames: usize,
+    pub max_group_frames: Option<usize>,
 }
 
 impl Default for BreathGroupConfig {
@@ -31,6 +32,7 @@ impl Default for BreathGroupConfig {
                 DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS,
                 DEFAULT_VAD_FRAME_MS,
             ),
+            max_group_frames: None,
         }
     }
 }
@@ -47,6 +49,7 @@ pub struct BreathGroupSegmenter {
     config: BreathGroupConfig,
     speech_frames: usize,
     silence_frames: usize,
+    active_group_frames: usize,
     active_group: Option<BreathGroupId>,
 }
 
@@ -56,6 +59,7 @@ impl BreathGroupSegmenter {
             config,
             speech_frames: 0,
             silence_frames: 0,
+            active_group_frames: 0,
             active_group: None,
         }
     }
@@ -65,15 +69,20 @@ impl BreathGroupSegmenter {
 
         if vad.is_speech {
             self.silence_frames = 0;
-            if let Some(_id) = self.active_group {
+            if let Some(id) = self.active_group {
+                self.active_group_frames = self.active_group_frames.saturating_add(1);
                 events.push(HearingEvent::SpeechContinued {
                     speech_prob: vad.speech_prob,
                 });
+                if self.group_timed_out() {
+                    self.close_active_group(&mut events, id, BreathGroupEndReason::Timeout);
+                }
             } else {
                 self.speech_frames += 1;
                 if self.speech_frames >= self.config.open_after_speech_frames {
                     let id = BreathGroupId(Uuid::new_v4());
                     self.active_group = Some(id);
+                    self.active_group_frames = 1;
                     self.speech_frames = 0;
                     events.push(HearingEvent::SpeechStarted);
                     events.push(HearingEvent::BreathGroupOpened { id });
@@ -84,21 +93,38 @@ impl BreathGroupSegmenter {
 
         self.speech_frames = 0;
         if let Some(id) = self.active_group {
+            self.active_group_frames = self.active_group_frames.saturating_add(1);
             if self.silence_frames == 0 {
                 events.push(HearingEvent::PauseStarted);
             }
             self.silence_frames += 1;
             if self.silence_frames >= self.config.close_after_silence_frames {
-                self.silence_frames = 0;
-                self.active_group = None;
-                events.push(HearingEvent::BreathGroupClosed {
-                    id,
-                    reason: BreathGroupEndReason::Silence,
-                });
+                self.close_active_group(&mut events, id, BreathGroupEndReason::Silence);
+            } else if self.group_timed_out() {
+                self.close_active_group(&mut events, id, BreathGroupEndReason::Timeout);
             }
         }
 
         events
+    }
+
+    fn group_timed_out(&self) -> bool {
+        self.config
+            .max_group_frames
+            .is_some_and(|max_group_frames| self.active_group_frames >= max_group_frames)
+    }
+
+    fn close_active_group(
+        &mut self,
+        events: &mut Vec<HearingEvent>,
+        id: BreathGroupId,
+        reason: BreathGroupEndReason,
+    ) {
+        self.speech_frames = 0;
+        self.silence_frames = 0;
+        self.active_group_frames = 0;
+        self.active_group = None;
+        events.push(HearingEvent::BreathGroupClosed { id, reason });
     }
 }
 
@@ -192,5 +218,28 @@ mod tests {
             BreathGroupConfig::default().close_after_silence_frames as u64 * DEFAULT_VAD_FRAME_MS,
             DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS
         );
+    }
+
+    #[test]
+    fn breath_group_closes_after_configured_timeout() {
+        let mut segmenter = BreathGroupSegmenter::new(BreathGroupConfig {
+            open_after_speech_frames: 3,
+            close_after_silence_frames: 100,
+            max_group_frames: Some(5),
+        });
+
+        let mut closed = None;
+        for _ in 0..7 {
+            let events = segmenter.process(speech());
+            closed = events.into_iter().find_map(|event| match event {
+                HearingEvent::BreathGroupClosed { reason, .. } => Some(reason),
+                _ => None,
+            });
+            if closed.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(closed, Some(BreathGroupEndReason::Timeout));
     }
 }
