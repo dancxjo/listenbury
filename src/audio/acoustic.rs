@@ -7,6 +7,13 @@ const DEFAULT_MAX_DB: f32 = 0.0;
 const ENERGY_WINDOW_MS: f32 = 20.0;
 const ENERGY_HOP_MS: f32 = 10.0;
 const ENERGY_DB_FLOOR: f32 = -120.0;
+const FORMANT_WINDOW_MS: f32 = 25.0;
+const FORMANT_HOP_MS: f32 = 10.0;
+const FORMANT_FFT_SIZE: usize = 2048;
+const FORMANT_MIN_HZ: f32 = 90.0;
+const FORMANT_MAX_HZ: f32 = 5_500.0;
+const FORMANT_MIN_SEPARATION_HZ: f32 = 250.0;
+const FORMANT_MAX_COUNT: usize = 4;
 const EPSILON: f64 = 1e-12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,6 +25,7 @@ pub struct AcousticAnalysis {
     pub spectrogram: SpectrogramAnalysis,
     pub energy_envelope: EnergyEnvelope,
     pub energy_landmarks: EnergyLandmarks,
+    pub formant_tracks: FormantTracks,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,6 +95,32 @@ pub struct EnergySilence {
     pub end_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormantTracks {
+    pub window_ms: f32,
+    pub hop_ms: f32,
+    pub method: String,
+    pub frames: Vec<FormantFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormantFrame {
+    pub frame_start_ms: u64,
+    pub frame_end_ms: u64,
+    pub rms_energy: f32,
+    pub formants: Vec<FormantEstimate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FormantEstimate {
+    pub label: String,
+    pub frequency_hz: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth_hz: Option<f32>,
+    pub amplitude_db: f32,
+    pub confidence: f32,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SpectrogramLevelConfig {
     id: &'static str,
@@ -104,6 +138,7 @@ pub fn analyze_mono_samples(samples: &[f32], sample_rate: u32) -> AcousticAnalys
     let spectrogram = analyze_spectrogram_samples(samples, sample_rate);
     let energy_envelope = build_energy_envelope(samples, sample_rate);
     let energy_landmarks = detect_energy_landmarks(&energy_envelope);
+    let formant_tracks = track_formants(samples, sample_rate);
     AcousticAnalysis {
         sample_rate,
         sample_count: samples.len(),
@@ -111,6 +146,7 @@ pub fn analyze_mono_samples(samples: &[f32], sample_rate: u32) -> AcousticAnalys
         spectrogram,
         energy_envelope,
         energy_landmarks,
+        formant_tracks,
     }
 }
 
@@ -376,6 +412,191 @@ fn detect_energy_landmarks(envelope: &EnergyEnvelope) -> EnergyLandmarks {
     landmarks
 }
 
+fn track_formants(samples: &[f32], sample_rate: u32) -> FormantTracks {
+    let window_samples = ((sample_rate as f32 * FORMANT_WINDOW_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    let hop_samples = ((sample_rate as f32 * FORMANT_HOP_MS) / 1000.0)
+        .round()
+        .max(1.0) as usize;
+    let fft_size = FORMANT_FFT_SIZE.max(window_samples.next_power_of_two());
+    let window = hann_window(window_samples);
+    let mut frames = Vec::new();
+
+    for frame_start in (0..samples.len()).step_by(hop_samples) {
+        let frame_end = samples.len().min(frame_start + window_samples);
+        if frame_end <= frame_start {
+            continue;
+        }
+        let rms = rms_energy(&samples[frame_start..frame_end]);
+        let formants = estimate_frame_formants(
+            samples,
+            sample_rate,
+            frame_start,
+            frame_end,
+            fft_size,
+            &window,
+            rms,
+        );
+        frames.push(FormantFrame {
+            frame_start_ms: (frame_start as u64 * 1000) / sample_rate as u64,
+            frame_end_ms: ((frame_end as u64 * 1000) / sample_rate as u64)
+                .max(((frame_start as u64 + 1) * 1000) / sample_rate as u64),
+            rms_energy: rms,
+            formants,
+        });
+    }
+
+    FormantTracks {
+        window_ms: FORMANT_WINDOW_MS,
+        hop_ms: FORMANT_HOP_MS,
+        method: "smoothed-spectrum-peaks".to_string(),
+        frames,
+    }
+}
+
+fn estimate_frame_formants(
+    samples: &[f32],
+    sample_rate: u32,
+    frame_start: usize,
+    frame_end: usize,
+    fft_size: usize,
+    window: &[f64],
+    rms: f32,
+) -> Vec<FormantEstimate> {
+    if rms <= 0.000_1 {
+        return Vec::new();
+    }
+
+    let mut real = vec![0.0f64; fft_size];
+    let mut imag = vec![0.0f64; fft_size];
+    for (index, sample_index) in (frame_start..frame_end).enumerate() {
+        real[index] = f64::from(samples[sample_index]) * window[index];
+    }
+    fft_in_place(&mut real, &mut imag);
+
+    let bin_hz = sample_rate as f32 / fft_size as f32;
+    let min_bin = ((FORMANT_MIN_HZ / bin_hz).floor() as usize).max(1);
+    let max_bin =
+        ((FORMANT_MAX_HZ.min(sample_rate as f32 / 2.0) / bin_hz).ceil() as usize).min(fft_size / 2);
+    if max_bin <= min_bin + 2 {
+        return Vec::new();
+    }
+
+    let magnitudes_db = (0..=fft_size / 2)
+        .map(|bin| {
+            let magnitude = real[bin].hypot(imag[bin]) / (frame_end - frame_start).max(1) as f64;
+            (20.0 * (magnitude + EPSILON).log10()) as f32
+        })
+        .collect::<Vec<_>>();
+    let smoothing_bins = ((150.0 / bin_hz).round() as usize).max(2);
+    let smoothed = smooth_spectrum_db(&magnitudes_db, smoothing_bins);
+    let noise_floor = percentile(&smoothed[min_bin..=max_bin], 0.20);
+
+    let mut peaks = Vec::<FormantPeak>::new();
+    for bin in (min_bin + 1)..max_bin {
+        let value = smoothed[bin];
+        if value <= smoothed[bin - 1] || value < smoothed[bin + 1] {
+            continue;
+        }
+        let prominence_db = value - noise_floor;
+        if prominence_db < 3.0 {
+            continue;
+        }
+        peaks.push(FormantPeak {
+            frequency_hz: bin as f32 * bin_hz,
+            amplitude_db: value,
+            bandwidth_hz: estimate_bandwidth_hz(&smoothed, bin, min_bin, max_bin, bin_hz),
+            confidence: (prominence_db / 24.0).clamp(0.0, 1.0),
+        });
+    }
+
+    peaks.sort_by(|left, right| right.confidence.total_cmp(&left.confidence));
+    let mut selected = Vec::<FormantPeak>::new();
+    for peak in peaks {
+        if selected
+            .iter()
+            .any(|prior| (prior.frequency_hz - peak.frequency_hz).abs() < FORMANT_MIN_SEPARATION_HZ)
+        {
+            continue;
+        }
+        selected.push(peak);
+        if selected.len() >= FORMANT_MAX_COUNT {
+            break;
+        }
+    }
+    selected.sort_by(|left, right| left.frequency_hz.total_cmp(&right.frequency_hz));
+    selected
+        .into_iter()
+        .enumerate()
+        .map(|(index, peak)| FormantEstimate {
+            label: format!("F{}", index + 1),
+            frequency_hz: peak.frequency_hz,
+            bandwidth_hz: Some(peak.bandwidth_hz),
+            amplitude_db: peak.amplitude_db,
+            confidence: peak.confidence,
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FormantPeak {
+    frequency_hz: f32,
+    amplitude_db: f32,
+    bandwidth_hz: f32,
+    confidence: f32,
+}
+
+fn rms_energy(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum_squares = samples.iter().map(|sample| sample * sample).sum::<f32>();
+    (sum_squares / samples.len() as f32).sqrt()
+}
+
+fn smooth_spectrum_db(values: &[f32], radius: usize) -> Vec<f32> {
+    let mut smoothed = Vec::with_capacity(values.len());
+    for index in 0..values.len() {
+        let start = index.saturating_sub(radius);
+        let end = (index + radius).min(values.len().saturating_sub(1));
+        let count = (end - start + 1) as f32;
+        let sum = values[start..=end].iter().sum::<f32>();
+        smoothed.push(sum / count);
+    }
+    smoothed
+}
+
+fn estimate_bandwidth_hz(
+    spectrum_db: &[f32],
+    peak_bin: usize,
+    min_bin: usize,
+    max_bin: usize,
+    bin_hz: f32,
+) -> f32 {
+    let half_power_db = spectrum_db[peak_bin] - 3.0;
+    let mut left = peak_bin;
+    while left > min_bin && spectrum_db[left] > half_power_db {
+        left -= 1;
+    }
+    let mut right = peak_bin;
+    while right < max_bin && spectrum_db[right] > half_power_db {
+        right += 1;
+    }
+    ((right.saturating_sub(left)).max(1) as f32 * bin_hz).max(bin_hz)
+}
+
+fn percentile(values: &[f32], percentile: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|left, right| left.total_cmp(right));
+    let index =
+        ((sorted.len().saturating_sub(1)) as f32 * percentile.clamp(0.0, 1.0)).round() as usize;
+    sorted[index]
+}
+
 fn frame_count_for_sample_count(sample_count: usize, hop_size: usize) -> usize {
     if sample_count == 0 {
         0
@@ -465,5 +686,43 @@ mod tests {
         assert!(analysis.spectrogram.levels[0].hop_ms > analysis.spectrogram.levels[1].hop_ms);
         assert!(analysis.spectrogram.levels[1].hop_ms > analysis.spectrogram.levels[2].hop_ms);
         assert!(!analysis.energy_envelope.frames.is_empty());
+        assert!(!analysis.formant_tracks.frames.is_empty());
+        assert_eq!(analysis.formant_tracks.method, "smoothed-spectrum-peaks");
+    }
+
+    #[test]
+    fn tracks_ordered_formant_estimates_in_acoustic_artifact() {
+        let sample_rate_hz = 16_000;
+        let samples = (0..3200)
+            .map(|index| {
+                let t = index as f32 / sample_rate_hz as f32;
+                (2.0 * std::f32::consts::PI * 700.0 * t).sin() * 0.6
+                    + (2.0 * std::f32::consts::PI * 1_250.0 * t).sin() * 0.35
+                    + (2.0 * std::f32::consts::PI * 2_600.0 * t).sin() * 0.25
+            })
+            .collect::<Vec<_>>();
+
+        let analysis = analyze_mono_samples(&samples, sample_rate_hz);
+        let frame = analysis
+            .formant_tracks
+            .frames
+            .iter()
+            .find(|frame| !frame.formants.is_empty())
+            .expect("at least one voiced frame should expose formant estimates");
+
+        assert!(frame.formants.len() <= FORMANT_MAX_COUNT);
+        for (index, formant) in frame.formants.iter().enumerate() {
+            assert_eq!(formant.label, format!("F{}", index + 1));
+            assert!(formant.frequency_hz >= FORMANT_MIN_HZ);
+            assert!(formant.frequency_hz <= FORMANT_MAX_HZ);
+            assert!(formant.confidence >= 0.0);
+            assert!(formant.confidence <= 1.0);
+            if let Some(previous) = index.checked_sub(1).and_then(|i| frame.formants.get(i)) {
+                assert!(previous.frequency_hz < formant.frequency_hz);
+            }
+        }
+
+        let json = serde_json::to_string(&analysis).expect("serialize analysis");
+        assert!(json.contains("\"formantTracks\""));
     }
 }
