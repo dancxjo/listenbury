@@ -555,6 +555,31 @@ mod tests {
     }
 
     #[test]
+    fn demo_shows_provisional_to_committed_to_revised_span() {
+        let mut span = Span::new_provisional(
+            SpanId(30),
+            TextId(11),
+            Modality::Word,
+            Cursor(4),
+            Some(Cursor(8)),
+            "hello".to_string(),
+            0.65,
+            0.35,
+        );
+
+        assert_eq!(span.state, SpanState::Hypothesis);
+        assert!(span.stabilize());
+        assert!(span.commit());
+
+        assert!(span.revise(Cursor(4), Some(Cursor(9)), "hello!".to_string(), 0.95, 0.9));
+        assert_eq!(span.state, SpanState::Revised);
+        assert_eq!(span.contents, "hello!");
+        assert_eq!(span.revisions.len(), 1);
+        assert_eq!(span.revisions[0].state, SpanState::Committed);
+        assert_eq!(span.revisions[0].contents, "hello");
+    }
+
+    #[test]
     fn can_mark_any_span_as_needs_review() {
         let mut span = Span::new_hypothesis(
             SpanId(4),
@@ -880,5 +905,63 @@ mod tests {
             .reconstruct_path(audio, phoneme)
             .expect("reverse path exists");
         assert_eq!(audio_to_phoneme, vec![audio, word, phoneme]);
+    }
+
+    #[test]
+    fn aligns_multiple_modalities_under_one_text_id() {
+        let text_id = TextId(77);
+        let audio = Span::new_provisional(
+            SpanId(500),
+            text_id,
+            Modality::Audio,
+            Cursor(0),
+            Some(Cursor(200)),
+            "audio[0..200]".to_string(),
+            0.99,
+            0.99,
+        );
+        let word = Span::new_provisional(
+            SpanId(501),
+            text_id,
+            Modality::Word,
+            Cursor(40),
+            Some(Cursor(64)),
+            "hello".to_string(),
+            0.93,
+            0.8,
+        );
+        let phoneme = Span::new_provisional(
+            SpanId(502),
+            text_id,
+            Modality::Phoneme,
+            Cursor(40),
+            Some(Cursor(64)),
+            "həˈloʊ".to_string(),
+            0.91,
+            0.78,
+        );
+
+        assert_eq!(audio.text_id, word.text_id);
+        assert_eq!(word.text_id, phoneme.text_id);
+
+        let mut graph = AlignmentGraph::new();
+        graph.add_alignment(Alignment::new(
+            audio.id,
+            word.id,
+            0.94,
+            AlignmentKind::Contains,
+        ));
+        graph.add_alignment(Alignment::new(
+            phoneme.id,
+            word.id,
+            0.92,
+            AlignmentKind::Equivalent,
+        ));
+
+        assert_eq!(graph.aligned_targets(audio.id), vec![word.id]);
+        let phoneme_to_audio = graph
+            .reconstruct_path(phoneme.id, audio.id)
+            .expect("path across modalities exists");
+        assert_eq!(phoneme_to_audio, vec![phoneme.id, word.id, audio.id]);
     }
 }
