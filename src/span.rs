@@ -329,7 +329,7 @@ impl<T: Clone> Span<T> {
     ) -> bool {
         if !matches!(
             self.state,
-            SpanState::Hypothesis | SpanState::Stable | SpanState::Committed | SpanState::Revised
+            SpanState::Stable | SpanState::Committed | SpanState::Revised
         ) {
             return false;
         }
@@ -367,6 +367,10 @@ impl<T: Clone> Span<T> {
         max_repair_attempts: u32,
     ) -> bool {
         if self.repair_attempts >= max_repair_attempts {
+            return false;
+        }
+
+        if matches!(self.state, SpanState::Hypothesis) && !self.stabilize() {
             return false;
         }
 
@@ -445,7 +449,6 @@ where
     };
 
     let mut queue = VecDeque::from([(source_span_id, root, 0usize)]);
-    let mut seen = HashSet::from([source_span_id]);
 
     while let Some((current_id, current_source, depth)) = queue.pop_front() {
         if depth >= max_depth {
@@ -453,10 +456,6 @@ where
         }
 
         for target_id in graph.aligned_targets(current_id) {
-            if !seen.insert(target_id) {
-                continue;
-            }
-
             let Some(target_snapshot) = spans.get(&target_id).cloned() else {
                 continue;
             };
