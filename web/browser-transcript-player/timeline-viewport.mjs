@@ -28,6 +28,19 @@ export class TimeScale {
       widthPx: Math.max(minWidthPx, this.durationToPx(end - start)),
     };
   }
+
+  waveformPeakIndexAtPx(px, { audioDurationMs, peakCount }) {
+    const duration = Math.max(0, clampFinite(audioDurationMs, 0));
+    const count = Math.max(0, Math.floor(clampFinite(peakCount, 0)));
+    if (duration <= 0 || count <= 0) {
+      return null;
+    }
+    const timeMs = clampFinite(px, 0) / this.pxPerMs;
+    if (timeMs < 0 || timeMs > duration) {
+      return null;
+    }
+    return Math.min(count - 1, Math.floor((timeMs / duration) * count));
+  }
 }
 
 export class TimelineViewport {
@@ -69,6 +82,12 @@ export function createTimeScale(options) {
 
 export function createTimelineViewport(options) {
   return new TimelineViewport(options);
+}
+
+export function renderedCanvasXToTimelinePx({ canvasX, canvasWidthPx, renderedWidthPx }) {
+  const width = Math.max(1, clampFinite(canvasWidthPx, 1));
+  const rendered = Math.max(1, clampFinite(renderedWidthPx, width));
+  return clampFinite(canvasX, 0) * (rendered / width);
 }
 
 function clampFinite(value, fallback) {

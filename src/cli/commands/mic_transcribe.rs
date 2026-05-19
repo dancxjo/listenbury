@@ -100,6 +100,7 @@ struct WebTranscribeState {
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct ActiveWebTranscribeGroup {
     frames: Vec<AudioFrame>,
+    opened_at_ms: u64,
     next_prospective_at_ms: u64,
 }
 
@@ -116,6 +117,7 @@ impl ActiveWebTranscribeGroup {
     fn new(opened_at_ms: u64) -> Self {
         Self {
             frames: Vec::new(),
+            opened_at_ms,
             next_prospective_at_ms: opened_at_ms
                 .saturating_add(WEB_TRANSCRIBE_PROSPECTIVE_INITIAL_MS),
         }
@@ -966,14 +968,15 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
     for group in state.active_groups.values_mut() {
         group.frames.push(frame.clone());
         if state.frame_time_ms >= group.next_prospective_at_ms {
-            prospective_groups.push(group.frames.clone());
+            prospective_groups.push((group.frames.clone(), group.opened_at_ms));
             group.next_prospective_at_ms = state
                 .frame_time_ms
                 .saturating_add(WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS);
         }
     }
-    for frames in prospective_groups {
-        let output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
+    for (frames, opened_at_ms) in prospective_groups {
+        let mut output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
+        offset_transcript_words_to_session(&mut output.words, opened_at_ms);
         emit_web_transcribe_output(state, output, false, ExactTimestamp::now())?;
     }
 
@@ -990,7 +993,8 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
             state.live_trace.emit(trace_event)?;
 
             if let Some(group) = state.active_groups.remove(&id) {
-                let output = transcribe_group(&group.frames, &mut state.recognizer)?;
+                let mut output = transcribe_group(&group.frames, &mut state.recognizer)?;
+                offset_transcript_words_to_session(&mut output.words, group.opened_at_ms);
                 let finalized_text = output.text.clone();
                 if confirms_existing_finalized_segments(state, &finalized_text) {
                     let segment_count = state.finalized_segments.len();
@@ -1065,6 +1069,17 @@ fn emit_web_transcribe_output(
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn offset_transcript_words_to_session(words: &mut [TranscriptWord], offset_ms: u64) {
+    if offset_ms == 0 {
+        return;
+    }
+    for word in words {
+        word.start_ms = word.start_ms.map(|start| start.saturating_add(offset_ms));
+        word.end_ms = word.end_ms.map(|end| end.saturating_add(offset_ms));
+    }
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]

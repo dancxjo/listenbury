@@ -1,6 +1,10 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 import cytoscape from "https://esm.sh/cytoscape@3.30.2";
-import { createTimeScale, createTimelineViewport } from "/assets/timeline-viewport.mjs";
+import {
+  createTimeScale,
+  createTimelineViewport,
+  renderedCanvasXToTimelinePx,
+} from "/assets/timeline-viewport.mjs";
 import {
   AlignmentKind,
   SpanModality,
@@ -1719,7 +1723,7 @@ function audioDurationMs() {
   return Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0;
 }
 
-function seekSessionAudioToMs(startMs, options = {}) {
+async function seekSessionAudioToMs(startMs, options = {}) {
   if (!audio.src) {
     return false;
   }
@@ -1727,29 +1731,115 @@ function seekSessionAudioToMs(startMs, options = {}) {
   const targetMs = Math.max(0, startMs);
   const stopAtMs = options.stopAtMs ?? null;
   const autoplay = options.autoplay ?? false;
-  const applySeek = () => {
-    audio.currentTime = targetMs / 1000;
-    if (stopAtMs !== null) {
-      setPlaybackStop(targetMs, stopAtMs);
-    }
-    if (autoplay) {
-      void audio.play();
-    }
-    refreshPlaybackState();
-  };
+  audio.pause();
+  clearPlaybackStop();
 
   const currentAudioUrl = new URL(audio.src, window.location.href);
   const isLiveAudio = currentAudioUrl.pathname === "/api/live-session-audio.wav";
   const needsFreshLiveSnapshot = isLiveAudio && audioDurationMs() < targetMs + 50;
   if (needsFreshLiveSnapshot) {
-    audio.addEventListener("loadedmetadata", applySeek, { once: true });
+    const loaded = waitForAudioEvent(["loadedmetadata", "canplay", "canplaythrough"], 2_000);
     audio.src = liveAudioPlaybackUrl();
     audio.load();
-    return true;
+    await loaded;
+  } else if (audio.readyState < 1) {
+    await waitForAudioEvent(["loadedmetadata", "canplay", "canplaythrough"], 2_000);
   }
 
-  applySeek();
+  if (audioDurationMs() > 0 && targetMs > audioDurationMs() + 50) {
+    uiState.statusMessage = "Audio for that word is still loading.";
+    renderShell();
+    return false;
+  }
+
+  const targetSeconds = targetMs / 1000;
+  try {
+    if (typeof audio.fastSeek === "function") {
+      audio.fastSeek(targetSeconds);
+    } else {
+      audio.currentTime = targetSeconds;
+    }
+  } catch (err) {
+    console.warn("Unable to seek session audio:", err);
+    return false;
+  }
+
+  const didSeek = await waitForAudioSeek(targetSeconds, 1_000);
+  if (!didSeek) {
+    console.warn(
+      `Session audio did not seek to ${targetSeconds.toFixed(3)}s; current time is ${audio.currentTime.toFixed(3)}s`,
+    );
+    return false;
+  }
+
+  if (stopAtMs !== null) {
+    setPlaybackStop(targetMs, stopAtMs);
+  }
+
+  if (autoplay) {
+    try {
+      await audio.play();
+    } catch (err) {
+      console.warn("Unable to play session audio:", err);
+    }
+  }
+  refreshPlaybackState();
   return true;
+}
+
+function waitForAudioEvent(eventNames, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      for (const name of eventNames) {
+        audio.removeEventListener(name, onEvent);
+      }
+      window.clearTimeout(timer);
+    };
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onEvent = () => finish();
+    for (const name of eventNames) {
+      audio.addEventListener(name, onEvent, { once: true });
+    }
+    const timer = window.setTimeout(finish, timeoutMs);
+  });
+}
+
+function waitForAudioSeek(targetSeconds, timeoutMs) {
+  if (Math.abs(audio.currentTime - targetSeconds) <= 0.02 && !audio.seeking) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const cleanup = () => {
+      audio.removeEventListener("seeked", onEvent);
+      window.clearTimeout(timer);
+    };
+    const finish = (didSeek) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve(didSeek);
+    };
+    const onEvent = () => {
+      if (Math.abs(audio.currentTime - targetSeconds) <= 0.05) {
+        finish(true);
+      }
+    };
+    audio.addEventListener("seeked", onEvent);
+    const timer = window.setTimeout(() => {
+      finish(Math.abs(audio.currentTime - targetSeconds) <= 0.05);
+    }, timeoutMs);
+  });
 }
 
 async function loadWaveform(url, options = {}) {
@@ -2866,17 +2956,37 @@ function appendWaveformOverlay(trackEl, trackContentWidth) {
   requestAnimationFrame(() => drawWaveformOverlay(canvas, trackContentWidth));
 }
 
+function waveformCanvasMetrics(canvas, trackContentWidth, fallbackHeightPx) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    renderedWidthPx: Math.max(1, trackContentWidth),
+    canvasWidthPx: Math.max(1, Math.round(Math.min(trackContentWidth, WAVEFORM_CANVAS_MAX_WIDTH_PX))),
+    cssHeight: Math.max(1, rect.height || fallbackHeightPx),
+  };
+}
+
+function waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks) {
+  const timelinePx = renderedCanvasXToTimelinePx({
+    canvasX: x,
+    canvasWidthPx,
+    renderedWidthPx,
+  });
+  const peakIndex = currentTimeScale().waveformPeakIndexAtPx(timelinePx, {
+    audioDurationMs: state.waveform.durationMs,
+    peakCount: peaks.length,
+  });
+  return peakIndex === null ? 0 : (peaks[peakIndex] ?? 0);
+}
+
 function drawWaveformOverlay(canvas, trackContentWidth) {
   const peaks = state.waveform.peaks;
   if (!peaks?.length) {
     return;
   }
 
-  const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.min(trackContentWidth, WAVEFORM_CANVAS_MAX_WIDTH_PX));
-  const cssHeight = Math.max(1, rect.height || 80);
+  const { renderedWidthPx, canvasWidthPx, cssHeight } = waveformCanvasMetrics(canvas, trackContentWidth, 80);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = Math.round(cssWidth * dpr);
+  canvas.width = Math.round(canvasWidthPx * dpr);
   canvas.height = Math.round(cssHeight * dpr);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
@@ -2884,19 +2994,16 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
   }
 
   ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.clearRect(0, 0, canvasWidthPx, cssHeight);
   ctx.strokeStyle = "rgba(99, 210, 255, 0.18)";
   ctx.lineWidth = 1;
   const centerY = cssHeight / 2;
   const maxAmp = cssHeight * 0.34;
-  const durationScale = state.maxDurationMs / Math.max(1, state.waveform.durationMs);
 
   ctx.beginPath();
-  for (let x = 0; x < cssWidth; x++) {
-    const timelineRatio = x / Math.max(1, cssWidth);
-    const audioRatio = Math.min(1, timelineRatio * durationScale);
-    const peakIndex = Math.min(peaks.length - 1, Math.floor(audioRatio * peaks.length));
-    const amp = Math.max(1, peaks[peakIndex] * maxAmp);
+  for (let x = 0; x < canvasWidthPx; x++) {
+    const peak = waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks);
+    const amp = peak <= 0 ? 0 : Math.max(1, peak * maxAmp);
     ctx.moveTo(x + 0.5, centerY - amp);
     ctx.lineTo(x + 0.5, centerY + amp);
   }
@@ -3039,11 +3146,9 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
  * visual timebase reference.
  */
 function drawCentralWaveform(canvas, trackContentWidth) {
-  const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.min(trackContentWidth, WAVEFORM_CANVAS_MAX_WIDTH_PX));
-  const cssHeight = Math.max(1, rect.height || 120);
+  const { renderedWidthPx, canvasWidthPx, cssHeight } = waveformCanvasMetrics(canvas, trackContentWidth, 120);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = Math.round(cssWidth * dpr);
+  canvas.width = Math.round(canvasWidthPx * dpr);
   canvas.height = Math.round(cssHeight * dpr);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
@@ -3051,7 +3156,7 @@ function drawCentralWaveform(canvas, trackContentWidth) {
   }
 
   ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.clearRect(0, 0, canvasWidthPx, cssHeight);
 
   const peaks = state.waveform.peaks;
   if (!peaks?.length) {
@@ -3060,23 +3165,20 @@ function drawCentralWaveform(canvas, trackContentWidth) {
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, cssHeight / 2);
-    ctx.lineTo(cssWidth, cssHeight / 2);
+    ctx.lineTo(canvasWidthPx, cssHeight / 2);
     ctx.stroke();
     return;
   }
 
   const centerY = cssHeight / 2;
   const maxAmp = cssHeight * 0.44;
-  const durationScale = state.maxDurationMs / Math.max(1, state.waveform.durationMs);
 
   // Pre-compute upper/lower envelope y-values
-  const topY = new Array(cssWidth);
-  const botY = new Array(cssWidth);
-  for (let x = 0; x < cssWidth; x++) {
-    const timelineRatio = x / Math.max(1, cssWidth);
-    const audioRatio = Math.min(1, timelineRatio * durationScale);
-    const peakIndex = Math.min(peaks.length - 1, Math.floor(audioRatio * peaks.length));
-    const amp = Math.max(0, peaks[peakIndex] * maxAmp);
+  const topY = new Array(canvasWidthPx);
+  const botY = new Array(canvasWidthPx);
+  for (let x = 0; x < canvasWidthPx; x++) {
+    const peak = waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks);
+    const amp = Math.max(0, peak * maxAmp);
     topY[x] = centerY - amp;
     botY[x] = centerY + amp;
   }
@@ -3085,10 +3187,10 @@ function drawCentralWaveform(canvas, trackContentWidth) {
   ctx.fillStyle = "rgba(99, 210, 255, 0.10)";
   ctx.beginPath();
   ctx.moveTo(0.5, topY[0]);
-  for (let x = 1; x < cssWidth; x++) {
+  for (let x = 1; x < canvasWidthPx; x++) {
     ctx.lineTo(x + 0.5, topY[x]);
   }
-  for (let x = cssWidth - 1; x >= 0; x--) {
+  for (let x = canvasWidthPx - 1; x >= 0; x--) {
     ctx.lineTo(x + 0.5, botY[x]);
   }
   ctx.closePath();
@@ -3099,7 +3201,7 @@ function drawCentralWaveform(canvas, trackContentWidth) {
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0.5, topY[0]);
-  for (let x = 1; x < cssWidth; x++) {
+  for (let x = 1; x < canvasWidthPx; x++) {
     ctx.lineTo(x + 0.5, topY[x]);
   }
   ctx.stroke();
@@ -3107,7 +3209,7 @@ function drawCentralWaveform(canvas, trackContentWidth) {
   // Stroked lower outline
   ctx.beginPath();
   ctx.moveTo(0.5, botY[0]);
-  for (let x = 1; x < cssWidth; x++) {
+  for (let x = 1; x < canvasWidthPx; x++) {
     ctx.lineTo(x + 0.5, botY[x]);
   }
   ctx.stroke();
@@ -3446,7 +3548,7 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
 
   state.selectedItem = { type: "word", laneIndex, itemIndex: wordIndex };
   if (seekAudio && audio.src) {
-    seekSessionAudioToMs(word.resolvedTiming.start_ms);
+    void seekSessionAudioToMs(word.resolvedTiming.start_ms);
   }
 
   clearPlaybackStop();
@@ -3474,7 +3576,7 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
     if (event.audio_ref?.url) {
       playAudioClip(event.audio_ref, event.start_ms, event.end_ms, false);
     } else if (audio.src) {
-      seekSessionAudioToMs(event.start_ms);
+      void seekSessionAudioToMs(event.start_ms);
     }
   }
 
@@ -4278,7 +4380,7 @@ function autoplayWordClip(laneIndex, wordIndex) {
   }
   const startMs = word.resolvedTiming.start_ms;
   const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
-  seekSessionAudioToMs(startMs, { stopAtMs: endMs, autoplay: true });
+  void seekSessionAudioToMs(startMs, { stopAtMs: endMs, autoplay: true });
 }
 
 function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {

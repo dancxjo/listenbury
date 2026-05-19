@@ -167,6 +167,26 @@ impl HttpResponse {
             headers: Vec::new(),
         }
     }
+
+    fn range_not_satisfiable(total_len: usize) -> Self {
+        Self {
+            status: 416,
+            reason: "Range Not Satisfiable",
+            content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
+            body: b"requested range not satisfiable\n".to_vec(),
+            headers: vec![
+                ("Accept-Ranges", "bytes".to_string()),
+                ("Content-Range", format!("bytes */{total_len}")),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteRange {
+    start: usize,
+    end: usize,
 }
 
 pub fn serve(config: ServeConfig) -> Result<()> {
@@ -196,6 +216,7 @@ pub fn bind(config: ServeConfig) -> Result<BoundServer> {
 
 fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result<()> {
     let mut first_line = String::new();
+    let mut headers = Vec::<(String, String)>::new();
     {
         let mut reader = BufReader::new(
             stream
@@ -205,6 +226,17 @@ fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result
         reader
             .read_line(&mut first_line)
             .context("read request line")?;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).context("read request header")?;
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = trimmed.split_once(':') {
+                headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
+            }
+        }
     }
 
     if first_line.trim().is_empty() {
@@ -224,9 +256,17 @@ fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result
         return handle_sse(stream, method, state);
     }
 
-    let response = route_request(method, target, state);
+    let range_header = request_header(&headers, "range");
+    let response = route_request_with_range(method, target, state, range_header);
     write_response(stream, &response, is_head)?;
     Ok(())
+}
+
+fn request_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) -> Result<()> {
@@ -299,7 +339,17 @@ fn write_response(stream: &mut TcpStream, response: &HttpResponse, is_head: bool
     Ok(())
 }
 
+#[cfg(test)]
 fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpResponse {
+    route_request_with_range(method, target, state, None)
+}
+
+fn route_request_with_range(
+    method: &str,
+    target: &str,
+    state: &Arc<ServerState>,
+    range_header: Option<&str>,
+) -> HttpResponse {
     if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
         return HttpResponse::method_not_allowed("only GET/HEAD are supported\n");
     }
@@ -364,9 +414,7 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/screenplay.css" | "/assets/screenplay.css" => {
             HttpResponse::ok("text/css; charset=utf-8", assets::SCREENPLAY_CSS)
         }
-        "/welcome.wav" | "/assets/welcome.wav" => {
-            HttpResponse::static_asset("audio/wav", assets::WELCOME_WAV)
-        }
+        "/welcome.wav" | "/assets/welcome.wav" => audio_response(assets::WELCOME_WAV, range_header),
         "/assets/index.html" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
 
         // Fixture files (organised under /fixtures/*)
@@ -409,13 +457,13 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
         "/api/live-session-audio.wav" => match load_live_session_audio(state) {
-            Ok(Some(audio)) => HttpResponse::ok("audio/wav", audio),
+            Ok(Some(audio)) => audio_response(audio, range_header),
             Ok(None) => HttpResponse::not_found("live session audio is not available yet\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
 
         _ if path.starts_with("/api/session-audio/") => match load_session_audio(path, state) {
-            Ok(Some(audio)) => HttpResponse::static_asset("audio/wav", audio),
+            Ok(Some(audio)) => audio_response(audio, range_header),
             Ok(None) => HttpResponse::not_found("session audio artifact not found\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
@@ -507,6 +555,84 @@ fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec
     let audio = std::fs::read(&audio_path)
         .with_context(|| format!("read session audio artifact {}", audio_path.display()))?;
     Ok(Some(audio))
+}
+
+fn audio_response(audio: impl Into<Vec<u8>>, range_header: Option<&str>) -> HttpResponse {
+    let audio = audio.into();
+    let total_len = audio.len();
+    let mut response = match parse_byte_range(range_header, total_len) {
+        Ok(Some(range)) => {
+            let body = audio[range.start..=range.end].to_vec();
+            HttpResponse {
+                status: 206,
+                reason: "Partial Content",
+                content_type: "audio/wav",
+                cache_control: "no-store",
+                body,
+                headers: vec![(
+                    "Content-Range",
+                    format!("bytes {}-{}/{}", range.start, range.end, total_len),
+                )],
+            }
+        }
+        Ok(None) => HttpResponse::ok("audio/wav", audio),
+        Err(()) => return HttpResponse::range_not_satisfiable(total_len),
+    };
+    response
+        .headers
+        .push(("Accept-Ranges", "bytes".to_string()));
+    response
+}
+
+fn parse_byte_range(
+    range_header: Option<&str>,
+    total_len: usize,
+) -> std::result::Result<Option<ByteRange>, ()> {
+    let Some(range_header) = range_header else {
+        return Ok(None);
+    };
+    if total_len == 0 {
+        return Err(());
+    }
+
+    let Some(spec) = range_header.trim().strip_prefix("bytes=") else {
+        return Err(());
+    };
+    if spec.contains(',') {
+        return Err(());
+    }
+    let Some((start_text, end_text)) = spec.split_once('-') else {
+        return Err(());
+    };
+
+    if start_text.is_empty() {
+        let suffix_len = end_text.parse::<usize>().map_err(|_| ())?;
+        if suffix_len == 0 {
+            return Err(());
+        }
+        let start = total_len.saturating_sub(suffix_len);
+        return Ok(Some(ByteRange {
+            start,
+            end: total_len - 1,
+        }));
+    }
+
+    let start = start_text.parse::<usize>().map_err(|_| ())?;
+    if start >= total_len {
+        return Err(());
+    }
+    let end = if end_text.is_empty() {
+        total_len - 1
+    } else {
+        end_text
+            .parse::<usize>()
+            .map_err(|_| ())?
+            .min(total_len - 1)
+    };
+    if end < start {
+        return Err(());
+    }
+    Ok(Some(ByteRange { start, end }))
 }
 
 #[cfg(test)]
@@ -737,6 +863,65 @@ mod tests {
         assert_eq!(response.content_type, "audio/wav");
         assert!(response.body.starts_with(b"RIFF"));
         assert!(response.body.windows(4).any(|window| window == b"data"));
+    }
+
+    #[test]
+    fn serves_live_session_audio_byte_ranges() {
+        let live_audio = LiveSessionAudioStore::new();
+        live_audio.push_frame(AudioFrame {
+            captured_at: crate::time::ExactTimestamp { unix_nanos: 0 },
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.0; 100],
+            voice_signatures: Vec::new(),
+        });
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+        });
+
+        let full = route_request("GET", "/api/live-session-audio.wav", &state);
+        let ranged = route_request_with_range(
+            "GET",
+            "/api/live-session-audio.wav",
+            &state,
+            Some("bytes=4-11"),
+        );
+
+        assert_eq!(ranged.status, 206);
+        assert_eq!(ranged.content_type, "audio/wav");
+        assert_eq!(ranged.body, full.body[4..=11]);
+        assert!(
+            ranged
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Accept-Ranges" && value == "bytes" })
+        );
+        assert!(
+            ranged
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Content-Range" && value == "bytes 4-11/244" })
+        );
+    }
+
+    #[test]
+    fn rejects_unsatisfiable_audio_byte_ranges() {
+        let response = route_request_with_range(
+            "GET",
+            "/welcome.wav",
+            &empty_state(),
+            Some("bytes=999999999-1000000000"),
+        );
+        assert_eq!(response.status, 416);
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Content-Range" && value.starts_with("bytes */") })
+        );
     }
 
     #[test]
