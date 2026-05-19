@@ -215,6 +215,12 @@ test("LIVE_EVENT_LANE maps event kinds to lanes", () => {
   assert.equal(LIVE_EVENT_LANE.playback_started, "Speaker");
   assert.equal(LIVE_EVENT_LANE.speech_started, "Mic");
   assert.equal(LIVE_EVENT_LANE.llm_generation_started, "LLM");
+  assert.equal(LIVE_EVENT_LANE["prosody.frame"], "Prosody");
+  assert.equal(LIVE_EVENT_LANE["prosody.contour"], "Prosody");
+  assert.equal(LIVE_EVENT_LANE["prosody.pause"], "Prosody");
+  assert.equal(LIVE_EVENT_LANE["prosody.phrase_candidate"], "Prosody");
+  assert.equal(LIVE_EVENT_LANE["prosody.accent_candidate"], "Prosody");
+  assert.equal(LIVE_EVENT_LANE.echo_planning_started, "Speaker");
 });
 
 test("SPAN_PAIRS and END_TO_START are consistent", () => {

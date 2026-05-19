@@ -5,6 +5,7 @@
 pub mod acoustic;
 pub mod frame;
 pub mod ring;
+pub mod streaming_prosody;
 pub mod voice_signature;
 pub mod wav;
 
