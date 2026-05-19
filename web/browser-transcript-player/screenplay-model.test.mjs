@@ -71,8 +71,15 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
 
   assert.equal(episode.scenes.length, 2, "topic shift should split into two scenes");
-  assert.match(episode.scenes[0].heading, /WAVEDECK INSPECTION/);
-  assert.match(episode.scenes[1].heading, /QUIET GRIEF/);
+
+  // Headings are now proper screenplay sluglines, not runtime labels
+  assert.match(episode.scenes[0].heading, /^INT\. UNKNOWN ROOM - DAY$/);
+  assert.match(episode.scenes[1].heading, /^INT\. UNKNOWN ROOM - DAY$/);
+
+  // Topic labels are preserved separately for metadata/soft notes
+  assert.equal(episode.scenes[0].topicLabel, "WAVEDECK INSPECTION");
+  assert.equal(episode.scenes[1].topicLabel, "QUIET GRIEF");
+
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "transcript_revision"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "interruption"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "cancellation"));
@@ -183,4 +190,114 @@ test("dialogue segments optionally carry span metadata", () => {
   const llmBeat = episode.scenes[0].beats.find((beat) => beat.kind === "llm_dialogue");
   assert.ok(userBeat.segments[0].spanMetadata?.length, "user segment should include optional span metadata");
   assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Acceptance tests: realistic scene headings (issue requirements)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test("scene heading is a proper screenplay slugline, not a runtime label", () => {
+  const episode = buildWaveDeckEpisode(1);
+  for (const scene of episode.scenes) {
+    // Must start with INT., EXT., or INT./EXT.
+    assert.match(scene.heading, /^(?:INT\.|EXT\.|INT\.\/EXT\.) /, `scene heading should start with INT./EXT.: ${scene.heading}`);
+    // Must contain a time-of-day separator
+    assert.match(scene.heading, / - /, `scene heading should contain a time-of-day separator: ${scene.heading}`);
+    // Must NOT contain runtime labels
+    assert.ok(!scene.heading.includes("LISTENBURY RUNTIME"), `slugline must not include LISTENBURY RUNTIME: ${scene.heading}`);
+    assert.ok(!scene.heading.includes("QUIET GRIEF"), `mood label must not appear in slugline: ${scene.heading}`);
+    assert.ok(!scene.heading.includes("PHONOLOGY WORKBENCH"), `topic label must not appear in slugline: ${scene.heading}`);
+    assert.ok(!scene.heading.includes("WAVEDECK INSPECTION"), `topic label must not appear in slugline: ${scene.heading}`);
+    assert.ok(!scene.heading.includes("PRESENT"), `"PRESENT" must not appear in slugline: ${scene.heading}`);
+  }
+});
+
+test("topic label is preserved as scene metadata, not used as location", () => {
+  const episode = buildWaveDeckEpisode(1);
+  const [sceneA, sceneB] = episode.scenes;
+  // Topic labels preserved separately
+  assert.equal(sceneA.topicLabel, "WAVEDECK INSPECTION");
+  assert.equal(sceneB.topicLabel, "QUIET GRIEF");
+  // Topic labels appear in action as soft note, not in the slugline
+  assert.ok(sceneA.action.includes("Topic:"), "topic soft note should appear in action text");
+  // Sluglines are proper physical locations
+  assert.match(sceneA.heading, /^INT\. UNKNOWN ROOM - DAY$/);
+  assert.match(sceneB.heading, /^INT\. UNKNOWN ROOM - DAY$/);
+});
+
+test("emotional/mood label is not used as slugline location", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "I miss how he used to sound." }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "I do too. We can stay with that." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const [scene] = episode.scenes;
+
+  // Heading must be a physical location slugline
+  assert.match(scene.heading, /^INT\. UNKNOWN ROOM - DAY$/);
+  // Mood label "QUIET GRIEF" should not appear in the heading
+  assert.ok(!scene.heading.includes("GRIEF"), `mood label must not appear in slugline: ${scene.heading}`);
+  // But the topic label is preserved in topicLabel
+  assert.equal(scene.topicLabel, "QUIET GRIEF");
+});
+
+test("unknown room fallback is used when no location context is available", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  assert.equal(episode.scenes[0].heading, "INT. UNKNOWN ROOM - DAY");
+});
+
+test("scene heading uses explicit place when locationContext is provided", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+
+  const episode = buildNarrativeEpisode(session, {
+    episodeNumber: 1,
+    locationContext: { place: "living room", interiorExterior: "INT.", timeOfDay: "NIGHT" },
+  });
+  assert.equal(episode.scenes[0].heading, "INT. LIVING ROOM - NIGHT");
+});
+
+test("scene heading uses vision-derived location when provided", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+
+  const episodeOutdoor = buildNarrativeEpisode(session, {
+    episodeNumber: 1,
+    locationContext: { vision: ["grass", "trees", "bench"], timeOfDay: "DAY" },
+  });
+  assert.equal(episodeOutdoor.scenes[0].heading, "EXT. PARK - DAY");
+
+  const episodeBedroom = buildNarrativeEpisode(session, {
+    episodeNumber: 1,
+    locationContext: { vision: ["bed", "nightstand"], timeOfDay: "NIGHT" },
+  });
+  assert.equal(episodeBedroom.scenes[0].heading, "INT. BEDROOM - NIGHT");
+});
+
+test("scene-list headings match scene headings", () => {
+  const episode = buildWaveDeckEpisode(1);
+  for (let i = 0; i < episode.scenes.length; i++) {
+    assert.equal(
+      episode.sceneList[i].heading,
+      episode.scenes[i].heading,
+      `scene-list heading at index ${i} must match scene heading`,
+    );
+  }
+});
+
+test("rendered screenplay body includes topic as soft note, not in slugline", () => {
+  const episode = buildWaveDeckEpisode(1);
+  // The screenplay body should include the topic as a soft note
+  assert.match(episode.screenplayBody, /Soft-note: Topic: Wavedeck Inspection\./);
+  assert.match(episode.screenplayBody, /Soft-note: Topic: Quiet Grief\./);
+  // The sluglines should be physical locations
+  assert.match(episode.screenplayBody, /INT\. UNKNOWN ROOM - DAY/);
+  // Runtime labels should NOT appear as sluglines
+  assert.ok(!episode.screenplayBody.includes("INT. LISTENBURY RUNTIME"), "runtime label must not appear as slugline in body");
 });
