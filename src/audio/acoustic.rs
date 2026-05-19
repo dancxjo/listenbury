@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::audio::frame::AudioFrame;
+use crate::word::{
+    PronunciationCandidateScore, WordPhoneSegmentation, WordPhoneSpan, WordPronunciation,
+};
 
 const DEFAULT_MIN_DB: f32 = -96.0;
 const DEFAULT_MAX_DB: f32 = 0.0;
@@ -656,10 +659,464 @@ fn fft_in_place(real: &mut [f64], imag: &mut [f64]) {
     }
 }
 
+pub fn segment_pronunciation_with_acoustics(
+    word: &str,
+    word_start_ms: u64,
+    word_end_ms: u64,
+    pronunciation: &WordPronunciation,
+    analysis: &AcousticAnalysis,
+) -> Option<WordPhoneSegmentation> {
+    if word_end_ms <= word_start_ms || pronunciation.phonemes.is_empty() {
+        return None;
+    }
+    let priors = proportional_phone_priors(
+        &pronunciation.phonemes,
+        word_start_ms as f32,
+        word_end_ms as f32,
+    );
+    if priors.is_empty() {
+        return None;
+    }
+    let boundary_points =
+        collect_boundary_points(&analysis.energy_landmarks, word_start_ms, word_end_ms);
+    let mut boundaries = vec![word_start_ms as f32];
+    let mut boundary_uncertainty = vec![24u64; priors.len()];
+    for index in 0..priors.len().saturating_sub(1) {
+        let left_class = priors[index].phone_class.as_str();
+        let right_class = priors[index + 1].phone_class.as_str();
+        let preferred = preferred_boundary_types(left_class, right_class);
+        let prior = priors[index].prior_end_ms;
+        if let Some((resolved, dist)) =
+            nearest_boundary_candidate(prior, &boundary_points, &preferred, 48.0)
+        {
+            boundaries.push(resolved);
+            let uncertainty = dist.round().max(1.0) as u64;
+            boundary_uncertainty[index] = uncertainty;
+            if let Some(next) = boundary_uncertainty.get_mut(index + 1) {
+                *next = uncertainty;
+            }
+        } else {
+            boundaries.push(prior);
+            boundary_uncertainty[index] = 32;
+        }
+    }
+    boundaries.push(word_end_ms as f32);
+    normalize_boundaries(&mut boundaries, word_start_ms as f32, word_end_ms as f32);
+
+    let level = analysis.spectrogram.levels.first();
+    let spans = priors
+        .iter()
+        .enumerate()
+        .map(|(index, prior)| {
+            let start_ms = boundaries[index].round().max(word_start_ms as f32) as u64;
+            let end_ms = boundaries[index + 1]
+                .round()
+                .max(start_ms as f32)
+                .min(word_end_ms as f32) as u64;
+            let (method, confidence, features_used) = acoustic_method_and_confidence(
+                prior,
+                start_ms,
+                end_ms,
+                &analysis.energy_landmarks,
+                level,
+            );
+            WordPhoneSpan {
+                source_symbol: prior.source_symbol.clone(),
+                phone: prior.phone.clone(),
+                phone_class: prior.phone_class.clone(),
+                prior_start_ms: prior.prior_start_ms.round().max(0.0) as u64,
+                prior_end_ms: prior.prior_end_ms.round().max(0.0) as u64,
+                start_ms,
+                end_ms,
+                resolved_start_ms: start_ms,
+                resolved_end_ms: end_ms,
+                method,
+                confidence,
+                features_used,
+                boundary_uncertainty_ms: boundary_uncertainty.get(index).copied().unwrap_or(24),
+                candidate_pronunciation_id: Some("default".to_string()),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Some(WordPhoneSegmentation {
+        word: word.to_string(),
+        word_start_ms,
+        word_end_ms,
+        pronunciation: pronunciation.phonemes.clone(),
+        candidate_pronunciation_id: Some("default".to_string()),
+        pronunciation_scores: vec![PronunciationCandidateScore {
+            id: "default".to_string(),
+            score: 0.5,
+        }],
+        phone_spans: spans,
+    })
+}
+
+#[derive(Clone)]
+struct PriorPhoneSpan {
+    source_symbol: String,
+    phone: String,
+    phone_class: String,
+    prior_start_ms: f32,
+    prior_end_ms: f32,
+}
+
+#[derive(Clone)]
+struct BoundaryPoint {
+    ms: f32,
+    point_type: &'static str,
+}
+
+fn proportional_phone_priors(tokens: &[String], start_ms: f32, end_ms: f32) -> Vec<PriorPhoneSpan> {
+    if tokens.is_empty() || end_ms <= start_ms {
+        return Vec::new();
+    }
+    let duration = end_ms - start_ms;
+    let weights = tokens
+        .iter()
+        .map(|token| if is_vowel_token(token) { 2.0 } else { 1.0 })
+        .collect::<Vec<_>>();
+    let total = weights.iter().sum::<f32>().max(1.0);
+    let mut cursor = start_ms;
+    let mut spans = Vec::with_capacity(tokens.len());
+    for (index, token) in tokens.iter().enumerate() {
+        let proportion = weights[index] / total;
+        let next = if index == tokens.len() - 1 {
+            end_ms
+        } else {
+            cursor + duration * proportion
+        };
+        spans.push(PriorPhoneSpan {
+            source_symbol: token.clone(),
+            phone: arpabet_to_ipa(token),
+            phone_class: phone_class(token).to_string(),
+            prior_start_ms: cursor,
+            prior_end_ms: next,
+        });
+        cursor = next;
+    }
+    spans
+}
+
+fn collect_boundary_points(
+    landmarks: &EnergyLandmarks,
+    start_ms: u64,
+    end_ms: u64,
+) -> Vec<BoundaryPoint> {
+    let mut points = Vec::new();
+    points.extend(landmarks.onsets.iter().map(|ms| BoundaryPoint {
+        ms: *ms as f32,
+        point_type: "onset",
+    }));
+    points.extend(landmarks.offsets.iter().map(|ms| BoundaryPoint {
+        ms: *ms as f32,
+        point_type: "offset",
+    }));
+    points.extend(landmarks.valleys.iter().map(|ms| BoundaryPoint {
+        ms: *ms as f32,
+        point_type: "valley",
+    }));
+    points.extend(landmarks.peaks.iter().map(|ms| BoundaryPoint {
+        ms: *ms as f32,
+        point_type: "peak",
+    }));
+    for silence in &landmarks.silences {
+        points.push(BoundaryPoint {
+            ms: silence.start_ms as f32,
+            point_type: "silence-start",
+        });
+        points.push(BoundaryPoint {
+            ms: silence.end_ms as f32,
+            point_type: "silence-end",
+        });
+    }
+    points.retain(|point| point.ms >= start_ms as f32 && point.ms <= end_ms as f32);
+    points.sort_by(|left, right| left.ms.total_cmp(&right.ms));
+    points
+}
+
+fn preferred_boundary_types(left_class: &str, right_class: &str) -> Vec<&'static str> {
+    if left_class == "stop" || right_class == "stop" {
+        return vec!["onset", "offset", "valley"];
+    }
+    if left_class == "fricative" || right_class == "fricative" {
+        return vec!["valley", "onset", "offset"];
+    }
+    if left_class == "vowel"
+        || right_class == "vowel"
+        || left_class == "diphthong"
+        || right_class == "diphthong"
+    {
+        return vec!["valley", "peak", "onset"];
+    }
+    vec!["valley", "onset", "offset", "silence-start", "silence-end"]
+}
+
+fn nearest_boundary_candidate(
+    prior_ms: f32,
+    candidates: &[BoundaryPoint],
+    preferred: &[&str],
+    tolerance_ms: f32,
+) -> Option<(f32, f32)> {
+    let mut best: Option<(f32, f32)> = None;
+    let mut best_cost = f32::INFINITY;
+    for candidate in candidates {
+        let distance = (candidate.ms - prior_ms).abs();
+        if distance > tolerance_ms {
+            continue;
+        }
+        let preference = if preferred.contains(&candidate.point_type) {
+            0.6
+        } else {
+            1.0
+        };
+        let cost = distance * preference;
+        if cost < best_cost {
+            best_cost = cost;
+            best = Some((candidate.ms, distance));
+        }
+    }
+    best
+}
+
+fn normalize_boundaries(boundaries: &mut [f32], start_ms: f32, end_ms: f32) {
+    if boundaries.is_empty() {
+        return;
+    }
+    boundaries[0] = start_ms;
+    if let Some(last) = boundaries.last_mut() {
+        *last = end_ms;
+    }
+    let min_gap = 0.5f32;
+    for index in 1..boundaries.len() {
+        boundaries[index] = boundaries[index].max(boundaries[index - 1] + min_gap);
+    }
+    if let Some(last) = boundaries.last_mut() {
+        *last = end_ms;
+    }
+    for index in (0..boundaries.len().saturating_sub(1)).rev() {
+        boundaries[index] = boundaries[index].min(boundaries[index + 1] - min_gap);
+    }
+    boundaries[0] = start_ms;
+}
+
+fn acoustic_method_and_confidence(
+    prior: &PriorPhoneSpan,
+    start_ms: u64,
+    end_ms: u64,
+    landmarks: &EnergyLandmarks,
+    level: Option<&SpectrogramLevel>,
+) -> (String, f32, Vec<String>) {
+    let class = prior.phone_class.as_str();
+    let mut confidence = 0.42f32;
+    let mut features = vec!["duration.prior".to_string()];
+    if (class == "vowel" || class == "diphthong")
+        && landmarks
+            .peaks
+            .iter()
+            .any(|peak| *peak >= start_ms && *peak <= end_ms)
+    {
+        confidence += 0.18;
+        features.push("energy.peak_nucleus".to_string());
+    }
+    if class == "stop"
+        && (landmarks
+            .onsets
+            .iter()
+            .any(|point| *point + 20 >= start_ms && *point <= end_ms + 20)
+            || landmarks
+                .offsets
+                .iter()
+                .any(|point| *point + 20 >= start_ms && *point <= end_ms + 20))
+    {
+        confidence += 0.16;
+        features.push("energy.release_or_closure".to_string());
+    }
+    if class == "fricative" {
+        if let Some((low, high)) = spectral_band_mean(level, start_ms as f32, end_ms as f32) {
+            if high > low + 4.0 {
+                confidence += 0.2;
+                features.push("spectrogram.high_frequency_noise".to_string());
+            }
+        }
+    }
+    confidence = confidence.clamp(0.08, 0.95);
+    let method = if features.len() > 1 {
+        default_method_for_class(class).to_string()
+    } else {
+        "projected.proportional".to_string()
+    };
+    (method, confidence, features)
+}
+
+fn spectral_band_mean(
+    level: Option<&SpectrogramLevel>,
+    start_ms: f32,
+    end_ms: f32,
+) -> Option<(f32, f32)> {
+    let level = level?;
+    if level.frames.is_empty() || level.hop_ms <= 0.0 || level.bin_hz <= 0.0 {
+        return None;
+    }
+    let start = (start_ms / level.hop_ms).floor().max(0.0) as usize;
+    let end = (end_ms / level.hop_ms).ceil().max(0.0) as usize;
+    let mut low_sum = 0.0f32;
+    let mut high_sum = 0.0f32;
+    let mut low_count = 0usize;
+    let mut high_count = 0usize;
+    for index in start..=end.min(level.frames.len().saturating_sub(1)) {
+        let frame = &level.frames[index];
+        if frame.is_empty() {
+            continue;
+        }
+        let low_max = ((1200.0 / level.bin_hz).floor() as usize).min(frame.len().saturating_sub(1));
+        let high_min =
+            ((3000.0 / level.bin_hz).floor() as usize).min(frame.len().saturating_sub(1));
+        let high_max =
+            ((7000.0 / level.bin_hz).floor() as usize).min(frame.len().saturating_sub(1));
+        for bin in 1..=low_max {
+            low_sum += frame[bin];
+            low_count += 1;
+        }
+        if high_min <= high_max {
+            for bin in high_min..=high_max {
+                high_sum += frame[bin];
+                high_count += 1;
+            }
+        }
+    }
+    if low_count == 0 || high_count == 0 {
+        return None;
+    }
+    Some((low_sum / low_count as f32, high_sum / high_count as f32))
+}
+
+fn default_method_for_class(class: &str) -> &'static str {
+    match class {
+        "vowel" => "heuristic.vowel.formants",
+        "diphthong" => "heuristic.formant.movement",
+        "fricative" => "heuristic.spectral.frication",
+        "stop" => "heuristic.energy.stop_release",
+        "nasal" => "heuristic.spectral.nasal_murmur",
+        "approximant_liquid" => "heuristic.formant.transition",
+        "affricate" => "heuristic.combined.affricate",
+        "silence" => "heuristic.energy.silence",
+        _ => "heuristic.combined",
+    }
+}
+
+fn phone_class(token: &str) -> &'static str {
+    let base = arpabet_base(token);
+    if matches!(base, "SIL" | "SP" | "PAU") {
+        return "silence";
+    }
+    if is_vowel_token(token) {
+        if matches!(base, "AW" | "AY" | "EY" | "OW" | "OY") {
+            return "diphthong";
+        }
+        return "vowel";
+    }
+    if matches!(base, "CH" | "JH") {
+        return "affricate";
+    }
+    if matches!(base, "P" | "B" | "T" | "D" | "K" | "G") {
+        return "stop";
+    }
+    if matches!(
+        base,
+        "F" | "V" | "TH" | "DH" | "S" | "Z" | "SH" | "ZH" | "HH"
+    ) {
+        return "fricative";
+    }
+    if matches!(base, "M" | "N" | "NG") {
+        return "nasal";
+    }
+    if matches!(base, "R" | "L" | "W" | "Y") {
+        return "approximant_liquid";
+    }
+    "other"
+}
+
+fn is_vowel_token(token: &str) -> bool {
+    matches!(
+        arpabet_base(token),
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
+    )
+}
+
+fn arpabet_base(token: &str) -> &str {
+    token
+        .strip_suffix('0')
+        .or_else(|| token.strip_suffix('1'))
+        .or_else(|| token.strip_suffix('2'))
+        .unwrap_or(token)
+}
+
+fn arpabet_to_ipa(token: &str) -> String {
+    match arpabet_base(token) {
+        "AA" => "ɑ",
+        "AE" => "æ",
+        "AH" => "ʌ",
+        "AO" => "ɔ",
+        "AW" => "aʊ",
+        "AY" => "aɪ",
+        "B" => "b",
+        "CH" => "tʃ",
+        "D" => "d",
+        "DH" => "ð",
+        "EH" => "ɛ",
+        "ER" => "ɝ",
+        "EY" => "eɪ",
+        "F" => "f",
+        "G" => "ɡ",
+        "HH" => "h",
+        "IH" => "ɪ",
+        "IY" => "iː",
+        "JH" => "dʒ",
+        "K" => "k",
+        "L" => "l",
+        "M" => "m",
+        "N" => "n",
+        "NG" => "ŋ",
+        "OW" => "oʊ",
+        "OY" => "ɔɪ",
+        "P" => "p",
+        "R" => "ɹ",
+        "S" => "s",
+        "SH" => "ʃ",
+        "T" => "t",
+        "TH" => "θ",
+        "UH" => "ʊ",
+        "UW" => "uː",
+        "V" => "v",
+        "W" => "w",
+        "Y" => "j",
+        "Z" => "z",
+        "ZH" => "ʒ",
+        unknown => return format!("?{unknown}"),
+    }
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::time::ExactTimestamp;
+    use crate::word::{PronunciationLookupStatus, WordPronunciation};
 
     #[test]
     fn analyzes_spectrogram_and_energy_from_ingested_frames() {
@@ -724,5 +1181,39 @@ mod tests {
 
         let json = serde_json::to_string(&analysis).expect("serialize analysis");
         assert!(json.contains("\"formantTracks\""));
+    }
+
+    #[test]
+    fn segments_word_pronunciation_into_monotonic_phone_spans() {
+        let sample_rate_hz = 16_000;
+        let samples = (0..6400)
+            .map(|index| {
+                ((2.0 * std::f32::consts::PI * 220.0 * index as f32) / sample_rate_hz as f32).sin()
+            })
+            .collect::<Vec<_>>();
+        let analysis = analyze_mono_samples(&samples, sample_rate_hz);
+        let pronunciation = WordPronunciation {
+            source: "cmudict".to_string(),
+            lookup: "THREE".to_string(),
+            phonemes: vec!["TH".to_string(), "R".to_string(), "IY1".to_string()],
+            stress_pattern: "1".to_string(),
+            status: PronunciationLookupStatus::Exact,
+            phone_segmentation: None,
+        };
+
+        let segmentation =
+            segment_pronunciation_with_acoustics("three", 1000, 1340, &pronunciation, &analysis)
+                .expect("segmentation");
+        assert_eq!(segmentation.phone_spans.len(), 3);
+        assert_eq!(segmentation.phone_spans[0].start_ms, 1000);
+        assert_eq!(segmentation.phone_spans[2].end_ms, 1340);
+        assert!(
+            segmentation.phone_spans[0].end_ms <= segmentation.phone_spans[1].start_ms
+                && segmentation.phone_spans[1].end_ms <= segmentation.phone_spans[2].start_ms
+        );
+        assert!(segmentation
+            .phone_spans
+            .iter()
+            .all(|span| span.start_ms <= span.end_ms));
     }
 }

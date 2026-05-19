@@ -11,12 +11,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  PHONE_CLASS_HEURISTICS,
   isVowel,
   phonemeFromArpabet,
   projectPhonemesIntoWordInterval,
   realizePhonemeSequence,
-  segmentKnownPronunciationIntoPhoneSpans,
   stressPattern,
 } from "./phoneme-projection.mjs";
 
@@ -179,102 +177,6 @@ test("projected spans preserve default and realized IPA separately", () => {
   assert.equal(spans[1].sourceSymbol, "T");
   assert.equal(spans[1].defaultPhoneString[0].ipa, "t");
   assert.equal(spans[1].realization.ipa, "ɾ");
-});
-
-test("heuristic profile library includes required phone classes", () => {
-  assert.ok(PHONE_CLASS_HEURISTICS.vowel);
-  assert.ok(PHONE_CLASS_HEURISTICS.fricative);
-  assert.ok(PHONE_CLASS_HEURISTICS.stop);
-  assert.ok(PHONE_CLASS_HEURISTICS.nasal);
-  assert.ok(PHONE_CLASS_HEURISTICS.approximant_liquid);
-});
-
-test("segments fricative + vowel pronunciation with provenance metadata", () => {
-  const segmentation = segmentKnownPronunciationIntoPhoneSpans({
-    word: "see",
-    wordStartMs: 1000,
-    wordEndMs: 1300,
-    pronunciationCandidates: [{ id: "a", phonemes: ["S", "IY1"] }],
-    energyLandmarks: {
-      onsets: [1040, 1120],
-      offsets: [1180],
-      valleys: [1110],
-      peaks: [1240],
-      silences: [],
-    },
-  });
-
-  assert.equal(segmentation.phoneSpans.length, 2);
-  assert.equal(segmentation.phoneSpans[0].start_ms, 1000);
-  assert.equal(segmentation.phoneSpans[1].end_ms, 1300);
-  assert.ok(segmentation.phoneSpans[0].end_ms <= segmentation.phoneSpans[1].start_ms);
-  assert.ok(segmentation.phoneSpans[0].prior_start_ms <= segmentation.phoneSpans[0].prior_end_ms);
-  assert.ok(segmentation.phoneSpans[0].features_used.includes("duration.prior"));
-  assert.equal(segmentation.phoneSpans[0].candidate_pronunciation_id, "a");
-});
-
-test("segments stop + vowel and prefers stop-release cues when available", () => {
-  const segmentation = segmentKnownPronunciationIntoPhoneSpans({
-    word: "two",
-    wordStartMs: 2000,
-    wordEndMs: 2300,
-    pronunciationCandidates: [{ id: "default", phonemes: ["T", "UW1"] }],
-    energyLandmarks: {
-      onsets: [2055],
-      offsets: [2038],
-      valleys: [2046],
-      peaks: [2210],
-      silences: [{ start_ms: 2000, end_ms: 2035 }],
-    },
-  });
-
-  assert.equal(segmentation.phoneSpans.length, 2);
-  assert.equal(segmentation.phoneSpans[0].phoneClass, "stop");
-  assert.ok(segmentation.phoneSpans[0].method.includes("stop"));
-  assert.ok(segmentation.phoneSpans[0].confidence > 0.45);
-});
-
-test("noisy low-evidence segmentation safely falls back toward proportional projection", () => {
-  const segmentation = segmentKnownPronunciationIntoPhoneSpans({
-    word: "mmm",
-    wordStartMs: 500,
-    wordEndMs: 620,
-    pronunciationCandidates: [{ id: "default", phonemes: ["M", "M", "M"] }],
-    energyLandmarks: {
-      onsets: [],
-      offsets: [],
-      valleys: [],
-      peaks: [],
-      silences: [],
-    },
-  });
-
-  assert.equal(segmentation.phoneSpans.length, 3);
-  assert.ok(segmentation.phoneSpans.every((span) => span.start_ms >= 500 && span.end_ms <= 620));
-  assert.ok(segmentation.phoneSpans.some((span) => span.method === "projected.proportional"));
-});
-
-test("scores multiple pronunciation candidates and picks the stronger candidate", () => {
-  const segmentation = segmentKnownPronunciationIntoPhoneSpans({
-    word: "three",
-    wordStartMs: 5985,
-    wordEndMs: 6342,
-    pronunciationCandidates: [
-      { id: "candidate-a", phonemes: ["TH", "R", "IY1"] },
-      { id: "candidate-b", phonemes: ["T", "R", "IY1"] },
-    ],
-    energyLandmarks: {
-      onsets: [6075],
-      offsets: [6060],
-      valleys: [6072],
-      peaks: [6210],
-      silences: [],
-    },
-  });
-
-  assert.equal(segmentation.pronunciation_scores.length, 2);
-  assert.ok(segmentation.pronunciation_scores.every((item) => item.score >= 0 && item.score <= 1));
-  assert.equal(segmentation.candidate_pronunciation_id, "candidate-a");
 });
 
 // ---------------------------------------------------------------------------

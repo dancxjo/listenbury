@@ -44,7 +44,7 @@ import {
 } from "/assets/spectrogram.mjs";
 import {
   isVowel,
-  segmentKnownPronunciationIntoPhoneSpans,
+  projectPhonemesIntoWordInterval,
   stressPattern,
 } from "/assets/phoneme-projection.mjs";
 
@@ -5979,6 +5979,7 @@ function buildSelectionProjection() {
   }
   const target = wordPlaybackTarget(word);
   const phoneSegmentation = buildPhoneSegmentationForWord(word, { allophoneRulesEnabled: true });
+  const segmentedPhoneSpans = phoneSegmentation?.phoneSpans ?? null;
   return {
     canPlaySelectionClip: canPlaySelectionTarget(target),
     playSelectionClipLabel: canPlaySelectionTarget(target) ? "Play word clip" : "Play selected clip",
@@ -6026,8 +6027,8 @@ function buildSelectionProjection() {
         revisions: word._revisions ?? [],
         pronunciation: word.pronunciation ?? null,
         phoneSegmentation,
-        phoneSpans: phoneSegmentation?.phoneSpans ?? null,
-        phonemeSpans: phoneSegmentation?.phoneSpans ?? null,
+        phoneSpans: segmentedPhoneSpans,
+        phonemeSpans: segmentedPhoneSpans,
       },
       null,
       2,
@@ -6175,35 +6176,50 @@ function buildPhoneSegmentationForWord(word, options = {}) {
   const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
   const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-
-  const candidateList = [];
-  if (Array.isArray(pron?.candidates)) {
-    for (const candidate of pron.candidates) {
-      const candidatePhonemes = Array.isArray(candidate?.phonemes) ? candidate.phonemes : null;
-      if (!candidatePhonemes?.length) continue;
-      candidateList.push({
-        id: candidate.id ?? candidate.label ?? `candidate-${candidateList.length + 1}`,
-        phonemes: candidatePhonemes,
-      });
-    }
-  }
-  if (!candidateList.length) {
-    candidateList.push({ id: "default", phonemes });
+  if (pron?.phoneSegmentation?.phoneSpans?.length) {
+    return {
+      ...pron.phoneSegmentation,
+      phoneSpans: pron.phoneSegmentation.phoneSpans.map((span) => ({
+        ...span,
+        sourceSymbol: span.sourceSymbol ?? span.source_symbol ?? "?",
+      })),
+    };
   }
 
-  return segmentKnownPronunciationIntoPhoneSpans({
-    word: word.text ?? null,
-    wordStartMs: startMs,
-    wordEndMs: endMs,
-    pronunciationCandidates: candidateList,
-    energyLandmarks: state.waveform.energyLandmarks ?? null,
-    spectrogram: state.waveform.spectrogram ?? null,
-    allophoneRules: {
-      enabled: options.allophoneRulesEnabled === true,
-      dialect: "american_english",
+  const projected = projectPhonemesIntoWordInterval(
+    phonemes,
+    startMs,
+    endMs,
+    "projected.proportional",
+    {
+      allophoneRules: {
+        enabled: options.allophoneRulesEnabled === true,
+        dialect: "american_english",
+      },
     },
-    enforceWordBounds: true,
-  });
+  ).map((span) => ({
+    ...span,
+    phone: span.realization?.ipa ?? span.defaultPhoneString?.[0]?.ipa ?? "?",
+    phoneClass: isVowel(span.sourceSymbol) ? "vowel" : "other",
+    prior_start_ms: span.start_ms,
+    prior_end_ms: span.end_ms,
+    resolved_start_ms: span.start_ms,
+    resolved_end_ms: span.end_ms,
+    method: "projected.proportional",
+    confidence: 0.35,
+    features_used: ["duration.prior"],
+    boundary_uncertainty_ms: 30,
+    candidate_pronunciation_id: "default",
+  }));
+  return {
+    word: word.text ?? null,
+    word_start_ms: startMs,
+    word_end_ms: endMs,
+    pronunciation: phonemes,
+    candidate_pronunciation_id: "default",
+    pronunciation_scores: [{ id: "default", score: 0.5 }],
+    phoneSpans: projected,
+  };
 }
 
 /**

@@ -22,10 +22,12 @@ pub mod stream;
 pub mod tts_export;
 
 pub use export::{
+    transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
     HeuristicAcousticWordBoundaryRefiner, NoopWordBoundaryRefiner, TranscriptWord,
-    WordBoundaryRefiner, transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
+    WordBoundaryRefiner,
 };
 pub use stream::{
-    AudioRef, BoundarySource, PronunciationLookupStatus, TextSpan, TimedWordStream, WordCommitment,
-    WordId, WordNode, WordPronunciation, WordStreamId, WordStreamSource, WordTiming,
+    AudioRef, BoundarySource, PronunciationCandidateScore, PronunciationLookupStatus, TextSpan,
+    TimedWordStream, WordCommitment, WordId, WordNode, WordPhoneSegmentation, WordPhoneSpan,
+    WordPronunciation, WordStreamId, WordStreamSource, WordTiming,
 };
