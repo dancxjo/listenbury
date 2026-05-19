@@ -93,6 +93,14 @@ pub struct WordNode {
     pub boundary_source: BoundarySource,
     /// Reference to the audio segment that corresponds to this word, if any.
     pub audio_ref: Option<AudioRef>,
+    /// Pronunciation metadata for this word, if available.
+    ///
+    /// When present, the [`WordPronunciation`] carries the phoneme sequence
+    /// and provenance information needed to render phoneme-level annotations
+    /// in the timeline UI.  Absence means pronunciation has not yet been
+    /// resolved for this word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pronunciation: Option<WordPronunciation>,
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +197,60 @@ pub struct AudioRef {
 }
 
 // ---------------------------------------------------------------------------
+// Pronunciation metadata
+// ---------------------------------------------------------------------------
+
+/// Indicates how a word's pronunciation was resolved during lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PronunciationLookupStatus {
+    /// Word found in the dictionary with an exact (case-insensitive) match.
+    Exact,
+    /// Word found after normalization (e.g. punctuation stripping).
+    Normalized,
+    /// Word not found; a grapheme-to-phoneme guess was used.
+    Guessed,
+    /// Word not found and no pronunciation is available.
+    Missing,
+}
+
+/// Pronunciation metadata for a word, derived from a pronunciation dictionary.
+///
+/// Carries the phoneme sequence and enough provenance information for the UI
+/// to clearly label that these are dictionary-derived projections, not
+/// acoustically measured timings.
+///
+/// # JSON shape
+///
+/// ```json
+/// {
+///   "source": "cmudict",
+///   "lookup": "THREE",
+///   "phonemes": ["TH", "R", "IY1"],
+///   "stressPattern": "1",
+///   "status": "exact"
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordPronunciation {
+    /// Pronunciation source identifier, e.g. `"cmudict"`.
+    pub source: String,
+    /// Normalized word form used for the dictionary lookup, e.g. `"THREE"`.
+    pub lookup: String,
+    /// ARPAbet phoneme symbols for the primary pronunciation.
+    ///
+    /// Stress digits (`0`, `1`, `2`) are preserved where present so the UI
+    /// can convey syllable stress.
+    pub phonemes: Vec<String>,
+    /// Compact stress-digit string derived from vowel phonemes (e.g. `"1"`
+    /// for primary stress).  Empty for all-consonant sequences.
+    pub stress_pattern: String,
+    /// How the pronunciation was resolved.
+    pub status: PronunciationLookupStatus,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -222,6 +284,7 @@ mod tests {
                     commitment: WordCommitment::Final,
                     boundary_source: BoundarySource::Whisper,
                     audio_ref: None,
+                    pronunciation: None,
                 },
                 WordNode {
                     id: w2,
@@ -235,6 +298,7 @@ mod tests {
                     commitment: WordCommitment::Final,
                     boundary_source: BoundarySource::Whisper,
                     audio_ref: None,
+                    pronunciation: None,
                 },
                 WordNode {
                     id: w3,
@@ -248,6 +312,7 @@ mod tests {
                     commitment: WordCommitment::Final,
                     boundary_source: BoundarySource::Whisper,
                     audio_ref: None,
+                    pronunciation: None,
                 },
             ],
         };
@@ -292,6 +357,7 @@ mod tests {
                     commitment: WordCommitment::StableText,
                     boundary_source: BoundarySource::Manual,
                     audio_ref: None,
+                    pronunciation: None,
                 }
             })
             .collect();
@@ -340,6 +406,7 @@ mod tests {
                     byte_offset,
                     byte_len,
                 }),
+                pronunciation: None,
             },
         )
         .collect();
@@ -378,6 +445,7 @@ mod tests {
                 commitment: WordCommitment::Hypothetical,
                 boundary_source: BoundarySource::Whisper,
                 audio_ref: None,
+                pronunciation: None,
             }],
         };
 

@@ -33,6 +33,11 @@ import {
   detectEnergyLandmarks,
   refineWordTimingsWithEnergy,
 } from "/assets/energy-timing.mjs";
+import {
+  isVowel,
+  projectPhonemesIntoWordInterval,
+  stressPattern,
+} from "/assets/phoneme-projection.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -4701,6 +4706,54 @@ function appendWordChipContent(chip, word, includeBadges) {
   if (includeBadges) {
     chip.append(createChipBadges([describeShortCommitment(word.commitment)]));
   }
+  // Render phoneme ticks when pronunciation data is available.
+  const phonemeStrip = createPhonemeStrip(word);
+  if (phonemeStrip) {
+    chip.append(phonemeStrip);
+  }
+}
+
+/**
+ * Build a phoneme strip for a word chip when the word carries pronunciation
+ * metadata.  Returns `null` when the word has no usable phoneme data.
+ *
+ * Phoneme spans are computed using proportional projection inside the word's
+ * resolved timing interval.  The strip is clearly labelled as "projected"
+ * via the `data-timing-source` attribute and aria-label.
+ */
+function createPhonemeStrip(word) {
+  const phonemes = word.pronunciation?.phonemes;
+  if (!Array.isArray(phonemes) || phonemes.length === 0) return null;
+
+  const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
+  const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+
+  const spans = projectPhonemesIntoWordInterval(phonemes, startMs, endMs);
+  if (!spans.length) return null;
+
+  const duration = endMs - startMs;
+
+  const strip = document.createElement("span");
+  strip.className = "phoneme-strip";
+  strip.setAttribute("aria-label", `Phonemes (projected): ${phonemes.join(" ")}`);
+  strip.dataset.timingSource = word.pronunciation.source ?? "cmudict";
+
+  for (const span of spans) {
+    const tick = document.createElement("span");
+    const isVowelTick = isVowel(span.symbol);
+    tick.className = ["phoneme-tick", isVowelTick ? "is-vowel" : ""].filter(Boolean).join(" ");
+    tick.textContent = span.symbol.replace(/[012]$/, ""); // strip stress digit for display
+    // Position proportionally within the chip.
+    const leftPct = ((span.start_ms - startMs) / duration) * 100;
+    const widthPct = ((span.end_ms - span.start_ms) / duration) * 100;
+    tick.style.left = `${leftPct.toFixed(2)}%`;
+    tick.style.width = `${widthPct.toFixed(2)}%`;
+    tick.title = `${span.symbol} (${span.start_ms}–${span.end_ms} ms · ${span.source})`;
+    strip.append(tick);
+  }
+
+  return strip;
 }
 
 function createProsodyStrip(level) {
@@ -5283,6 +5336,7 @@ function buildSelectionProjection() {
       h("br"),
       "Timing source: ",
       h("strong", null, word.timingSourceDetail),
+      ...buildPronunciationSummaryParts(word),
     ],
     selectionJson: JSON.stringify(
       {
@@ -5305,6 +5359,8 @@ function buildSelectionProjection() {
         lexicalSpan: word.lexical_span,
         audioRef: word.audio_ref,
         revisions: word._revisions ?? [],
+        pronunciation: word.pronunciation ?? null,
+        phonemeSpans: buildPhonemeSpansForInspector(word),
       },
       null,
       2,
@@ -5368,6 +5424,58 @@ function describeSpanState(commitment) {
     case "Cancelled":    return "Cancelled — abandoned before playback";
     default:             return commitment ?? "Unknown";
   }
+}
+
+// ── Pronunciation / phoneme inspector helpers ─────────────────────────────
+
+/**
+ * Build an array of Preact/h() nodes to append to the inspector summary
+ * for a word that has pronunciation metadata.  Returns an empty array when
+ * the word has no pronunciation data.
+ */
+function buildPronunciationSummaryParts(word) {
+  const pron = word.pronunciation;
+  if (!pron) return [];
+
+  const statusLabel = {
+    exact: "exact match",
+    normalized: "normalized match",
+    guessed: "guessed",
+    missing: "not found",
+  }[pron.status] ?? pron.status ?? "unknown";
+
+  const parts = [
+    h("br"),
+    "Pronunciation: ",
+    h("strong", null, pron.source ?? "unknown"),
+    ` · lookup "${pron.lookup ?? word.text}" · `,
+    h("em", null, statusLabel),
+  ];
+
+  if (Array.isArray(pron.phonemes) && pron.phonemes.length > 0) {
+    parts.push(
+      h("br"),
+      h("span", { className: "inspector-phoneme-sequence", title: "Projected phoneme sequence — timing is estimated, not measured" },
+        pron.phonemes.join(" "),
+        h("span", { className: "inspector-phoneme-provenance" }, " (projected)"),
+      ),
+    );
+  }
+
+  return parts;
+}
+
+/**
+ * Compute and return the projected phoneme spans for a word, or `null` when
+ * the word has no usable pronunciation metadata.  Used in the inspector JSON.
+ */
+function buildPhonemeSpansForInspector(word) {
+  const phonemes = word.pronunciation?.phonemes;
+  if (!Array.isArray(phonemes) || phonemes.length === 0) return null;
+  const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
+  const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  return projectPhonemesIntoWordInterval(phonemes, startMs, endMs);
 }
 
 /**

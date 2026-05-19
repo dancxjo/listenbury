@@ -8,6 +8,57 @@ use crate::linguistic::{
     variety::LinguisticVariety,
 };
 
+/// How a pronunciation was resolved during lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PronunciationStatus {
+    /// The word was found in the dictionary exactly (case-insensitive match).
+    Exact,
+    /// The word was found after normalization (e.g. punctuation stripping).
+    Normalized,
+    /// The word was not found; a guess was provided by another means.
+    Guessed,
+    /// The word was not found and no pronunciation is available.
+    Missing,
+}
+
+/// The result of a CMUdict pronunciation lookup for a single word.
+///
+/// Contains the original query, the normalized lookup key used, the source
+/// identifier, **all** candidate pronunciation sequences, and a status flag
+/// indicating how (or whether) the word was resolved.
+///
+/// # Example
+///
+/// ```
+/// use listenbury::linguistic::CmudictPronouncer;
+/// use listenbury::linguistic::PronunciationStatus;
+///
+/// let p = CmudictPronouncer::bundled();
+/// let entry = p.lookup_entry("three");
+/// assert_eq!(entry.status, PronunciationStatus::Exact);
+/// assert!(!entry.candidates.is_empty());
+/// assert_eq!(entry.source, "cmudict");
+/// // All candidate pronunciations are returned.
+/// assert!(entry.candidates.len() >= 1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PronunciationEntry {
+    /// The original (un-normalized) word text that was queried.
+    pub original: String,
+    /// The normalized form used for the dictionary lookup.
+    pub lookup: String,
+    /// The pronunciation source identifier (always `"cmudict"` for this impl).
+    pub source: &'static str,
+    /// All candidate pronunciations ordered by dictionary priority.
+    ///
+    /// Each inner `Vec<CmuPhoneme>` is one pronunciation variant.  Empty when
+    /// `status` is [`PronunciationStatus::Missing`] or
+    /// [`PronunciationStatus::Guessed`].
+    pub candidates: Vec<Vec<CmuPhoneme>>,
+    /// How the pronunciation was resolved.
+    pub status: PronunciationStatus,
+}
+
 /// Stress level for a CMUdict vowel phoneme.
 ///
 /// CMUdict encodes stress by appending a digit to vowel symbols:
@@ -152,6 +203,68 @@ impl CmudictPronouncer {
         self.entries.get(key.as_str())
     }
 
+    /// Look up `word` and return a [`PronunciationEntry`] that includes **all**
+    /// candidate pronunciations, the resolution status, and provenance.
+    ///
+    /// The lookup strategy is:
+    /// 1. Try an exact case-insensitive match first.
+    /// 2. If that fails, strip leading/trailing punctuation and retry
+    ///    (e.g. `"three,"` → `"three"`).
+    /// 3. If still not found, return an entry with status
+    ///    [`PronunciationStatus::Missing`] and an empty `candidates` list.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use listenbury::linguistic::{CmudictPronouncer, PronunciationStatus};
+    /// let p = CmudictPronouncer::bundled();
+    ///
+    /// let entry = p.lookup_entry("THREE");
+    /// assert_eq!(entry.status, PronunciationStatus::Exact);
+    /// assert!(!entry.candidates.is_empty());
+    ///
+    /// let entry = p.lookup_entry("xyzzyqux");
+    /// assert_eq!(entry.status, PronunciationStatus::Missing);
+    /// assert!(entry.candidates.is_empty());
+    /// ```
+    pub fn lookup_entry(&self, word: &str) -> PronunciationEntry {
+        // 1. Exact case-insensitive lookup.
+        let exact_key = word.to_lowercase();
+        if let Some(variants) = self.entries.get(exact_key.as_str()) {
+            return PronunciationEntry {
+                original: word.to_string(),
+                lookup: exact_key,
+                source: "cmudict",
+                candidates: variants.clone(),
+                status: PronunciationStatus::Exact,
+            };
+        }
+
+        // 2. Normalized lookup: strip leading/trailing non-alphabetic chars,
+        //    collapse apostrophes in common contractions.
+        let normalized = normalize_for_lookup(word);
+        if normalized != exact_key {
+            if let Some(variants) = self.entries.get(normalized.as_str()) {
+                return PronunciationEntry {
+                    original: word.to_string(),
+                    lookup: normalized,
+                    source: "cmudict",
+                    candidates: variants.clone(),
+                    status: PronunciationStatus::Normalized,
+                };
+            }
+        }
+
+        // 3. Not found.
+        PronunciationEntry {
+            original: word.to_string(),
+            lookup: if normalized.is_empty() { exact_key } else { normalized },
+            source: "cmudict",
+            candidates: Vec::new(),
+            status: PronunciationStatus::Missing,
+        }
+    }
+
     /// Return the number of entries in the dictionary.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -249,6 +362,18 @@ impl OrthographyToPhonemes for CmudictPronouncer {
 
 /// The representative CMUdict subset shipped with this crate.
 static BUNDLED_CMUDICT: &str = include_str!("../../data/cmudict.dict");
+
+/// Normalize a raw transcript word for CMUdict lookup.
+///
+/// - Strips leading and trailing non-alphabetic characters (punctuation, etc.).
+/// - Lowercases the result.
+/// - Preserves internal apostrophes so that contractions like `"it's"` or
+///   `"don't"` survive intact for CMUdict entries that include them.
+fn normalize_for_lookup(word: &str) -> String {
+    // Strip leading non-alpha chars.
+    let stripped = word.trim_matches(|c: char| !c.is_alphabetic());
+    stripped.to_lowercase()
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -456,5 +581,85 @@ mod tests {
             "expected at least 100 entries, got {}",
             p.len()
         );
+    }
+
+    // ------------------------------------------------------------------
+    // PronunciationEntry / lookup_entry
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn lookup_entry_exact_match() {
+        let p = pronouncer();
+        let entry = p.lookup_entry("three");
+        assert_eq!(entry.status, PronunciationStatus::Exact);
+        assert_eq!(entry.original, "three");
+        assert_eq!(entry.source, "cmudict");
+        assert!(!entry.candidates.is_empty(), "should have at least one pronunciation");
+    }
+
+    #[test]
+    fn lookup_entry_case_insensitive_is_exact() {
+        let p = pronouncer();
+        let entry = p.lookup_entry("THREE");
+        assert_eq!(entry.status, PronunciationStatus::Exact);
+        assert!(!entry.candidates.is_empty());
+    }
+
+    #[test]
+    fn lookup_entry_returns_all_candidates() {
+        // "the" has three variants in CMUdict
+        let dict = "THE  DH AH0\nTHE(2)  DH AH1\nTHE(3)  DH IY0\n";
+        let p = CmudictPronouncer::from_str(dict);
+        let entry = p.lookup_entry("the");
+        assert_eq!(entry.candidates.len(), 3);
+        assert_eq!(entry.status, PronunciationStatus::Exact);
+    }
+
+    #[test]
+    fn lookup_entry_normalized_strips_trailing_punctuation() {
+        let p = pronouncer();
+        // "three," should normalize to "three" and still find a result.
+        let entry = p.lookup_entry("three,");
+        assert_eq!(entry.status, PronunciationStatus::Normalized);
+        assert!(!entry.candidates.is_empty());
+        assert_eq!(entry.original, "three,");
+        assert_eq!(entry.lookup, "three");
+    }
+
+    #[test]
+    fn lookup_entry_normalized_strips_leading_punctuation() {
+        let p = pronouncer();
+        let entry = p.lookup_entry("\"hello");
+        assert_eq!(entry.status, PronunciationStatus::Normalized);
+        assert_eq!(entry.lookup, "hello");
+        assert!(!entry.candidates.is_empty());
+    }
+
+    #[test]
+    fn lookup_entry_unknown_word_is_missing() {
+        let p = pronouncer();
+        let entry = p.lookup_entry("xyzzyqux");
+        assert_eq!(entry.status, PronunciationStatus::Missing);
+        assert!(entry.candidates.is_empty());
+        assert_eq!(entry.source, "cmudict");
+    }
+
+    #[test]
+    fn lookup_entry_phonemes_match_lookup() {
+        let p = pronouncer();
+        let entry = p.lookup_entry("doctor");
+        assert_eq!(entry.status, PronunciationStatus::Exact);
+        let bases: Vec<&str> = entry.candidates[0].iter().map(|ph| ph.base.as_str()).collect();
+        assert_eq!(bases, vec!["D", "AA", "K", "T", "ER"]);
+    }
+
+    #[test]
+    fn normalize_for_lookup_strips_both_ends() {
+        assert_eq!(normalize_for_lookup("\"hello!\""), "hello");
+    }
+
+    #[test]
+    fn normalize_for_lookup_lowercases() {
+        assert_eq!(normalize_for_lookup("Hello"), "hello");
     }
 }

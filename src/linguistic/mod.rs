@@ -6,7 +6,7 @@ pub mod service;
 pub mod sound_it_out;
 pub mod variety;
 
-pub use cmudict::{CmuPhoneme, CmudictPronouncer, Stress};
+pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
