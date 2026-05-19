@@ -379,7 +379,11 @@ fn browser_transcript_player_selection_playback_is_bounded() {
     assert!(js.contains(
         "void seekSessionAudioToMs(target.startMs, { stopAtMs: target.endMs, autoplay });"
     ));
+    assert!(js.contains("start_ms: target.startMs"));
+    assert!(js.contains("end_ms: target.endMs"));
     assert!(js.contains("setPlaybackStop(startMs, endMs);"));
+    assert!(js.contains("function schedulePlaybackStopTimer"));
+    assert!(js.contains("stopPlaybackAtBoundary();"));
     assert!(js.contains("const stopSeconds = state.stopAtMs / 1000;"));
     assert!(js.contains("audio.currentTime = stopSeconds;"));
     assert!(js.contains("playSelectionClipLabel: canPlaySelectionTarget(target) ? \"Play word clip\" : \"Play selected clip\""));

@@ -27,7 +27,8 @@ use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::speech::transcript::TranscriptCandidateEvent;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::word::{
-    TimedWordStream, TranscriptWord, WordStreamId, WordStreamSource, transcript_to_word_stream,
+    TimedWordStream, TranscriptWord, WordStreamId, WordStreamSource,
+    transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
 };
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::{AudioFrame, ExactTimestamp, WhisperSpeechRecognizer};
@@ -725,12 +726,19 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let forced_groups = state
         .active_groups
         .drain()
-        .map(|(_, group)| group.frames)
+        .map(|(_, group)| group)
         .collect::<Vec<_>>();
-    for frames in forced_groups {
+    for group in forced_groups {
         state.groups_closed += 1;
-        let output = transcribe_group(&frames, &mut state.recognizer)?;
-        emit_web_transcribe_output(&mut state, output, true, ExactTimestamp::now())?;
+        let output = transcribe_group(&group.frames, &mut state.recognizer)?;
+        emit_web_transcribe_output(
+            &mut state,
+            output,
+            &group.frames,
+            group.opened_at_ms,
+            true,
+            ExactTimestamp::now(),
+        )?;
     }
 
     let callback_drops = dropped_in_callback.load(Ordering::Relaxed);
@@ -975,9 +983,15 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
         }
     }
     for (frames, opened_at_ms) in prospective_groups {
-        let mut output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
-        offset_transcript_words_to_session(&mut output.words, opened_at_ms);
-        emit_web_transcribe_output(state, output, false, ExactTimestamp::now())?;
+        let output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
+        emit_web_transcribe_output(
+            state,
+            output,
+            &frames,
+            opened_at_ms,
+            false,
+            ExactTimestamp::now(),
+        )?;
     }
 
     for event in events {
@@ -993,8 +1007,7 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
             state.live_trace.emit(trace_event)?;
 
             if let Some(group) = state.active_groups.remove(&id) {
-                let mut output = transcribe_group(&group.frames, &mut state.recognizer)?;
-                offset_transcript_words_to_session(&mut output.words, group.opened_at_ms);
+                let output = transcribe_group(&group.frames, &mut state.recognizer)?;
                 let finalized_text = output.text.clone();
                 if confirms_existing_finalized_segments(state, &finalized_text) {
                     let segment_count = state.finalized_segments.len();
@@ -1006,7 +1019,14 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
                     )?;
                     continue;
                 }
-                emit_web_transcribe_output(state, output, true, ExactTimestamp::now())?;
+                emit_web_transcribe_output(
+                    state,
+                    output,
+                    &group.frames,
+                    group.opened_at_ms,
+                    true,
+                    ExactTimestamp::now(),
+                )?;
                 if !finalized_text.is_empty() {
                     append_finalized_asr_segment(state, group.frames, finalized_text);
                     queue_refinement_if_due(state);
@@ -1023,6 +1043,8 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
 fn emit_web_transcribe_output(
     state: &mut WebTranscribeState,
     output: TranscribeGroupOutput,
+    audio_frames: &[AudioFrame],
+    word_timing_offset_ms: u64,
     is_final: bool,
     occurred_at: ExactTimestamp,
 ) -> Result<()> {
@@ -1049,8 +1071,12 @@ fn emit_web_transcribe_output(
         let stream = if output.words.is_empty() {
             live_asr_text_to_word_stream(WordStreamId(state.next_stream_id), &output.text)
         } else {
-            let mut stream =
-                transcript_to_word_stream(WordStreamId(state.next_stream_id), &output.words);
+            let mut stream = transcript_to_energy_snapped_word_stream(
+                WordStreamId(state.next_stream_id),
+                &output.words,
+                audio_frames,
+            );
+            offset_timed_word_stream_to_session(&mut stream, word_timing_offset_ms);
             stream.source = WordStreamSource::LiveAsr;
             stream
         };
@@ -1072,13 +1098,15 @@ fn emit_web_transcribe_output(
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn offset_transcript_words_to_session(words: &mut [TranscriptWord], offset_ms: u64) {
+fn offset_timed_word_stream_to_session(stream: &mut TimedWordStream, offset_ms: u64) {
     if offset_ms == 0 {
         return;
     }
-    for word in words {
-        word.start_ms = word.start_ms.map(|start| start.saturating_add(offset_ms));
-        word.end_ms = word.end_ms.map(|end| end.saturating_add(offset_ms));
+    for word in &mut stream.words {
+        if let Some(timing) = word.timing.as_mut() {
+            timing.start_ms = timing.start_ms.saturating_add(offset_ms);
+            timing.end_ms = timing.end_ms.saturating_add(offset_ms);
+        }
     }
 }
 

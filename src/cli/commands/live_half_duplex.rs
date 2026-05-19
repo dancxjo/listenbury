@@ -180,7 +180,9 @@ use listenbury::word::tts_export::generated_text_to_word_stream;
         feature = "tts-piper"
     )
 ))]
-use listenbury::word::{TimedWordStream, WordCommitment, WordStreamId, transcript_to_word_stream};
+use listenbury::word::{
+    TimedWordStream, WordCommitment, WordStreamId, transcript_to_energy_snapped_word_stream,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -800,8 +802,11 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             transcript_event.text = Some(transcript.to_string());
             state.trace.buffer(transcript_event);
             if !asr_output.words.is_empty() {
-                let mut stream =
-                    transcript_to_word_stream(WordStreamId(turn_id), &asr_output.words);
+                let mut stream = transcript_to_energy_snapped_word_stream(
+                    WordStreamId(turn_id),
+                    &asr_output.words,
+                    &group_frames,
+                );
                 stream.source = listenbury::word::WordStreamSource::LiveAsr;
                 let mut stream_event =
                     state

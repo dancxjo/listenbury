@@ -258,7 +258,11 @@ impl CmudictPronouncer {
         // 3. Not found.
         PronunciationEntry {
             original: word.to_string(),
-            lookup: if normalized.is_empty() { exact_key } else { normalized },
+            lookup: if normalized.is_empty() {
+                exact_key
+            } else {
+                normalized
+            },
             source: "cmudict",
             candidates: Vec::new(),
             status: PronunciationStatus::Missing,
@@ -594,7 +598,10 @@ mod tests {
         assert_eq!(entry.status, PronunciationStatus::Exact);
         assert_eq!(entry.original, "three");
         assert_eq!(entry.source, "cmudict");
-        assert!(!entry.candidates.is_empty(), "should have at least one pronunciation");
+        assert!(
+            !entry.candidates.is_empty(),
+            "should have at least one pronunciation"
+        );
     }
 
     #[test]
@@ -649,7 +656,10 @@ mod tests {
         let p = pronouncer();
         let entry = p.lookup_entry("doctor");
         assert_eq!(entry.status, PronunciationStatus::Exact);
-        let bases: Vec<&str> = entry.candidates[0].iter().map(|ph| ph.base.as_str()).collect();
+        let bases: Vec<&str> = entry.candidates[0]
+            .iter()
+            .map(|ph| ph.base.as_str())
+            .collect();
         assert_eq!(bases, vec!["D", "AA", "K", "T", "ER"]);
     }
 

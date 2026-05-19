@@ -1,9 +1,11 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 import cytoscape from "https://esm.sh/cytoscape@3.30.2";
 import {
+  buildWaveformResolutionLevels,
   createTimeScale,
   createTimelineViewport,
   renderedCanvasXToTimelinePx,
+  selectWaveformResolutionLevel,
 } from "/assets/timeline-viewport.mjs";
 import {
   AlignmentKind,
@@ -30,6 +32,7 @@ import {
 } from "/assets/shared/events/reducers.mjs";
 import {
   buildEnergyEnvelopeFromAudioBuffer,
+  calculateReverseWordBreaks,
   detectEnergyLandmarks,
   refineWordTimingsWithEnergy,
 } from "/assets/energy-timing.mjs";
@@ -117,6 +120,7 @@ const state = {
   selectedItem: null,
   maxDurationMs: 1000,
   stopAtMs: null,
+  playbackStopTimerId: null,
   // Custom timeline renderer state
   zoomPxPerSecond: DEFAULT_ZOOM_PX_PER_SECOND,
   followLatest: false,
@@ -124,6 +128,7 @@ const state = {
   brushSelection: null,
   waveform: {
     url: null,
+    levels: null,
     peaks: null,
     durationMs: 0,
     status: "idle",
@@ -198,6 +203,41 @@ function RibbonToken({ token }) {
       title: token.title,
     },
     token.text,
+  );
+}
+
+function TranscriptLiteralToken({ token, suffix = "" }) {
+  const className = [
+    "transcript-literal-token",
+    token.selection ? "transcript-literal-token-button" : "",
+    token.selected ? "selected" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const text = literalTranscriptTokenText(token.text);
+  if (token.selection) {
+    return h(
+      "button",
+      {
+        type: "button",
+        className,
+        title: token.title ?? `Play "${token.text}"`,
+        "aria-label": `Play transcript word: ${token.text}`,
+        "aria-pressed": Boolean(token.selected),
+        onClick: () => selectTranscriptToken(token),
+      },
+      text,
+      suffix,
+    );
+  }
+  return h(
+    "span",
+    {
+      className,
+      title: token.title,
+    },
+    text,
+    suffix,
   );
 }
 
@@ -300,8 +340,12 @@ function TranscriptRibbonPane({ projection }) {
       { className: "transcript-ribbon-body" },
       h(
         "div",
-        { id: "transcript-ribbon-literal", className: "transcript-ribbon-literal" },
-        projection.literalTranscriptText,
+        {
+          id: "transcript-ribbon-literal",
+          className: "transcript-ribbon-literal",
+          "aria-label": projection.literalTranscriptText,
+        },
+        renderLiteralTranscriptTokens(projection.transcriptTokens),
       ),
       h(
         "span",
@@ -424,18 +468,17 @@ function renderShell() {
 }
 
 audio.addEventListener("timeupdate", () => {
-  if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
-    const stopSeconds = state.stopAtMs / 1000;
-    audio.pause();
-    if (audio.currentTime > stopSeconds) {
-      audio.currentTime = stopSeconds;
-    }
-    clearPlaybackStop();
-  }
+  enforcePlaybackStop();
   refreshPlaybackState();
 });
-audio.addEventListener("play", refreshPlaybackState);
-audio.addEventListener("pause", refreshPlaybackState);
+audio.addEventListener("play", () => {
+  schedulePlaybackStopTimer();
+  refreshPlaybackState();
+});
+audio.addEventListener("pause", () => {
+  clearPlaybackStopTimer();
+  refreshPlaybackState();
+});
 audio.addEventListener("loadedmetadata", () => {
   syncMaxDurationWithAudio();
   render();
@@ -1380,8 +1423,22 @@ function transcriptTokensFromSession(session) {
 
 function literalTranscriptTextFromTokens(tokens) {
   return tokens
-    .map((token) => String(token.text ?? "").replace(/\s+/g, ""))
-    .join("");
+    .map((token) => String(token.text ?? ""))
+    .join(" ");
+}
+
+function literalTranscriptTokenText(text) {
+  return String(text ?? "").replace(/ /g, "\u00a0");
+}
+
+function renderLiteralTranscriptTokens(tokens) {
+  return tokens.map((token, index) =>
+    h(TranscriptLiteralToken, {
+      key: `literal-${index}`,
+      token,
+      suffix: index === tokens.length - 1 ? "" : "\u00a0",
+    }),
+  );
 }
 
 function transcriptTokenSelection(turnId, word, wordIndex, laneLabel) {
@@ -1787,21 +1844,38 @@ function normalizeWordLane(lane) {
   const totalWords = lane.stream.words.length || 1;
   const baseWords = lane.stream.words.map((word, wordIndex) => {
     const hasMeasuredTiming = Boolean(word.timing);
+    const hasBackendEnergyTiming = hasMeasuredTiming && word.boundary_source === "RefinedAcoustic";
     const timing = hasMeasuredTiming
       ? word.timing
       : fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
+    const energyTiming = hasBackendEnergyTiming
+      ? {
+          ...timing,
+          method: "backend-acoustic-refiner",
+          confidence: word.timing_confidence ?? null,
+        }
+      : null;
     return {
       ...word,
       whisperTiming: hasMeasuredTiming ? word.timing : null,
-      energyTiming: null,
+      energyTiming,
       energySnapConfidence: null,
+      reverseWordBreak: null,
       resolvedTiming: timing,
-      timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
+      timingResolution: hasBackendEnergyTiming
+        ? "energy.snapped"
+        : hasMeasuredTiming
+          ? "word.timing"
+          : "fallback-layout",
       timingSourceDetail: describeTimingSource(
         {
           ...word,
-          timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
-          energyTiming: null,
+          timingResolution: hasBackendEnergyTiming
+            ? "energy.snapped"
+            : hasMeasuredTiming
+              ? "word.timing"
+              : "fallback-layout",
+          energyTiming,
         },
         hasMeasuredTiming,
       ),
@@ -1835,6 +1909,7 @@ function normalizeWordLane(lane) {
       whisperTiming: refinement.whisperTiming,
       energyTiming: refinement.energyTiming,
       energySnapConfidence: refinement.energySnapConfidence ?? null,
+      reverseWordBreak: refinement.reverseWordBreak ?? null,
       resolvedTiming: refinement.resolvedTiming ?? refinement.whisperTiming,
       timingResolution: refinement.timingResolution ?? "word.timing",
     };
@@ -2179,6 +2254,7 @@ async function loadWaveform(url, options = {}) {
   if (!preserveCurrentWaveform) {
     state.waveform = {
       url,
+      levels: null,
       peaks: null,
       durationMs: 0,
       status: "loading",
@@ -2216,6 +2292,8 @@ async function loadWaveform(url, options = {}) {
             minDb: SPECTROGRAM_MIN_DB,
             maxDb: SPECTROGRAM_MAX_DB,
           });
+    const levels = buildWaveformResolutionLevels(audioBuffer);
+    const peaks = waveformPeaksFromLevels(levels);
     const durationMs = Math.round(audioBuffer.duration * 1000);
     const waveformUnchanged =
       preserveCurrentWaveform &&
@@ -2224,6 +2302,7 @@ async function loadWaveform(url, options = {}) {
       previousWaveform.spectrogram?.sampleCount === spectrogram.sampleCount;
     state.waveform = waveformUnchanged ? previousWaveform : {
       url,
+      levels,
       peaks,
       durationMs,
       status: "ready",
@@ -2242,6 +2321,7 @@ async function loadWaveform(url, options = {}) {
     if (!preserveCurrentWaveform) {
       state.waveform = {
         url,
+        levels: null,
         peaks: null,
         durationMs: 0,
         status: "error",
@@ -2282,26 +2362,12 @@ function clearLiveWaveformRetry() {
   liveWaveformRetryTimer = null;
 }
 
-function waveformPeaksFromAudioBuffer(audioBuffer) {
-  const channelCount = audioBuffer.numberOfChannels;
-  const sampleCount = audioBuffer.length;
-  const bucketCount = Math.min(WAVEFORM_PEAK_BUCKETS, Math.max(1, sampleCount));
-  const samplesPerBucket = Math.max(1, Math.floor(sampleCount / bucketCount));
-  const peaks = [];
-
-  for (let bucket = 0; bucket < bucketCount; bucket++) {
-    const start = bucket * samplesPerBucket;
-    const end = bucket === bucketCount - 1 ? sampleCount : Math.min(sampleCount, start + samplesPerBucket);
-    let peak = 0;
-    for (let channel = 0; channel < channelCount; channel++) {
-      const data = audioBuffer.getChannelData(channel);
-      for (let i = start; i < end; i++) {
-        peak = Math.max(peak, Math.abs(data[i] ?? 0));
-      }
-    }
-    peaks.push(Math.min(1, peak));
+function waveformPeaksFromLevels(levels) {
+  const overview = Array.isArray(levels) ? levels[0] : null;
+  if (!overview?.buckets?.length) {
+    return null;
   }
-  return peaks;
+  return overview.buckets.map((bucket) => Math.min(1, Math.max(Math.abs(bucket.min_sample ?? 0), Math.abs(bucket.max_sample ?? 0))));
 }
 
 function syncMaxDurationWithAudio() {
@@ -3372,7 +3438,7 @@ function createTimelinePlaybackDeck() {
 }
 
 function appendWaveformOverlay(trackEl, trackContentWidth) {
-  if (state.waveform.status !== "ready" || !state.waveform.peaks?.length || state.waveform.durationMs <= 0) {
+  if (state.waveform.status !== "ready" || !getWaveformLevelForCurrentZoom()?.buckets?.length || state.waveform.durationMs <= 0) {
     return;
   }
 
@@ -3425,22 +3491,88 @@ function waveformCanvasMetrics(canvas, trackContentWidth, fallbackHeightPx) {
   };
 }
 
-function waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks) {
-  const timelinePx = renderedCanvasXToTimelinePx({
-    canvasX: x,
+function getWaveformLevelForCurrentZoom() {
+  return selectWaveformResolutionLevel(state.waveform.levels, {
+    pxPerSecond: state.zoomPxPerSecond,
+  });
+}
+
+function waveformBucketIndexAtTimelinePx(timelinePx, level) {
+  const bucketCount = level?.buckets?.length ?? 0;
+  if (state.waveform.durationMs <= 0 || bucketCount <= 0) {
+    return null;
+  }
+  const timeMs = currentTimeScale().pxToMs(timelinePx);
+  if (timeMs < 0 || timeMs >= state.waveform.durationMs) {
+    return null;
+  }
+  return Math.min(bucketCount - 1, Math.floor((timeMs / state.waveform.durationMs) * bucketCount));
+}
+
+function waveformWindowAtCanvasX(canvasX, canvasWidthPx, renderedWidthPx, level) {
+  const startTimelinePx = renderedCanvasXToTimelinePx({
+    canvasX,
     canvasWidthPx,
     renderedWidthPx,
   });
-  const peakIndex = currentTimeScale().waveformPeakIndexAtPx(timelinePx, {
-    audioDurationMs: state.waveform.durationMs,
-    peakCount: peaks.length,
+  const endTimelinePx = renderedCanvasXToTimelinePx({
+    canvasX: canvasX + 1,
+    canvasWidthPx,
+    renderedWidthPx,
   });
-  return peakIndex === null ? 0 : (peaks[peakIndex] ?? 0);
+  const startIndex = waveformBucketIndexAtTimelinePx(startTimelinePx, level);
+  const endIndex = waveformBucketIndexAtTimelinePx(endTimelinePx, level);
+  if (startIndex === null || endIndex === null) {
+    return { min: 0, max: 0, rms: 0 };
+  }
+
+  const firstBucketIndex = Math.max(0, Math.min(startIndex, endIndex));
+  const lastBucketIndex = Math.min(level.buckets.length - 1, Math.max(firstBucketIndex, endIndex));
+  let min = 0;
+  let max = 0;
+  let rmsSumSquares = 0;
+  let count = 0;
+  for (let index = firstBucketIndex; index <= lastBucketIndex; index++) {
+    const bucket = level.buckets[index];
+    min = count === 0 ? (bucket?.min_sample ?? 0) : Math.min(min, bucket?.min_sample ?? 0);
+    max = count === 0 ? (bucket?.max_sample ?? 0) : Math.max(max, bucket?.max_sample ?? 0);
+    rmsSumSquares += (bucket?.rms_energy ?? 0) ** 2;
+    count += 1;
+  }
+  return {
+    min,
+    max,
+    rms: count > 0 ? Math.sqrt(rmsSumSquares / count) : 0,
+  };
+}
+
+function formatSecondsFromMs(ms) {
+  return `${(Math.max(0, ms ?? 0) / 1000).toFixed(2)}s`;
+}
+
+function waveformResolutionDebugSummary() {
+  const viewport = currentTimelineViewport();
+  const visible = viewport.visibleRangeMs({ minDurationMs: MIN_VIEW_DURATION_MS });
+  const level = getWaveformLevelForCurrentZoom();
+  return {
+    resolutionLabel: level?.label ?? "overview",
+    visibleLabel: `${formatSecondsFromMs(visible.startMs)}..${formatSecondsFromMs(visible.endMs)}`,
+    pxPerSecondLabel: `${Math.round(state.zoomPxPerSecond)} px/s`,
+  };
+}
+
+function updateWaveformResolutionDebugReadout() {
+  const el = document.getElementById("waveform-resolution-debug");
+  if (!el) {
+    return;
+  }
+  const summary = waveformResolutionDebugSummary();
+  el.textContent = `${summary.resolutionLabel} · ${summary.visibleLabel} · ${summary.pxPerSecondLabel}`;
 }
 
 function drawWaveformOverlay(canvas, trackContentWidth) {
-  const peaks = state.waveform.peaks;
-  if (!peaks?.length) {
+  const level = getWaveformLevelForCurrentZoom();
+  if (!level?.buckets?.length) {
     return;
   }
 
@@ -3462,10 +3594,11 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
 
   ctx.beginPath();
   for (let x = 0; x < canvasWidthPx; x++) {
-    const peak = waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks);
-    const amp = peak <= 0 ? 0 : Math.max(1, peak * maxAmp);
-    ctx.moveTo(x + 0.5, centerY - amp);
-    ctx.lineTo(x + 0.5, centerY + amp);
+    const window = waveformWindowAtCanvasX(x, canvasWidthPx, renderedWidthPx, level);
+    const minAmpPx = Math.max(0, Math.abs(window.min) * maxAmp);
+    const maxAmpPx = Math.max(0, Math.abs(window.max) * maxAmp);
+    ctx.moveTo(x + 0.5, centerY - Math.max(1, maxAmpPx));
+    ctx.lineTo(x + 0.5, centerY + Math.max(1, minAmpPx));
   }
   ctx.stroke();
 }
@@ -3711,11 +3844,16 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   h2El.textContent = "Waveform & Spectrogram";
   headerEl.append(h2El);
   const metaEl = document.createElement("div");
-  metaEl.className = "lane-meta";
+  metaEl.className = "lane-meta waveform-lane-meta";
   if (state.waveform.status === "ready") {
     metaEl.textContent = spectrogramLevel
       ? `${(state.waveform.durationMs / 1000).toFixed(2)} s · ${spectrogramLevel.fftSize} FFT`
       : `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
+    const durationEl = document.createElement("div");
+    durationEl.textContent = formatSecondsFromMs(state.waveform.durationMs);
+    const debugEl = document.createElement("div");
+    debugEl.id = "waveform-resolution-debug";
+    metaEl.append(durationEl, debugEl);
   } else if (state.waveform.status === "loading") {
     metaEl.textContent = "Loading audio…";
   } else if (uiState.liveMode && state.payload?.audio?.url) {
@@ -3726,6 +3864,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   headerEl.append(metaEl);
   labelEl.append(headerEl);
   labelsCol.append(labelEl);
+  updateWaveformResolutionDebugReadout();
 
   // Track element
   const trackEl = document.createElement("div");
@@ -3875,8 +4014,8 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, canvasWidthPx, cssHeight);
 
-  const peaks = state.waveform.peaks;
-  if (!peaks?.length) {
+  const level = getWaveformLevelForCurrentZoom();
+  if (!level?.buckets?.length) {
     // Flat zero-line placeholder when no audio is loaded
     ctx.strokeStyle = "rgba(157, 171, 186, 0.28)";
     ctx.lineWidth = 1;
@@ -3896,10 +4035,9 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
   const topY = new Array(canvasWidthPx);
   const botY = new Array(canvasWidthPx);
   for (let x = 0; x < canvasWidthPx; x++) {
-    const peak = waveformPeakAtCanvasX(x, canvasWidthPx, renderedWidthPx, peaks);
-    const amp = Math.max(0, peak * maxAmp);
-    topY[x] = centerY - amp;
-    botY[x] = centerY + amp;
+    const window = waveformWindowAtCanvasX(x, canvasWidthPx, renderedWidthPx, level);
+    topY[x] = centerY - Math.max(0, window.max * maxAmp);
+    botY[x] = centerY + Math.max(0, Math.abs(window.min) * maxAmp);
   }
 
   // Filled waveform envelope
@@ -4068,11 +4206,14 @@ function centralWaveformSignature(renderedWidthPx) {
   const canvasWidthPx = Math.max(1, Math.round(Math.min(renderedWidthPx, WAVEFORM_CANVAS_MAX_WIDTH_PX)));
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const debugSignature = uiState.diagnosticsExpanded ? wordTimingDebugSignature() : "";
+  const level = getWaveformLevelForCurrentZoom();
   return [
     state.waveform.status,
     state.waveform.url ?? "",
     state.waveform.durationMs,
     waveformPeakVersion(state.waveform.peaks),
+    level?.label ?? "",
+    level?.bucketDurationMs ?? "",
     state.waveform.energyEnvelope?.frames?.length ?? 0,
     renderedWidthPx,
     canvasWidthPx,
@@ -4196,6 +4337,7 @@ function buildRulerTicks(maxDurationMs, viewportMs) {
 
 function onTracksScroll() {
   scheduleWaveformSpectrogramDraw(document.getElementById("waveform-spectrogram-canvas"));
+  updateWaveformResolutionDebugReadout();
   if (_programmaticScroll) return;
   if (state.followLatest) {
     state.followLatest = false;
@@ -5421,7 +5563,16 @@ function playSelectionTarget(target, autoplay) {
     return false;
   }
   if (target.audioRef?.url) {
-    playAudioClip(target.audioRef, target.startMs, target.endMs, autoplay);
+    playAudioClip(
+      {
+        ...target.audioRef,
+        start_ms: target.startMs,
+        end_ms: target.endMs,
+      },
+      target.startMs,
+      target.endMs,
+      autoplay,
+    );
     return true;
   }
   if (!audio.src) {
@@ -5475,10 +5626,57 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
 
 function setPlaybackStop(startMs, endMs) {
   state.stopAtMs = endMs > startMs ? endMs : null;
+  schedulePlaybackStopTimer();
 }
 
 function clearPlaybackStop() {
+  clearPlaybackStopTimer();
   state.stopAtMs = null;
+}
+
+function clearPlaybackStopTimer() {
+  if (state.playbackStopTimerId !== null) {
+    window.clearTimeout(state.playbackStopTimerId);
+    state.playbackStopTimerId = null;
+  }
+}
+
+function schedulePlaybackStopTimer() {
+  clearPlaybackStopTimer();
+  if (state.stopAtMs === null || audio.paused) {
+    return;
+  }
+
+  const remainingMs = state.stopAtMs - audio.currentTime * 1000;
+  state.playbackStopTimerId = window.setTimeout(
+    () => {
+      state.playbackStopTimerId = null;
+      stopPlaybackAtBoundary();
+      refreshPlaybackState();
+    },
+    Math.max(0, remainingMs),
+  );
+}
+
+function enforcePlaybackStop() {
+  if (state.stopAtMs === null || audio.currentTime * 1000 < state.stopAtMs) {
+    return false;
+  }
+
+  stopPlaybackAtBoundary();
+  return true;
+}
+
+function stopPlaybackAtBoundary() {
+  if (state.stopAtMs === null) {
+    return;
+  }
+  const stopSeconds = state.stopAtMs / 1000;
+  audio.pause();
+  if (audio.currentTime !== stopSeconds) {
+    audio.currentTime = stopSeconds;
+  }
+  clearPlaybackStop();
 }
 
 function formatRulerLabel(ms) {
