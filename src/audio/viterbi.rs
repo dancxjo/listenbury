@@ -82,6 +82,9 @@ pub fn viterbi_align_pronunciation(
     // ---- Viterbi DP --------------------------------------------------------
     // dp[f][p] = best log-probability of reaching phone p at frame f.
     // bt[f][p] = phone index at frame f-1 on the best path to (f, p).
+    //
+    // Clamp log scores to this floor to avoid -inf polluting the DP.
+    const MIN_LOG_EMISSION_SCORE: f32 = -20.0;
     let neg_inf: f32 = f32::NEG_INFINITY;
     let mut dp = vec![vec![neg_inf; n_phones]; n_frames];
     let mut bt = vec![vec![0usize; n_phones]; n_frames];
@@ -93,7 +96,7 @@ pub fn viterbi_align_pronunciation(
     };
 
     // Initialise frame 0.
-    dp[0][0] = emit(0, 0).ln().max(-20.0);
+    dp[0][0] = emit(0, 0).ln().max(MIN_LOG_EMISSION_SCORE);
     // Phones 1..n_phones cannot be reached at frame 0 (enforce left-to-right).
     // dp[0][p>0] stays at neg_inf.
 
@@ -110,7 +113,7 @@ pub fn viterbi_align_pronunciation(
                 (stay, p)
             };
             dp[f][p] = if best > neg_inf {
-                best + emit(f, p).ln().max(-20.0)
+                best + emit(f, p).ln().max(MIN_LOG_EMISSION_SCORE)
             } else {
                 neg_inf
             };
@@ -131,7 +134,7 @@ pub fn viterbi_align_pronunciation(
     // Compute overall path score (geometric mean of per-frame emission scores).
     let path_score: f32 = {
         let total_log: f32 = (0..n_frames)
-            .map(|f| emit(f, phone_assignment[f]).ln().max(-20.0))
+            .map(|f| emit(f, phone_assignment[f]).ln().max(MIN_LOG_EMISSION_SCORE))
             .sum();
         // Exponentiate the per-frame average to get a 0..1 score.
         (total_log / n_frames as f32).exp().clamp(0.0, 1.0)

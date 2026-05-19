@@ -83,6 +83,18 @@ export function phoneSpansFromHypotheses(hypotheses) {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Minimum pixel width for a phone span label to be rendered. */
+const MIN_LABEL_WIDTH_PX = 6;
+
+/** Minimum alpha for phone span fill (low confidence). */
+const ALPHA_BASE = 0.25;
+/** Additional alpha range scaled by confidence. */
+const ALPHA_RANGE = 0.45;
+
+// ---------------------------------------------------------------------------
 // Colour helpers
 // ---------------------------------------------------------------------------
 
@@ -97,7 +109,7 @@ export function phoneSpansFromHypotheses(hypotheses) {
  * @returns {string} CSS colour string
  */
 function phoneSpanFillColour(span) {
-  const alpha = (0.25 + span.confidence * 0.45).toFixed(2);
+  const alpha = (ALPHA_BASE + span.confidence * ALPHA_RANGE).toFixed(2);
   if (span.method === "viterbi.fused_heuristic") {
     return `rgba(80, 160, 240, ${alpha})`;
   }
@@ -165,7 +177,7 @@ export function drawViterbiPhoneSpans(ctx, metrics, spans, msToCanvasX) {
     ctx.strokeRect(x0, rowTop, width, rowHeight);
 
     // IPA label — only draw if there is enough horizontal space.
-    if (width >= 6) {
+    if (width >= MIN_LABEL_WIDTH_PX) {
       const fontSize = Math.min(rowHeight * 0.55, 13);
       ctx.font = `${fontSize}px serif`;
       ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
