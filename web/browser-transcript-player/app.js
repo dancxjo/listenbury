@@ -1146,15 +1146,34 @@ function debugEntriesFromSession(session) {
 function transcriptTokensFromSession(session) {
   const tokens = [];
   const sortedTurns = [...session.turns.entries()].sort((a, b) => a[0] - b[0]);
+  const refined = session.refinedTranscript;
+
+  if (refined?.words?.length) {
+    for (const word of refined.words) {
+      tokens.push({
+        className: `transcript-token commit-confirmed${word._revisions?.length ? " was-revised" : ""}`,
+        text: word.text,
+        title: formatRevisionTooltip(word) || "confirmed by broader ASR context",
+      });
+    }
+  } else if (refined?.text) {
+    tokens.push({
+      className: "transcript-token span-state-confirmed",
+      text: refined.text,
+      title: "confirmed by broader ASR context",
+    });
+  }
 
   for (const [, liveTurn] of sortedTurns) {
-    if (liveTurn.transcriptProposition && liveTurn.id === 0) {
-      tokens.push({
-        className: "transcript-token span-state-hypothetical",
-        text: liveTurn.transcriptProposition,
-        title: "rolling Whisper large v3 turbo proposition",
-      });
-    } else if (liveTurn.finalTranscript != null) {
+    const supersededByRefinement =
+      refined?.elapsedMs != null &&
+      liveTurn.finalTranscriptElapsedMs != null &&
+      liveTurn.finalTranscriptElapsedMs <= refined.elapsedMs;
+    if (liveTurn.id === 0 || supersededByRefinement) {
+      continue;
+    }
+
+    if (liveTurn.finalTranscript != null) {
       // Committed turn: use word-level commitment states when available.
       const wordStream = liveTurn.latestWordStream;
       if (wordStream?.words?.length > 0) {
@@ -3829,6 +3848,7 @@ function describeShortCommitment(commitment) {
     case "Playable": return "Ready";
     case "Played": return "Played";
     case "Final": return "Final";
+    case "Confirmed": return "Confirmed";
     case "Cancelled": return "Cancel";
     default: return null;
   }
@@ -4299,6 +4319,7 @@ function describeSpanState(commitment) {
     case "Playable":     return "Playable — audio ready, playback imminent";
     case "Played":       return "Played — currently being spoken";
     case "Final":        return "Committed — played and confirmed";
+    case "Confirmed":    return "Confirmed — refined by broader ASR context";
     case "Cancelled":    return "Cancelled — abandoned before playback";
     default:             return commitment ?? "Unknown";
   }
