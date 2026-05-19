@@ -85,8 +85,10 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "cancellation"));
   assert.ok(episode.scenes[0].sourceEventIds.some((id) => id.startsWith("turn-turn:1:transcript_candidate:140")));
   assert.ok(episode.sceneList.every((scene) => scene.summary.length > 0), "scene summaries should be present");
-  assert.match(episode.screenplayBody, /USER\nCan you explain what overlap routing means\?/);
+  assert.match(episode.screenplayBody, /UNKNOWN VOICE #1\nCan you explain what overlap routing means\?/);
   assert.match(episode.screenplayBody, /PETE\nSure\. Overlap routing decides whether Pete yields/);
+  assert.ok(!episode.screenplayBody.includes("\nUSER\n"), "legacy USER cue must never render");
+  assert.ok(!episode.screenplayBody.includes("\nASSISTANT\n"), "legacy ASSISTANT cue must never render");
   assert.ok(!episode.screenplayBody.includes("The transcript revises itself"));
   assert.ok(!episode.screenplayBody.includes("Source trace IDs:"));
 });
@@ -132,6 +134,11 @@ test("consecutive utterances by the same speaker are consolidated", () => {
 
   assert.deepEqual(
     dialogueBeats.map((beat) => beat.role),
+    ["UNKNOWN VOICE #1", "PETE"],
+  );
+  assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
+  assert.equal(dialogueBeats[0].turnIds, undefined);
+  assert.equal((episode.screenplayBody.match(/\nUNKNOWN VOICE #1\n/g) ?? []).length, 1);
     ["USER", "PETE"],
   );
   assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
@@ -206,9 +213,9 @@ test("dialogue segments optionally carry span metadata", () => {
   }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
-  const userBeat = episode.scenes[0].beats.find((beat) => beat.kind === "user_dialogue");
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
   const llmBeat = episode.scenes[0].beats.find((beat) => beat.kind === "llm_dialogue");
-  assert.ok(userBeat.segments[0].spanMetadata?.length, "user segment should include optional span metadata");
+  assert.ok(voiceBeat.segments[0].spanMetadata?.length, "voice segment should include optional span metadata");
   assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
 });
 
@@ -320,4 +327,19 @@ test("rendered screenplay body includes topic as soft note, not in slugline", ()
   assert.match(episode.screenplayBody, /INT\. UNKNOWN ROOM - DAY/);
   // Runtime labels should NOT appear as sluglines
   assert.ok(!episode.screenplayBody.includes("INT. LISTENBURY RUNTIME"), "runtime label must not appear as slugline in body");
+});
+
+test("unknown voice ordinals are stable and speaker cues stay voice-oriented", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "first", voice_id: "speaker-a", voice_label: "unknown" }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 2, 200, { text: "second", voice_id: "speaker-b", voice_label: "unknown" }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 3, 300, { text: "third", voice_id: "speaker-a", voice_label: "unknown" }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 340, { text: "acknowledged" }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const cues = episode.scenes.flatMap((scene) => scene.beats.map((beat) => beat.role).filter(Boolean));
+  assert.deepEqual(cues.filter((cue) => cue.startsWith("UNKNOWN VOICE")), ["UNKNOWN VOICE #1", "UNKNOWN VOICE #2", "UNKNOWN VOICE #1"]);
+  assert.ok(cues.includes("PETE"));
+  assert.ok(!cues.includes("USER"));
+  assert.ok(!cues.includes("ASSISTANT"));
 });

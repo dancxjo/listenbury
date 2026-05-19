@@ -53,7 +53,7 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
             logical_id: format!("conversation_turn:{sequence}"),
             label: "ConversationTurn".to_string(),
             properties: props([
-                ("speaker", json!(speaker_role_name(speaker))),
+                ("speaker", json!(voice_label_name(speaker))),
                 ("text", json!(text)),
                 ("occurred_at", json!(occurred_at)),
             ]),
@@ -193,11 +193,13 @@ fn playback_node(
     }
 }
 
-fn speaker_role_name(role: &SpeakerRole) -> &'static str {
+fn voice_label_name(role: &SpeakerRole) -> String {
     match role {
-        SpeakerRole::User => "user",
-        SpeakerRole::Pete => "pete",
-        SpeakerRole::Unknown => "unknown",
+        SpeakerRole::Pete => "pete".to_string(),
+        SpeakerRole::Named(name) => name.trim().to_lowercase(),
+        SpeakerRole::UnknownVoice { ordinal } => format!("unknown_voice_{ordinal}"),
+        SpeakerRole::BackgroundVoice => "background_voice".to_string(),
+        SpeakerRole::Environment => "environment".to_string(),
     }
 }
 

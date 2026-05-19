@@ -38,7 +38,7 @@ const TOPIC_CATALOG = [
     topicLabel: "MEMORY, DECOUPAGE, AND MANUSCRIPT",
     chapterTitle: "Memory, Découpage, and Manuscript",
     action:
-      "Pete and the user shape live traces into something that can be read later as narrative memory.",
+      "Pete and another voice shape live traces into something that can be read later as narrative memory.",
     keywords: [/\bmemory\b/i, /\bd[eé]coupage\b/i, /\bscene\b/i, /\bepisode\b/i, /\bchapter\b/i, /\bmanuscript\b/i],
   },
   {
@@ -62,7 +62,7 @@ const TOPIC_CATALOG = [
     topicLabel: "WAVEDECK INSPECTION",
     chapterTitle: "The WaveDeck Era",
     action:
-      "Pete and the user watch the session machinery in motion, following traces, overlap, and routing decisions.",
+      "Pete and another voice watch the session machinery in motion, following traces, overlap, and routing decisions.",
     keywords: [/\bwave ?deck\b/i, /\boverlap\b/i, /\brouting\b/i, /\btrace\b/i, /\bspan\b/i, /\btimeline\b/i, /\breplay\b/i],
   },
   {
@@ -87,12 +87,17 @@ const FALLBACK_TOPIC = {
   key: "live-session",
   topicLabel: null,
   chapterTitle: "The WaveDeck Era",
-  action: "Pete and the user remain in the live session, gathering the next beat as it arrives.",
+  action: "Pete and other voices remain in the live session, gathering the next beat as it arrives.",
 };
+
+const PETE_CUE = "PETE";
+const UNKNOWN_VOICE_PREFIX = "UNKNOWN VOICE #";
 
 export function createNarrativeSession() {
   return {
     turns: new Map(),
+    unknownVoiceOrdinalByKey: new Map(),
+    nextUnknownVoiceOrdinal: 1,
     proposition: null,
     propositionDeleted: [],
     sourceEvents: [],
@@ -116,6 +121,7 @@ export function reduceNarrativeEvent(session, event) {
   turn.startedAtMs = minNumber(turn.startedAtMs, numericMs(sourceEvent.elapsed_ms));
   turn.endedAtMs = maxNumber(turn.endedAtMs, numericMs(sourceEvent.elapsed_ms));
   registerEventSignals(turn, sourceEvent);
+  maybeCaptureVoiceCue(session, turn, sourceEvent);
 
   if (sourceEvent.kind === "transcript_proposition" && textContent(sourceEvent.text)) {
     const next = textContent(sourceEvent.text);
@@ -320,6 +326,7 @@ function getTurn(session, turnKey, turnNumber) {
       userWords: [],
       userCandidateText: "",
       userDeleted: [],
+      userVoiceCue: null,
       llmFinal: "",
       llmProspective: "",
       llmFragments: [],
@@ -368,6 +375,80 @@ function registerEventSignals(turn, event) {
       turn.flags.cancelled = true;
     }
   }
+}
+
+function maybeCaptureVoiceCue(session, turn, event) {
+  if (!isHumanDialogueEvent(event.kind)) {
+    return;
+  }
+  turn.userVoiceCue = resolveVoiceCue(session, event) ?? turn.userVoiceCue ?? nextUnknownVoiceCue(session, "unattributed-human");
+}
+
+function isHumanDialogueEvent(kind) {
+  return ["transcript_candidate", "asr_timed_word_stream", "transcript"].includes(kind);
+}
+
+function resolveVoiceCue(session, event) {
+  const entries = eventVoiceAttributions(event);
+  for (const entry of entries) {
+    const cue = cueFromVoiceEntry(session, entry);
+    if (cue) {
+      return cue;
+    }
+  }
+  return null;
+}
+
+function eventVoiceAttributions(event) {
+  if (Array.isArray(event.voice_attributions)) {
+    return event.voice_attributions;
+  }
+  if (event.voice_id != null || event.voice_label != null) {
+    return [{ voice_id: event.voice_id, voice_label: event.voice_label }];
+  }
+  return [];
+}
+
+function cueFromVoiceEntry(session, entry) {
+  const voiceId = normalizedId(entry?.voice_id);
+  const label = entry?.voice_label;
+  if (label && typeof label === "object" && typeof label.ordinal === "number") {
+    return `${UNKNOWN_VOICE_PREFIX}${label.ordinal}`;
+  }
+  const textLabel = textContent(
+    typeof label === "string"
+      ? label
+      : label?.named ?? label?.cluster ?? label?.kind ?? label?.label ?? null,
+  );
+  if (!textLabel) {
+    return nextUnknownVoiceCue(session, voiceId ? `voice-id:${voiceId}` : "unattributed-human");
+  }
+  const normalized = textLabel.toUpperCase();
+  if (normalized === "PETE") {
+    return PETE_CUE;
+  }
+  if (normalized.includes("UNKNOWN")) {
+    return nextUnknownVoiceCue(session, voiceId ? `voice-id:${voiceId}` : `voice-label:${normalized}`);
+  }
+  if (normalized.includes("BACKGROUND")) {
+    return "BACKGROUND VOICE";
+  }
+  if (normalized.includes("ENVIRONMENT")) {
+    return "ENVIRONMENT";
+  }
+  return normalized;
+}
+
+function nextUnknownVoiceCue(session, key) {
+  const stableKey = textContent(key) || "unattributed-human";
+  if (!session.unknownVoiceOrdinalByKey.has(stableKey)) {
+    session.unknownVoiceOrdinalByKey.set(stableKey, session.nextUnknownVoiceOrdinal++);
+  }
+  return `${UNKNOWN_VOICE_PREFIX}${session.unknownVoiceOrdinalByKey.get(stableKey)}`;
+}
+
+function resolveTurnVoiceCue(turn) {
+  return turn.userVoiceCue || `${UNKNOWN_VOICE_PREFIX}1`;
 }
 
 function buildScenes(turns, locationContext = {}) {
@@ -451,10 +532,10 @@ function turnToBeats(turn) {
 
   if (turnHasUserDialogue(turn)) {
     beats.push({
-      id: `beat-turn-${turn.id}-user`,
+      id: `beat-turn-${turn.id}-voice`,
       type: "beat",
-      kind: "user_dialogue",
-      role: "USER",
+      kind: "voice_dialogue",
+      role: resolveTurnVoiceCue(turn),
       text: stringifySegments(userSegments(turn)),
       segments: userSegments(turn),
       sourceEventIds,
@@ -483,7 +564,7 @@ function turnToBeats(turn) {
       id: `beat-turn-${turn.id}-pete`,
       type: "beat",
       kind: "llm_dialogue",
-      role: "PETE",
+      role: PETE_CUE,
       text: stringifySegments(llmSegments(turn)),
       segments: llmSegments(turn),
       sourceEventIds,

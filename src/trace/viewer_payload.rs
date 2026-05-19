@@ -130,8 +130,8 @@ pub fn live_trace_events_to_viewer_payload(events: &[LiveTraceEvent]) -> ViewerP
 
 #[derive(Clone, Copy)]
 enum TextLaneKind {
-    UserTranscript,
-    PeteIntendedSpeech,
+    UnknownVoice,
+    PeteVoice,
 }
 
 fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
@@ -158,8 +158,8 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
         };
 
         let key = match kind {
-            TextLaneKind::UserTranscript => "User transcript",
-            TextLaneKind::PeteIntendedSpeech => "Pete intended speech",
+            TextLaneKind::UnknownVoice => "UNKNOWN VOICE #1",
+            TextLaneKind::PeteVoice => "PETE",
         };
         lane_events
             .entry(key)
@@ -167,17 +167,17 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
             .push((event.elapsed_ms, text.to_string()));
     }
     if !live_asr_streams.is_empty() {
-        lane_events.entry("User transcript").or_default();
+        lane_events.entry("UNKNOWN VOICE #1").or_default();
     }
     if !live_tts_revision_streams.is_empty() {
-        lane_events.entry("Pete intended speech").or_default();
+        lane_events.entry("PETE").or_default();
     }
 
     lane_events
         .into_iter()
         .enumerate()
         .map(|(stream_index, (label, snippets))| {
-            if label == "User transcript" && !live_asr_streams.is_empty() {
+            if label == "UNKNOWN VOICE #1" && !live_asr_streams.is_empty() {
                 let mut streams = live_asr_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
@@ -198,7 +198,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                     },
                 };
             }
-            if label == "Pete intended speech" && !live_tts_revision_streams.is_empty() {
+            if label == "PETE" && !live_tts_revision_streams.is_empty() {
                 let mut streams = live_tts_revision_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
@@ -220,17 +220,17 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                 };
             }
 
-            let source = if label == "User transcript" {
+            let source = if label == "UNKNOWN VOICE #1" {
                 WordStreamSource::RecordedAudio
             } else {
                 WordStreamSource::GeneratedText
             };
-            let commitment = if label == "User transcript" {
+            let commitment = if label == "UNKNOWN VOICE #1" {
                 WordCommitment::Final
             } else {
                 WordCommitment::StableText
             };
-            let boundary_source = if label == "User transcript" {
+            let boundary_source = if label == "UNKNOWN VOICE #1" {
                 BoundarySource::Whisper
             } else {
                 BoundarySource::Predicted
@@ -468,8 +468,8 @@ fn end_kind_to_base_kind(kind: &str) -> Option<&str> {
 
 fn text_lane_kind_for_event(kind: &str) -> Option<TextLaneKind> {
     match kind {
-        "transcript" => Some(TextLaneKind::UserTranscript),
-        "first_safe_speech_unit_emitted" => Some(TextLaneKind::PeteIntendedSpeech),
+        "transcript" => Some(TextLaneKind::UnknownVoice),
+        "first_safe_speech_unit_emitted" => Some(TextLaneKind::PeteVoice),
         _ => None,
     }
 }
@@ -651,6 +651,10 @@ mod tests {
     fn event(turn: u64, kind: &str, elapsed_ms: u64) -> LiveTraceEvent {
         LiveTraceEvent {
             turn,
+            soundscape_id: None,
+            voice_id: None,
+            voice_label: None,
+            voice_attributions: Vec::new(),
             session_id: None,
             turn_id: None,
             utterance_id: None,
@@ -701,15 +705,15 @@ mod tests {
             payload
                 .streams
                 .iter()
-                .any(|lane| lane.label == "User transcript"),
-            "user transcript lane should be present"
+                .any(|lane| lane.label == "UNKNOWN VOICE #1"),
+            "unknown voice lane should be present"
         );
         assert!(
             payload
                 .streams
                 .iter()
-                .any(|lane| lane.label == "Pete intended speech"),
-            "intended speech lane should be present"
+                .any(|lane| lane.label == "PETE"),
+            "pete lane should be present"
         );
         assert!(
             payload
@@ -775,8 +779,8 @@ mod tests {
         let lane = payload
             .streams
             .iter()
-            .find(|lane| lane.label == "User transcript")
-            .expect("user transcript lane should be present");
+            .find(|lane| lane.label == "UNKNOWN VOICE #1")
+            .expect("unknown voice lane should be present");
         assert_eq!(lane.stream.source, WordStreamSource::LiveAsr);
         assert_eq!(lane.stream.words.len(), 1);
         assert_eq!(lane.stream.words[0].text, "hello");
@@ -842,8 +846,8 @@ mod tests {
         let lane = payload
             .streams
             .iter()
-            .find(|lane| lane.label == "Pete intended speech")
-            .expect("pete intended speech lane should be present");
+            .find(|lane| lane.label == "PETE")
+            .expect("pete lane should be present");
         assert_eq!(lane.stream.source, WordStreamSource::SyntheticSpeech);
         assert!(
             lane.stream
