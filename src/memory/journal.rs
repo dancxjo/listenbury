@@ -205,7 +205,7 @@ mod tests {
 
     fn sample_trace() -> MemoryTrace {
         MemoryTrace::ConversationTurnFinalized {
-            speaker: SpeakerRole::User,
+            speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
             text: "Can you hear me?".to_string(),
             occurred_at: ExactTimestamp::now(),
         }
@@ -275,7 +275,7 @@ mod tests {
         for t in &texts {
             journal
                 .append(&MemoryTrace::ConversationTurnFinalized {
-                    speaker: SpeakerRole::User,
+                    speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
                     text: t.to_string(),
                     occurred_at: ExactTimestamp::now(),
                 })

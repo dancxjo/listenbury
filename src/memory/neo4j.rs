@@ -193,11 +193,13 @@ fn playback_node(
     }
 }
 
-fn speaker_role_name(role: &SpeakerRole) -> &'static str {
+fn speaker_role_name(role: &SpeakerRole) -> String {
     match role {
-        SpeakerRole::User => "user",
-        SpeakerRole::Pete => "pete",
-        SpeakerRole::Unknown => "unknown",
+        SpeakerRole::Pete => "pete".to_string(),
+        SpeakerRole::Named(name) => name.trim().to_lowercase(),
+        SpeakerRole::UnknownVoice { ordinal } => format!("unknown_voice_{ordinal}"),
+        SpeakerRole::BackgroundVoice => "background_voice".to_string(),
+        SpeakerRole::Environment => "environment".to_string(),
     }
 }
 

@@ -8,6 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::soundscape::{SoundscapeId, VoiceAttribution, VoiceId, VoiceLabel};
 use crate::speech_timeline::{
     AudioClipId, SessionId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId,
     UtteranceId,
@@ -21,6 +22,14 @@ pub const TRACE_SESSION_EVENTS_FILE: &str = "events.jsonl";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveTraceEvent {
     pub turn: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub soundscape_id: Option<SoundscapeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_id: Option<VoiceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_label: Option<VoiceLabel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voice_attributions: Vec<VoiceAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,6 +77,10 @@ impl LiveTraceEvent {
         let started_unix_ns = unix_nanos_u64(session_started_at);
         Self {
             turn,
+            soundscape_id: None,
+            voice_id: None,
+            voice_label: None,
+            voice_attributions: Vec::new(),
             session_id: Some(session_id),
             turn_id: Some(TurnId(turn)),
             utterance_id: None,

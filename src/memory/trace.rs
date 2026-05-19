@@ -1,13 +1,15 @@
 use crate::time::ExactTimestamp;
 use serde::{Deserialize, Serialize};
 
-/// The role of a speaker in a conversation turn.
+/// A voice label captured in a memory trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpeakerRole {
-    User,
     Pete,
-    Unknown,
+    Named(String),
+    UnknownVoice { ordinal: u32 },
+    BackgroundVoice,
+    Environment,
 }
 
 /// A single runtime trace event emitted by the Listenbury engine.
@@ -21,7 +23,7 @@ pub enum SpeakerRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MemoryTrace {
-    /// A conversation turn (user utterance or Pete response) was finalised.
+    /// A conversation turn (voice utterance or Pete response) was finalised.
     ConversationTurnFinalized {
         speaker: SpeakerRole,
         text: String,

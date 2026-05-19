@@ -386,7 +386,7 @@ mod tests {
 
     fn sample_turn(text: &str) -> MemoryTrace {
         MemoryTrace::ConversationTurnFinalized {
-            speaker: SpeakerRole::User,
+            speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
             text: text.to_string(),
             occurred_at: ExactTimestamp::now(),
         }
