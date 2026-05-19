@@ -368,7 +368,32 @@ audio.addEventListener("loadedmetadata", () => {
 void bootstrap();
 
 async function bootstrap() {
+  if (document.body.dataset.mode === "replay") {
+    // Replay mode: expose the replay API and let replay.js control initialization.
+    window.wavedeckReplay = {
+      addLiveEvent,
+      applyPayload,
+      renderShell,
+      resetLiveSession,
+      uiState,
+    };
+    renderShell();
+    return;
+  }
   enterLiveMode();
+}
+
+// Reset the live session back to the initial empty state (used by replay.js for seek).
+function resetLiveSession() {
+  liveSession.turns.clear();
+  liveSession.openSpans.clear();
+  liveSession.viewerEvents.length = 0;
+  liveSession.viewerMarkers.length = 0;
+  liveSession.debugLog.length = 0;
+  liveSession.maxElapsedMs = 0;
+  liveSession.receivedOriginMs = performance.now();
+  liveEvents.length = 0;
+  applyLiveEvents();
 }
 
 function enterLiveMode() {
