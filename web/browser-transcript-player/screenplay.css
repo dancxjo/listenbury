@@ -86,6 +86,11 @@ body {
   width: 100%;
 }
 
+.episode-meta,
+.scene {
+  margin: 0 0 1.4rem;
+}
+
 .title-page {
   min-height: 7.7in;
   display: grid;
@@ -113,6 +118,11 @@ body {
 
 .turn {
   margin: 0 0 1.15rem;
+}
+
+.scene + .scene {
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--rule);
 }
 
 .scene-heading {
@@ -155,6 +165,19 @@ body {
   text-transform: uppercase;
 }
 
+.scene-list {
+  margin: 0 0 1.2rem 1.2rem;
+  padding: 0;
+}
+
+.scene-list li {
+  margin: 0 0 0.45rem;
+}
+
+.scene-list a {
+  color: inherit;
+}
+
 .empty-page {
   text-align: center;
 }
@@ -175,6 +198,12 @@ body {
 
 .soft-note {
   color: var(--muted);
+}
+
+.source-line {
+  margin: 0 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.92em;
 }
 
 @media (max-width: 700px) {

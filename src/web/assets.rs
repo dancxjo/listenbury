@@ -5,6 +5,8 @@ pub(super) const SCREENPLAY_HTML: &str =
     include_str!("../../web/browser-transcript-player/screenplay.html");
 pub(super) const SCREENPLAY_JS: &str =
     include_str!("../../web/browser-transcript-player/screenplay.js");
+pub(super) const SCREENPLAY_MODEL_JS: &str =
+    include_str!("../../web/browser-transcript-player/screenplay-model.mjs");
 pub(super) const SCREENPLAY_CSS: &str =
     include_str!("../../web/browser-transcript-player/screenplay.css");
 pub(super) const DEMO_JSON: &str = include_str!("../../web/browser-transcript-player/demo.json");
