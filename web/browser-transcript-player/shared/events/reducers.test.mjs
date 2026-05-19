@@ -196,12 +196,14 @@ test("isProspectiveCommitment returns true for non-final states", () => {
   assert.equal(isProspectiveCommitment("Prepared"), true);
   assert.equal(isProspectiveCommitment("StableText"), false);
   assert.equal(isProspectiveCommitment("Final"), false);
+  assert.equal(isProspectiveCommitment("Confirmed"), false);
   assert.equal(isProspectiveCommitment("Played"), false);
   assert.equal(isProspectiveCommitment(null), true);
 });
 
 test("isPlayedCommitment returns true only for committed states", () => {
   assert.equal(isPlayedCommitment("Final"), true);
+  assert.equal(isPlayedCommitment("Confirmed"), true);
   assert.equal(isPlayedCommitment("Played"), true);
   assert.equal(isPlayedCommitment("Hypothetical"), false);
   assert.equal(isPlayedCommitment(null), false);
@@ -209,6 +211,7 @@ test("isPlayedCommitment returns true only for committed states", () => {
 
 test("LIVE_EVENT_LANE maps event kinds to lanes", () => {
   assert.equal(LIVE_EVENT_LANE.asr_started, "ASR");
+  assert.equal(LIVE_EVENT_LANE.transcript_confirmed, "ASR");
   assert.equal(LIVE_EVENT_LANE.playback_started, "Speaker");
   assert.equal(LIVE_EVENT_LANE.speech_started, "Mic");
   assert.equal(LIVE_EVENT_LANE.llm_generation_started, "LLM");

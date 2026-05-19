@@ -976,11 +976,12 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
                 let output = transcribe_group(&group.frames, &mut state.recognizer)?;
                 let finalized_text = output.text.clone();
                 if confirms_existing_finalized_segments(state, &finalized_text) {
+                    let segment_count = state.finalized_segments.len();
                     emit_web_confirmed_transcript(
                         state,
                         finalized_text,
                         ExactTimestamp::now(),
-                        state.finalized_segments.len(),
+                        segment_count,
                     )?;
                     continue;
                 }
@@ -1053,7 +1054,9 @@ fn emit_web_confirmed_transcript(
     state.live_trace_turn = turn;
     println!("confirmed transcript segments={segment_count} text={text}");
 
-    let mut event = state.live_trace.event(turn, "transcript_confirmed", occurred_at);
+    let mut event = state
+        .live_trace
+        .event(turn, "transcript_confirmed", occurred_at);
     event.text = Some(text.clone());
     event.artifact = Some(json!({
         "source": "whisper-large-v3-turbo",
@@ -1179,10 +1182,15 @@ fn normalized_transcript_for_confirmation(text: &str) -> String {
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn confirms_existing_finalized_segments(state: &WebTranscribeState, text: &str) -> bool {
-    if state.finalized_segments.len() < 2 {
+    confirms_finalized_segments(&state.finalized_segments, text)
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn confirms_finalized_segments(segments: &VecDeque<FinalizedAsrSegment>, text: &str) -> bool {
+    if segments.len() < 2 {
         return false;
     }
-    let previous = finalized_segments_text(&state.finalized_segments);
+    let previous = finalized_segments_text(segments);
     !previous.is_empty()
         && normalized_transcript_for_confirmation(&previous)
             == normalized_transcript_for_confirmation(text)
@@ -1487,9 +1495,9 @@ where
 #[cfg(all(test, feature = "asr-whisper", feature = "audio-cpal"))]
 mod tests {
     use super::{
-        FinalizedAsrSegment, WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS, convert_frame_samples,
-        finalized_segments_refinement_work, total_frame_duration_ms, trim_finalized_asr_segments,
-        vad_frame_format, web_transcribe_breath_group_config,
+        FinalizedAsrSegment, WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS, confirms_finalized_segments,
+        convert_frame_samples, finalized_segments_refinement_work, total_frame_duration_ms,
+        trim_finalized_asr_segments, vad_frame_format, web_transcribe_breath_group_config,
     };
     use listenbury::hearing::breath::DEFAULT_VAD_FRAME_MS;
     use listenbury::hearing::vad::VadBackendKind;
@@ -1512,6 +1520,7 @@ mod tests {
         FinalizedAsrSegment {
             frames,
             duration_ms,
+            text: format!("segment {frame_count}"),
         }
     }
 
@@ -1591,5 +1600,25 @@ mod tests {
             segments.front().map(|segment| segment.frames.len()),
             Some(3)
         );
+    }
+
+    #[test]
+    fn combined_prior_segments_are_treated_as_confirmation() {
+        let mut segments = VecDeque::new();
+        segments.push_back(FinalizedAsrSegment {
+            frames: vec![test_frame(160)],
+            duration_ms: 10,
+            text: "Hello, can you hear me?".to_string(),
+        });
+        segments.push_back(FinalizedAsrSegment {
+            frames: vec![test_frame(160)],
+            duration_ms: 10,
+            text: "My name is Travis.".to_string(),
+        });
+
+        assert!(confirms_finalized_segments(
+            &segments,
+            "Hello, can you hear me? My name is Travis."
+        ));
     }
 }
