@@ -41,7 +41,7 @@ enum Command {
     Complete(LlamaTurnCommand),
     #[command(alias = "round-trip-wav", about = "Reply to a WAV file with speech")]
     Reply(RoundTripWavCommand),
-    #[command(about = "Host the browser transcript viewer as a local web UI")]
+    #[command(about = "Host the WaveDeck session viewer as a local web UI")]
     Web(WebCommand),
     #[command(about = "Fetch and inspect local model assets")]
     Models {

@@ -54,6 +54,8 @@ const WORD_DENSITY_BADGE_MIN_PX = 64;
 const HOVER_PREVIEW_OFFSET_PX = 14;
 const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
 const WAVEFORM_PEAK_BUCKETS = 2_400;
+const LIVE_WAVEFORM_REFRESH_MS = 2_000;
+const LIVE_WAVEFORM_GROWTH_REFRESH_MS = 1_000;
 const GRAPH_MAX_RENDER_NODES = 180;
 const GRAPH_MAX_RENDER_EDGES = 260;
 // Central waveform panel layout constants
@@ -72,6 +74,8 @@ function openSpanKey(lane, turn, startKind) {
 // Accumulated live trace events (kept for error recovery / diagnostics).
 const liveEvents = [];
 let liveRenderScheduled = false;
+let lastLiveWaveformRefreshAt = 0;
+let liveWaveformRetryTimer = null;
 // Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
 const LIVE_RENDER_DEBOUNCE_MS = 80;
 
@@ -359,10 +363,6 @@ async function bootstrap() {
     renderShell();
     return;
   }
-  if (window.location.pathname === "/wavedeck" || window.location.pathname === "/wavedeck/") {
-    enterSessionInspectionMode();
-    return;
-  }
   enterLiveMode();
 }
 
@@ -389,30 +389,6 @@ function enterLiveMode() {
   renderShell();
 
   connectLiveEvents();
-}
-
-async function enterSessionInspectionMode() {
-  document.body.classList.add("session-mode");
-  uiState.liveMode = false;
-  document.title = "WaveDeck · Session";
-  uiState.statusMessage = "Loading recorded session timeline…";
-  renderShell();
-
-  try {
-    const response = await fetch("/api/trace-viewer-payload");
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const payload = await response.json();
-    applyPayload(payload);
-    uiState.statusMessage = "Loaded recorded session WaveDeck timeline.";
-    renderShell();
-  } catch (err) {
-    console.warn("Unable to load recorded session payload; falling back to live mode:", err);
-    uiState.statusMessage = "No recorded trace is attached; connecting to live events…";
-    renderShell();
-    enterLiveMode();
-  }
 }
 
 function connectLiveEvents() {
@@ -1096,6 +1072,12 @@ function liveSessionToViewerPayload(session) {
 
   return {
     title: "Live — Listenbury",
+    audio: uiState.liveMode
+      ? {
+          url: "/api/live-session-audio.wav",
+          duration_ms: Math.max(session.maxElapsedMs, 1000),
+        }
+      : null,
     streams: wordStreamLanes,
     events: [
       ...transcriptEvents,
@@ -1681,21 +1663,111 @@ function inferPayloadDuration(stream) {
 
 function configureAudio(audioConfig) {
   if (!audioConfig?.url) {
+    clearLiveWaveformRetry();
     state.waveform = { url: null, peaks: null, durationMs: 0, status: "idle" };
     return;
   }
 
-  audio.src = audioConfig.url;
-  void loadWaveform(audioConfig.url);
+  const audioUrl = new URL(audioConfig.url, window.location.href);
+  if (canonicalAudioUrl(audio.src) !== audioUrl.href) {
+    audio.src = audioUrl.href;
+  }
+
+  const isLiveAudio = uiState.liveMode && audioUrl.pathname === "/api/live-session-audio.wav";
+  if (!isLiveAudio) {
+    void loadWaveform(audioConfig.url);
+    return;
+  }
+
+  const expectedDurationMs = audioConfig.duration_ms ?? 0;
+  const now = Date.now();
+  const needsInitialLoad = state.waveform.url !== audioConfig.url || state.waveform.status === "idle";
+  const needsErrorRetry = state.waveform.status === "error" && now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
+  const needsGrowthRefresh =
+    state.waveform.status === "ready" &&
+    expectedDurationMs > state.waveform.durationMs + LIVE_WAVEFORM_GROWTH_REFRESH_MS &&
+    now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
+
+  if (needsInitialLoad || needsErrorRetry || needsGrowthRefresh) {
+    lastLiveWaveformRefreshAt = now;
+    const fetchUrl = new URL(audioConfig.url, window.location.href);
+    fetchUrl.searchParams.set("waveform_rev", String(now));
+    void loadWaveform(audioConfig.url, { force: true, fetchUrl: fetchUrl.href });
+  } else if (state.waveform.status === "error") {
+    scheduleLiveWaveformRetry();
+  }
 }
 
-async function loadWaveform(url) {
-  if (!url || state.waveform.url === url) {
+function canonicalAudioUrl(url) {
+  if (!url) {
+    return "";
+  }
+  const parsed = new URL(url, window.location.href);
+  if (parsed.pathname === "/api/live-session-audio.wav") {
+    parsed.search = "";
+  }
+  return parsed.href;
+}
+
+function liveAudioPlaybackUrl() {
+  const url = new URL("/api/live-session-audio.wav", window.location.href);
+  url.searchParams.set("audio_rev", String(Date.now()));
+  return url.href;
+}
+
+function audioDurationMs() {
+  return Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : 0;
+}
+
+function seekSessionAudioToMs(startMs, options = {}) {
+  if (!audio.src) {
+    return false;
+  }
+
+  const targetMs = Math.max(0, startMs);
+  const stopAtMs = options.stopAtMs ?? null;
+  const autoplay = options.autoplay ?? false;
+  const applySeek = () => {
+    audio.currentTime = targetMs / 1000;
+    if (stopAtMs !== null) {
+      setPlaybackStop(targetMs, stopAtMs);
+    }
+    if (autoplay) {
+      void audio.play();
+    }
+    refreshPlaybackState();
+  };
+
+  const currentAudioUrl = new URL(audio.src, window.location.href);
+  const isLiveAudio = currentAudioUrl.pathname === "/api/live-session-audio.wav";
+  const needsFreshLiveSnapshot = isLiveAudio && audioDurationMs() < targetMs + 50;
+  if (needsFreshLiveSnapshot) {
+    audio.addEventListener("loadedmetadata", applySeek, { once: true });
+    audio.src = liveAudioPlaybackUrl();
+    audio.load();
+    return true;
+  }
+
+  applySeek();
+  return true;
+}
+
+async function loadWaveform(url, options = {}) {
+  const { force = false, fetchUrl = url } = options;
+  if (
+    !url ||
+    (!force &&
+      state.waveform.url === url &&
+      (state.waveform.status === "ready" || state.waveform.status === "loading"))
+  ) {
+    return;
+  }
+  if (force && state.waveform.url === url && state.waveform.status === "loading") {
     return;
   }
   state.waveform = { url, peaks: null, durationMs: 0, status: "loading" };
   try {
-    const response = await fetch(url);
+    const response = await fetch(fetchUrl, { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -1713,11 +1785,37 @@ async function loadWaveform(url) {
       durationMs: Math.round(audioBuffer.duration * 1000),
       status: "ready",
     };
+    clearLiveWaveformRetry();
     renderCustomTimeline();
   } catch (err) {
     console.warn("Unable to build waveform overlay:", err);
     state.waveform = { url, peaks: null, durationMs: 0, status: "error" };
+    const failedUrl = new URL(url, window.location.href);
+    if (uiState.liveMode && failedUrl.pathname === "/api/live-session-audio.wav") {
+      scheduleLiveWaveformRetry();
+    }
   }
+}
+
+function scheduleLiveWaveformRetry() {
+  if (liveWaveformRetryTimer !== null) {
+    return;
+  }
+  liveWaveformRetryTimer = window.setTimeout(() => {
+    liveWaveformRetryTimer = null;
+    const audioConfig = state.payload?.audio;
+    if (uiState.liveMode && audioConfig?.url) {
+      configureAudio(audioConfig);
+    }
+  }, LIVE_WAVEFORM_REFRESH_MS);
+}
+
+function clearLiveWaveformRetry() {
+  if (liveWaveformRetryTimer === null) {
+    return;
+  }
+  window.clearTimeout(liveWaveformRetryTimer);
+  liveWaveformRetryTimer = null;
 }
 
 function waveformPeaksFromAudioBuffer(audioBuffer) {
@@ -2830,6 +2928,8 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
     metaEl.textContent = `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
   } else if (state.waveform.status === "loading") {
     metaEl.textContent = "Loading audio…";
+  } else if (uiState.liveMode && state.payload?.audio?.url) {
+    metaEl.textContent = "Waiting for live audio…";
   } else {
     metaEl.textContent = "No audio loaded";
   }
@@ -3346,7 +3446,7 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
 
   state.selectedItem = { type: "word", laneIndex, itemIndex: wordIndex };
   if (seekAudio && audio.src) {
-    audio.currentTime = word.resolvedTiming.start_ms / 1000;
+    seekSessionAudioToMs(word.resolvedTiming.start_ms);
   }
 
   clearPlaybackStop();
@@ -3374,7 +3474,7 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
     if (event.audio_ref?.url) {
       playAudioClip(event.audio_ref, event.start_ms, event.end_ms, false);
     } else if (audio.src) {
-      audio.currentTime = event.start_ms / 1000;
+      seekSessionAudioToMs(event.start_ms);
     }
   }
 
@@ -4178,10 +4278,7 @@ function autoplayWordClip(laneIndex, wordIndex) {
   }
   const startMs = word.resolvedTiming.start_ms;
   const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
-  audio.currentTime = startMs / 1000;
-  setPlaybackStop(startMs, endMs);
-  void audio.play();
-  refreshPlaybackState();
+  seekSessionAudioToMs(startMs, { stopAtMs: endMs, autoplay: true });
 }
 
 function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
@@ -4201,7 +4298,7 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
     refreshPlaybackState();
   };
 
-  if (audio.src !== targetUrl) {
+  if (canonicalAudioUrl(audio.src) !== canonicalAudioUrl(targetUrl)) {
     audio.src = targetUrl;
     audio.addEventListener("loadedmetadata", seekAndMaybePlay, { once: true });
     uiState.statusMessage = `Loaded clip reference ${targetUrl}.`;

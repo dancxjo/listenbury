@@ -830,6 +830,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             payload: None,
             trace: None,
             broadcaster: Some(server_bc),
+            live_audio: None,
         })
         .context("failed to start embedded web viewer")?;
         let web_port = server.local_addr().port();

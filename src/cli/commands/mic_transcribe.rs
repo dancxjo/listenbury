@@ -87,6 +87,7 @@ struct WebTranscribeState {
     candidate_planner: WebTranscriptSpeculativePlanner,
     live_trace: LiveTraceRecorder<SseBroadcaster>,
     live_trace_turn: u64,
+    live_audio: listenbury::web::LiveSessionAudioStore,
     next_stream_id: u64,
     finalized_segments: VecDeque<FinalizedAsrSegment>,
     finalized_segments_duration_ms: u64,
@@ -483,6 +484,8 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
 
     let broadcaster = SseBroadcaster::new();
     let server_broadcaster = broadcaster.clone();
+    let live_audio = listenbury::web::LiveSessionAudioStore::new();
+    let server_live_audio = live_audio.clone();
     let bind_host = command.web_host.clone();
     let server = listenbury::web::bind(listenbury::web::ServeConfig {
         host: bind_host.clone(),
@@ -490,6 +493,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         payload: None,
         trace: None,
         broadcaster: Some(server_broadcaster),
+        live_audio: Some(server_live_audio),
     })
     .context("failed to start embedded transcription web viewer")?;
     let web_port = server.local_addr().port();
@@ -502,7 +506,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         }
     });
     println!("Listenbury transcription screenplay available at {screenplay_url}");
-    println!("WaveDeck trace viewer available at {viewer_url}");
+    println!("WaveDeck live session view available at {viewer_url}");
 
     let trace_started_at = ExactTimestamp::now();
     let mut live_trace = LiveTraceRecorder::new(trace_started_at, broadcaster.clone());
@@ -662,6 +666,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         candidate_planner: WebTranscriptSpeculativePlanner::default(),
         live_trace,
         live_trace_turn: 0,
+        live_audio,
         next_stream_id: 1,
         finalized_segments: VecDeque::new(),
         finalized_segments_duration_ms: 0,
@@ -917,6 +922,7 @@ fn process_web_ring_frames(
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeState) -> Result<()> {
+    state.live_audio.push_frame(frame.clone());
     let frame_duration_ms = frame_duration_ms(&frame);
     let vad_result = state.vad.process_frame(&frame)?;
 

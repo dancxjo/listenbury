@@ -10,9 +10,9 @@ pub mod mind;
 pub mod models;
 pub mod mouth;
 pub mod runtime;
+pub mod soundscape;
 pub mod span;
 pub mod speculative;
-pub mod soundscape;
 pub mod speech;
 pub mod speech_timeline;
 pub mod text_stability;
@@ -53,6 +53,10 @@ pub use mouth::read_aloud::{
     SpeechCandidateCommitment, SpeechCandidateId,
 };
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
+pub use soundscape::{
+    Soundscape, SoundscapeId, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
+    VoiceRoleInSpan,
+};
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
     SpanRevision, SpanState, Text, TextId,
@@ -61,9 +65,5 @@ pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
-pub use soundscape::{
-    Soundscape, SoundscapeId, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
-    VoiceRoleInSpan,
-};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};
 pub use time::{ExactTimestamp, Timed};

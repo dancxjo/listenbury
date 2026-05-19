@@ -110,9 +110,6 @@ mod tests {
             "UNKNOWN VOICE #2"
         );
         assert_eq!(VoiceLabel::Named("Travis".into()).display_label(), "TRAVIS");
-        assert_eq!(
-            VoiceLabel::Background.display_label(),
-            "BACKGROUND VOICE"
-        );
+        assert_eq!(VoiceLabel::Background.display_label(), "BACKGROUND VOICE");
     }
 }

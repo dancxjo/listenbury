@@ -323,7 +323,8 @@ just cuda listen
 
 ## WaveDeck live browser timeline
 
-The repository now includes WaveDeck, a live timeline viewer for `listenbury listen --web`:
+The repository now includes WaveDeck, a live timeline viewer for `listenbury transcribe --web`
+and `listenbury listen --web`:
 
 ```text
 web/browser-transcript-player/
@@ -351,8 +352,8 @@ cargo run -- web --open
 The hosted server exposes stable routes for the viewer and event APIs:
 
 ```text
-/                     live WaveDeck viewer (connects to SSE immediately)
-/wavedeck             canonical session WaveDeck view (loads --trace when attached)
+/                     live WaveDeck viewer for the active --web session
+/wavedeck             same live WaveDeck viewer alias as /
 /replay               trace replay / fixture tooling (offline, deterministic)
 /screenplay           narrative screenplay view
 /assets/...           bundled static assets
@@ -362,13 +363,17 @@ The hosted server exposes stable routes for the viewer and event APIs:
 /api/trace            JSONL from --trace (when provided)
 /api/trace-session    structured recorded session JSON from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
+/api/live-session-audio.wav  live microphone session audio from transcribe --web
 /api/session-audio/{artifact_id}  full-session audio artifact from structured --trace
-/api/live-events      SSE stream of live LiveTraceEvent JSON (requires listen --web)
+/api/live-events      SSE stream of live LiveTraceEvent JSON (requires a --web session)
 /healthz              simple health check
 ```
 
-The main WaveDeck page (`/`) is **live-only**: it connects directly to the SSE
-stream on load and does not contain any fixture or demo branching.
+The main WaveDeck page (`/`) is the live session view. `/wavedeck` is the same
+view under an explicit name. Both routes connect directly to `/api/live-events`
+on load and use `/api/live-session-audio.wav` as the real microphone audio
+source when running `listenbury transcribe --web`; they do not switch to fixture
+payloads automatically.
 
 The **replay page** (`/replay`) is dedicated to offline trace exploration.
 It loads JSONL trace files, structured recorded sessions, or the trace attached
@@ -381,17 +386,17 @@ playback controls:
 - configurable playback speed (0.1× – 16×)
 
 Open the hosted WaveDeck page and it will immediately connect to `/api/live-events`
-for the active listen session. The viewer renders multiple streams vertically with
-a shared ruler, highlights the active word during playback, and lets you click
-chips/ruler positions to seek the shared audio timeline. Drag across the ruler or an
-empty lane region to mark a time range; releasing the mouse zooms directly into
-that range.
+for the active `--web` session. With `listenbury transcribe --web`, the viewer
+also draws the real microphone session waveform from `/api/live-session-audio.wav`.
+The viewer renders multiple streams vertically with a shared ruler, highlights
+the active word during playback, and lets you click chips/ruler positions to
+seek the shared audio timeline. Drag across the ruler or an empty lane region to
+mark a time range; releasing the mouse zooms directly into that range.
 
-When `listenbury web` is started with `--trace <path>`, `/wavedeck` loads the
-recorded session as the canonical waveform timeline. `/replay` and `/screenplay`
-also load the recorded trace/session instead of waiting for live SSE events.
-Event/marker selections can also expose and play saved clip references through
-`audio_ref` when present in payload data.
+When `listenbury web` is started with `--trace <path>`, `/replay` and
+`/screenplay` load the recorded trace/session instead of waiting for live SSE
+events. Event/marker selections can also expose and play saved clip references
+through `audio_ref` when present in payload data.
 
 Words without `timing` are displayed with fallback layout timing so they are
 visibly distinct from measured/aligned timings.

@@ -135,19 +135,22 @@ pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFra
 }
 
 pub fn write_wav(path: &Path, frames: &[AudioFrame]) -> Result<()> {
+    let bytes = write_wav_bytes(frames)?;
+    std::fs::write(path, bytes)
+        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
+    Ok(())
+}
+
+pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
     let Some(first_frame) = frames.first() else {
         anyhow::bail!("cannot write WAV without audio frames");
     };
+    anyhow::ensure!(
+        first_frame.channels > 0,
+        "cannot write WAV with zero channels"
+    );
 
-    let spec = hound::WavSpec {
-        channels: first_frame.channels,
-        sample_rate: first_frame.sample_rate_hz,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(path, spec)
-        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
-
+    let mut pcm = Vec::<u8>::new();
     for frame in frames {
         anyhow::ensure!(
             frame.channels == first_frame.channels,
@@ -163,12 +166,40 @@ pub fn write_wav(path: &Path, frames: &[AudioFrame]) -> Result<()> {
         );
 
         for sample in &frame.samples {
-            writer.write_sample(f32_to_i16(*sample))?;
+            pcm.extend_from_slice(&f32_to_i16(*sample).to_le_bytes());
         }
     }
 
-    writer.finalize()?;
-    Ok(())
+    let data_len = u32::try_from(pcm.len()).context("WAV PCM payload exceeds u32 size")?;
+    let riff_len = 36u32
+        .checked_add(data_len)
+        .context("WAV RIFF payload exceeds u32 size")?;
+    let byte_rate = first_frame
+        .sample_rate_hz
+        .checked_mul(u32::from(first_frame.channels))
+        .and_then(|value| value.checked_mul(2))
+        .context("WAV byte rate overflows u32")?;
+    let block_align = first_frame
+        .channels
+        .checked_mul(2)
+        .context("WAV block alignment overflows u16")?;
+
+    let mut out = Vec::with_capacity(44usize.saturating_add(pcm.len()));
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&riff_len.to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&first_frame.channels.to_le_bytes());
+    out.extend_from_slice(&first_frame.sample_rate_hz.to_le_bytes());
+    out.extend_from_slice(&byte_rate.to_le_bytes());
+    out.extend_from_slice(&block_align.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data_len.to_le_bytes());
+    out.extend_from_slice(&pcm);
+    Ok(out)
 }
 
 fn normalize_signed_sample(sample: i64, bits_per_sample: u16) -> f32 {

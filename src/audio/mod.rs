@@ -7,11 +7,14 @@ pub mod ring;
 pub mod voice_signature;
 pub mod wav;
 
-use crate::audio::frame::AudioFrame;
+pub use crate::audio::frame::AudioFrame;
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };
-pub use wav::{read_wav_as_audio_frames, read_wav_as_whisper_frames, read_wav_frames, write_wav};
+pub use wav::{
+    read_wav_as_audio_frames, read_wav_as_whisper_frames, read_wav_frames, write_wav,
+    write_wav_bytes,
+};
 
 pub trait AudioInput {
     fn poll_frames(&mut self) -> anyhow::Result<Vec<AudioFrame>>;

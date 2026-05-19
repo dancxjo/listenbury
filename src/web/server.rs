@@ -1,10 +1,11 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
+use crate::audio::{AudioFrame, write_wav_bytes};
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
 use crate::trace::viewer_payload::trace_session_to_viewer_payload;
 
@@ -17,6 +18,7 @@ pub struct ServeConfig {
     pub payload: Option<PathBuf>,
     pub trace: Option<PathBuf>,
     pub broadcaster: Option<SseBroadcaster>,
+    pub live_audio: Option<LiveSessionAudioStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +26,34 @@ struct ServerState {
     payload: Option<PathBuf>,
     trace: Option<PathBuf>,
     broadcaster: Option<SseBroadcaster>,
+    live_audio: Option<LiveSessionAudioStore>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LiveSessionAudioStore {
+    frames: Arc<Mutex<Vec<AudioFrame>>>,
+}
+
+impl LiveSessionAudioStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_frame(&self, frame: AudioFrame) {
+        match self.frames.lock() {
+            Ok(mut frames) => frames.push(frame),
+            Err(error) => tracing::error!("live audio mutex poisoned; dropping frame: {error}"),
+        }
+    }
+
+    fn snapshot(&self) -> Result<Vec<AudioFrame>> {
+        let frames = self
+            .frames
+            .lock()
+            .map_err(|error| anyhow::anyhow!("live audio mutex poisoned: {error}"))?
+            .clone();
+        Ok(frames)
+    }
 }
 
 #[derive(Debug)]
@@ -44,7 +74,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/session-audio/*, /api/live-events, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/session-audio/*, /api/live-events, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -154,6 +184,7 @@ pub fn bind(config: ServeConfig) -> Result<BoundServer> {
         payload: config.payload,
         trace: config.trace,
         broadcaster: config.broadcaster,
+        live_audio: config.live_audio,
     });
 
     Ok(BoundServer {
@@ -377,6 +408,11 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             Ok(None) => HttpResponse::not_found("no --trace file was provided\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
+        "/api/live-session-audio.wav" => match load_live_session_audio(state) {
+            Ok(Some(audio)) => HttpResponse::ok("audio/wav", audio),
+            Ok(None) => HttpResponse::not_found("live session audio is not available yet\n"),
+            Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+        },
 
         _ if path.starts_with("/api/session-audio/") => match load_session_audio(path, state) {
             Ok(Some(audio)) => HttpResponse::static_asset("audio/wav", audio),
@@ -423,6 +459,18 @@ fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>
     let json = serde_json::to_vec_pretty(&payload)
         .with_context(|| format!("serialize viewer payload for {}", path.display()))?;
     Ok(Some(json))
+}
+
+fn load_live_session_audio(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(store) = state.live_audio.as_ref() else {
+        return Ok(None);
+    };
+    let frames = store.snapshot()?;
+    if frames.is_empty() {
+        return Ok(None);
+    }
+    let audio = write_wav_bytes(&frames).context("encode live session audio as WAV")?;
+    Ok(Some(audio))
 }
 
 fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
@@ -476,6 +524,7 @@ mod tests {
             payload: None,
             trace: None,
             broadcaster: None,
+            live_audio: None,
         })
     }
 
@@ -484,6 +533,7 @@ mod tests {
             payload: None,
             trace: None,
             broadcaster: Some(SseBroadcaster::new()),
+            live_audio: None,
         })
     }
 
@@ -587,6 +637,7 @@ mod tests {
             payload: Some(payload_path.clone()),
             trace: Some(trace_path.clone()),
             broadcaster: None,
+            live_audio: None,
         });
 
         let payload_response = route_request("GET", "/api/payload", &state);
@@ -654,6 +705,7 @@ mod tests {
             payload: None,
             trace: Some(root.clone()),
             broadcaster: None,
+            live_audio: None,
         });
         let response = route_request("GET", "/api/session-audio/session-audio", &state);
         assert_eq!(response.status, 200);
@@ -661,6 +713,30 @@ mod tests {
         assert_eq!(response.body, b"RIFFtest");
 
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn serves_live_session_audio_from_shared_store() {
+        let live_audio = LiveSessionAudioStore::new();
+        live_audio.push_frame(AudioFrame {
+            captured_at: crate::time::ExactTimestamp { unix_nanos: 0 },
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.0, 0.25, -0.25],
+            voice_signatures: Vec::new(),
+        });
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+        });
+
+        let response = route_request("GET", "/api/live-session-audio.wav", &state);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "audio/wav");
+        assert!(response.body.starts_with(b"RIFF"));
+        assert!(response.body.windows(4).any(|window| window == b"data"));
     }
 
     #[test]
@@ -694,6 +770,7 @@ mod tests {
             payload: None,
             trace: Some(session_root.clone()),
             broadcaster: None,
+            live_audio: None,
         });
 
         let trace_response = route_request("GET", "/api/trace", &state);
@@ -858,6 +935,7 @@ mod tests {
             payload: None,
             trace: None,
             broadcaster: None,
+            live_audio: None,
         })
         .expect_err("second bind should fail");
 
