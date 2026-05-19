@@ -209,8 +209,8 @@ impl OrthographyToPhonemes for CmudictPronouncer {
         let mut pending_word_boundary = false;
 
         let flush_word = |current_word: &mut String,
-                              units: &mut Vec<PhonemeTextUnit>,
-                              pending: &mut bool|
+                          units: &mut Vec<PhonemeTextUnit>,
+                          pending: &mut bool|
          -> Result<(), PhonologyError> {
             if current_word.is_empty() {
                 return Ok(());
@@ -370,7 +370,10 @@ mod tests {
         let phones = p.lookup("fitzgerald").expect("fitzgerald in dictionary");
         // FITZGERALD  F IH0 TS JH EH1 R AH0 L D
         let bases: Vec<&str> = phones.iter().map(|ph| ph.base.as_str()).collect();
-        assert_eq!(bases, vec!["F", "IH", "TS", "JH", "EH", "R", "AH", "L", "D"]);
+        assert_eq!(
+            bases,
+            vec!["F", "IH", "TS", "JH", "EH", "R", "AH", "L", "D"]
+        );
     }
 
     #[test]
@@ -387,7 +390,10 @@ mod tests {
         let p = pronouncer();
         let phones = p.lookup("xylophone").expect("xylophone in dictionary");
         // OW2 = secondary stress
-        let ow = phones.iter().find(|ph| ph.base == "OW").expect("OW phoneme");
+        let ow = phones
+            .iter()
+            .find(|ph| ph.base == "OW")
+            .expect("OW phoneme");
         assert_eq!(ow.stress, Some(Stress::Secondary));
     }
 
@@ -420,9 +426,13 @@ mod tests {
         let v = variety();
         let text = p.realize_text(&v, "okay doctor").expect("realize text");
         assert_eq!(text.units.len(), 3);
-        assert!(matches!(&text.units[0], PhonemeTextUnit::Word { orthography, .. } if orthography.text == "okay"));
+        assert!(
+            matches!(&text.units[0], PhonemeTextUnit::Word { orthography, .. } if orthography.text == "okay")
+        );
         assert_eq!(text.units[1], PhonemeTextUnit::WordBoundary);
-        assert!(matches!(&text.units[2], PhonemeTextUnit::Word { orthography, .. } if orthography.text == "doctor"));
+        assert!(
+            matches!(&text.units[2], PhonemeTextUnit::Word { orthography, .. } if orthography.text == "doctor")
+        );
     }
 
     #[test]
@@ -441,6 +451,10 @@ mod tests {
     fn bundled_dict_has_reasonable_size() {
         let p = pronouncer();
         // The bundled dictionary should have at least 100 entries.
-        assert!(p.len() >= 100, "expected at least 100 entries, got {}", p.len());
+        assert!(
+            p.len() >= 100,
+            "expected at least 100 entries, got {}",
+            p.len()
+        );
     }
 }

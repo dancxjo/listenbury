@@ -222,8 +222,9 @@ impl OrthographyToPhonemes for SimpleEnglishG2p {
         _variety: &LinguisticVariety,
         word: &OrthographicWord,
     ) -> Result<PhonemeSeq, PhonologyError> {
-        let phones = word_to_phones(&word.text)
-            .ok_or_else(|| PhonologyError::UnsupportedWord { word: word.text.clone() })?;
+        let phones = word_to_phones(&word.text).ok_or_else(|| PhonologyError::UnsupportedWord {
+            word: word.text.clone(),
+        })?;
         Ok(PhonemeSeq::new(
             phones.into_iter().map(Phoneme::new).collect(),
         ))
@@ -237,7 +238,9 @@ impl OrthographyToPhonemes for SimpleEnglishG2p {
         let normalized = self
             .normalizer
             .normalize(text)
-            .map_err(|e| PhonologyError::Message { message: e.to_string() })?;
+            .map_err(|e| PhonologyError::Message {
+                message: e.to_string(),
+            })?;
 
         let mut units: Vec<PhonemeTextUnit> = Vec::new();
         let mut pending_word_boundary = false;
@@ -257,19 +260,13 @@ impl OrthographyToPhonemes for SimpleEnglishG2p {
                     pending_word_boundary = true;
                 }
                 NormalizedToken::Initial(initial) => {
-                    let initial_phones = initial_to_phones(*initial).ok_or_else(|| {
-                        PhonologyError::Message {
+                    let initial_phones =
+                        initial_to_phones(*initial).ok_or_else(|| PhonologyError::Message {
                             message: format!("unsupported initial '{initial}'"),
-                        }
-                    })?;
+                        })?;
                     let ortho = OrthographicWord::new(&initial.to_string());
-                    let seq = PhonemeSeq::new(
-                        initial_phones
-                            .iter()
-                            .copied()
-                            .map(Phoneme::new)
-                            .collect(),
-                    );
+                    let seq =
+                        PhonemeSeq::new(initial_phones.iter().copied().map(Phoneme::new).collect());
                     if pending_word_boundary {
                         units.push(PhonemeTextUnit::WordBoundary);
                     }
@@ -286,8 +283,10 @@ impl OrthographyToPhonemes for SimpleEnglishG2p {
             }
         }
 
-        if matches!(normalized.boundary, ProsodyBoundaryHint::PossibleSentenceEnd)
-            && !matches!(units.last(), Some(PhonemeTextUnit::PhraseBoundary))
+        if matches!(
+            normalized.boundary,
+            ProsodyBoundaryHint::PossibleSentenceEnd
+        ) && !matches!(units.last(), Some(PhonemeTextUnit::PhraseBoundary))
         {
             units.push(PhonemeTextUnit::PhraseBoundary);
         }
@@ -713,9 +712,14 @@ mod tests {
         #[test]
         fn realize_text_no_trailing_boundary_for_incomplete_phrase() {
             let g2p = SimpleEnglishG2p::default();
-            let phoneme_text = g2p.realize_text(&en_us(), "Dr. King").expect("realize_text");
+            let phoneme_text = g2p
+                .realize_text(&en_us(), "Dr. King")
+                .expect("realize_text");
             assert!(
-                !matches!(phoneme_text.units.last(), Some(PhonemeTextUnit::PhraseBoundary)),
+                !matches!(
+                    phoneme_text.units.last(),
+                    Some(PhonemeTextUnit::PhraseBoundary)
+                ),
                 "no trailing PhraseBoundary expected for non-sentence-ending text"
             );
         }

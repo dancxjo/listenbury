@@ -47,11 +47,10 @@ struct BrowserTranscriptPlayerMarker {
 
 #[test]
 fn browser_transcript_player_demo_json_deserializes() {
-    let payload: BrowserTranscriptPlayerPayload =
-        serde_json::from_str(include_str!(
-            "../examples/browser-transcript-player/fixtures/demo.json"
-        ))
-            .expect("demo JSON should deserialize");
+    let payload: BrowserTranscriptPlayerPayload = serde_json::from_str(include_str!(
+        "../examples/browser-transcript-player/fixtures/demo.json"
+    ))
+    .expect("demo JSON should deserialize");
 
     assert_eq!(payload.title.as_deref(), Some("Listenbury WaveDeck Demo"));
 

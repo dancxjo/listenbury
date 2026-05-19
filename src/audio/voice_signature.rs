@@ -68,11 +68,7 @@ pub struct VoiceSignature {
 
 impl VoiceSignature {
     /// Construct a new [`VoiceSignature`] with a freshly generated ID.
-    pub fn new(
-        label: VoiceSignatureLabel,
-        confidence: f32,
-        source: VoiceSignatureSource,
-    ) -> Self {
+    pub fn new(label: VoiceSignatureLabel, confidence: f32, source: VoiceSignatureSource) -> Self {
         Self {
             id: VoiceSignatureId::new(),
             label,

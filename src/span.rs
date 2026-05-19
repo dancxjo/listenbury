@@ -630,11 +630,8 @@ mod tests {
         assert!(word.stabilize());
         assert!(clause.stabilize());
 
-        let mut spans = HashMap::from([
-            (phoneme_id, phoneme),
-            (word_id, word),
-            (clause_id, clause),
-        ]);
+        let mut spans =
+            HashMap::from([(phoneme_id, phoneme), (word_id, word), (clause_id, clause)]);
 
         let mut graph = AlignmentGraph::new();
         graph.add_alignment(Alignment::new(
@@ -643,8 +640,18 @@ mod tests {
             0.95,
             AlignmentKind::Equivalent,
         ));
-        graph.add_alignment(Alignment::new(word_id, clause_id, 0.9, AlignmentKind::Contains));
-        graph.add_alignment(Alignment::new(clause_id, phoneme_id, 0.4, AlignmentKind::Overlaps));
+        graph.add_alignment(Alignment::new(
+            word_id,
+            clause_id,
+            0.9,
+            AlignmentKind::Contains,
+        ));
+        graph.add_alignment(Alignment::new(
+            clause_id,
+            phoneme_id,
+            0.4,
+            AlignmentKind::Overlaps,
+        ));
 
         spans
             .get_mut(&phoneme_id)
@@ -664,18 +671,14 @@ mod tests {
                 )
         );
 
-        let revised = propagate_repair_to_aligned(
-            &graph,
-            &mut spans,
-            phoneme_id,
-            8,
-            1,
-            |source, target| match target.modality {
-                Modality::Word => Some(source.contents.clone()),
-                Modality::Clause => Some(format!("{} tools", source.contents)),
-                _ => None,
-            },
-        );
+        let revised =
+            propagate_repair_to_aligned(&graph, &mut spans, phoneme_id, 8, 1, |source, target| {
+                match target.modality {
+                    Modality::Word => Some(source.contents.clone()),
+                    Modality::Clause => Some(format!("{} tools", source.contents)),
+                    _ => None,
+                }
+            });
         assert_eq!(revised, vec![word_id, clause_id]);
         assert_eq!(
             spans.get(&word_id).expect("word exists").contents,
@@ -686,7 +689,14 @@ mod tests {
             "garden tools".to_string()
         );
         assert_eq!(spans.get(&word_id).expect("word exists").revisions.len(), 1);
-        assert_eq!(spans.get(&clause_id).expect("clause exists").revisions.len(), 1);
+        assert_eq!(
+            spans
+                .get(&clause_id)
+                .expect("clause exists")
+                .revisions
+                .len(),
+            1
+        );
 
         spans
             .get_mut(&phoneme_id)
@@ -706,18 +716,14 @@ mod tests {
                 )
         );
 
-        let revised_again = propagate_repair_to_aligned(
-            &graph,
-            &mut spans,
-            phoneme_id,
-            8,
-            1,
-            |source, target| match target.modality {
-                Modality::Word => Some(source.contents.clone()),
-                Modality::Clause => Some(format!("{} tools", source.contents)),
-                _ => None,
-            },
-        );
+        let revised_again =
+            propagate_repair_to_aligned(&graph, &mut spans, phoneme_id, 8, 1, |source, target| {
+                match target.modality {
+                    Modality::Word => Some(source.contents.clone()),
+                    Modality::Clause => Some(format!("{} tools", source.contents)),
+                    _ => None,
+                }
+            });
         assert!(
             revised_again.is_empty(),
             "repair attempts on aligned spans are bounded"

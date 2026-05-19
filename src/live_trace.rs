@@ -1,6 +1,6 @@
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::soundscape::{SoundscapeId, VoiceAttribution, VoiceId, VoiceLabel};
+pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
-    AudioClipId, SessionId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId,
-    UtteranceId,
+    AudioClipId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId, UtteranceId,
 };
 use crate::time::ExactTimestamp;
 
@@ -276,10 +276,7 @@ pub enum DiskTraceWriter {
 }
 
 impl DiskTraceWriter {
-    pub fn create(
-        path: impl AsRef<Path>,
-        metadata: TraceSessionMetadata,
-    ) -> anyhow::Result<Self> {
+    pub fn create(path: impl AsRef<Path>, metadata: TraceSessionMetadata) -> anyhow::Result<Self> {
         let path = path.as_ref();
         if trace_path_looks_like_jsonl(path) {
             Ok(Self::Jsonl(JsonlTraceWriter::create(path)?))
@@ -323,7 +320,11 @@ impl<S> LiveTraceRecorder<S>
 where
     S: LiveTraceSink,
 {
-    pub fn with_session_id(session_id: SessionId, session_started_at: ExactTimestamp, sink: S) -> Self {
+    pub fn with_session_id(
+        session_id: SessionId,
+        session_started_at: ExactTimestamp,
+        sink: S,
+    ) -> Self {
         Self {
             session_id,
             session_started_at,
@@ -622,14 +623,21 @@ pub fn read_trace_session(path: &Path) -> anyhow::Result<TraceSessionEnvelope> {
     Ok(TraceSessionEnvelope { metadata, events })
 }
 
-fn synthesize_trace_session_metadata(path: &Path, events: &[LiveTraceEvent]) -> TraceSessionMetadata {
+fn synthesize_trace_session_metadata(
+    path: &Path,
+    events: &[LiveTraceEvent],
+) -> TraceSessionMetadata {
     let session_id = events
         .iter()
         .find_map(|event| event.session_id)
         .unwrap_or_default();
     let session_started_at_unix_ns = events
         .iter()
-        .map(|event| event.t_unix_ns.saturating_sub(event.elapsed_ms.saturating_mul(1_000_000)))
+        .map(|event| {
+            event
+                .t_unix_ns
+                .saturating_sub(event.elapsed_ms.saturating_mul(1_000_000))
+        })
         .min()
         .unwrap_or_default();
     let mut runtime = TraceRuntimeMetadata::new("imported-jsonl");
@@ -707,10 +715,8 @@ mod tests {
 
     #[test]
     fn trace_session_writer_persists_metadata_and_events() {
-        let root = std::env::temp_dir().join(format!(
-            "listenbury-live-session-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("listenbury-live-session-{}", uuid::Uuid::new_v4()));
         let session_id = SessionId::new();
         let metadata = TraceSessionMetadata::new(
             session_id,

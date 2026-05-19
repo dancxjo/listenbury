@@ -1239,6 +1239,17 @@ h1 {
   box-shadow: 0 0 0 1px rgba(99, 210, 255, 0.25);
 }
 
+/* Confirmed: high-quality pass over broader context */
+.word-chip.commit-confirmed {
+  border-color: rgba(142, 230, 168, 0.95);
+  background:
+    linear-gradient(90deg, rgba(142, 230, 168, 0.34), transparent),
+    #13271a;
+  color: #e0ffe9;
+  font-weight: 800;
+  box-shadow: 0 0 0 1px rgba(142, 230, 168, 0.32);
+}
+
 /* Cancelled: abandoned before playback */
 .word-chip.commit-cancelled {
   border-style: dashed;
@@ -1354,9 +1365,18 @@ h1 {
 /* Committed / Final: full weight */
 .transcript-token.span-state-committed,
 .transcript-token.commit-final,
+.transcript-token.commit-confirmed,
 .transcript-token.commit-played {
   color: var(--text);
   font-weight: 600;
+}
+
+/* Confirmed: broader-context refinement has superseded the fast final pass */
+.transcript-token.span-state-confirmed,
+.transcript-token.commit-confirmed {
+  color: rgba(142, 230, 168, 0.95);
+  font-weight: 800;
+  text-decoration: underline solid rgba(142, 230, 168, 0.45);
 }
 
 /* Revised: orange highlight, was wrong */
@@ -1404,6 +1424,11 @@ h1 {
 .span-legend-item.span-state-committed {
   color: rgba(99, 210, 255, 0.9);
   font-weight: 800;
+}
+.span-legend-item.span-state-confirmed {
+  color: rgba(142, 230, 168, 0.95);
+  font-weight: 800;
+  text-decoration: underline solid rgba(142, 230, 168, 0.45);
 }
 .span-legend-item.span-state-revised {
   color: var(--warn);

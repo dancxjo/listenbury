@@ -36,9 +36,7 @@ impl Default for AudioFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::voice_signature::{
-        VoiceSignatureLabel, VoiceSignatureSource,
-    };
+    use crate::audio::voice_signature::{VoiceSignatureLabel, VoiceSignatureSource};
 
     #[test]
     fn default_frame_has_no_voice_signatures() {
@@ -54,11 +52,7 @@ mod tests {
 
     #[test]
     fn frame_can_carry_one_voice_signature() {
-        let sig = VoiceSignature::new(
-            VoiceSignatureLabel::User,
-            0.9,
-            VoiceSignatureSource::Manual,
-        );
+        let sig = VoiceSignature::new(VoiceSignatureLabel::User, 0.9, VoiceSignatureSource::Manual);
         let frame = AudioFrame {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: 16_000,

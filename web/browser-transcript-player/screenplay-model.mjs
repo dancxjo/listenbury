@@ -294,7 +294,7 @@ export function renderEpisodeScreenplay(episode) {
     if (scene.topicLabel) {
       lines.push(`Soft-note: Topic: ${toTitleCase(scene.topicLabel)}.`);
     }
-    lines.push(scene.action, `Source trace IDs: ${scene.sourceEventIds.join(", ") || "none"}`, "");
+    lines.push(scene.action, "");
     for (const beat of scene.beats) {
       if (beat.role) {
         lines.push(beat.role, stringifySegments(beat.segments), "");
@@ -505,7 +505,7 @@ function buildScene(turns, index, sceneKey, locationContext = {}) {
     timestampMs: turns[0]?.startedAtMs ?? locationContext.timestampMs ?? null,
   };
   const heading = resolveSlugline(sceneContext);
-  const beats = turns.flatMap((turn) => turnToBeats(turn));
+  const beats = consolidateConsecutiveDialogueBeats(turns.flatMap((turn) => turnToBeats(turn)));
   const sourceEventIds = unique(turns.flatMap((turn) => turn.sourceEventIds));
   const summary = summarizeScene(turns, topic, beats);
   const scene = {
@@ -516,7 +516,6 @@ function buildScene(turns, index, sceneKey, locationContext = {}) {
     heading,
     action: describeSceneAction(turns, topic),
     summary,
-    turnIds: turns.map((turn) => turn.id),
     sourceEventIds,
     beats,
     children: beats,
@@ -530,20 +529,6 @@ function turnToBeats(turn) {
   const beats = [];
   const sourceEventIds = [...turn.sourceEventIds];
   const topicKey = classifyTopic(turn);
-
-  if (turn.flags.revised && turn.userDeleted.length) {
-    beats.push({
-      id: `beat-turn-${turn.id}-revision`,
-      type: "beat",
-      kind: "transcript_revision",
-      role: null,
-      text: `The transcript revises itself, striking ${deletedSummary(turn.userDeleted)} from the earlier listening pass.`,
-      sourceEventIds,
-      topicKey,
-      turnId: turn.id,
-      children: [],
-    });
-  }
 
   if (turnHasUserDialogue(turn)) {
     beats.push({
@@ -606,6 +591,35 @@ function turnToBeats(turn) {
   return beats;
 }
 
+function consolidateConsecutiveDialogueBeats(beats) {
+  const consolidated = [];
+
+  for (const beat of beats) {
+    const previous = consolidated[consolidated.length - 1];
+    if (previous?.role && previous.role === beat.role) {
+      const segments = [
+        ...(previous.segments ?? [{ text: previous.text }]),
+        ...(beat.segments ?? [{ text: beat.text }]),
+      ];
+      previous.id = `${previous.id}+${beat.id}`;
+      previous.kind = previous.kind === beat.kind ? previous.kind : "dialogue";
+      previous.text = stringifySegments(segments);
+      previous.segments = compactSegments(segments);
+      previous.sourceEventIds = unique([
+        ...(previous.sourceEventIds ?? []),
+        ...(beat.sourceEventIds ?? []),
+      ]);
+      previous.turnId ??= beat.turnId;
+      previous.children = [...(previous.children ?? []), ...(beat.children ?? [])];
+      continue;
+    }
+
+    consolidated.push({ ...beat });
+  }
+
+  return consolidated;
+}
+
 function classifyTopic(turn) {
   const interruptionOnly = turn.flags.interruption || turn.flags.cancelled;
   const body = joinSemanticText(
@@ -646,9 +660,6 @@ function summarizeScene(turns, topic, beats) {
   const userLine = turns.map((turn) => currentUserText(turn)).find(Boolean);
   const peteLine = turns.map((turn) => textContent(turn.llmFinal || turn.llmProspective)).find(Boolean);
   const notes = [];
-  if (turns.some((turn) => turn.flags.revised)) {
-    notes.push("the transcript revises itself");
-  }
   if (turns.some((turn) => turn.flags.cancelled)) {
     notes.push("cancelled speech remains visible");
   }

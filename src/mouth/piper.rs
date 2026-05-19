@@ -9,13 +9,11 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use tracing::debug;
 
 use crate::audio::frame::AudioFrame;
-use crate::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
 use crate::linguistic::{PronunciationService, service::default_english_variety};
+use crate::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
-use crate::mouth::piper_native::{
-    NativePiperBackend, PiperEncoder, PiperVoiceConfig,
-};
+use crate::mouth::piper_native::{NativePiperBackend, PiperEncoder, PiperVoiceConfig};
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;

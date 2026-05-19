@@ -89,7 +89,7 @@ pub fn default_bundle_id(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llama-3-2-3b-instruct-q4-k-m",
         ModelKind::Voice => "ryan",
-        ModelKind::Whisper => "whisper-tiny-en",
+        ModelKind::Whisper => "whisper-large-v3-turbo",
     }
 }
 
@@ -398,7 +398,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{FetchOutcome, fetch_assets_at_home, find_bundle};
+    use super::{FetchOutcome, default_bundle_id, fetch_assets_at_home, find_bundle};
     use crate::models::manifest::{ModelAsset, ModelKind};
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -455,5 +455,13 @@ mod tests {
 
         let turbo = find_bundle(ModelKind::Whisper, "turbo").expect("turbo bundle");
         assert_eq!(turbo.id, "whisper-large-v3-turbo");
+    }
+
+    #[test]
+    fn whisper_defaults_to_multilingual_v3_turbo() {
+        assert_eq!(
+            default_bundle_id(ModelKind::Whisper),
+            "whisper-large-v3-turbo"
+        );
     }
 }

@@ -19,10 +19,7 @@ pub struct Environment {
 }
 
 impl Environment {
-    pub fn new(
-        preceding: Option<impl Into<String>>,
-        following: Option<impl Into<String>>,
-    ) -> Self {
+    pub fn new(preceding: Option<impl Into<String>>, following: Option<impl Into<String>>) -> Self {
         Self {
             preceding: preceding.map(Into::into),
             following: following.map(Into::into),
@@ -251,36 +248,45 @@ impl OrthographyToPhonemes for SoundItOutPronouncer {
         // last separator was whitespace, not a phrase boundary).
         let mut pending_word_boundary = false;
 
-        let flush_word =
-            |current_word: &mut String,
-             units: &mut Vec<PhonemeTextUnit>,
-             pending: &mut bool,
-             pronouncer: &SoundItOutPronouncer|
-             -> Result<(), PhonologyError> {
-                if current_word.is_empty() {
-                    return Ok(());
-                }
-                if *pending {
-                    units.push(PhonemeTextUnit::WordBoundary);
-                }
-                let ortho = OrthographicWord::new(current_word.as_str());
-                let phonemes = pronouncer.apply_rules_to_word(current_word)?;
-                units.push(PhonemeTextUnit::Word {
-                    orthography: ortho,
-                    phonemes,
-                });
-                current_word.clear();
-                *pending = true;
-                Ok(())
-            };
+        let flush_word = |current_word: &mut String,
+                          units: &mut Vec<PhonemeTextUnit>,
+                          pending: &mut bool,
+                          pronouncer: &SoundItOutPronouncer|
+         -> Result<(), PhonologyError> {
+            if current_word.is_empty() {
+                return Ok(());
+            }
+            if *pending {
+                units.push(PhonemeTextUnit::WordBoundary);
+            }
+            let ortho = OrthographicWord::new(current_word.as_str());
+            let phonemes = pronouncer.apply_rules_to_word(current_word)?;
+            units.push(PhonemeTextUnit::Word {
+                orthography: ortho,
+                phonemes,
+            });
+            current_word.clear();
+            *pending = true;
+            Ok(())
+        };
 
         for ch in text.chars() {
             if ch.is_alphabetic() {
                 current_word.push(ch);
             } else if ch.is_ascii_whitespace() {
-                flush_word(&mut current_word, &mut units, &mut pending_word_boundary, self)?;
+                flush_word(
+                    &mut current_word,
+                    &mut units,
+                    &mut pending_word_boundary,
+                    self,
+                )?;
             } else if matches!(ch, '.' | ',' | ';' | ':' | '!' | '?') {
-                flush_word(&mut current_word, &mut units, &mut pending_word_boundary, self)?;
+                flush_word(
+                    &mut current_word,
+                    &mut units,
+                    &mut pending_word_boundary,
+                    self,
+                )?;
                 units.push(PhonemeTextUnit::PhraseBoundary);
                 // After a phrase boundary the next word should not be preceded by
                 // an additional WordBoundary.
@@ -290,7 +296,12 @@ impl OrthographyToPhonemes for SoundItOutPronouncer {
         }
 
         // Flush any remaining word at end of input.
-        flush_word(&mut current_word, &mut units, &mut pending_word_boundary, self)?;
+        flush_word(
+            &mut current_word,
+            &mut units,
+            &mut pending_word_boundary,
+            self,
+        )?;
 
         Ok(PhonemeText::new(units))
     }
@@ -470,6 +481,9 @@ mod tests {
         let rules = SoundItOutRules::new(VarietyTag::new("test"), vec![rule("a", &["a"])]);
         let p = SoundItOutPronouncer::new(rules);
         let result = p.realize_word(&variety(), &OrthographicWord::new("b"));
-        assert!(matches!(result, Err(PhonologyError::UnsupportedWord { .. })));
+        assert!(matches!(
+            result,
+            Err(PhonologyError::UnsupportedWord { .. })
+        ));
     }
 }

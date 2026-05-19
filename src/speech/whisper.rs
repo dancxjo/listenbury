@@ -11,8 +11,11 @@ pub struct WhisperSpeechRecognizer {
     ctx: whisper_cpp_plus::WhisperContext,
     pending: Vec<f32>,
     sample_rate_hz: u32,
+    input_silence_padding_ms: u64,
     candidate_tracker: TranscriptCandidateTracker,
 }
+
+const DEFAULT_INPUT_SILENCE_PADDING_MS: u64 = 250;
 
 impl WhisperSpeechRecognizer {
     pub fn new(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
@@ -23,9 +26,31 @@ impl WhisperSpeechRecognizer {
         Self::new_with_log_suppression(model_path, true)
     }
 
+    /// Creates a quiet recognizer without synthetic edge silence.
+    ///
+    /// This is intended for refinement passes that already operate over a wider rolling
+    /// context window.
+    pub fn new_quiet_without_input_padding(
+        model_path: impl AsRef<std::path::Path>,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_log_suppression_and_padding(model_path, true, 0)
+    }
+
     fn new_with_log_suppression(
         model_path: impl AsRef<std::path::Path>,
         suppress_logs: bool,
+    ) -> anyhow::Result<Self> {
+        Self::new_with_log_suppression_and_padding(
+            model_path,
+            suppress_logs,
+            DEFAULT_INPUT_SILENCE_PADDING_MS,
+        )
+    }
+
+    fn new_with_log_suppression_and_padding(
+        model_path: impl AsRef<std::path::Path>,
+        suppress_logs: bool,
+        input_silence_padding_ms: u64,
     ) -> anyhow::Result<Self> {
         configure_whisper_logging(suppress_logs);
         let ctx = whisper_cpp_plus::WhisperContext::new(model_path.as_ref())?;
@@ -34,6 +59,7 @@ impl WhisperSpeechRecognizer {
             ctx,
             pending: Vec::new(),
             sample_rate_hz: 16_000,
+            input_silence_padding_ms,
             candidate_tracker: TranscriptCandidateTracker::new(),
         })
     }
@@ -62,6 +88,8 @@ impl WhisperSpeechRecognizer {
         }
 
         let audio = std::mem::take(&mut self.pending);
+        let audio =
+            pad_samples_with_silence(audio, self.sample_rate_hz, self.input_silence_padding_ms);
         let text = self.ctx.transcribe(&audio)?;
         let text = text.trim();
 
@@ -99,12 +127,60 @@ impl WhisperSpeechRecognizer {
     }
 }
 
+fn pad_samples_with_silence(audio: Vec<f32>, sample_rate_hz: u32, padding_ms: u64) -> Vec<f32> {
+    if audio.is_empty() || sample_rate_hz == 0 || padding_ms == 0 {
+        return audio;
+    }
+
+    let padding_samples = (u64::from(sample_rate_hz) * padding_ms).div_ceil(1_000) as usize;
+    if padding_samples == 0 {
+        return audio;
+    }
+
+    let mut padded = Vec::with_capacity(
+        audio
+            .len()
+            .saturating_add(padding_samples.saturating_mul(2)),
+    );
+    padded.extend(std::iter::repeat_n(0.0, padding_samples));
+    padded.extend(audio);
+    padded.extend(std::iter::repeat_n(0.0, padding_samples));
+    padded
+}
+
 fn configure_whisper_logging(suppress_logs: bool) {
     static LOGGING_CONFIGURED: OnceLock<()> = OnceLock::new();
     if suppress_logs || !developer_diagnostics_enabled() {
         LOGGING_CONFIGURED.get_or_init(|| unsafe {
             whisper_ffi::whisper_log_set(Some(drop_whisper_log), std::ptr::null_mut());
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pad_samples_with_silence;
+
+    #[test]
+    fn pads_samples_with_silence_on_both_ends() {
+        let padded = pad_samples_with_silence(vec![0.5, -0.5], 1_000, 2);
+
+        assert_eq!(padded, vec![0.0, 0.0, 0.5, -0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn silence_padding_uses_ceiling_sample_count() {
+        let padded = pad_samples_with_silence(vec![1.0], 16_000, 1);
+
+        assert_eq!(padded.len(), 33);
+        assert_eq!(padded[16], 1.0);
+    }
+
+    #[test]
+    fn zero_padding_leaves_samples_unchanged() {
+        let padded = pad_samples_with_silence(vec![0.25], 16_000, 0);
+
+        assert_eq!(padded, vec![0.25]);
     }
 }
 
