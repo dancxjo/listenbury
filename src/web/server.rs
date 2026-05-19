@@ -301,6 +301,10 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             "application/javascript; charset=utf-8",
             assets::SCENE_HEADING_MJS,
         ),
+        "/shared-span-model.mjs" | "/assets/shared-span-model.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SHARED_SPAN_MODEL_MJS,
+        ),
         // Shared live-event model modules
         "/assets/shared/events/schema.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
@@ -531,9 +535,22 @@ mod tests {
 
     #[test]
     fn live_server_root_serves_index_without_query() {
-        let response = route_request("GET", "/", &live_state());
+        let state = live_state();
+
+        let response = route_request("GET", "/", &state);
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
+
+        let app = route_request("GET", "/assets/app.js", &state);
+        assert_eq!(app.status, 200);
+        assert_eq!(app.content_type, "application/javascript; charset=utf-8");
+
+        let shared_span_model = route_request("GET", "/assets/shared-span-model.mjs", &state);
+        assert_eq!(shared_span_model.status, 200);
+        assert_eq!(
+            shared_span_model.content_type,
+            "application/javascript; charset=utf-8"
+        );
     }
 
     #[test]
@@ -558,6 +575,12 @@ mod tests {
         let scene_heading = route_request("GET", "/assets/scene-heading.mjs", &state);
         assert_eq!(scene_heading.status, 200);
         assert_eq!(scene_heading.content_type, "application/javascript; charset=utf-8");
+        let shared_span_model = route_request("GET", "/assets/shared-span-model.mjs", &state);
+        assert_eq!(shared_span_model.status, 200);
+        assert_eq!(
+            shared_span_model.content_type,
+            "application/javascript; charset=utf-8"
+        );
 
         let styles = route_request("GET", "/assets/screenplay.css", &state);
         assert_eq!(styles.status, 200);
