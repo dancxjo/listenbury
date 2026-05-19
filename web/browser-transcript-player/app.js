@@ -107,6 +107,7 @@ const state = {
   selectedItem: null,
   maxDurationMs: 1000,
   stopAtMs: null,
+  playbackStopTimerId: null,
   // Custom timeline renderer state
   zoomPxPerSecond: DEFAULT_ZOOM_PX_PER_SECOND,
   followLatest: false,
@@ -413,18 +414,17 @@ function renderShell() {
 }
 
 audio.addEventListener("timeupdate", () => {
-  if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
-    const stopSeconds = state.stopAtMs / 1000;
-    audio.pause();
-    if (audio.currentTime > stopSeconds) {
-      audio.currentTime = stopSeconds;
-    }
-    clearPlaybackStop();
-  }
+  enforcePlaybackStop();
   refreshPlaybackState();
 });
-audio.addEventListener("play", refreshPlaybackState);
-audio.addEventListener("pause", refreshPlaybackState);
+audio.addEventListener("play", () => {
+  schedulePlaybackStopTimer();
+  refreshPlaybackState();
+});
+audio.addEventListener("pause", () => {
+  clearPlaybackStopTimer();
+  refreshPlaybackState();
+});
 audio.addEventListener("loadedmetadata", () => {
   syncMaxDurationWithAudio();
   render();
@@ -5177,10 +5177,49 @@ function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
 
 function setPlaybackStop(startMs, endMs) {
   state.stopAtMs = endMs > startMs ? endMs : null;
+  schedulePlaybackStopTimer();
 }
 
 function clearPlaybackStop() {
+  clearPlaybackStopTimer();
   state.stopAtMs = null;
+}
+
+function clearPlaybackStopTimer() {
+  if (state.playbackStopTimerId !== null) {
+    window.clearTimeout(state.playbackStopTimerId);
+    state.playbackStopTimerId = null;
+  }
+}
+
+function schedulePlaybackStopTimer() {
+  clearPlaybackStopTimer();
+  if (state.stopAtMs === null || audio.paused) {
+    return;
+  }
+
+  const remainingMs = state.stopAtMs - audio.currentTime * 1000;
+  state.playbackStopTimerId = window.setTimeout(
+    () => {
+      state.playbackStopTimerId = null;
+      enforcePlaybackStop();
+    },
+    Math.max(0, remainingMs),
+  );
+}
+
+function enforcePlaybackStop() {
+  if (state.stopAtMs === null || audio.currentTime * 1000 < state.stopAtMs) {
+    return false;
+  }
+
+  const stopSeconds = state.stopAtMs / 1000;
+  audio.pause();
+  if (audio.currentTime !== stopSeconds) {
+    audio.currentTime = stopSeconds;
+  }
+  clearPlaybackStop();
+  return true;
 }
 
 function formatRulerLabel(ms) {
