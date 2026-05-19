@@ -73,7 +73,24 @@ pub struct Span<T> {
     pub contents: T,
     pub confidence: f32,
     pub stability: f32,
+    pub needs_review: bool,
+    pub repair_attempts: u32,
     pub revisions: Vec<SpanRevision<T>>,
+}
+
+/// Request to revisit a span after a delayed number of passes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelayedRescanRequest {
+    pub span_id: SpanId,
+    pub requested_by: Option<SpanId>,
+    pub ready_after_pass: u64,
+}
+
+/// Minimal delayed queue for deferred span rescanning.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelayedRescanQueue {
+    current_pass: u64,
+    pending: VecDeque<DelayedRescanRequest>,
 }
 
 /// Cursor offsets of an aligned sub-span within a larger span.
@@ -261,6 +278,8 @@ impl<T: Clone> Span<T> {
             contents,
             confidence,
             stability,
+            needs_review: false,
+            repair_attempts: 0,
             revisions: Vec::new(),
         }
     }
@@ -308,7 +327,10 @@ impl<T: Clone> Span<T> {
         confidence: f32,
         stability: f32,
     ) -> bool {
-        if !matches!(self.state, SpanState::Stable | SpanState::Committed) {
+        if !matches!(
+            self.state,
+            SpanState::Hypothesis | SpanState::Stable | SpanState::Committed | SpanState::Revised
+        ) {
             return false;
         }
 
@@ -326,8 +348,34 @@ impl<T: Clone> Span<T> {
         self.contents = contents;
         self.confidence = confidence;
         self.stability = stability;
+        self.needs_review = false;
         self.state = SpanState::Revised;
         true
+    }
+
+    pub fn mark_needs_review(&mut self) {
+        self.needs_review = true;
+    }
+
+    pub fn revise_from_rescan(
+        &mut self,
+        start: Cursor,
+        end: Option<Cursor>,
+        contents: T,
+        confidence: f32,
+        stability: f32,
+        max_repair_attempts: u32,
+    ) -> bool {
+        if self.repair_attempts >= max_repair_attempts {
+            return false;
+        }
+
+        if self.revise(start, end, contents, confidence, stability) {
+            self.repair_attempts += 1;
+            return true;
+        }
+
+        false
     }
 
     pub fn contains_span<U>(&self, inner: &Span<U>) -> bool {
@@ -341,6 +389,106 @@ impl<T: Clone> Span<T> {
             (None, _) => true,
         }
     }
+}
+
+impl DelayedRescanQueue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn current_pass(&self) -> u64 {
+        self.current_pass
+    }
+
+    pub fn schedule(&mut self, span_id: SpanId, requested_by: Option<SpanId>, delay_passes: u64) {
+        self.pending.push_back(DelayedRescanRequest {
+            span_id,
+            requested_by,
+            ready_after_pass: self.current_pass.saturating_add(delay_passes),
+        });
+    }
+
+    pub fn advance_pass(&mut self) {
+        self.current_pass = self.current_pass.saturating_add(1);
+    }
+
+    pub fn drain_ready(&mut self) -> Vec<DelayedRescanRequest> {
+        let mut ready = Vec::new();
+        let mut still_pending = VecDeque::new();
+        while let Some(request) = self.pending.pop_front() {
+            if request.ready_after_pass <= self.current_pass {
+                ready.push(request);
+            } else {
+                still_pending.push_back(request);
+            }
+        }
+        self.pending = still_pending;
+        ready
+    }
+}
+
+pub fn propagate_repair_to_aligned<T, F>(
+    graph: &AlignmentGraph,
+    spans: &mut HashMap<SpanId, Span<T>>,
+    source_span_id: SpanId,
+    max_depth: usize,
+    max_repair_attempts_per_span: u32,
+    mut derive_contents: F,
+) -> Vec<SpanId>
+where
+    T: Clone,
+    F: FnMut(&Span<T>, &Span<T>) -> Option<T>,
+{
+    let mut revised = Vec::new();
+    let Some(root) = spans.get(&source_span_id).cloned() else {
+        return revised;
+    };
+
+    let mut queue = VecDeque::from([(source_span_id, root, 0usize)]);
+    let mut seen = HashSet::from([source_span_id]);
+
+    while let Some((current_id, current_source, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+
+        for target_id in graph.aligned_targets(current_id) {
+            if !seen.insert(target_id) {
+                continue;
+            }
+
+            let Some(target_snapshot) = spans.get(&target_id).cloned() else {
+                continue;
+            };
+
+            if target_snapshot.repair_attempts >= max_repair_attempts_per_span {
+                continue;
+            }
+
+            let Some(new_contents) = derive_contents(&current_source, &target_snapshot) else {
+                continue;
+            };
+
+            let Some(target) = spans.get_mut(&target_id) else {
+                continue;
+            };
+
+            if target.revise_from_rescan(
+                target.start,
+                target.end,
+                new_contents,
+                target.confidence.max(current_source.confidence),
+                target.stability.max(current_source.stability),
+                max_repair_attempts_per_span,
+            ) {
+                let revised_source = target.clone();
+                revised.push(target_id);
+                queue.push_back((target_id, revised_source, depth + 1));
+            }
+        }
+    }
+
+    revised
 }
 
 #[cfg(test)]
@@ -405,6 +553,184 @@ mod tests {
         assert_eq!(span.revisions.len(), 1);
         assert_eq!(span.revisions[0].state, SpanState::Stable);
         assert_eq!(span.revisions[0].contents, "old");
+    }
+
+    #[test]
+    fn can_mark_any_span_as_needs_review() {
+        let mut span = Span::new_hypothesis(
+            SpanId(4),
+            TextId(11),
+            Modality::Topic,
+            Cursor(1),
+            Some(Cursor(4)),
+            "gardening".to_string(),
+            0.6,
+            0.4,
+        );
+
+        assert!(!span.needs_review);
+        span.mark_needs_review();
+        assert!(span.needs_review);
+    }
+
+    #[test]
+    fn delayed_rescan_queue_defers_semantic_guided_request() {
+        let mut queue = DelayedRescanQueue::new();
+        let semantic_span = SpanId(90);
+        let phoneme_span = SpanId(10);
+        queue.schedule(phoneme_span, Some(semantic_span), 2);
+
+        assert!(queue.drain_ready().is_empty());
+        queue.advance_pass();
+        assert!(queue.drain_ready().is_empty());
+
+        queue.advance_pass();
+        let ready = queue.drain_ready();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].span_id, phoneme_span);
+        assert_eq!(ready[0].requested_by, Some(semantic_span));
+    }
+
+    #[test]
+    fn corrected_phoneme_revision_propagates_to_word_and_clause_with_loop_guard() {
+        let phoneme_id = SpanId(100);
+        let word_id = SpanId(101);
+        let clause_id = SpanId(102);
+
+        let mut phoneme = Span::new_hypothesis(
+            phoneme_id,
+            TextId(1),
+            Modality::Phoneme,
+            Cursor(0),
+            Some(Cursor(7)),
+            "garbage".to_string(),
+            0.5,
+            0.3,
+        );
+        let mut word = Span::new_hypothesis(
+            word_id,
+            TextId(1),
+            Modality::Word,
+            Cursor(0),
+            Some(Cursor(7)),
+            "garbage".to_string(),
+            0.6,
+            0.6,
+        );
+        let mut clause = Span::new_hypothesis(
+            clause_id,
+            TextId(1),
+            Modality::Clause,
+            Cursor(0),
+            Some(Cursor(20)),
+            "garbage tools".to_string(),
+            0.7,
+            0.6,
+        );
+        assert!(phoneme.stabilize());
+        assert!(word.stabilize());
+        assert!(clause.stabilize());
+
+        let mut spans = HashMap::from([
+            (phoneme_id, phoneme),
+            (word_id, word),
+            (clause_id, clause),
+        ]);
+
+        let mut graph = AlignmentGraph::new();
+        graph.add_alignment(Alignment::new(
+            phoneme_id,
+            word_id,
+            0.95,
+            AlignmentKind::Equivalent,
+        ));
+        graph.add_alignment(Alignment::new(word_id, clause_id, 0.9, AlignmentKind::Contains));
+        graph.add_alignment(Alignment::new(clause_id, phoneme_id, 0.4, AlignmentKind::Overlaps));
+
+        spans
+            .get_mut(&phoneme_id)
+            .expect("phoneme exists")
+            .mark_needs_review();
+        assert!(
+            spans
+                .get_mut(&phoneme_id)
+                .expect("phoneme exists")
+                .revise_from_rescan(
+                    Cursor(0),
+                    Some(Cursor(6)),
+                    "garden".to_string(),
+                    0.95,
+                    0.85,
+                    2,
+                )
+        );
+
+        let revised = propagate_repair_to_aligned(
+            &graph,
+            &mut spans,
+            phoneme_id,
+            8,
+            1,
+            |source, target| match target.modality {
+                Modality::Word => Some(source.contents.clone()),
+                Modality::Clause => Some(format!("{} tools", source.contents)),
+                _ => None,
+            },
+        );
+        assert_eq!(revised, vec![word_id, clause_id]);
+        assert_eq!(
+            spans.get(&word_id).expect("word exists").contents,
+            "garden".to_string()
+        );
+        assert_eq!(
+            spans.get(&clause_id).expect("clause exists").contents,
+            "garden tools".to_string()
+        );
+        assert_eq!(spans.get(&word_id).expect("word exists").revisions.len(), 1);
+        assert_eq!(spans.get(&clause_id).expect("clause exists").revisions.len(), 1);
+
+        spans
+            .get_mut(&phoneme_id)
+            .expect("phoneme exists")
+            .mark_needs_review();
+        assert!(
+            spans
+                .get_mut(&phoneme_id)
+                .expect("phoneme exists")
+                .revise_from_rescan(
+                    Cursor(0),
+                    Some(Cursor(9)),
+                    "gardening".to_string(),
+                    0.98,
+                    0.9,
+                    2,
+                )
+        );
+
+        let revised_again = propagate_repair_to_aligned(
+            &graph,
+            &mut spans,
+            phoneme_id,
+            8,
+            1,
+            |source, target| match target.modality {
+                Modality::Word => Some(source.contents.clone()),
+                Modality::Clause => Some(format!("{} tools", source.contents)),
+                _ => None,
+            },
+        );
+        assert!(
+            revised_again.is_empty(),
+            "repair attempts on aligned spans are bounded"
+        );
+        assert_eq!(
+            spans.get(&word_id).expect("word exists").contents,
+            "garden".to_string()
+        );
+        assert_eq!(
+            spans.get(&clause_id).expect("clause exists").contents,
+            "garden tools".to_string()
+        );
     }
 
     #[test]
