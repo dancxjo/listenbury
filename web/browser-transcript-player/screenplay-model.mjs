@@ -916,7 +916,10 @@ function dialogueSpanMetadata(word, turnId, source) {
     return null;
   }
   return {
-    id: word?.span_id != null ? String(word.span_id) : `turn-${turnId}:${source}:${word?.id ?? word?.text ?? "word"}`,
+    id:
+      word?.span_id != null
+        ? String(word.span_id)
+        : `turn-${turnId ?? 0}:${source || "stream"}:${word?.id ?? safeSpanIdToken(word?.text)}`,
     modality: SpanModality.Word,
     start_ms: startMs,
     end_ms: endMs,
@@ -930,6 +933,12 @@ function aggregateDialogueSpanMetadata(words, turnId, source) {
   return (words ?? [])
     .map((word) => dialogueSpanMetadata(word, turnId, source))
     .filter(Boolean);
+}
+
+function safeSpanIdToken(value) {
+  const text = String(value ?? "word").trim().toLowerCase();
+  const normalized = text.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return normalized || "word";
 }
 
 function stringifySegments(segments) {

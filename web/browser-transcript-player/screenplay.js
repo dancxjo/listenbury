@@ -215,6 +215,10 @@ function dialogueLine(segments) {
     if (segment.spanMetadata?.length) {
       span.dataset.spanMetadata = JSON.stringify(segment.spanMetadata);
       span.title = `span metadata: ${segment.spanMetadata.length} item${segment.spanMetadata.length === 1 ? "" : "s"}`;
+      span.setAttribute(
+        "aria-label",
+        `${segment.text} (span metadata: ${segment.spanMetadata.length} item${segment.spanMetadata.length === 1 ? "" : "s"})`,
+      );
     }
     line.append(span);
   }

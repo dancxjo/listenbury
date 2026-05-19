@@ -1034,6 +1034,26 @@ function liveSessionToViewerPayload(session) {
         confidence: 1,
       })),
   ].filter(Boolean);
+  const streamSpans = [
+    asrWords.length
+      ? createSpan({
+          id: "stream:asr",
+          start_ms: asrWords[0]?.timing?.start_ms ?? 0,
+          end_ms: asrWords[asrWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
+          modality: SpanModality.Audio,
+          metadata: { stream: "asr_timed_word_stream", lane: "ASR" },
+        })
+      : null,
+    ttsWords.length
+      ? createSpan({
+          id: "stream:tts",
+          start_ms: ttsWords[0]?.timing?.start_ms ?? 0,
+          end_ms: ttsWords[ttsWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
+          modality: SpanModality.Audio,
+          metadata: { stream: "tts_timed_word_stream_revision", lane: "TTS" },
+        })
+      : null,
+  ].filter(Boolean);
 
   return {
     title: "Live — Listenbury",
@@ -1046,20 +1066,7 @@ function liveSessionToViewerPayload(session) {
     markers: session.viewerMarkers,
     shared_span_model: buildSharedSpanModel({
       spans: [
-        createSpan({
-          id: "stream:asr",
-          start_ms: asrWords[0]?.timing?.start_ms ?? 0,
-          end_ms: asrWords[asrWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
-          modality: SpanModality.Audio,
-          metadata: { stream: "asr_timed_word_stream", lane: "ASR" },
-        }),
-        createSpan({
-          id: "stream:tts",
-          start_ms: ttsWords[0]?.timing?.start_ms ?? 0,
-          end_ms: ttsWords[ttsWords.length - 1]?.timing?.end_ms ?? session.maxElapsedMs,
-          modality: SpanModality.Audio,
-          metadata: { stream: "tts_timed_word_stream_revision", lane: "TTS" },
-        }),
+        ...streamSpans,
         ...asrWordSpans,
         ...ttsWordSpans,
         ...transcriptSpans,
@@ -1489,11 +1496,7 @@ function projectSharedSpanModel(sharedSpanModel) {
     const modality = String(span?.modality ?? "");
     const lane = span?.metadata?.lane ?? (modality || "Events");
     if (modality === SpanModality.Word) {
-      const streamLabel = lane === "ASR" || span?.metadata?.stream === "asr_timed_word_stream"
-        ? "ASR"
-        : lane === "TTS" || span?.metadata?.stream === "tts_timed_word_stream_revision"
-          ? "TTS"
-          : "Word";
+      const streamLabel = streamLabelForWordSpan(lane, span?.metadata?.stream);
       if (!streamsByLabel.has(streamLabel)) {
         streamsByLabel.set(streamLabel, []);
       }
@@ -1502,7 +1505,7 @@ function projectSharedSpanModel(sharedSpanModel) {
         text: span?.metadata?.text ?? "",
         timing: {
           start_ms: Math.max(0, Math.round(startMs)),
-          end_ms: Math.max(Math.round(startMs), Math.round(endMs)),
+          end_ms: Math.max(Math.round(startMs) + 1, Math.round(endMs)),
         },
         commitment: "StableText",
       });
@@ -1514,7 +1517,7 @@ function projectSharedSpanModel(sharedSpanModel) {
       kind: span?.metadata?.kind ?? String(modality || "span").toLowerCase(),
       label: span?.metadata?.text ?? span?.id ?? "span",
       start_ms: Math.max(0, Math.round(startMs)),
-      end_ms: Math.max(Math.round(startMs), Math.round(endMs)),
+      end_ms: Math.max(Math.round(startMs) + 1, Math.round(endMs)),
       metadata: {
         ...(span?.metadata ?? {}),
         shared_span_id: span?.id ?? null,
@@ -1531,6 +1534,16 @@ function projectSharedSpanModel(sharedSpanModel) {
     },
   }));
   return { streams, events, markers: [] };
+}
+
+function streamLabelForWordSpan(lane, streamName) {
+  if (lane === "ASR" || streamName === "asr_timed_word_stream") {
+    return "ASR";
+  }
+  if (lane === "TTS" || streamName === "tts_timed_word_stream_revision") {
+    return "TTS";
+  }
+  return "Word";
 }
 
 function normalizeWordLane(lane) {

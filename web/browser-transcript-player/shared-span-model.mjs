@@ -24,7 +24,7 @@ export function createSpan({
   modality,
   metadata = null,
 }) {
-  if (!id || !Number.isFinite(start_ms) || !Number.isFinite(end_ms) || end_ms < start_ms) {
+  if (!id || !Number.isFinite(start_ms) || !Number.isFinite(end_ms) || end_ms <= start_ms) {
     return null;
   }
   return { id, start_ms, end_ms, modality, metadata };
@@ -55,7 +55,7 @@ export function projectTimedWordsToSpans({
     const word = words[index];
     const startMs = word?.timing?.start_ms;
     const endMs = word?.timing?.end_ms;
-    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
       continue;
     }
     const stableId = word?.span_id ?? word?.id ?? index;
