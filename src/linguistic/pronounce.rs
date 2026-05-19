@@ -14,13 +14,16 @@ pub enum PhonologyError {
     Message { message: String },
 }
 
+/// General-purpose interface for realizing orthography into phonemic units.
 pub trait OrthographyToPhonemes {
+    /// Realize one orthographic word into a phoneme sequence.
     fn realize_word(
         &self,
         variety: &LinguisticVariety,
         word: &OrthographicWord,
     ) -> Result<PhonemeSeq, PhonologyError>;
 
+    /// Realize free-form text into phoneme text units with explicit boundaries.
     fn realize_text(
         &self,
         variety: &LinguisticVariety,

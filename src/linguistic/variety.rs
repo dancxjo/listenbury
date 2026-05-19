@@ -8,6 +8,7 @@ impl VarietyTag {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Pronunciation system associated with a linguistic variety.
 pub struct Phonology {
     pub name: String,
 }
@@ -19,8 +20,15 @@ impl Phonology {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Optional lexical resource associated with a linguistic variety.
 pub struct Lexicon {
     pub name: String,
+}
+
+impl Lexicon {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +44,7 @@ impl Default for LinguisticRuntimeProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Language variety context used by orthography-to-phoneme realizers.
 pub struct LinguisticVariety {
     pub tag: Option<VarietyTag>,
     pub name: String,
