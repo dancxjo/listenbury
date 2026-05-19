@@ -464,6 +464,11 @@ h1 {
   line-height: 1.25;
 }
 
+.waveform-lane-meta {
+  display: grid;
+  gap: 0.15rem;
+}
+
 .lane-track {
   position: relative;
   min-height: 6.5rem;
