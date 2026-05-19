@@ -4129,7 +4129,23 @@ function drawEnergyDebugOverlays(ctx, metrics) {
   const wordLanes = state.lanes.filter((lane) => lane.type === "word");
   const whisperBoundaries = [];
   const snappedBoundaries = [];
+  const reverseWordBreakBoundaries = [];
+  const reverseWordBreakBoundaryKeys = new Set();
   for (const lane of wordLanes) {
+    const laneReverseBreaks = lane.words.some((word) => word.reverseWordBreak)
+      ? lane.words.map((word) => word.reverseWordBreak).filter(Boolean)
+      : calculateReverseWordBreaks(lane.words);
+    for (const boundary of laneReverseBreaks) {
+      const ms = boundary?.ms;
+      if (!Number.isFinite(ms)) {
+        continue;
+      }
+      const key = `${lane.label ?? ""}:${Math.round(ms)}`;
+      if (!reverseWordBreakBoundaryKeys.has(key)) {
+        reverseWordBreakBoundaryKeys.add(key);
+        reverseWordBreakBoundaries.push(Math.round(ms));
+      }
+    }
     for (const word of lane.words) {
       if (word.whisperTiming) {
         whisperBoundaries.push(word.whisperTiming.start_ms, word.whisperTiming.end_ms);
@@ -4146,6 +4162,7 @@ function drawEnergyDebugOverlays(ctx, metrics) {
     }
   }
   drawDebugMarkers(ctx, metrics, whisperBoundaries, "rgba(201, 214, 226, 0.20)", top, bottom, 0.8);
+  drawDebugMarkers(ctx, metrics, reverseWordBreakBoundaries, "rgba(255, 146, 196, 0.9)", top, bottom, 1);
   drawDebugMarkers(ctx, metrics, snappedBoundaries, "rgba(99, 210, 255, 0.85)", top, bottom, 1.2);
   ctx.restore();
 }
@@ -4235,6 +4252,7 @@ function wordTimingDebugSignature() {
           timing.end_ms ?? "",
           whisper.start_ms ?? "",
           whisper.end_ms ?? "",
+          word.reverseWordBreak?.ms ?? "",
           word.timingResolution ?? "",
         ].join(":");
       }))
@@ -5826,6 +5844,8 @@ function buildSelectionProjection() {
       h("br"),
       `Whisper timing: ${(word.whisperTiming ?? word.timing)?.start_ms ?? "n/a"}–${(word.whisperTiming ?? word.timing)?.end_ms ?? "n/a"} ms`,
       h("br"),
+      `Reverse word break: ${word.reverseWordBreak?.ms ?? "n/a"} ms`,
+      h("br"),
       `Energy-snapped timing: ${word.energyTiming?.start_ms ?? "n/a"}–${word.energyTiming?.end_ms ?? "n/a"} ms`,
       h("br"),
       `Resolved timing: ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${word.timing_confidence ?? "n/a"}`,
@@ -5843,6 +5863,7 @@ function buildSelectionProjection() {
           text: word.text,
           timing: word.timing,
           whisperTiming: word.whisperTiming ?? word.timing ?? null,
+          reverseWordBreak: word.reverseWordBreak ?? null,
           energyTiming: word.energyTiming ?? null,
           resolvedTiming: word.resolvedTiming,
           timingResolution: word.timingResolution,
