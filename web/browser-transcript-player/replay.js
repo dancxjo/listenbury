@@ -1,3 +1,9 @@
+import {
+  isTraceSessionEnvelope,
+  parseTraceEventsJsonl,
+  traceSessionLabel,
+} from "./trace-session.mjs";
+
 // WaveDeck Trace Replay Controller
 //
 // This module drives the replay page (replay.html).  It waits for app.js to
@@ -96,6 +102,8 @@ progressBar.addEventListener("input", () => {
   seekToMs(targetMs);
 });
 
+void loadAttachedTraceSource();
+
 // ── Loading ───────────────────────────────────────────────────────────────
 
 function inferTypeFromUrl(url) {
@@ -137,41 +145,20 @@ function processLoadedText(text, type, label) {
   if (type === "jsonl") {
     loadJsonlTrace(text, label);
   } else {
-    loadStaticPayload(text, label);
+    loadJsonPayload(text, label);
   }
 }
 
 function loadJsonlTrace(text, label) {
-  const lines = text.split("\n").filter((line) => line.trim());
-  const events = [];
-  let parseErrors = 0;
-  for (const line of lines) {
-    try {
-      events.push(JSON.parse(line));
-    } catch {
-      parseErrors++;
-    }
-  }
+  const { events, parseErrors } = parseTraceEventsJsonl(text);
   if (!events.length) {
     setStatus(`No valid events in ${label}`);
     return;
   }
-  replayEvents = events;
-  replayIndex = 0;
-  replayPaused = true;
-  replayStartPerf = null;
-  replayStartEventMs = null;
-  cancelScheduledReplay();
-  resetLiveSession();
-  setLiveMode(true, `Replay — ${label}`);
-  enableControls(true);
-  updateProgressBar();
-  const durationS = ((events[events.length - 1]?.elapsed_ms ?? 0) / 1000).toFixed(1);
-  const note = parseErrors > 0 ? ` (${parseErrors} parse error${parseErrors === 1 ? "" : "s"})` : "";
-  setStatus(`${events.length} events · ${durationS}s${note} · paused`);
+  loadReplayEvents(events, label, parseErrors);
 }
 
-function loadStaticPayload(text, label) {
+function loadJsonPayload(text, label) {
   let payload;
   try {
     payload = JSON.parse(text);
@@ -179,6 +166,36 @@ function loadStaticPayload(text, label) {
     setStatus(`JSON parse error: ${err.message}`);
     return;
   }
+  if (isTraceSessionEnvelope(payload)) {
+    loadTraceSession(payload, label);
+    return;
+  }
+  loadStaticPayload(payload, label);
+}
+
+function loadTraceSession(session, label = traceSessionLabel(session)) {
+  loadReplayEvents(session.events ?? [], label, 0, session.metadata);
+}
+
+function loadReplayEvents(events, label, parseErrors = 0, metadata = null) {
+  replayEvents = events;
+  replayIndex = 0;
+  replayPaused = true;
+  replayStartPerf = null;
+  replayStartEventMs = null;
+  cancelScheduledReplay();
+  resetLiveSession();
+  const title = metadata ? `Replay — ${traceSessionLabel({ metadata, events }, label)}` : `Replay — ${label}`;
+  setLiveMode(true, title);
+  enableControls(true);
+  updateProgressBar();
+  const durationS = ((events[events.length - 1]?.elapsed_ms ?? 0) / 1000).toFixed(1);
+  const note = parseErrors > 0 ? ` (${parseErrors} parse error${parseErrors === 1 ? "" : "s"})` : "";
+  const sessionNote = metadata?.runtime?.mode ? ` · ${metadata.runtime.mode}` : "";
+  setStatus(`${events.length} events · ${durationS}s${sessionNote}${note} · paused`);
+}
+
+function loadStaticPayload(payload, label) {
   replayEvents = [];
   replayIndex = 0;
   replayPaused = true;
@@ -188,6 +205,26 @@ function loadStaticPayload(text, label) {
   enableControls(false);
   applyPayload(payload);
   setStatus(`Static payload loaded: ${label}`);
+}
+
+async function loadAttachedTraceSource() {
+  try {
+    const sessionResponse = await fetch("/api/trace-session");
+    if (sessionResponse.ok) {
+      const session = await sessionResponse.json();
+      if (isTraceSessionEnvelope(session) && session.events.length) {
+        loadTraceSession(session, traceSessionLabel(session, "Attached trace"));
+        return;
+      }
+    }
+    const traceResponse = await fetch("/api/trace");
+    if (!traceResponse.ok) {
+      return;
+    }
+    loadJsonlTrace(await traceResponse.text(), "Attached trace");
+  } catch (error) {
+    console.error("Failed to auto-load attached trace:", error);
+  }
 }
 
 // ── Playback control ──────────────────────────────────────────────────────

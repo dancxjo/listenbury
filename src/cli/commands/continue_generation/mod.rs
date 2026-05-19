@@ -152,7 +152,10 @@ use listenbury::hearing::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder, SseBroadcaster, TeeSink};
+use listenbury::live_trace::{
+    DiskTraceWriter, JsonlTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster,
+    TeeSink, TraceRuntimeMetadata, TraceSessionMetadata,
+};
 #[cfg(any(
     test,
     all(
@@ -516,7 +519,45 @@ const DEFAULT_CONTINUE_LLAMA_GPU_LAYERS: Option<u32> = None;
     feature = "tts-piper"
 ))]
 type ContinueLiveTrace =
-    LiveTraceRecorder<TeeSink<Option<JsonlTraceWriter>, Option<SseBroadcaster>>>;
+    LiveTraceRecorder<TeeSink<Option<DiskTraceWriter>, Option<SseBroadcaster>>>;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn continue_trace_session_metadata(
+    session_id: SessionId,
+    trace_started_at: ExactTimestamp,
+    command: &crate::cli::ContinueCommand,
+) -> TraceSessionMetadata {
+    let mut runtime = TraceRuntimeMetadata::new("listenbury dev continue");
+    runtime.mode = Some(if command.duplex_trace_scenario.is_some() {
+        "duplex_trace_scenario".to_string()
+    } else {
+        "live_duplex".to_string()
+    });
+    runtime.configuration = serde_json::from_value(json!({
+        "web": command.web,
+        "web_host": command.web_host,
+        "web_port": command.web_port,
+        "vad": format!("{:?}", command.vad),
+        "mode": format!("{:?}", command.mode),
+        "context_size": command.context_size,
+        "verbatim_turns": command.verbatim_turns,
+        "max_tokens": command.max_tokens,
+        "tts_vad_pause_ms": command.tts_vad_pause_ms,
+        "tts_vad_listen_ms": command.tts_vad_listen_ms,
+        "duplex_trace_scenario": command.duplex_trace_scenario.map(|value| format!("{value:?}")),
+        "llm_model": command.llm_model.as_ref().map(|path| path.display().to_string()),
+        "whisper_model": command.whisper_model.as_ref().map(|path| path.display().to_string()),
+        "piper_bin": command.piper_bin.as_ref().map(|path| path.display().to_string()),
+        "piper_voice": command.piper_voice.as_ref().map(|path| path.display().to_string()),
+    }))
+    .expect("continue trace runtime configuration should serialize to an object");
+    TraceSessionMetadata::new(session_id, trace_started_at, runtime)
+}
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -767,9 +808,16 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let speaker_reference = Arc::new(Mutex::new(SpeakerReferenceMask::default()));
     let trace_started_at = ExactTimestamp::now();
+    let trace_session_id = SessionId::new();
     let trace_writer = command
         .jsonl
-        .map(JsonlTraceWriter::create)
+        .as_deref()
+        .map(|path| {
+            DiskTraceWriter::create(
+                path,
+                continue_trace_session_metadata(trace_session_id, trace_started_at, &command),
+            )
+        })
         .transpose()
         .context("failed to create dev continue live trace writer")?;
     let broadcaster = if command.web {
@@ -798,7 +846,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         None
     };
     let mut live_trace =
-        LiveTraceRecorder::new(trace_started_at, TeeSink(trace_writer, broadcaster));
+        LiveTraceRecorder::with_session_id(trace_session_id, trace_started_at, TeeSink(trace_writer, broadcaster));
     let mut live_trace_turn = 0u64;
     live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(
@@ -2566,11 +2614,52 @@ fn flush_deferred_live_events(
     feature = "tts-piper"
 ))]
 fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -> Result<()> {
-    let mut writer = JsonlTraceWriter::create(path)?;
+    let mut writer = if listenbury::live_trace::trace_path_looks_like_jsonl(path) {
+        EitherTraceScenarioWriter::Jsonl(JsonlTraceWriter::create(path)?)
+    } else {
+        EitherTraceScenarioWriter::Session(listenbury::live_trace::TraceSessionWriter::create(
+            path,
+            TraceSessionMetadata::new(
+                SessionId::new(),
+                ExactTimestamp::now(),
+                {
+                    let mut runtime = TraceRuntimeMetadata::new("listenbury dev continue");
+                    runtime.mode = Some("duplex_trace_scenario".to_string());
+                    runtime
+                },
+            ),
+        )?)
+    };
     for event in events {
         writer.write(event)?;
     }
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+enum EitherTraceScenarioWriter {
+    Jsonl(JsonlTraceWriter),
+    Session(listenbury::live_trace::TraceSessionWriter),
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl EitherTraceScenarioWriter {
+    fn write(&mut self, value: &Value) -> Result<()> {
+        match self {
+            Self::Jsonl(writer) => writer.write(value),
+            Self::Session(writer) => writer.write(value),
+        }
+    }
 }
 
 #[cfg(all(

@@ -1,17 +1,22 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::speech_timeline::{
     AudioClipId, SessionId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId,
     UtteranceId,
 };
 use crate::time::ExactTimestamp;
+
+pub const TRACE_SESSION_FORMAT: &str = "listenbury.live-session.v1";
+pub const TRACE_SESSION_METADATA_FILE: &str = "metadata.json";
+pub const TRACE_SESSION_EVENTS_FILE: &str = "events.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveTraceEvent {
@@ -87,6 +92,59 @@ impl LiveTraceEvent {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceRuntimeMetadata {
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub configuration: Map<String, Value>,
+}
+
+impl TraceRuntimeMetadata {
+    pub fn new(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            mode: None,
+            configuration: Map::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceSessionMetadata {
+    pub format: String,
+    pub session_id: SessionId,
+    pub session_started_at_unix_ns: u64,
+    pub recorded_at_unix_ns: u64,
+    pub events_path: String,
+    pub runtime: TraceRuntimeMetadata,
+}
+
+impl TraceSessionMetadata {
+    pub fn new(
+        session_id: SessionId,
+        session_started_at: ExactTimestamp,
+        runtime: TraceRuntimeMetadata,
+    ) -> Self {
+        let session_started_at_unix_ns = unix_nanos_u64(session_started_at);
+        Self {
+            format: TRACE_SESSION_FORMAT.to_string(),
+            session_id,
+            session_started_at_unix_ns,
+            recorded_at_unix_ns: session_started_at_unix_ns,
+            events_path: TRACE_SESSION_EVENTS_FILE.to_string(),
+            runtime,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceSessionEnvelope {
+    pub metadata: TraceSessionMetadata,
+    pub events: Vec<LiveTraceEvent>,
+}
+
 pub trait LiveTraceSink {
     fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()>;
 }
@@ -153,6 +211,80 @@ impl LiveTraceSink for JsonlTraceWriter {
     }
 }
 
+#[derive(Debug)]
+pub struct TraceSessionWriter {
+    pub metadata: TraceSessionMetadata,
+    pub metadata_path: PathBuf,
+    pub events_path: PathBuf,
+    events: JsonlTraceWriter,
+}
+
+impl TraceSessionWriter {
+    pub fn create(
+        directory: impl AsRef<Path>,
+        metadata: TraceSessionMetadata,
+    ) -> anyhow::Result<Self> {
+        let directory = directory.as_ref();
+        std::fs::create_dir_all(directory)
+            .with_context(|| format!("create trace session directory {}", directory.display()))?;
+        let metadata_path = directory.join(TRACE_SESSION_METADATA_FILE);
+        let events_path = directory.join(&metadata.events_path);
+        let metadata_json =
+            serde_json::to_vec_pretty(&metadata).context("serialize trace session metadata")?;
+        std::fs::write(&metadata_path, metadata_json)
+            .with_context(|| format!("write trace metadata {}", metadata_path.display()))?;
+        let events = JsonlTraceWriter::create(&events_path)?;
+        Ok(Self {
+            metadata,
+            metadata_path,
+            events_path,
+            events,
+        })
+    }
+
+    pub fn write<T>(&mut self, value: &T) -> anyhow::Result<()>
+    where
+        T: Serialize,
+    {
+        self.events.write(value)
+    }
+}
+
+impl LiveTraceSink for TraceSessionWriter {
+    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+        self.events.emit(event)
+    }
+}
+
+#[derive(Debug)]
+pub enum DiskTraceWriter {
+    Jsonl(JsonlTraceWriter),
+    Session(TraceSessionWriter),
+}
+
+impl DiskTraceWriter {
+    pub fn create(
+        path: impl AsRef<Path>,
+        metadata: TraceSessionMetadata,
+    ) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        if trace_path_looks_like_jsonl(path) {
+            Ok(Self::Jsonl(JsonlTraceWriter::create(path)?))
+        } else {
+            Ok(Self::Session(TraceSessionWriter::create(path, metadata)?))
+        }
+    }
+}
+
+impl LiveTraceSink for DiskTraceWriter {
+    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+        match self {
+            Self::Jsonl(writer) => writer.emit(event),
+            Self::Session(writer) => writer.emit(event),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PendingSuppression {
     turn: u64,
@@ -178,14 +310,22 @@ impl<S> LiveTraceRecorder<S>
 where
     S: LiveTraceSink,
 {
-    pub fn new(session_started_at: ExactTimestamp, sink: S) -> Self {
+    pub fn with_session_id(session_id: SessionId, session_started_at: ExactTimestamp, sink: S) -> Self {
         Self {
-            session_id: SessionId::new(),
+            session_id,
             session_started_at,
             sink,
             pending_turn: None,
             pending_suppression: None,
         }
+    }
+
+    pub fn new(session_started_at: ExactTimestamp, sink: S) -> Self {
+        Self::with_session_id(SessionId::new(), session_started_at, sink)
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
     }
 
     pub fn into_sink(self) -> S {
@@ -388,6 +528,120 @@ impl LiveTraceSink for SseBroadcaster {
     }
 }
 
+pub fn trace_path_looks_like_jsonl(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+}
+
+fn trace_session_metadata_path(path: &Path) -> Option<PathBuf> {
+    if path.file_name() == Some(OsStr::new(TRACE_SESSION_METADATA_FILE)) {
+        return Some(path.to_path_buf());
+    }
+    if trace_path_looks_like_jsonl(path) || path.is_file() {
+        return None;
+    }
+    Some(path.join(TRACE_SESSION_METADATA_FILE))
+}
+
+pub fn read_trace_session_metadata(path: &Path) -> anyhow::Result<TraceSessionMetadata> {
+    let metadata_path = trace_session_metadata_path(path)
+        .ok_or_else(|| anyhow::anyhow!("{} is not a trace session path", path.display()))?;
+    let raw = std::fs::read(&metadata_path)
+        .with_context(|| format!("read trace session metadata {}", metadata_path.display()))?;
+    serde_json::from_slice(&raw)
+        .with_context(|| format!("parse trace session metadata {}", metadata_path.display()))
+}
+
+pub fn read_live_trace_events(path: &Path) -> anyhow::Result<Vec<LiveTraceEvent>> {
+    let events_path = if let Some(metadata_path) = trace_session_metadata_path(path) {
+        let metadata = read_trace_session_metadata(&metadata_path)?;
+        metadata_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(metadata.events_path)
+    } else {
+        path.to_path_buf()
+    };
+    let input = File::open(&events_path)
+        .with_context(|| format!("open live trace events at {}", events_path.display()))?;
+    let reader = std::io::BufReader::new(input);
+    let mut events = Vec::new();
+    for (line_index, line) in std::io::BufRead::lines(reader).enumerate() {
+        let line = line.with_context(|| format!("read JSONL line {}", line_index + 1))?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str(line).with_context(|| {
+            format!(
+                "parse live trace JSONL line {} in {}",
+                line_index + 1,
+                events_path.display()
+            )
+        })?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+pub fn read_trace_jsonl(path: &Path) -> anyhow::Result<String> {
+    let events_path = if let Some(metadata_path) = trace_session_metadata_path(path) {
+        let metadata = read_trace_session_metadata(&metadata_path)?;
+        metadata_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(metadata.events_path)
+    } else {
+        path.to_path_buf()
+    };
+    std::fs::read_to_string(&events_path)
+        .with_context(|| format!("read trace from {}", events_path.display()))
+}
+
+pub fn read_trace_session(path: &Path) -> anyhow::Result<TraceSessionEnvelope> {
+    let events = read_live_trace_events(path)?;
+    let metadata = if trace_session_metadata_path(path).is_some() {
+        read_trace_session_metadata(path)?
+    } else {
+        synthesize_trace_session_metadata(path, &events)
+    };
+    Ok(TraceSessionEnvelope { metadata, events })
+}
+
+fn synthesize_trace_session_metadata(path: &Path, events: &[LiveTraceEvent]) -> TraceSessionMetadata {
+    let session_id = events
+        .iter()
+        .find_map(|event| event.session_id)
+        .unwrap_or_default();
+    let session_started_at_unix_ns = events
+        .iter()
+        .map(|event| event.t_unix_ns.saturating_sub(event.elapsed_ms.saturating_mul(1_000_000)))
+        .min()
+        .unwrap_or_default();
+    let mut runtime = TraceRuntimeMetadata::new("imported-jsonl");
+    runtime.configuration.insert(
+        "source_path".to_string(),
+        Value::String(path.display().to_string()),
+    );
+    runtime.configuration.insert(
+        "source_kind".to_string(),
+        Value::String("jsonl".to_string()),
+    );
+    TraceSessionMetadata {
+        format: TRACE_SESSION_FORMAT.to_string(),
+        session_id,
+        session_started_at_unix_ns,
+        recorded_at_unix_ns: session_started_at_unix_ns,
+        events_path: path
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or(TRACE_SESSION_EVENTS_FILE)
+            .to_string(),
+        runtime,
+    }
+}
+
 fn unix_nanos_u64(timestamp: ExactTimestamp) -> u64 {
     match u64::try_from(timestamp.unix_nanos) {
         Ok(value) => value,
@@ -436,6 +690,73 @@ mod tests {
 
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn trace_session_writer_persists_metadata_and_events() {
+        let root = std::env::temp_dir().join(format!(
+            "listenbury-live-session-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+        let metadata = TraceSessionMetadata::new(
+            session_id,
+            ts(1_000),
+            TraceRuntimeMetadata {
+                command: "listen".to_string(),
+                mode: Some("half_duplex".to_string()),
+                configuration: Map::from_iter([(
+                    "vad".to_string(),
+                    Value::String("webrtc".to_string()),
+                )]),
+            },
+        );
+        let mut writer = TraceSessionWriter::create(&root, metadata.clone()).unwrap();
+        let mut event = LiveTraceEvent::new(session_id, 1, "transcript", ts(1_250), ts(1_000));
+        event.text = Some("hello".to_string());
+        writer.emit(event).unwrap();
+
+        let saved_metadata: TraceSessionMetadata =
+            serde_json::from_str(&std::fs::read_to_string(root.join("metadata.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved_metadata, metadata);
+
+        let envelope = read_trace_session(&root).unwrap();
+        assert_eq!(envelope.metadata, metadata);
+        assert_eq!(envelope.events.len(), 1);
+        assert_eq!(envelope.events[0].text.as_deref(), Some("hello"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_trace_session_synthesizes_metadata_for_jsonl_input() {
+        let path = std::env::temp_dir().join(format!(
+            "listenbury-live-trace-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let session_id = SessionId::new();
+        let mut writer = JsonlTraceWriter::create(&path).unwrap();
+        writer
+            .emit(LiveTraceEvent::new(
+                session_id,
+                2,
+                "playback_started",
+                ts(1_500),
+                ts(1_000),
+            ))
+            .unwrap();
+
+        let envelope = read_trace_session(&path).unwrap();
+        assert_eq!(envelope.metadata.session_id, session_id);
+        assert_eq!(envelope.metadata.runtime.command, "imported-jsonl");
+        assert_eq!(
+            envelope.metadata.events_path,
+            path.file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(envelope.events[0].kind, "playback_started");
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

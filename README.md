@@ -359,6 +359,7 @@ The hosted server exposes stable routes for the viewer and event APIs:
 /api/demo-payload     bundled demo JSON fixture (alias for /fixtures/demo.json)
 /api/payload          JSON from --payload (when provided)
 /api/trace            JSONL from --trace (when provided)
+/api/trace-session    structured recorded session JSON from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
 /api/live-events      SSE stream of live LiveTraceEvent JSON (requires listen --web)
 /healthz              simple health check
@@ -368,8 +369,9 @@ The main WaveDeck page (`/`) is **live-only**: it connects directly to the SSE
 stream on load and does not contain any fixture or demo branching.
 
 The **replay page** (`/replay`) is dedicated to offline trace exploration.
-It loads JSONL trace files (from built-in fixtures or uploaded local files) and
-replays events deterministically with full playback controls:
+It loads JSONL trace files, structured recorded sessions, or the trace attached
+to `listenbury web --trace ...`, and replays events deterministically with full
+playback controls:
 
 - pause/resume
 - per-event stepping
@@ -382,6 +384,10 @@ a shared ruler, highlights the active word during playback, and lets you click
 chips/ruler positions to seek the shared audio timeline. Drag across the ruler or an
 empty lane region to mark a time range; releasing the mouse zooms directly into
 that range.
+
+When `listenbury web` is started with `--trace <path>`, both `/replay` and
+`/screenplay` automatically load the recorded trace/session instead of waiting
+for live SSE events.
 Event/marker selections can also expose and play saved clip references through
 `audio_ref` when present in payload data.
 
@@ -408,12 +414,23 @@ examples/browser-transcript-player/fixtures/
 ### Export runtime live trace JSONL into viewer payload JSON
 
 `listenbury listen --jsonl ...` and `listenbury dev continue --jsonl ...`
-write runtime trace lines as `LiveTraceEvent` JSONL. `dev continue` also emits
-`asr_timed_word_stream` artifacts carrying serialized live ASR
-`TimedWordStream` objects. Convert JSONL into the browser viewer payload with:
+write runtime traces either as a plain JSONL file (`*.jsonl`) or as a
+structured session directory when the output path is not a `.jsonl` file:
+
+```text
+session/
+  metadata.json
+  events.jsonl
+```
+
+`metadata.json` preserves the session ID, start time, event stream path, and
+runtime configuration. `dev continue` also emits `asr_timed_word_stream`
+artifacts carrying serialized live ASR `TimedWordStream` objects. Convert a
+JSONL file or a structured session directory into the browser viewer payload
+with:
 
 ```bash
-cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.json
+cargo run -- dev trace-viewer-export out/live-session out/live-trace.viewer.json
 ```
 
 Then load `out/live-trace.viewer.json` in the replay page (`/replay`).

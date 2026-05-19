@@ -16,6 +16,8 @@ pub(super) const SCREENPLAY_CSS: &str =
 pub(super) const REPLAY_HTML: &str =
     include_str!("../../web/browser-transcript-player/replay.html");
 pub(super) const REPLAY_JS: &str = include_str!("../../web/browser-transcript-player/replay.js");
+pub(super) const TRACE_SESSION_MJS: &str =
+    include_str!("../../web/browser-transcript-player/trace-session.mjs");
 pub(super) const DEMO_JSON: &str =
     include_str!("../../examples/browser-transcript-player/fixtures/demo.json");
 pub(super) const LIVE_TRACE_SAMPLE_JSONL: &str =

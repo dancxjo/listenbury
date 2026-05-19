@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -6,8 +5,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::live_trace::SseBroadcaster;
-use crate::trace::viewer_payload::live_trace_jsonl_reader_to_viewer_payload;
+use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
+use crate::trace::viewer_payload::live_trace_events_to_viewer_payload;
 
 use super::assets;
 
@@ -44,7 +43,7 @@ impl BoundServer {
             "Listenbury web viewer serving on http://{}",
             self.local_addr
         );
-        println!("Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/live-events, /healthz");
+        println!("Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-events, /healthz");
 
         for stream in self.listener.incoming() {
             let mut stream = match stream {
@@ -289,6 +288,10 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/replay.js" | "/assets/replay.js" => {
             HttpResponse::ok("application/javascript; charset=utf-8", assets::REPLAY_JS)
         }
+        "/trace-session.mjs" | "/assets/trace-session.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::TRACE_SESSION_MJS,
+        ),
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::SCREENPLAY_JS,
@@ -356,6 +359,11 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
             Ok(None) => HttpResponse::not_found("no --trace file was provided\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
+        "/api/trace-session" => match load_trace_session_payload(state) {
+            Ok(Some(payload)) => HttpResponse::ok("application/json; charset=utf-8", payload),
+            Ok(None) => HttpResponse::not_found("no --trace file was provided\n"),
+            Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+        },
         "/api/trace-viewer-payload" => match load_trace_viewer_payload(state) {
             Ok(Some(payload)) => HttpResponse::ok("application/json; charset=utf-8", payload),
             Ok(None) => HttpResponse::not_found("no --trace file was provided\n"),
@@ -379,24 +387,26 @@ fn load_trace(state: &Arc<ServerState>) -> Result<Option<String>> {
     let Some(path) = state.trace.as_ref() else {
         return Ok(None);
     };
-    let trace = std::fs::read_to_string(path)
-        .with_context(|| format!("read trace from {}", path.display()))?;
+    let trace = read_trace_jsonl(path)?;
     Ok(Some(trace))
+}
+
+fn load_trace_session_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(path) = state.trace.as_ref() else {
+        return Ok(None);
+    };
+    let session = read_trace_session(path)?;
+    let payload = serde_json::to_vec_pretty(&session)
+        .with_context(|| format!("serialize trace session payload for {}", path.display()))?;
+    Ok(Some(payload))
 }
 
 fn load_trace_viewer_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
     let Some(path) = state.trace.as_ref() else {
         return Ok(None);
     };
-    let input =
-        File::open(path).with_context(|| format!("open trace JSONL at {}", path.display()))?;
-    let reader = BufReader::new(input);
-    let payload = live_trace_jsonl_reader_to_viewer_payload(reader).with_context(|| {
-        format!(
-            "convert trace JSONL at {} into viewer payload",
-            path.display()
-        )
-    })?;
+    let session = read_trace_session(path)?;
+    let payload = live_trace_events_to_viewer_payload(&session.events);
     let json = serde_json::to_vec_pretty(&payload)
         .with_context(|| format!("serialize viewer payload for {}", path.display()))?;
     Ok(Some(json))
@@ -410,6 +420,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+    use crate::live_trace::LiveTraceSink;
 
     fn empty_state() -> Arc<ServerState> {
         Arc::new(ServerState {
@@ -479,6 +490,13 @@ mod tests {
         let script = route_request("GET", "/assets/replay.js", &empty_state());
         assert_eq!(script.status, 200);
         assert_eq!(script.content_type, "application/javascript; charset=utf-8");
+
+        let trace_session = route_request("GET", "/assets/trace-session.mjs", &empty_state());
+        assert_eq!(trace_session.status, 200);
+        assert_eq!(
+            trace_session.content_type,
+            "application/javascript; charset=utf-8"
+        );
     }
 
     #[test]
@@ -513,6 +531,13 @@ mod tests {
         let trace_body = String::from_utf8(trace_response.body).expect("utf8 trace");
         assert!(trace_body.contains("\"kind\":\"transcript\""));
 
+        let trace_session_response = route_request("GET", "/api/trace-session", &state);
+        assert_eq!(trace_session_response.status, 200);
+        let trace_session_body =
+            String::from_utf8(trace_session_response.body).expect("utf8 trace session");
+        assert!(trace_session_body.contains("\"metadata\""));
+        assert!(trace_session_body.contains("\"events\""));
+
         let viewer_payload_response = route_request("GET", "/api/trace-viewer-payload", &state);
         assert_eq!(viewer_payload_response.status, 200);
         let viewer_payload_body =
@@ -522,6 +547,60 @@ mod tests {
 
         let _ = std::fs::remove_file(payload_path);
         let _ = std::fs::remove_file(trace_path);
+    }
+
+    #[test]
+    fn trace_routes_accept_structured_trace_session_directory() {
+        let session_root = temp_path("trace-session");
+        let metadata = crate::live_trace::TraceSessionMetadata::new(
+            crate::speech_timeline::SessionId::new(),
+            crate::time::ExactTimestamp {
+                unix_nanos: 1_000_000_000,
+            },
+            crate::live_trace::TraceRuntimeMetadata::new("listenbury listen"),
+        );
+        let mut writer =
+            crate::live_trace::TraceSessionWriter::create(&session_root, metadata.clone())
+                .expect("create trace session writer");
+        writer
+            .emit(crate::live_trace::LiveTraceEvent::new(
+                metadata.session_id,
+                1,
+                "transcript",
+                crate::time::ExactTimestamp {
+                    unix_nanos: 1_250_000_000,
+                },
+                crate::time::ExactTimestamp {
+                    unix_nanos: 1_000_000_000,
+                },
+            ))
+            .expect("write trace event");
+
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: Some(session_root.clone()),
+            broadcaster: None,
+        });
+
+        let trace_response = route_request("GET", "/api/trace", &state);
+        assert_eq!(trace_response.status, 200);
+        let trace_body = String::from_utf8(trace_response.body).expect("utf8 trace");
+        assert!(trace_body.contains("\"kind\":\"transcript\""));
+
+        let trace_session_response = route_request("GET", "/api/trace-session", &state);
+        assert_eq!(trace_session_response.status, 200);
+        let trace_session_body =
+            String::from_utf8(trace_session_response.body).expect("utf8 trace session");
+        assert!(trace_session_body.contains("\"listenbury.live-session.v1\""));
+        assert!(trace_session_body.contains("\"listenbury listen\""));
+
+        let viewer_payload_response = route_request("GET", "/api/trace-viewer-payload", &state);
+        assert_eq!(viewer_payload_response.status, 200);
+        let viewer_payload_body =
+            String::from_utf8(viewer_payload_response.body).expect("utf8 viewer payload");
+        assert!(viewer_payload_body.contains("\"streams\""));
+
+        let _ = std::fs::remove_dir_all(session_root);
     }
 
     #[test]
