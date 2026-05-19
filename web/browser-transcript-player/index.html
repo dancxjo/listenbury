@@ -23,10 +23,11 @@
       </div>
 
       <div id="chrome-shell-root"></div>
-      <audio id="audio" controls preload="metadata"></audio>
     </header>
 
-    <div id="transcript-shell-root"></div>
+    <div id="audio-park" hidden>
+      <audio id="audio" controls preload="metadata"></audio>
+    </div>
 
     <main class="workspace">
       <section class="viewer-stage">
@@ -39,6 +40,8 @@
         <div id="inspector-shell-root"></div>
       </aside>
     </main>
+
+    <div id="transcript-shell-root"></div>
 
     <script type="module" src="./app.js"></script>
   </body>

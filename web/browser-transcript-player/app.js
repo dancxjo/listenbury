@@ -38,6 +38,7 @@ const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
 const transcriptShellRoot = document.getElementById("transcript-shell-root");
 const inspectorShellRoot = document.getElementById("inspector-shell-root");
+const audioParkingRoot = document.getElementById("audio-park");
 const audio = document.getElementById("audio");
 const VIEWER_NAME = "WaveDeck";
 const MIN_VIEW_DURATION_MS = 100;
@@ -198,23 +199,6 @@ function ConnectionChrome({ projection }) {
     ),
     h(
       "section",
-      { className: "toolbar", id: "playback-toolbar" },
-      h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", onClick: () => jumpSelectedWord(-1) }, "◀ Prev"),
-      h("button", { id: "play-pause", type: "button", onClick: () => togglePlayback() }, projection.playPauseLabel),
-      h("button", { id: "jump-next", type: "button", "aria-label": "Next word", onClick: () => jumpSelectedWord(1) }, "Next ▶"),
-      h(
-        "button",
-        {
-          id: "play-selection-clip",
-          type: "button",
-          disabled: !projection.canPlaySelectionClip,
-          onClick: () => playSelectedClip(),
-        },
-        projection.playSelectionClipLabel,
-      ),
-    ),
-    h(
-      "section",
       { className: "toolbar zoom-toolbar", id: "zoom-toolbar", "aria-label": "Timeline zoom controls" },
       h("button", { id: "zoom-out", type: "button", "aria-label": "Zoom out (−)", disabled: !projection.canZoom, onClick: () => zoomTimelineOut() }, "−"),
       h("button", { id: "zoom-in", type: "button", "aria-label": "Zoom in (+)", disabled: !projection.canZoom, onClick: () => zoomTimelineIn() }, "+"),
@@ -263,6 +247,26 @@ function ConnectionChrome({ projection }) {
       h("strong", { id: "viewer-title" }, projection.viewerTitle),
       h("span", { id: "status-message" }, projection.statusMessage),
       h("span", { id: "playback-time" }, projection.playbackTimeLabel),
+    ),
+  );
+}
+
+function PlaybackToolbar({ projection }) {
+  return h(
+    "section",
+    { className: "toolbar playback-toolbar", id: "playback-toolbar", "aria-label": "Playback controls" },
+    h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", onClick: () => jumpSelectedWord(-1) }, "◀ Prev"),
+    h("button", { id: "play-pause", type: "button", onClick: () => togglePlayback() }, projection.playPauseLabel),
+    h("button", { id: "jump-next", type: "button", "aria-label": "Next word", onClick: () => jumpSelectedWord(1) }, "Next ▶"),
+    h(
+      "button",
+      {
+        id: "play-selection-clip",
+        type: "button",
+        disabled: !projection.canPlaySelectionClip,
+        onClick: () => playSelectedClip(),
+      },
+      projection.playSelectionClipLabel,
     ),
   );
 }
@@ -376,6 +380,10 @@ function renderShell() {
   const projection = buildShellProjection();
   if (chromeShellRoot) {
     preactRender(h(ConnectionChrome, { projection }), chromeShellRoot);
+  }
+  const timelinePlaybackRoot = document.getElementById("timeline-playback-toolbar-root");
+  if (timelinePlaybackRoot) {
+    preactRender(h(PlaybackToolbar, { projection }), timelinePlaybackRoot);
   }
   if (transcriptShellRoot) {
     preactRender(h(TranscriptRibbonPane, { projection }), transcriptShellRoot);
@@ -2238,6 +2246,7 @@ function syncMaxDurationWithAudio() {
 }
 
 function render() {
+  parkAudioElement();
   if (!state.lanes.length) {
     viewer.className = "viewer empty";
     state.chipElementByKey = new Map();
@@ -2256,6 +2265,12 @@ function render() {
   }
   renderSelection();
   renderShell();
+}
+
+function parkAudioElement() {
+  if (audioParkingRoot && audio.parentElement !== audioParkingRoot) {
+    audioParkingRoot.append(audio);
+  }
 }
 
 function setSurfaceMode(mode) {
@@ -2407,6 +2422,8 @@ function renderCustomTimeline() {
     rulerEl.append(tick, label);
   });
   scrollContent.append(rulerEl);
+
+  appendTimelinePlaybackDeck(labelsCol, scrollContent, trackContentWidth);
 
   // Central waveform/oscilloscope panel — shared timebase anchor for all lanes
   appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs, {
@@ -3256,6 +3273,41 @@ function selectedGraphNodeId() {
     return null;
   }
   return `${state.selectedItem.type}:${state.selectedItem.laneIndex}:${state.selectedItem.itemIndex}`;
+}
+
+function appendTimelinePlaybackDeck(labelsCol, scrollContent, trackContentWidth) {
+  const labelEl = document.createElement("div");
+  labelEl.className = "lane-label-entry playback-controls-label";
+  const headerEl = document.createElement("div");
+  headerEl.className = "lane-header playback-controls-header";
+  const h2El = document.createElement("h2");
+  h2El.textContent = "Playback";
+  const metaEl = document.createElement("div");
+  metaEl.className = "lane-meta";
+  metaEl.textContent = "Controls";
+  headerEl.append(h2El, metaEl);
+  labelEl.append(headerEl);
+  labelsCol.append(labelEl);
+
+  const trackEl = document.createElement("div");
+  trackEl.className = "lane-track playback-controls-track";
+  trackEl.style.width = `${trackContentWidth}px`;
+
+  const deckEl = document.createElement("div");
+  deckEl.className = "timeline-playback-deck";
+
+  const toolbarRoot = document.createElement("div");
+  toolbarRoot.id = "timeline-playback-toolbar-root";
+  toolbarRoot.className = "timeline-playback-toolbar-root";
+
+  const audioSlot = document.createElement("div");
+  audioSlot.id = "timeline-audio-slot";
+  audioSlot.className = "timeline-audio-slot";
+  audioSlot.append(audio);
+
+  deckEl.append(toolbarRoot, audioSlot);
+  trackEl.append(deckEl);
+  scrollContent.append(trackEl);
 }
 
 function appendWaveformOverlay(trackEl, trackContentWidth) {
