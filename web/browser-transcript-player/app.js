@@ -3724,7 +3724,6 @@ function scheduleWaveformSpectrogramDraw(canvas, renderedWidthPx = spectrogramRe
     return;
   }
   canvas.dataset.renderedWidthPx = String(Math.max(1, Math.round(renderedWidthPx)));
-  syncWaveformSpectrogramScroll(canvas);
   const signature = waveformSpectrogramSignature(canvas, renderedWidthPx);
   if (
     canvas.dataset.spectrogramSignature === signature ||
@@ -3734,15 +3733,6 @@ function scheduleWaveformSpectrogramDraw(canvas, renderedWidthPx = spectrogramRe
   }
   canvas.dataset.pendingSpectrogramSignature = signature;
   requestAnimationFrame(() => drawWaveformSpectrogram(canvas, renderedWidthPx, signature));
-}
-
-function syncWaveformSpectrogramScroll(canvas = document.getElementById("waveform-spectrogram-canvas")) {
-  if (!canvas) {
-    return;
-  }
-  const col = getScrollContainer();
-  const scrollLeft = Math.max(0, col?.scrollLeft ?? 0);
-  canvas.style.transform = `translateX(${-scrollLeft}px)`;
 }
 
 function drawWaveformSpectrogram(
@@ -4016,6 +4006,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
 
   const spectrogramPanel = document.createElement("div");
   spectrogramPanel.className = "waveform-spectrogram-panel";
+  spectrogramPanel.style.width = `${waveformCanvasWidth}px`;
   spectrogramPanel.addEventListener("pointermove", updateWaveformSpectrogramHover);
   spectrogramPanel.addEventListener("pointerleave", clearWaveformSpectrogramHover);
   const spectrogramCanvas = document.createElement("canvas");
@@ -4487,7 +4478,6 @@ function buildRulerTicks(maxDurationMs, viewportMs) {
 // ── Event handlers for the custom timeline ──────────────────────────────────
 
 function onTracksScroll() {
-  syncWaveformSpectrogramScroll();
   updateWaveformResolutionDebugReadout();
   if (_programmaticScroll) return;
   if (state.followLatest) {
@@ -4526,7 +4516,6 @@ function onTimelineWheel(event) {
   _programmaticScroll = true;
   const maxScrollLeft = Math.max(0, col.scrollWidth - col.clientWidth);
   col.scrollLeft = Math.max(0, Math.min(maxScrollLeft, pxForMs(anchorMs) - xInViewport));
-  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });
@@ -4850,7 +4839,6 @@ function ensureTimingVisible(timing) {
   }
   _programmaticScroll = true;
   col.scrollLeft = nextScrollLeft;
-  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });
@@ -4896,7 +4884,6 @@ function zoomToTimeSelection(selection) {
   if (col) {
     _programmaticScroll = true;
     col.scrollLeft = pxForMs(viewStartMs);
-    syncWaveformSpectrogramScroll();
     requestAnimationFrame(() => {
       _programmaticScroll = false;
     });
@@ -4917,7 +4904,6 @@ function zoomToFullSession() {
   if (col) {
     _programmaticScroll = true;
     col.scrollLeft = 0;
-    syncWaveformSpectrogramScroll();
     requestAnimationFrame(() => {
       _programmaticScroll = false;
     });
@@ -4951,7 +4937,6 @@ function applyFollowLatest() {
   const targetScroll = Math.max(0, getTrackContentWidth() - col.clientWidth);
   _programmaticScroll = true;
   col.scrollLeft = targetScroll;
-  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });
