@@ -3264,15 +3264,21 @@ function addGraphWord(nodes, edges, nodeIds, edgeIds, item) {
       label: "contains",
     });
   }
-  const phonemes = Array.isArray(item.word.phonemes) ? item.word.phonemes : [];
+  const phonemes = buildPhonemeSpansForInspector(item.word, { allophoneRulesEnabled: true }) ?? [];
   phonemes.forEach((phoneme, index) => {
+    const defaultIpa = phoneme.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?";
     const phonemeNodeId = `phoneme:${item.laneIndex}:${item.wordIndex}:${index}`;
     pushGraphNode(nodes, nodeIds, {
       id: phonemeNodeId,
-      label: String(phoneme?.label ?? phoneme?.text ?? phoneme ?? "phoneme"),
+      label: defaultIpa,
       nodeType: "phoneme",
       modality: item.lane.label,
       turn: item.turn,
+      rawSymbol: phoneme.sourceSymbol ?? phoneme.symbol ?? null,
+      defaultIpa,
+      realizedIpa: phoneme.realization?.ipa ?? null,
+      realizationMethod: phoneme.realization?.method ?? null,
+      realizationRule: phoneme.realization?.rule ?? null,
     });
     pushGraphEdge(edges, edgeIds, {
       id: `edge:${phonemeNodeId}:${wordNodeId}:alignment`,
@@ -5235,27 +5241,50 @@ function createPhonemeStrip(word) {
   const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
 
-  const spans = projectPhonemesIntoWordInterval(phonemes, startMs, endMs);
+  const spans = projectPhonemesIntoWordInterval(
+    phonemes,
+    startMs,
+    endMs,
+    "cmudict.proportional",
+    { allophoneRules: { enabled: true, dialect: "american_english" } },
+  );
   if (!spans.length) return null;
 
   const duration = endMs - startMs;
+  const defaultIpaSequence = spans
+    .map((span) => span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?")
+    .join(" ");
+  const realizedIpaSequence = spans.map((span) => span.realization?.ipa ?? "?").join(" ");
 
   const strip = document.createElement("span");
   strip.className = "phoneme-strip";
-  strip.setAttribute("aria-label", `Phonemes (projected): ${phonemes.join(" ")}`);
+  strip.setAttribute(
+    "aria-label",
+    `Phonemes: source ${phonemes.join(" ")} · default /${defaultIpaSequence}/ · realized [${realizedIpaSequence}]`,
+  );
   strip.dataset.timingSource = word.pronunciation.source ?? "cmudict";
 
   for (const span of spans) {
     const tick = document.createElement("span");
-    const isVowelTick = isVowel(span.symbol);
+    const isVowelTick = isVowel(span.sourceSymbol);
     tick.className = ["phoneme-tick", isVowelTick ? "is-vowel" : ""].filter(Boolean).join(" ");
-    tick.textContent = span.symbol.replace(/[012]$/, ""); // strip stress digit for display
+    const defaultIpa = span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?";
+    const realizedIpa = span.realization?.ipa ?? defaultIpa;
+    tick.textContent = realizedIpa;
     // Position proportionally within the chip.
     const leftPct = ((span.start_ms - startMs) / duration) * 100;
     const widthPct = ((span.end_ms - span.start_ms) / duration) * 100;
     tick.style.left = `${leftPct.toFixed(2)}%`;
     tick.style.width = `${widthPct.toFixed(2)}%`;
-    tick.title = `${span.symbol} (${span.start_ms}–${span.end_ms} ms · ${span.source})`;
+    tick.title = [
+      `source: ${span.sourceSymbol ?? span.symbol}`,
+      `default: /${defaultIpa}/`,
+      `realized: [${realizedIpa}]`,
+      span.realization?.rule ? `rule: ${span.realization.rule}` : null,
+      `${span.start_ms}–${span.end_ms} ms · ${span.timingSource}`,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     strip.append(tick);
   }
 
@@ -5925,7 +5954,7 @@ function buildSelectionProjection() {
         audioRef: word.audio_ref,
         revisions: word._revisions ?? [],
         pronunciation: word.pronunciation ?? null,
-        phonemeSpans: buildPhonemeSpansForInspector(word),
+        phonemeSpans: buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }),
       },
       null,
       2,
@@ -6018,12 +6047,26 @@ function buildPronunciationSummaryParts(word) {
   ];
 
   if (Array.isArray(pron.phonemes) && pron.phonemes.length > 0) {
+    const spans = buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }) ?? [];
+    const sourceSymbols = spans.map((span) => span.sourceSymbol ?? span.symbol).join(" ");
+    const defaultIpa = spans
+      .map((span) => span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?")
+      .join(" ");
+    const realizedIpa = spans.map((span) => span.realization?.ipa ?? "?").join(" ");
+    const appliedRules = [...new Set(spans.map((span) => span.realization?.rule).filter(Boolean))];
     parts.push(
       h("br"),
       h("span", { className: "inspector-phoneme-sequence", title: "Projected phoneme sequence — timing is estimated, not measured" },
-        pron.phonemes.join(" "),
+        sourceSymbols,
         h("span", { className: "inspector-phoneme-provenance" }, " (projected)"),
       ),
+      h("br"),
+      `Default IPA: /${defaultIpa}/`,
+      h("br"),
+      `Realized IPA: [${realizedIpa}]`,
+      ...(appliedRules.length > 0
+        ? [h("br"), `Allophone rules: ${appliedRules.join(", ")}`]
+        : []),
     );
   }
 
@@ -6034,13 +6077,24 @@ function buildPronunciationSummaryParts(word) {
  * Compute and return the projected phoneme spans for a word, or `null` when
  * the word has no usable pronunciation metadata.  Used in the inspector JSON.
  */
-function buildPhonemeSpansForInspector(word) {
+function buildPhonemeSpansForInspector(word, options = {}) {
   const phonemes = word.pronunciation?.phonemes;
   if (!Array.isArray(phonemes) || phonemes.length === 0) return null;
   const startMs = word.resolvedTiming?.start_ms ?? word.timing?.start_ms;
   const endMs = word.resolvedTiming?.end_ms ?? word.timing?.end_ms;
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-  return projectPhonemesIntoWordInterval(phonemes, startMs, endMs);
+  return projectPhonemesIntoWordInterval(
+    phonemes,
+    startMs,
+    endMs,
+    "cmudict.proportional",
+    {
+      allophoneRules: {
+        enabled: options.allophoneRulesEnabled === true,
+        dialect: "american_english",
+      },
+    },
+  );
 }
 
 /**
