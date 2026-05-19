@@ -160,6 +160,8 @@ export function selectWaveformResolutionLevel(levels, options = {}) {
     return null;
   }
   const pxPerSecond = Math.max(1, clampFinite(options.pxPerSecond, 1));
+  // Aim for ~2 waveform buckets per rendered pixel so zooming reveals more
+  // structure without oversampling far beyond what the canvas can display.
   const bucketsPerPixel = Math.max(0.25, clampFinite(options.bucketsPerPixel, 2));
   const desiredBucketDurationMs = (1000 / pxPerSecond) * bucketsPerPixel;
 

@@ -3319,7 +3319,7 @@ function createTimelinePlaybackDeck() {
 }
 
 function appendWaveformOverlay(trackEl, trackContentWidth) {
-  if (state.waveform.status !== "ready" || !selectedWaveformLevel()?.buckets?.length || state.waveform.durationMs <= 0) {
+  if (state.waveform.status !== "ready" || !getWaveformLevelForCurrentZoom()?.buckets?.length || state.waveform.durationMs <= 0) {
     return;
   }
 
@@ -3372,7 +3372,7 @@ function waveformCanvasMetrics(canvas, trackContentWidth, fallbackHeightPx) {
   };
 }
 
-function selectedWaveformLevel() {
+function getWaveformLevelForCurrentZoom() {
   return selectWaveformResolutionLevel(state.waveform.levels, {
     pxPerSecond: state.zoomPxPerSecond,
   });
@@ -3411,29 +3411,33 @@ function waveformWindowAtCanvasX(canvasX, canvasWidthPx, renderedWidthPx, level)
   const lastBucketIndex = Math.min(level.buckets.length - 1, Math.max(firstBucketIndex, endIndex));
   let min = 0;
   let max = 0;
-  let rms = 0;
+  let rmsSumSquares = 0;
   let count = 0;
   for (let index = firstBucketIndex; index <= lastBucketIndex; index++) {
     const bucket = level.buckets[index];
     min = count === 0 ? (bucket?.min_sample ?? 0) : Math.min(min, bucket?.min_sample ?? 0);
     max = count === 0 ? (bucket?.max_sample ?? 0) : Math.max(max, bucket?.max_sample ?? 0);
-    rms += bucket?.rms_energy ?? 0;
+    rmsSumSquares += (bucket?.rms_energy ?? 0) ** 2;
     count += 1;
   }
   return {
     min,
     max,
-    rms: count > 0 ? rms / count : 0,
+    rms: count > 0 ? Math.sqrt(rmsSumSquares / count) : 0,
   };
+}
+
+function formatSecondsFromMs(ms) {
+  return `${(Math.max(0, ms ?? 0) / 1000).toFixed(2)}s`;
 }
 
 function waveformResolutionDebugSummary() {
   const viewport = currentTimelineViewport();
   const visible = viewport.visibleRangeMs({ minDurationMs: MIN_VIEW_DURATION_MS });
-  const level = selectedWaveformLevel();
+  const level = getWaveformLevelForCurrentZoom();
   return {
     resolutionLabel: level?.label ?? "overview",
-    visibleLabel: `${(visible.startMs / 1000).toFixed(2)}s..${(visible.endMs / 1000).toFixed(2)}s`,
+    visibleLabel: `${formatSecondsFromMs(visible.startMs)}..${formatSecondsFromMs(visible.endMs)}`,
     pxPerSecondLabel: `${Math.round(state.zoomPxPerSecond)} px/s`,
   };
 }
@@ -3448,7 +3452,7 @@ function updateWaveformResolutionDebugReadout() {
 }
 
 function drawWaveformOverlay(canvas, trackContentWidth) {
-  const level = selectedWaveformLevel();
+  const level = getWaveformLevelForCurrentZoom();
   if (!level?.buckets?.length) {
     return;
   }
@@ -3503,7 +3507,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   metaEl.className = "lane-meta waveform-lane-meta";
   if (state.waveform.status === "ready") {
     const durationEl = document.createElement("div");
-    durationEl.textContent = `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
+    durationEl.textContent = formatSecondsFromMs(state.waveform.durationMs);
     const debugEl = document.createElement("div");
     debugEl.id = "waveform-resolution-debug";
     metaEl.append(durationEl, debugEl);
@@ -3638,7 +3642,7 @@ function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWavefor
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, canvasWidthPx, cssHeight);
 
-  const level = selectedWaveformLevel();
+  const level = getWaveformLevelForCurrentZoom();
   if (!level?.buckets?.length) {
     // Flat zero-line placeholder when no audio is loaded
     ctx.strokeStyle = "rgba(157, 171, 186, 0.28)";
@@ -3830,7 +3834,7 @@ function centralWaveformSignature(renderedWidthPx) {
   const canvasWidthPx = Math.max(1, Math.round(Math.min(renderedWidthPx, WAVEFORM_CANVAS_MAX_WIDTH_PX)));
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const debugSignature = uiState.diagnosticsExpanded ? wordTimingDebugSignature() : "";
-  const level = selectedWaveformLevel();
+  const level = getWaveformLevelForCurrentZoom();
   return [
     state.waveform.status,
     state.waveform.url ?? "",
