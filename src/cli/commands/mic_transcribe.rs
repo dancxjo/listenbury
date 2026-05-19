@@ -60,7 +60,7 @@ const WEB_TRANSCRIBE_PROSPECTIVE_INITIAL_MS: u64 = 300;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 const WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS: u64 = 250;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-const WEB_TRANSCRIBE_MAX_GROUP_MS: u64 = 6_000;
+const WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS: u64 = 350;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct MicTranscribeState {
@@ -88,9 +88,9 @@ struct WebTranscribeState {
     live_trace: LiveTraceRecorder<SseBroadcaster>,
     live_trace_turn: u64,
     next_stream_id: u64,
-    rolling_frames: VecDeque<AudioFrame>,
-    rolling_duration_ms: u64,
-    max_rolling_duration_ms: u64,
+    finalized_segments: VecDeque<FinalizedAsrSegment>,
+    finalized_segments_duration_ms: u64,
+    max_finalized_segments_duration_ms: u64,
     next_refine_at: Instant,
     refine_interval: Duration,
     refine_tx: crossbeam_channel::Sender<RefinementWorkItem>,
@@ -100,6 +100,13 @@ struct WebTranscribeState {
 struct ActiveWebTranscribeGroup {
     frames: Vec<AudioFrame>,
     next_prospective_at_ms: u64,
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[derive(Debug, Clone)]
+struct FinalizedAsrSegment {
+    frames: Vec<AudioFrame>,
+    duration_ms: u64,
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -118,6 +125,7 @@ impl ActiveWebTranscribeGroup {
 struct RefinementWorkItem {
     frames: Vec<AudioFrame>,
     observed_at: ExactTimestamp,
+    segment_count: usize,
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -654,9 +662,9 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         live_trace,
         live_trace_turn: 0,
         next_stream_id: 1,
-        rolling_frames: VecDeque::new(),
-        rolling_duration_ms: 0,
-        max_rolling_duration_ms: command.refine_window_seconds.saturating_mul(1_000),
+        finalized_segments: VecDeque::new(),
+        finalized_segments_duration_ms: 0,
+        max_finalized_segments_duration_ms: command.refine_window_seconds.saturating_mul(1_000),
         next_refine_at: Instant::now(),
         refine_interval: Duration::from_millis(command.refine_interval_ms),
         refine_tx,
@@ -964,10 +972,13 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
             state.live_trace.emit(trace_event)?;
 
             if let Some(group) = state.active_groups.remove(&id) {
-                append_rolling_frames(state, &group.frames);
-                queue_refinement_if_due(state);
                 let output = transcribe_group(&group.frames, &mut state.recognizer)?;
+                let finalized_text = output.text.clone();
                 emit_web_transcribe_output(state, output, true, ExactTimestamp::now())?;
+                if !finalized_text.is_empty() {
+                    append_finalized_asr_segment(state, group.frames);
+                    queue_refinement_if_due(state);
+                }
             }
         }
     }
@@ -1024,12 +1035,11 @@ fn emit_web_transcribe_output(
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn web_transcribe_breath_group_config() -> BreathGroupConfig {
     let mut config = BreathGroupConfig::default();
-    config.max_group_frames = Some(
-        WEB_TRANSCRIBE_MAX_GROUP_MS
-            .div_ceil(DEFAULT_VAD_FRAME_MS)
-            .try_into()
-            .unwrap_or(usize::MAX),
-    );
+    config.close_after_silence_frames = WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
+        .div_ceil(DEFAULT_VAD_FRAME_MS)
+        .try_into()
+        .unwrap_or(usize::MAX);
+    config.max_group_frames = None;
     config
 }
 
@@ -1075,32 +1085,51 @@ fn emit_web_candidate_trace_event(
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn append_rolling_frames(state: &mut WebTranscribeState, frames: &[AudioFrame]) {
-    for frame in frames {
-        state.rolling_duration_ms = state
-            .rolling_duration_ms
-            .saturating_add(frame_duration_ms(frame));
-        state.rolling_frames.push_back(frame.clone());
+fn append_finalized_asr_segment(state: &mut WebTranscribeState, frames: Vec<AudioFrame>) {
+    let duration_ms = total_frame_duration_ms(&frames);
+    if frames.is_empty() || duration_ms == 0 {
+        return;
     }
-    while state.rolling_duration_ms > state.max_rolling_duration_ms {
-        let Some(frame) = state.rolling_frames.pop_front() else {
-            state.rolling_duration_ms = 0;
+
+    state.finalized_segments_duration_ms = state
+        .finalized_segments_duration_ms
+        .saturating_add(duration_ms);
+    state.finalized_segments.push_back(FinalizedAsrSegment {
+        frames,
+        duration_ms,
+    });
+
+    trim_finalized_asr_segments(
+        &mut state.finalized_segments,
+        &mut state.finalized_segments_duration_ms,
+        state.max_finalized_segments_duration_ms,
+    );
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn trim_finalized_asr_segments(
+    segments: &mut VecDeque<FinalizedAsrSegment>,
+    duration_ms: &mut u64,
+    max_duration_ms: u64,
+) {
+    while *duration_ms > max_duration_ms {
+        let Some(segment) = segments.pop_front() else {
+            *duration_ms = 0;
             break;
         };
-        state.rolling_duration_ms = state
-            .rolling_duration_ms
-            .saturating_sub(frame_duration_ms(&frame));
+        *duration_ms = (*duration_ms).saturating_sub(segment.duration_ms);
     }
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn queue_refinement_if_due(state: &mut WebTranscribeState) {
-    if state.rolling_frames.is_empty() || Instant::now() < state.next_refine_at {
+    if state.finalized_segments.len() < 2 || Instant::now() < state.next_refine_at {
         return;
     }
-    let work = RefinementWorkItem {
-        frames: state.rolling_frames.iter().cloned().collect(),
-        observed_at: ExactTimestamp::now(),
+    let Some(work) =
+        finalized_segments_refinement_work(&state.finalized_segments, ExactTimestamp::now())
+    else {
+        return;
     };
     match state.refine_tx.try_send(work) {
         Ok(()) => {
@@ -1112,13 +1141,43 @@ fn queue_refinement_if_due(state: &mut WebTranscribeState) {
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn finalized_segments_refinement_work(
+    segments: &VecDeque<FinalizedAsrSegment>,
+    observed_at: ExactTimestamp,
+) -> Option<RefinementWorkItem> {
+    if segments.len() < 2 {
+        return None;
+    }
+
+    let frame_count = segments
+        .iter()
+        .map(|segment| segment.frames.len())
+        .sum::<usize>();
+    if frame_count == 0 {
+        return None;
+    }
+
+    let mut frames = Vec::with_capacity(frame_count);
+    for segment in segments {
+        frames.extend(segment.frames.iter().cloned());
+    }
+
+    Some(RefinementWorkItem {
+        frames,
+        observed_at,
+        segment_count: segments.len(),
+    })
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn run_refinement_worker(
     model_path: std::path::PathBuf,
     rx: crossbeam_channel::Receiver<RefinementWorkItem>,
     broadcaster: SseBroadcaster,
     trace_started_at: ExactTimestamp,
 ) {
-    let mut recognizer = match WhisperSpeechRecognizer::new_quiet(&model_path) {
+    let recognizer_result = WhisperSpeechRecognizer::new_quiet_without_input_padding(&model_path);
+    let mut recognizer = match recognizer_result {
         Ok(recognizer) => recognizer,
         Err(error) => {
             let mut trace = LiveTraceRecorder::new(trace_started_at, broadcaster);
@@ -1131,12 +1190,14 @@ fn run_refinement_worker(
     let mut trace = LiveTraceRecorder::new(trace_started_at, broadcaster);
 
     while let Ok(work) = rx.recv() {
-        match transcribe_group_with_finality(&work.frames, &mut recognizer, false) {
+        match transcribe_group_with_finality(&work.frames, &mut recognizer, true) {
             Ok(output) if !output.text.is_empty() => {
                 let mut event = trace.event(0, "transcript_proposition", work.observed_at);
                 event.text = Some(output.text.clone());
                 event.artifact = Some(json!({
                     "source": "whisper-large-v3-turbo",
+                    "input": "consecutive_finalized_asr_segments",
+                    "segment_count": work.segment_count,
                     "window_ms": total_frame_duration_ms(&work.frames),
                     "text": output.text,
                 }));
@@ -1358,8 +1419,34 @@ where
 
 #[cfg(all(test, feature = "asr-whisper", feature = "audio-cpal"))]
 mod tests {
-    use super::{convert_frame_samples, vad_frame_format};
+    use super::{
+        FinalizedAsrSegment, WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS, convert_frame_samples,
+        finalized_segments_refinement_work, total_frame_duration_ms, trim_finalized_asr_segments,
+        vad_frame_format, web_transcribe_breath_group_config,
+    };
+    use listenbury::hearing::breath::DEFAULT_VAD_FRAME_MS;
     use listenbury::hearing::vad::VadBackendKind;
+    use listenbury::{AudioFrame, ExactTimestamp};
+    use std::collections::VecDeque;
+
+    fn test_frame(sample_count: usize) -> AudioFrame {
+        AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            samples: vec![0.1; sample_count],
+            voice_signatures: Vec::new(),
+        }
+    }
+
+    fn test_segment(frame_count: usize) -> FinalizedAsrSegment {
+        let frames = vec![test_frame(160); frame_count];
+        let duration_ms = total_frame_duration_ms(&frames);
+        FinalizedAsrSegment {
+            frames,
+            duration_ms,
+        }
+    }
 
     #[test]
     fn webrtc_vad_frames_use_supported_mono_rate() {
@@ -1383,6 +1470,59 @@ mod tests {
             converted
                 .iter()
                 .all(|sample| (*sample - 1.0).abs() < 0.0001)
+        );
+    }
+
+    #[test]
+    fn web_transcribe_groups_close_on_short_pause_without_hard_timeout() {
+        let config = web_transcribe_breath_group_config();
+
+        assert_eq!(
+            config.close_after_silence_frames as u64 * DEFAULT_VAD_FRAME_MS,
+            WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
+        );
+        assert_eq!(config.max_group_frames, None);
+    }
+
+    #[test]
+    fn refinement_work_combines_multiple_finalized_segments() {
+        let mut segments = VecDeque::new();
+        segments.push_back(test_segment(2));
+        segments.push_back(test_segment(3));
+
+        let work = finalized_segments_refinement_work(&segments, ExactTimestamp::now())
+            .expect("two finalized segments should queue refinement");
+
+        assert_eq!(work.segment_count, 2);
+        assert_eq!(work.frames.len(), 5);
+        assert_eq!(total_frame_duration_ms(&work.frames), 50);
+    }
+
+    #[test]
+    fn refinement_work_waits_for_a_transition_between_segments() {
+        let mut segments = VecDeque::new();
+        segments.push_back(test_segment(2));
+
+        assert!(finalized_segments_refinement_work(&segments, ExactTimestamp::now()).is_none());
+    }
+
+    #[test]
+    fn finalized_segment_window_trims_whole_old_segments() {
+        let mut segments = VecDeque::new();
+        segments.push_back(test_segment(2));
+        segments.push_back(test_segment(3));
+        segments.push_back(test_segment(4));
+        let mut duration_ms = segments.iter().fold(0u64, |total, segment| {
+            total.saturating_add(segment.duration_ms)
+        });
+
+        trim_finalized_asr_segments(&mut segments, &mut duration_ms, 70);
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(duration_ms, 70);
+        assert_eq!(
+            segments.front().map(|segment| segment.frames.len()),
+            Some(3)
         );
     }
 }
