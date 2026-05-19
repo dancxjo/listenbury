@@ -20,7 +20,7 @@ function fakeAudioBuffer(samples, sampleRate = 1000) {
   };
 }
 
-test("buildEnergyEnvelopeFromAudioBuffer returns deterministic frame metrics", () => {
+test("buildEnergyEnvelopeFromAudioBuffer generates expected frame structure and non-negative energy metrics", () => {
   const buffer = fakeAudioBuffer([0, 1, 1, 0, 0, 0, 0, 0], 1000);
   const envelope = buildEnergyEnvelopeFromAudioBuffer(buffer, { windowMs: 4, hopMs: 2 });
   assert.equal(envelope.window_ms, 4);

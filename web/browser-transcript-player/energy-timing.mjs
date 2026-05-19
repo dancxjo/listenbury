@@ -17,6 +17,7 @@ const DEFAULT_REFINEMENT_CONFIG = {
   minWordDurationMs: 20,
   minSnapConfidence: 0.58,
 };
+const MIN_RESOLVED_DURATION_MS = 1;
 
 export function buildEnergyEnvelopeFromAudioBuffer(audioBuffer, options = {}) {
   if (!audioBuffer || typeof audioBuffer.length !== "number" || typeof audioBuffer.sampleRate !== "number") {
@@ -367,7 +368,7 @@ function enforceMonotonicWordOrder(words) {
     }
     const whisper = word.whisperTiming ?? word.resolvedTiming;
     const start = Math.max(previousEnd, word.resolvedTiming.start_ms);
-    const end = Math.max(start + 1, word.resolvedTiming.end_ms);
+    const end = Math.max(start + MIN_RESOLVED_DURATION_MS, word.resolvedTiming.end_ms);
     word.resolvedTiming = { start_ms: start, end_ms: end };
     if (word.energyTiming) {
       word.energyTiming = { ...word.energyTiming, start_ms: start, end_ms: end };

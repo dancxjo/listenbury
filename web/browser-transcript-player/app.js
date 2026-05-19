@@ -1986,6 +1986,7 @@ async function loadWaveform(url, options = {}) {
     };
     reprojectWordTimingAgainstWaveform();
     clearLiveWaveformRetry();
+    // Re-render full shell so inspector/selection metadata reflects updated resolved timings.
     render();
   } catch (err) {
     console.warn("Unable to build waveform overlay:", err);
