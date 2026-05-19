@@ -28,6 +28,11 @@ import {
   wordStreamText as _wordStreamText,
   textContent,
 } from "/assets/shared/events/reducers.mjs";
+import {
+  buildEnergyEnvelopeFromAudioBuffer,
+  detectEnergyLandmarks,
+  refineWordTimingsWithEnergy,
+} from "/assets/energy-timing.mjs";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -98,7 +103,14 @@ const state = {
   followLatest: false,
   dragSelection: null,
   brushSelection: null,
-  waveform: { url: null, peaks: null, durationMs: 0, status: "idle" },
+  waveform: {
+    url: null,
+    peaks: null,
+    durationMs: 0,
+    status: "idle",
+    energyEnvelope: null,
+    energyLandmarks: null,
+  },
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
@@ -1466,6 +1478,16 @@ function buildLanes(normalizedPayload) {
   });
 }
 
+function reprojectWordTimingAgainstWaveform() {
+  if (!state.payload) {
+    return;
+  }
+  const previousSelection = state.selectedItem;
+  state.lanes = buildLanes(state.payload);
+  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
+  syncMaxDurationWithAudio();
+}
+
 function normalizePayload(rawPayload) {
   const sharedSpanProjection = projectSharedSpanModel(rawPayload?.shared_span_model);
   const hasExplicitTimelinePayload =
@@ -1568,21 +1590,67 @@ function streamLabelForWordSpan(lane, streamName) {
 
 function normalizeWordLane(lane) {
   const totalWords = lane.stream.words.length || 1;
+  const baseWords = lane.stream.words.map((word, wordIndex) => {
+    const hasMeasuredTiming = Boolean(word.timing);
+    const timing = hasMeasuredTiming
+      ? word.timing
+      : fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
+    return {
+      ...word,
+      whisperTiming: hasMeasuredTiming ? word.timing : null,
+      energyTiming: null,
+      energySnapConfidence: null,
+      resolvedTiming: timing,
+      timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
+      timingSourceDetail: describeTimingSource(
+        {
+          ...word,
+          timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
+          energyTiming: null,
+        },
+        hasMeasuredTiming,
+      ),
+    };
+  });
+
+  const canRefineAgainstEnergy =
+    lane.stream?.source === "RecordedAudio" &&
+    state.waveform.status === "ready" &&
+    state.waveform.energyEnvelope?.frames?.length;
+  if (!canRefineAgainstEnergy) {
+    return {
+      ...lane,
+      type: "word",
+      words: baseWords,
+    };
+  }
+
+  const refinements = refineWordTimingsWithEnergy(
+    lane.stream.words,
+    state.waveform.energyEnvelope,
+    state.waveform.energyLandmarks,
+  );
+  const words = baseWords.map((word, wordIndex) => {
+    const refinement = refinements[wordIndex];
+    if (!refinement?.whisperTiming) {
+      return word;
+    }
+    const next = {
+      ...word,
+      whisperTiming: refinement.whisperTiming,
+      energyTiming: refinement.energyTiming,
+      energySnapConfidence: refinement.energySnapConfidence ?? null,
+      resolvedTiming: refinement.resolvedTiming ?? refinement.whisperTiming,
+      timingResolution: refinement.timingResolution ?? "word.timing",
+    };
+    next.timingSourceDetail = describeTimingSource(next, true);
+    return next;
+  });
+
   return {
     ...lane,
     type: "word",
-    words: lane.stream.words.map((word, wordIndex) => {
-      const hasMeasuredTiming = Boolean(word.timing);
-      const timing = hasMeasuredTiming
-        ? word.timing
-        : fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
-      return {
-        ...word,
-        resolvedTiming: timing,
-        timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
-        timingSourceDetail: describeTimingSource(word, hasMeasuredTiming),
-      };
-    }),
+    words,
   };
 }
 
@@ -1691,7 +1759,14 @@ function inferPayloadDuration(stream) {
 function configureAudio(audioConfig) {
   if (!audioConfig?.url) {
     clearLiveWaveformRetry();
-    state.waveform = { url: null, peaks: null, durationMs: 0, status: "idle" };
+    state.waveform = {
+      url: null,
+      peaks: null,
+      durationMs: 0,
+      status: "idle",
+      energyEnvelope: null,
+      energyLandmarks: null,
+    };
     return;
   }
 
@@ -1878,7 +1953,14 @@ async function loadWaveform(url, options = {}) {
   if (force && state.waveform.url === url && state.waveform.status === "loading") {
     return;
   }
-  state.waveform = { url, peaks: null, durationMs: 0, status: "loading" };
+  state.waveform = {
+    url,
+    peaks: null,
+    durationMs: 0,
+    status: "loading",
+    energyEnvelope: null,
+    energyLandmarks: null,
+  };
   try {
     const response = await fetch(fetchUrl, { cache: "no-store" });
     if (!response.ok) {
@@ -1892,17 +1974,30 @@ async function loadWaveform(url, options = {}) {
     const context = new AudioContextCtor();
     const audioBuffer = await context.decodeAudioData(buffer.slice(0));
     await context.close?.();
+    const energyEnvelope = buildEnergyEnvelopeFromAudioBuffer(audioBuffer);
+    const energyLandmarks = detectEnergyLandmarks(energyEnvelope);
     state.waveform = {
       url,
       peaks: waveformPeaksFromAudioBuffer(audioBuffer),
       durationMs: Math.round(audioBuffer.duration * 1000),
       status: "ready",
+      energyEnvelope,
+      energyLandmarks,
     };
+    reprojectWordTimingAgainstWaveform();
     clearLiveWaveformRetry();
-    renderCustomTimeline();
+    // Re-render full shell so inspector/selection metadata reflects updated resolved timings.
+    render();
   } catch (err) {
     console.warn("Unable to build waveform overlay:", err);
-    state.waveform = { url, peaks: null, durationMs: 0, status: "error" };
+    state.waveform = {
+      url,
+      peaks: null,
+      durationMs: 0,
+      status: "error",
+      energyEnvelope: null,
+      energyLandmarks: null,
+    };
     const failedUrl = new URL(url, window.location.href);
     if (uiState.liveMode && failedUrl.pathname === "/api/live-session-audio.wav") {
       scheduleLiveWaveformRetry();
@@ -3293,6 +3388,103 @@ function drawCentralWaveform(canvas, trackContentWidth) {
     ctx.lineTo(x + 0.5, botY[x]);
   }
   ctx.stroke();
+
+  if (uiState.diagnosticsExpanded) {
+    drawEnergyDebugOverlays(ctx, {
+      cssHeight,
+      canvasWidthPx,
+      renderedWidthPx,
+    });
+  }
+}
+
+function drawEnergyDebugOverlays(ctx, metrics) {
+  const envelopeFrames = state.waveform.energyEnvelope?.frames;
+  if (!Array.isArray(envelopeFrames) || envelopeFrames.length === 0) {
+    return;
+  }
+  const landmarks = state.waveform.energyLandmarks ?? {
+    onsets: [],
+    offsets: [],
+    valleys: [],
+    silences: [],
+    peaks: [],
+  };
+  const maxRms = Math.max(0.0001, ...envelopeFrames.map((frame) => frame.rms_energy ?? 0));
+  const bottom = metrics.cssHeight - 1;
+  const usableHeight = Math.max(20, metrics.cssHeight * 0.32);
+  const top = bottom - usableHeight;
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 184, 77, 0.85)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let index = 0; index < envelopeFrames.length; index++) {
+    const frame = envelopeFrames[index];
+    const x = msToCanvasX(metrics, Math.round((frame.frame_start_ms + frame.frame_end_ms) / 2));
+    const normalizedRms = Math.max(0, Math.min(1, (frame.rms_energy ?? 0) / maxRms));
+    const y = bottom - normalizedRms * usableHeight;
+    if (index === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  ctx.stroke();
+
+  drawDebugMarkers(ctx, metrics, landmarks.onsets, "rgba(103, 224, 116, 0.8)", top, bottom, 1);
+  drawDebugMarkers(ctx, metrics, landmarks.offsets, "rgba(255, 118, 117, 0.8)", top, bottom, 1);
+  drawDebugMarkers(ctx, metrics, landmarks.valleys, "rgba(255, 211, 74, 0.9)", top, bottom, 1.4);
+  for (const silence of landmarks.silences ?? []) {
+    const startX = msToCanvasX(metrics, silence.start_ms);
+    const endX = msToCanvasX(metrics, silence.end_ms);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.fillRect(Math.min(startX, endX), top, Math.abs(endX - startX), bottom - top);
+  }
+
+  const wordLanes = state.lanes.filter((lane) => lane.type === "word");
+  const whisperBoundaries = [];
+  const snappedBoundaries = [];
+  for (const lane of wordLanes) {
+    for (const word of lane.words) {
+      if (word.whisperTiming) {
+        whisperBoundaries.push(word.whisperTiming.start_ms, word.whisperTiming.end_ms);
+      }
+      if (
+        word.timingResolution === "energy.snapped" &&
+        word.resolvedTiming &&
+        word.whisperTiming &&
+        (word.resolvedTiming.start_ms !== word.whisperTiming.start_ms ||
+          word.resolvedTiming.end_ms !== word.whisperTiming.end_ms)
+      ) {
+        snappedBoundaries.push(word.resolvedTiming.start_ms, word.resolvedTiming.end_ms);
+      }
+    }
+  }
+  drawDebugMarkers(ctx, metrics, whisperBoundaries, "rgba(201, 214, 226, 0.20)", top, bottom, 0.8);
+  drawDebugMarkers(ctx, metrics, snappedBoundaries, "rgba(99, 210, 255, 0.85)", top, bottom, 1.2);
+  ctx.restore();
+}
+
+function drawDebugMarkers(ctx, metrics, msValues, color, yTop, yBottom, width) {
+  if (!Array.isArray(msValues) || msValues.length === 0) {
+    return;
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  for (const ms of msValues) {
+    const x = msToCanvasX(metrics, ms);
+    ctx.beginPath();
+    ctx.moveTo(x, yTop);
+    ctx.lineTo(x, yBottom);
+    ctx.stroke();
+  }
+}
+
+function msToCanvasX(metrics, ms) {
+  const timelinePx = pxForMs(Math.max(0, Math.round(ms ?? 0)));
+  const ratio = metrics.renderedWidthPx > 0 ? metrics.canvasWidthPx / metrics.renderedWidthPx : 1;
+  return Math.max(0, Math.min(metrics.canvasWidthPx, timelinePx * ratio));
 }
 
 // Update only active/selected classes on existing chips (no DOM rebuild).
@@ -3540,6 +3732,9 @@ function timelineItemFromChip(chip) {
       meta: `${lane.label} · ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · ${describeSpanState(word.commitment)}`,
       detail: [
         revision ? `revised from "${revision.fromText}" at ${revision.at_ms} ms` : word.timingSourceDetail,
+        word.whisperTiming
+          ? `whisper ${word.whisperTiming.start_ms}–${word.whisperTiming.end_ms} ms`
+          : null,
         prosodyLevel !== null ? `prosody ${(prosodyLevel * 100).toFixed(0)}%` : null,
       ].filter(Boolean).join(" · "),
     };
@@ -4098,6 +4293,17 @@ function describeTimingSource(word, hasMeasuredTiming) {
     return "fallback layout timing (resolved locally, not measured)";
   }
 
+  if (word.timingResolution === "energy.snapped" && word.energyTiming) {
+    const confidence = Number.isFinite(word.energyTiming.confidence)
+      ? ` (confidence ${(word.energyTiming.confidence * 100).toFixed(0)}%)`
+      : "";
+    return `energy-snapped timing via ${word.energyTiming.method ?? "rms-valley-snap"}${confidence}`;
+  }
+
+  if (word.energyTiming && Number.isFinite(word.energyTiming.confidence)) {
+    return `measured word.timing (energy evidence weak, confidence ${(word.energyTiming.confidence * 100).toFixed(0)}%)`;
+  }
+
   if (word.boundary_source) {
     return `measured word.timing (${word.boundary_source})`;
   }
@@ -4644,7 +4850,11 @@ function buildSelectionProjection() {
       "Word ",
       h("strong", null, word.text),
       h("br"),
-      `${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${word.timing_confidence ?? "n/a"}`,
+      `Whisper timing: ${(word.whisperTiming ?? word.timing)?.start_ms ?? "n/a"}–${(word.whisperTiming ?? word.timing)?.end_ms ?? "n/a"} ms`,
+      h("br"),
+      `Energy-snapped timing: ${word.energyTiming?.start_ms ?? "n/a"}–${word.energyTiming?.end_ms ?? "n/a"} ms`,
+      h("br"),
+      `Resolved timing: ${word.resolvedTiming.start_ms}–${word.resolvedTiming.end_ms} ms · confidence ${word.timing_confidence ?? "n/a"}`,
       h("br"),
       "Timing source: ",
       h("strong", null, word.timingSourceDetail),
@@ -4654,13 +4864,16 @@ function buildSelectionProjection() {
         lane: lane.label,
         source: lane.stream.source,
         streamId: lane.stream.id,
-        wordId: word.id,
-        text: word.text,
-        timing: word.timing,
-        resolvedTiming: word.resolvedTiming,
-        timingResolution: word.timingResolution,
-        timingSourceDetail: word.timingSourceDetail,
-        confidence: word.timing_confidence,
+          wordId: word.id,
+          text: word.text,
+          timing: word.timing,
+          whisperTiming: word.whisperTiming ?? word.timing ?? null,
+          energyTiming: word.energyTiming ?? null,
+          resolvedTiming: word.resolvedTiming,
+          timingResolution: word.timingResolution,
+          timingSourceDetail: word.timingSourceDetail,
+          energySnapConfidence: word.energySnapConfidence,
+          confidence: word.timing_confidence,
         commitment: word.commitment,
         spanState: describeSpanState(word.commitment),
         boundarySource: word.boundary_source,

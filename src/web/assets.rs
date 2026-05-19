@@ -20,6 +20,8 @@ pub(super) const TRACE_SESSION_MJS: &str =
     include_str!("../../web/browser-transcript-player/trace-session.mjs");
 pub(super) const TIMELINE_VIEWPORT_MJS: &str =
     include_str!("../../web/browser-transcript-player/timeline-viewport.mjs");
+pub(super) const ENERGY_TIMING_MJS: &str =
+    include_str!("../../web/browser-transcript-player/energy-timing.mjs");
 pub(super) const DEMO_JSON: &str =
     include_str!("../../examples/browser-transcript-player/fixtures/demo.json");
 pub(super) const LIVE_TRACE_SAMPLE_JSONL: &str =
