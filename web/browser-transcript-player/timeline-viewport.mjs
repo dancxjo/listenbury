@@ -90,7 +90,117 @@ export function renderedCanvasXToTimelinePx({ canvasX, canvasWidthPx, renderedWi
   return clampFinite(canvasX, 0) * (rendered / width);
 }
 
+export function buildWaveformResolutionLevels(audioBuffer, options = {}) {
+  const sampleRate = Math.max(1, clampFinite(audioBuffer?.sampleRate, 1));
+  const sampleCount = Math.max(0, Math.floor(clampFinite(audioBuffer?.length, 0)));
+  const channelCount = Math.max(1, Math.floor(clampFinite(audioBuffer?.numberOfChannels, 1)));
+  if (sampleCount <= 0) {
+    return [];
+  }
+
+  const targetBucketCounts = Array.isArray(options.targetBucketCounts) && options.targetBucketCounts.length
+    ? options.targetBucketCounts
+    : [600, 2400, 9600, 19_200];
+  const bucketSizes = [...new Set(targetBucketCounts
+    .map((target) => Math.max(1, Math.ceil(sampleCount / Math.max(1, Math.floor(clampFinite(target, 1))))))
+    .sort((left, right) => right - left))];
+
+  const channels = [];
+  for (let channel = 0; channel < channelCount; channel++) {
+    channels.push(audioBuffer.getChannelData(channel));
+  }
+
+  return bucketSizes.map((bucketSize) => {
+    const buckets = [];
+    for (let startSample = 0; startSample < sampleCount; startSample += bucketSize) {
+      const endSample = Math.min(sampleCount, startSample + bucketSize);
+      let minSample = Infinity;
+      let maxSample = -Infinity;
+      let sumSquares = 0;
+      for (let sampleIndex = startSample; sampleIndex < endSample; sampleIndex++) {
+        let frameMin = Infinity;
+        let frameMax = -Infinity;
+        let frameSquareSum = 0;
+        for (let channel = 0; channel < channelCount; channel++) {
+          const sample = channels[channel]?.[sampleIndex] ?? 0;
+          frameMin = Math.min(frameMin, sample);
+          frameMax = Math.max(frameMax, sample);
+          frameSquareSum += sample * sample;
+        }
+        minSample = frameMin === Infinity ? minSample : Math.min(minSample, frameMin);
+        maxSample = frameMax === -Infinity ? maxSample : Math.max(maxSample, frameMax);
+        sumSquares += frameSquareSum / channelCount;
+      }
+      const frameCount = Math.max(1, endSample - startSample);
+      buckets.push({
+        start_ms: (startSample / sampleRate) * 1000,
+        end_ms: (endSample / sampleRate) * 1000,
+        min_sample: minSample === Infinity ? 0 : minSample,
+        max_sample: maxSample === -Infinity ? 0 : maxSample,
+        rms_energy: Math.sqrt(sumSquares / frameCount),
+        sample_count: frameCount,
+      });
+    }
+
+    const bucketDurationMs = (bucketSize / sampleRate) * 1000;
+    return {
+      bucketDurationMs,
+      bucketCount: buckets.length,
+      label: formatWaveformBucketDuration(bucketDurationMs),
+      buckets,
+    };
+  });
+}
+
+export function selectWaveformResolutionLevel(levels, options = {}) {
+  if (!Array.isArray(levels) || levels.length === 0) {
+    return null;
+  }
+  const pxPerSecond = Math.max(1, clampFinite(options.pxPerSecond, 1));
+  const bucketsPerPixel = Math.max(0.25, clampFinite(options.bucketsPerPixel, 2));
+  const desiredBucketDurationMs = (1000 / pxPerSecond) * bucketsPerPixel;
+
+  let bestLevel = levels[0];
+  let bestError = Number.POSITIVE_INFINITY;
+  for (const level of levels) {
+    const durationMs = Math.max(0.0001, clampFinite(level?.bucketDurationMs, 0.0001));
+    const error = Math.abs(Math.log(durationMs / desiredBucketDurationMs));
+    if (
+      error < bestError - 0.000001 ||
+      (Math.abs(error - bestError) <= 0.000001 &&
+        durationMs < Math.max(0.0001, clampFinite(bestLevel?.bucketDurationMs, 0.0001)))
+    ) {
+      bestLevel = level;
+      bestError = error;
+    }
+  }
+  return bestLevel;
+}
+
+export function waveformBucketToPx(scale, bucket, minWidthPx = 0) {
+  return scale.intervalToPx({
+    startMs: bucket?.start_ms ?? 0,
+    endMs: bucket?.end_ms ?? bucket?.start_ms ?? 0,
+    minWidthPx,
+  });
+}
+
+export function formatWaveformBucketDuration(bucketDurationMs) {
+  const durationMs = Math.max(0.0001, clampFinite(bucketDurationMs, 0.0001));
+  if (durationMs >= 1000) {
+    return `${stripTrailingZeros((durationMs / 1000).toFixed(2))}s buckets`;
+  }
+  if (durationMs >= 1) {
+    return `${stripTrailingZeros(durationMs.toFixed(durationMs >= 10 ? 0 : 1))}ms buckets`;
+  }
+  return `${stripTrailingZeros(durationMs.toFixed(3))}ms buckets`;
+}
+
 function clampFinite(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function stripTrailingZeros(value) {
+  return String(value).replace(/(?:\.0+|(\.\d*?)0+)$/, "$1");
 }
