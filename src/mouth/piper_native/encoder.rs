@@ -26,7 +26,10 @@ impl PiperEncoder {
         let mut phonemes = Vec::new();
         for unit in &phoneme_text.units {
             match unit {
-                PhonemeTextUnit::Word { phonemes: word_phonemes, .. } => {
+                PhonemeTextUnit::Word {
+                    phonemes: word_phonemes,
+                    ..
+                } => {
                     phonemes.extend(
                         word_phonemes
                             .phonemes

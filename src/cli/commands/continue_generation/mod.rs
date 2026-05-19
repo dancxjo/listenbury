@@ -153,8 +153,8 @@ use listenbury::hearing::{
     feature = "tts-piper"
 ))]
 use listenbury::live_trace::{
-    DiskTraceWriter, JsonlTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster,
-    TeeSink, TraceRuntimeMetadata, TraceSessionMetadata,
+    DiskTraceWriter, JsonlTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink,
+    TraceRuntimeMetadata, TraceSessionMetadata,
 };
 #[cfg(any(
     test,
@@ -845,8 +845,11 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     } else {
         None
     };
-    let mut live_trace =
-        LiveTraceRecorder::with_session_id(trace_session_id, trace_started_at, TeeSink(trace_writer, broadcaster));
+    let mut live_trace = LiveTraceRecorder::with_session_id(
+        trace_session_id,
+        trace_started_at,
+        TeeSink(trace_writer, broadcaster),
+    );
     let mut live_trace_turn = 0u64;
     live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(
@@ -2619,15 +2622,11 @@ fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -
     } else {
         EitherTraceScenarioWriter::Session(listenbury::live_trace::TraceSessionWriter::create(
             path,
-            TraceSessionMetadata::new(
-                SessionId::new(),
-                ExactTimestamp::now(),
-                {
-                    let mut runtime = TraceRuntimeMetadata::new("listenbury dev continue");
-                    runtime.mode = Some("duplex_trace_scenario".to_string());
-                    runtime
-                },
-            ),
+            TraceSessionMetadata::new(SessionId::new(), ExactTimestamp::now(), {
+                let mut runtime = TraceRuntimeMetadata::new("listenbury dev continue");
+                runtime.mode = Some("duplex_trace_scenario".to_string());
+                runtime
+            }),
         )?)
     };
     for event in events {

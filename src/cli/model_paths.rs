@@ -115,14 +115,17 @@ pub(crate) fn resolve_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf
         "LISTENBURY_WHISPER_MODEL",
         "Whisper model",
         "--whisper-model",
-        Some("whisper-tiny-en"),
+        Some("whisper-large-v3-turbo"),
         Some(ModelKind::Whisper),
         |path| {
             path.extension().is_some_and(|ext| ext == "bin")
                 && path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.contains("ggml"))
+                    .is_some_and(|name| {
+                        let name = name.to_ascii_lowercase();
+                        name.contains("ggml") && name.contains("large-v3-turbo")
+                    })
         },
     )
 }

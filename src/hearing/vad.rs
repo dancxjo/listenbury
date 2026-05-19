@@ -150,9 +150,8 @@ impl WebRtcVad {
     }
 
     fn observe_noise_floor(&mut self, rms: f32) {
-        self.noise_floor_rms =
-            (self.noise_floor_rms * (1.0 - WEBRTC_NOISE_FLOOR_ALPHA))
-                + (rms * WEBRTC_NOISE_FLOOR_ALPHA);
+        self.noise_floor_rms = (self.noise_floor_rms * (1.0 - WEBRTC_NOISE_FLOOR_ALPHA))
+            + (rms * WEBRTC_NOISE_FLOOR_ALPHA);
     }
 }
 

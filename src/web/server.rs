@@ -43,7 +43,9 @@ impl BoundServer {
             "Listenbury web viewer serving on http://{}",
             self.local_addr
         );
-        println!("Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-events, /healthz");
+        println!(
+            "Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-events, /healthz"
+        );
 
         for stream in self.listener.incoming() {
             let mut stream = match stream {
@@ -274,9 +276,7 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
     let path = target.split('?').next().unwrap_or("/");
     match path {
         "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
-        "/replay" | "/replay/" => {
-            HttpResponse::ok("text/html; charset=utf-8", assets::REPLAY_HTML)
-        }
+        "/replay" | "/replay/" => HttpResponse::ok("text/html; charset=utf-8", assets::REPLAY_HTML),
         "/screenplay" | "/screenplay/" => {
             HttpResponse::ok("text/html; charset=utf-8", assets::SCREENPLAY_HTML)
         }
@@ -336,16 +336,18 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/fixtures/demo.json" | "/api/demo-payload" => {
             HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
         }
-        "/fixtures/live-trace.sample.jsonl"
-        | "/assets/live-trace.sample.jsonl" => HttpResponse::static_asset(
-            "application/x-ndjson; charset=utf-8",
-            assets::LIVE_TRACE_SAMPLE_JSONL,
-        ),
-        "/fixtures/live-trace.sample.viewer.json"
-        | "/assets/live-trace.sample.viewer.json" => HttpResponse::static_asset(
-            "application/json; charset=utf-8",
-            assets::LIVE_TRACE_SAMPLE_VIEWER_JSON,
-        ),
+        "/fixtures/live-trace.sample.jsonl" | "/assets/live-trace.sample.jsonl" => {
+            HttpResponse::static_asset(
+                "application/x-ndjson; charset=utf-8",
+                assets::LIVE_TRACE_SAMPLE_JSONL,
+            )
+        }
+        "/fixtures/live-trace.sample.viewer.json" | "/assets/live-trace.sample.viewer.json" => {
+            HttpResponse::static_asset(
+                "application/json; charset=utf-8",
+                assets::LIVE_TRACE_SAMPLE_VIEWER_JSON,
+            )
+        }
 
         "/api/payload" => match load_payload(state) {
             Ok(Some(payload)) => HttpResponse::ok("application/json; charset=utf-8", payload),
@@ -474,8 +476,11 @@ mod tests {
         let jsonl = route_request("GET", "/fixtures/live-trace.sample.jsonl", &empty_state());
         assert_eq!(jsonl.status, 200);
 
-        let viewer_json =
-            route_request("GET", "/fixtures/live-trace.sample.viewer.json", &empty_state());
+        let viewer_json = route_request(
+            "GET",
+            "/fixtures/live-trace.sample.viewer.json",
+            &empty_state(),
+        );
         assert_eq!(viewer_json.status, 200);
     }
 
@@ -512,7 +517,9 @@ mod tests {
         std::fs::write(&payload_path, r#"{"title":"custom"}"#).expect("write payload");
         std::fs::write(
             &trace_path,
-            include_str!("../../examples/browser-transcript-player/fixtures/live-trace.sample.jsonl"),
+            include_str!(
+                "../../examples/browser-transcript-player/fixtures/live-trace.sample.jsonl"
+            ),
         )
         .expect("write trace");
 
@@ -653,7 +660,10 @@ mod tests {
 
         let scene_heading = route_request("GET", "/assets/scene-heading.mjs", &state);
         assert_eq!(scene_heading.status, 200);
-        assert_eq!(scene_heading.content_type, "application/javascript; charset=utf-8");
+        assert_eq!(
+            scene_heading.content_type,
+            "application/javascript; charset=utf-8"
+        );
         let shared_span_model = route_request("GET", "/assets/shared-span-model.mjs", &state);
         assert_eq!(shared_span_model.status, 200);
         assert_eq!(
@@ -676,11 +686,17 @@ mod tests {
 
         let reducers = route_request("GET", "/assets/shared/events/reducers.mjs", &state);
         assert_eq!(reducers.status, 200);
-        assert_eq!(reducers.content_type, "application/javascript; charset=utf-8");
+        assert_eq!(
+            reducers.content_type,
+            "application/javascript; charset=utf-8"
+        );
 
         let selectors = route_request("GET", "/assets/shared/events/selectors.mjs", &state);
         assert_eq!(selectors.status, 200);
-        assert_eq!(selectors.content_type, "application/javascript; charset=utf-8");
+        assert_eq!(
+            selectors.content_type,
+            "application/javascript; charset=utf-8"
+        );
     }
 
     #[test]

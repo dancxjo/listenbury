@@ -109,8 +109,8 @@ use listenbury::hearing::{SelfHearingState, SuppressionDecision};
     feature = "tts-piper"
 ))]
 use listenbury::live_trace::{
-    DiskTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink,
-    TraceRuntimeMetadata, TraceSessionMetadata,
+    DiskTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink, TraceRuntimeMetadata,
+    TraceSessionMetadata,
 };
 #[cfg(any(
     test,
@@ -196,6 +196,13 @@ use listenbury::{ConversationController, ConversationMessage, FillerContext};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use serde_json::json;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use std::collections::{HashMap, VecDeque};
 #[cfg(any(
     test,
@@ -224,13 +231,6 @@ use std::sync::{
     feature = "tts-piper"
 ))]
 use std::time::{Duration, Instant};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use serde_json::json;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -710,8 +710,11 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         None
     };
 
-    let mut trace =
-        LiveTraceRecorder::with_session_id(trace_session_id, trace_started_at, TeeSink(trace_writer, broadcaster));
+    let mut trace = LiveTraceRecorder::with_session_id(
+        trace_session_id,
+        trace_started_at,
+        TeeSink(trace_writer, broadcaster),
+    );
     trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
 
     println!(

@@ -326,11 +326,17 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
     },
     ModelBundle {
         id: "whisper-large-v3-turbo",
-        display_name: "Whisper large v3 turbo",
+        display_name: "Whisper large v3 turbo multilingual",
         kind: ModelKind::Whisper,
         asset_ids: &["whisper-large-v3-turbo"],
         primary_asset_id: "whisper-large-v3-turbo",
-        aliases: &["large-v3-turbo", "large-turbo", "turbo"],
+        aliases: &[
+            "large-v3-turbo",
+            "large-turbo",
+            "turbo",
+            "v3-turbo",
+            "multilingual-v3-turbo",
+        ],
     },
     ModelBundle {
         id: "llama-3-2-3b-instruct-q4-k-m",
