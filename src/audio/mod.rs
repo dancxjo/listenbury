@@ -2,12 +2,14 @@
 //! audio callbacks must not allocate, block, call models, log heavily, or acquire contended locks.
 //! They should only move PCM through bounded realtime-safe buffers.
 
+pub mod acoustic;
 pub mod frame;
 pub mod ring;
 pub mod voice_signature;
 pub mod wav;
 
 pub use crate::audio::frame::AudioFrame;
+pub use acoustic::{AcousticAnalysis, analyze_audio_frames, analyze_mono_samples};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };

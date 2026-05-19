@@ -24,8 +24,8 @@ pub mod word;
 
 pub use audio::frame::AudioFrame;
 pub use audio::{
-    AudioInput, AudioOutput, VoiceSignature, VoiceSignatureId, VoiceSignatureLabel,
-    VoiceSignatureSource,
+    AcousticAnalysis, AudioInput, AudioOutput, VoiceSignature, VoiceSignatureId,
+    VoiceSignatureLabel, VoiceSignatureSource, analyze_audio_frames, analyze_mono_samples,
 };
 pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,

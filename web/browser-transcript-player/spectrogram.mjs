@@ -1,24 +1,33 @@
 const DEFAULT_MIN_DB = -96;
 const DEFAULT_MAX_DB = 0;
 const EPSILON = 1e-12;
+const MIN_FRAME_DURATION_MS = 0.0001;
+const FLOAT_TOLERANCE = 0.000001;
 
 const WINDOW_CACHE = new Map();
 const FFT_PLAN_CACHE = new Map();
 
 export function defaultSpectrogramLevels(sampleRate) {
-  const coarseHop = Math.max(1, Math.round(sampleRate * 0.01));
-  const detailHop = Math.max(1, Math.round(coarseHop / 2));
+  const overviewHop = Math.max(1, Math.round(sampleRate * 0.02));
+  const detailHop = Math.max(1, Math.round(sampleRate * 0.005));
+  const fineHop = Math.max(1, Math.round(sampleRate * 0.0025));
   return [
     {
       id: "overview",
-      windowSize: 1024,
-      hopSize: coarseHop,
-      fftSize: 1024,
+      windowSize: 2048,
+      hopSize: overviewHop,
+      fftSize: 2048,
     },
     {
       id: "detail",
-      windowSize: 512,
+      windowSize: 1024,
       hopSize: detailHop,
+      fftSize: 1024,
+    },
+    {
+      id: "fine",
+      windowSize: 512,
+      hopSize: fineHop,
       fftSize: 512,
     },
   ];
@@ -56,9 +65,25 @@ export function selectSpectrogramLevel(spectrogram, { pxPerSecond } = {}) {
   if (!levels.length) {
     return null;
   }
-  const msPerPixel = 1000 / Math.max(1, Number(pxPerSecond) || 1);
-  const ordered = [...levels].sort((left, right) => right.hopMs - left.hopMs);
-  return ordered.find((level) => level.hopMs <= msPerPixel * 2) ?? ordered[ordered.length - 1];
+  const safePxPerSecond = Math.max(1, clampFinite(pxPerSecond, 1));
+  const framesPerPixel = 2;
+  const desiredFrameDurationMs = (1000 / safePxPerSecond) * framesPerPixel;
+
+  let bestLevel = levels[0];
+  let bestError = Number.POSITIVE_INFINITY;
+  for (const level of levels) {
+    const frameDurationMs = Math.max(MIN_FRAME_DURATION_MS, clampFinite(level?.hopMs, MIN_FRAME_DURATION_MS));
+    const error = Math.abs(Math.log(frameDurationMs / desiredFrameDurationMs));
+    if (
+      error < bestError - FLOAT_TOLERANCE ||
+      (Math.abs(error - bestError) <= FLOAT_TOLERANCE &&
+        frameDurationMs < Math.max(MIN_FRAME_DURATION_MS, clampFinite(bestLevel?.hopMs, MIN_FRAME_DURATION_MS)))
+    ) {
+      bestLevel = level;
+      bestError = error;
+    }
+  }
+  return bestLevel;
 }
 
 export function spectrogramValueAt(level, timeMs, frequencyHz) {
@@ -293,4 +318,9 @@ function reverseBits(value, width) {
 
 function nearestPowerOfTwo(value) {
   return 2 ** Math.ceil(Math.log2(Math.max(1, value)));
+}
+
+function clampFinite(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }

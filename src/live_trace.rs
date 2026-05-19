@@ -143,6 +143,8 @@ pub struct TraceSessionAudioArtifact {
     pub session_id: SessionId,
     pub artifact_id: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acoustic_analysis_path: Option<String>,
     pub duration_ms: u64,
     pub sample_rate_hz: u32,
     pub channels: u16,
@@ -803,6 +805,7 @@ mod tests {
             session_id,
             artifact_id: "session-audio".to_string(),
             path: "audio/session.wav".to_string(),
+            acoustic_analysis_path: Some("audio/session.acoustic.json".to_string()),
             duration_ms: 1500,
             sample_rate_hz: 16_000,
             channels: 1,

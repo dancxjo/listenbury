@@ -79,7 +79,7 @@ use listenbury::audio::ring::make_audio_ring;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::audio::write_wav;
+use listenbury::audio::{analyze_audio_frames, write_wav};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -910,6 +910,20 @@ fn persist_session_audio_artifact(
     let audio_path = audio_dir.join(TRACE_SESSION_AUDIO_FILE);
     write_wav(&audio_path, frames)
         .with_context(|| format!("write full session audio {}", audio_path.display()))?;
+    let acoustic_analysis_path = if let Some(analysis) = analyze_audio_frames(frames) {
+        let relative_path = format!("{TRACE_SESSION_AUDIO_DIR}/session.acoustic.json");
+        let analysis_path = trace_path.join(&relative_path);
+        let json = serde_json::to_vec(&analysis).context("serialize session acoustic analysis")?;
+        std::fs::write(&analysis_path, json).with_context(|| {
+            format!(
+                "write session acoustic analysis {}",
+                analysis_path.display()
+            )
+        })?;
+        Some(relative_path)
+    } else {
+        None
+    };
 
     let duration_ms = frames.iter().fold(0u64, |sum, frame| {
         sum.saturating_add(frame_duration_ms(frame))
@@ -918,6 +932,7 @@ fn persist_session_audio_artifact(
         session_id,
         artifact_id: "session-audio".to_string(),
         path: format!("{TRACE_SESSION_AUDIO_DIR}/{TRACE_SESSION_AUDIO_FILE}"),
+        acoustic_analysis_path,
         duration_ms,
         sample_rate_hz: first_frame.sample_rate_hz,
         channels: first_frame.channels,

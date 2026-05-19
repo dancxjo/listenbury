@@ -33,6 +33,8 @@ pub struct ViewerPayload {
 pub struct ViewerAudio {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub acoustic_analysis_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_id: Option<String>,
@@ -147,6 +149,10 @@ fn canonical_session_audio(artifacts: &[TraceSessionAudioArtifact]) -> Option<Vi
     let artifact = artifacts.first()?;
     Some(ViewerAudio {
         url: format!("/api/session-audio/{}", artifact.artifact_id),
+        acoustic_analysis_url: artifact
+            .acoustic_analysis_path
+            .as_ref()
+            .map(|_| format!("/api/session-audio/{}/acoustic.json", artifact.artifact_id)),
         duration_ms: Some(artifact.duration_ms),
         artifact_id: Some(artifact.artifact_id.clone()),
         sample_rate_hz: Some(artifact.sample_rate_hz),
@@ -967,6 +973,7 @@ mod tests {
                     session_id,
                     artifact_id: "session-audio".to_string(),
                     path: "audio/session.wav".to_string(),
+                    acoustic_analysis_path: Some("audio/session.acoustic.json".to_string()),
                     duration_ms: 2_500,
                     sample_rate_hz: 16_000,
                     channels: 1,
@@ -981,6 +988,10 @@ mod tests {
         let audio = payload.audio.expect("session audio should be exposed");
 
         assert_eq!(audio.url, "/api/session-audio/session-audio");
+        assert_eq!(
+            audio.acoustic_analysis_url.as_deref(),
+            Some("/api/session-audio/session-audio/acoustic.json")
+        );
         assert_eq!(audio.duration_ms, Some(2_500));
         assert_eq!(audio.sample_rate_hz, Some(16_000));
         assert_eq!(audio.channels, Some(1));

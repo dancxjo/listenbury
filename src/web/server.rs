@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 
-use crate::audio::{AudioFrame, write_wav_bytes};
+use crate::audio::{
+    AcousticAnalysis, AudioFrame, analyze_audio_frames, read_wav_frames, write_wav_bytes,
+};
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
 use crate::trace::viewer_payload::trace_session_to_viewer_payload;
 
@@ -32,6 +34,7 @@ struct ServerState {
 #[derive(Clone, Debug, Default)]
 pub struct LiveSessionAudioStore {
     frames: Arc<Mutex<Vec<AudioFrame>>>,
+    acoustic: Arc<Mutex<Option<CachedAcousticAnalysis>>>,
 }
 
 impl LiveSessionAudioStore {
@@ -44,6 +47,9 @@ impl LiveSessionAudioStore {
             Ok(mut frames) => frames.push(frame),
             Err(error) => tracing::error!("live audio mutex poisoned; dropping frame: {error}"),
         }
+        if let Ok(mut acoustic) = self.acoustic.lock() {
+            *acoustic = None;
+        }
     }
 
     fn snapshot(&self) -> Result<Vec<AudioFrame>> {
@@ -54,6 +60,38 @@ impl LiveSessionAudioStore {
             .clone();
         Ok(frames)
     }
+
+    fn acoustic_analysis(&self) -> Result<Option<AcousticAnalysis>> {
+        let frames = self.snapshot()?;
+        if frames.is_empty() {
+            return Ok(None);
+        }
+        let frame_count = frames.len();
+        let mut cached = self
+            .acoustic
+            .lock()
+            .map_err(|error| anyhow::anyhow!("live acoustic mutex poisoned: {error}"))?;
+        if let Some(cached) = cached
+            .as_ref()
+            .filter(|cached| cached.frame_count == frame_count)
+        {
+            return Ok(Some(cached.analysis.clone()));
+        }
+        let Some(analysis) = analyze_audio_frames(&frames) else {
+            return Ok(None);
+        };
+        *cached = Some(CachedAcousticAnalysis {
+            frame_count,
+            analysis: analysis.clone(),
+        });
+        Ok(Some(analysis))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CachedAcousticAnalysis {
+    frame_count: usize,
+    analysis: AcousticAnalysis,
 }
 
 #[derive(Debug)]
@@ -74,7 +112,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/session-audio/*, /api/live-events, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/session-audio/*, /api/live-events, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -473,7 +511,21 @@ fn route_request_with_range(
             Ok(None) => HttpResponse::not_found("live session audio is not available yet\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
+        "/api/live-session-acoustic.json" => match load_live_session_acoustic(state) {
+            Ok(Some(analysis)) => HttpResponse::ok("application/json; charset=utf-8", analysis),
+            Ok(None) => {
+                HttpResponse::not_found("live session acoustic analysis is not available yet\n")
+            }
+            Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+        },
 
+        _ if path.starts_with("/api/session-audio/") && path.ends_with("/acoustic.json") => {
+            match load_session_acoustic(path, state) {
+                Ok(Some(analysis)) => HttpResponse::ok("application/json; charset=utf-8", analysis),
+                Ok(None) => HttpResponse::not_found("session acoustic analysis not found\n"),
+                Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+            }
+        }
         _ if path.starts_with("/api/session-audio/") => match load_session_audio(path, state) {
             Ok(Some(audio)) => audio_response(audio, range_header),
             Ok(None) => HttpResponse::not_found("session audio artifact not found\n"),
@@ -533,6 +585,17 @@ fn load_live_session_audio(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> 
     Ok(Some(audio))
 }
 
+fn load_live_session_acoustic(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(store) = state.live_audio.as_ref() else {
+        return Ok(None);
+    };
+    let Some(analysis) = store.acoustic_analysis()? else {
+        return Ok(None);
+    };
+    let json = serde_json::to_vec(&analysis).context("serialize live session acoustic analysis")?;
+    Ok(Some(json))
+}
+
 fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
     let Some(trace_path) = state.trace.as_ref() else {
         return Ok(None);
@@ -567,6 +630,59 @@ fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec
     let audio = std::fs::read(&audio_path)
         .with_context(|| format!("read session audio artifact {}", audio_path.display()))?;
     Ok(Some(audio))
+}
+
+fn load_session_acoustic(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(trace_path) = state.trace.as_ref() else {
+        return Ok(None);
+    };
+    let artifact_id = path
+        .trim_start_matches("/api/session-audio/")
+        .trim_end_matches("/acoustic.json")
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    if artifact_id.is_empty() || artifact_id.contains("..") {
+        return Ok(None);
+    }
+
+    let session = read_trace_session(trace_path)?;
+    let Some(artifact) = session
+        .metadata
+        .audio_artifacts
+        .iter()
+        .find(|artifact| artifact.artifact_id == artifact_id)
+    else {
+        return Ok(None);
+    };
+    let base_dir = trace_path
+        .parent()
+        .filter(|_| {
+            trace_path
+                .file_name()
+                .is_some_and(|name| name == "metadata.json")
+        })
+        .unwrap_or(trace_path.as_path());
+    if let Some(path) = artifact.acoustic_analysis_path.as_ref() {
+        let analysis_path = base_dir.join(path);
+        let analysis = std::fs::read(&analysis_path).with_context(|| {
+            format!("read session acoustic analysis {}", analysis_path.display())
+        })?;
+        return Ok(Some(analysis));
+    }
+
+    let audio_path = base_dir.join(&artifact.path);
+    let frames = read_wav_frames(&audio_path, 1_600).with_context(|| {
+        format!(
+            "read session audio for acoustic analysis {}",
+            audio_path.display()
+        )
+    })?;
+    let Some(analysis) = analyze_audio_frames(&frames) else {
+        return Ok(None);
+    };
+    let json = serde_json::to_vec(&analysis).context("serialize session acoustic analysis")?;
+    Ok(Some(json))
 }
 
 fn audio_response(audio: impl Into<Vec<u8>>, range_header: Option<&str>) -> HttpResponse {
@@ -825,6 +941,11 @@ mod tests {
         let audio_dir = root.join("audio");
         std::fs::create_dir_all(&audio_dir).expect("create audio dir");
         std::fs::write(audio_dir.join("session.wav"), b"RIFFtest").expect("write audio");
+        std::fs::write(
+            audio_dir.join("session.acoustic.json"),
+            br#"{"spectrogram":{"levels":[]},"energyEnvelope":{"frames":[]}}"#,
+        )
+        .expect("write acoustic analysis");
 
         let session_id = crate::live_trace::SessionId::new();
         let mut metadata = crate::live_trace::TraceSessionMetadata::new(
@@ -840,6 +961,7 @@ mod tests {
                 session_id,
                 artifact_id: "session-audio".to_string(),
                 path: "audio/session.wav".to_string(),
+                acoustic_analysis_path: Some("audio/session.acoustic.json".to_string()),
                 duration_ms: 100,
                 sample_rate_hz: 16_000,
                 channels: 1,
@@ -864,7 +986,54 @@ mod tests {
         assert_eq!(response.content_type, "audio/wav");
         assert_eq!(response.body, b"RIFFtest");
 
+        let acoustic_response = route_request(
+            "GET",
+            "/api/session-audio/session-audio/acoustic.json",
+            &state,
+        );
+        assert_eq!(acoustic_response.status, 200);
+        assert_eq!(
+            acoustic_response.content_type,
+            "application/json; charset=utf-8"
+        );
+        let acoustic_body =
+            String::from_utf8(acoustic_response.body).expect("utf8 acoustic analysis");
+        assert!(acoustic_body.contains("\"spectrogram\""));
+        assert!(acoustic_body.contains("\"energyEnvelope\""));
+
         std::fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn serves_live_session_acoustic_analysis_from_audio_store() {
+        let store = LiveSessionAudioStore::new();
+        let sample_rate_hz = 16_000;
+        let samples = (0..1600)
+            .map(|index| {
+                ((2.0 * std::f32::consts::PI * 440.0 * index as f32) / sample_rate_hz as f32).sin()
+            })
+            .collect::<Vec<_>>();
+        store.push_frame(crate::audio::AudioFrame {
+            captured_at: crate::time::ExactTimestamp { unix_nanos: 0 },
+            sample_rate_hz,
+            channels: 1,
+            samples,
+            voice_signatures: Vec::new(),
+        });
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(store),
+        });
+
+        let response = route_request("GET", "/api/live-session-acoustic.json", &state);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json; charset=utf-8");
+        let body = String::from_utf8(response.body).expect("utf8 acoustic analysis");
+        assert!(body.contains("\"spectrogram\""));
+        assert!(body.contains("\"energyEnvelope\""));
+        assert!(body.contains("\"energyLandmarks\""));
     }
 
     #[test]

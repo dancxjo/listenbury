@@ -67,6 +67,9 @@ test("zoom-dependent level selection prefers the finer level as zoom increases",
 
   assert.equal(selectSpectrogramLevel(spectrogram, { pxPerSecond: 80 })?.id, "overview");
   assert.equal(selectSpectrogramLevel(spectrogram, { pxPerSecond: 400 })?.id, "detail");
+  assert.equal(selectSpectrogramLevel(spectrogram, { pxPerSecond: 1600 })?.id, "fine");
+  assert.ok(spectrogram.levels[0].hopMs > spectrogram.levels[1].hopMs);
+  assert.ok(spectrogram.levels[1].hopMs > spectrogram.levels[2].hopMs);
 });
 
 test("hover inspection can resolve magnitude at time/frequency", () => {

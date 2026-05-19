@@ -1233,6 +1233,7 @@ function liveSessionToViewerPayload(session) {
     audio: uiState.liveMode
       ? {
           url: "/api/live-session-audio.wav",
+          acoustic_analysis_url: "/api/live-session-acoustic.json",
           duration_ms: Math.max(session.maxElapsedMs, 1000),
         }
       : null,
@@ -2031,11 +2032,13 @@ function configureAudio(audioConfig) {
     clearLiveWaveformRetry();
     state.waveform = {
       url: null,
+      levels: null,
       peaks: null,
       durationMs: 0,
       status: "idle",
       energyEnvelope: null,
       energyLandmarks: null,
+      spectrogram: null,
     };
     return;
   }
@@ -2047,7 +2050,7 @@ function configureAudio(audioConfig) {
 
   const isLiveAudio = uiState.liveMode && audioUrl.pathname === "/api/live-session-audio.wav";
   if (!isLiveAudio) {
-    void loadWaveform(audioConfig.url);
+    void loadWaveform(audioConfig.url, { acousticAnalysisUrl: audioConfig.acoustic_analysis_url });
     return;
   }
 
@@ -2064,7 +2067,16 @@ function configureAudio(audioConfig) {
     lastLiveWaveformRefreshAt = now;
     const fetchUrl = new URL(audioConfig.url, window.location.href);
     fetchUrl.searchParams.set("waveform_rev", String(now));
-    void loadWaveform(audioConfig.url, { force: true, fetchUrl: fetchUrl.href });
+    const acousticFetchUrl = audioConfig.acoustic_analysis_url
+      ? new URL(audioConfig.acoustic_analysis_url, window.location.href)
+      : null;
+    acousticFetchUrl?.searchParams.set("acoustic_rev", String(now));
+    void loadWaveform(audioConfig.url, {
+      force: true,
+      fetchUrl: fetchUrl.href,
+      acousticAnalysisUrl: audioConfig.acoustic_analysis_url,
+      acousticFetchUrl: acousticFetchUrl?.href ?? null,
+    });
   } else if (state.waveform.status === "error") {
     scheduleLiveWaveformRetry();
   }
@@ -2227,7 +2239,12 @@ function audioBufferToMonoSamples(audioBuffer) {
 }
 
 async function loadWaveform(url, options = {}) {
-  const { force = false, fetchUrl = url } = options;
+  const {
+    force = false,
+    fetchUrl = url,
+    acousticAnalysisUrl = null,
+    acousticFetchUrl = acousticAnalysisUrl,
+  } = options;
   if (
     !url ||
     (!force &&
@@ -2264,6 +2281,7 @@ async function loadWaveform(url, options = {}) {
     };
   }
   try {
+    const acousticAnalysisPromise = loadAcousticAnalysis(acousticFetchUrl);
     const response = await fetch(fetchUrl, { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -2277,11 +2295,25 @@ async function loadWaveform(url, options = {}) {
     const audioBuffer = await context.decodeAudioData(buffer.slice(0));
     await context.close?.();
     const monoSamples = audioBufferToMonoSamples(audioBuffer);
-    const energyEnvelope = buildEnergyEnvelopeFromAudioBuffer(audioBuffer);
-    const energyLandmarks = detectEnergyLandmarks(energyEnvelope);
-    const peaks = waveformPeaksFromAudioBuffer(audioBuffer);
-    const spectrogram =
-      preserveCurrentWaveform && previousWaveform.spectrogram
+    const acousticAnalysis = await acousticAnalysisPromise;
+    const serverSpectrogram = acousticAnalysis?.spectrogram;
+    const serverEnergyEnvelope = acousticAnalysis?.energyEnvelope;
+    const serverEnergyLandmarks = acousticAnalysis?.energyLandmarks;
+    const hasCurrentServerSpectrogram =
+      serverSpectrogram?.levels?.length &&
+      (serverSpectrogram.sampleCount ?? 0) >= monoSamples.length;
+    const hasCurrentServerEnergy =
+      serverEnergyEnvelope?.frames?.length &&
+      (acousticAnalysis?.sampleCount ?? serverSpectrogram?.sampleCount ?? 0) >= monoSamples.length;
+    const energyEnvelope = hasCurrentServerEnergy
+      ? serverEnergyEnvelope
+      : buildEnergyEnvelopeFromAudioBuffer(audioBuffer);
+    const energyLandmarks = hasCurrentServerEnergy && serverEnergyLandmarks
+      ? serverEnergyLandmarks
+      : detectEnergyLandmarks(energyEnvelope);
+    const spectrogram = hasCurrentServerSpectrogram
+      ? serverSpectrogram
+      : preserveCurrentWaveform && previousWaveform.spectrogram
         ? appendSpectrogramSamples(previousWaveform.spectrogram, monoSamples, {
             sampleRate: audioBuffer.sampleRate,
             minDb: SPECTROGRAM_MIN_DB,
@@ -2338,6 +2370,22 @@ async function loadWaveform(url, options = {}) {
     if (force && waveformRefreshInFlightUrl === url) {
       waveformRefreshInFlightUrl = null;
     }
+  }
+}
+
+async function loadAcousticAnalysis(url) {
+  if (!url) {
+    return null;
+  }
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch (err) {
+    console.warn("Unable to load cached acoustic analysis:", err);
+    return null;
   }
 }
 
