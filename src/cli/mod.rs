@@ -1146,7 +1146,7 @@ mod tests {
             "dev",
             "trace-viewer-export",
             "out/live-trace.jsonl",
-            "web/browser-transcript-player/live-trace.sample.viewer.json",
+            "examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json",
         ])
         .expect("trace-viewer-export should parse");
 
@@ -1159,7 +1159,9 @@ mod tests {
         assert_eq!(command.input_jsonl, PathBuf::from("out/live-trace.jsonl"));
         assert_eq!(
             command.output_json,
-            PathBuf::from("web/browser-transcript-player/live-trace.sample.viewer.json")
+            PathBuf::from(
+                "examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json"
+            )
         );
     }
 

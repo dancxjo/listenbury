@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WaveDeck — Trace Replay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .replay-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background: var(--color-surface-2, #1e1e2e);
+        border-bottom: 1px solid var(--color-border, #313244);
+      }
+      .replay-toolbar label {
+        font-size: 0.8rem;
+        color: var(--color-text-muted, #a6adc8);
+        white-space: nowrap;
+      }
+      .replay-toolbar select,
+      .replay-toolbar input[type="file"],
+      .replay-toolbar input[type="range"] {
+        font-size: 0.85rem;
+      }
+      .replay-toolbar input[type="range"] {
+        width: 5rem;
+      }
+      #replay-progress-bar {
+        flex: 1 1 200px;
+        min-width: 100px;
+        cursor: pointer;
+        height: 0.5rem;
+        accent-color: var(--color-accent, #89b4fa);
+      }
+      #replay-status {
+        font-size: 0.8rem;
+        color: var(--color-text-muted, #a6adc8);
+        white-space: nowrap;
+      }
+      .replay-separator {
+        width: 1px;
+        height: 1.5rem;
+        background: var(--color-border, #313244);
+        flex-shrink: 0;
+      }
+    </style>
+  </head>
+  <body data-mode="replay">
+    <header class="top-chrome">
+      <div class="brand">
+        <p class="eyebrow">Listenbury trace replay</p>
+        <h1>WaveDeck — Trace Replay</h1>
+        <p class="subtitle" id="header-subtitle">
+          Deterministic offline replay of saved session traces.
+          <a href="/">Live view</a>
+        </p>
+      </div>
+
+      <!-- Replay controls -->
+      <section class="replay-toolbar" id="replay-toolbar" aria-label="Replay controls">
+        <label for="fixture-select">Fixture:</label>
+        <select id="fixture-select">
+          <option value="">— select built-in fixture —</option>
+          <option value="/fixtures/live-trace.sample.jsonl" data-type="jsonl">Live trace sample (JSONL)</option>
+          <option value="/fixtures/demo.json" data-type="payload">Demo payload (static)</option>
+        </select>
+
+        <span class="replay-separator" aria-hidden="true"></span>
+
+        <label for="replay-file-input">Load file:</label>
+        <input
+          type="file"
+          id="replay-file-input"
+          accept=".jsonl,.json"
+          title="Open a local .jsonl trace or .json viewer payload"
+        />
+
+        <span class="replay-separator" aria-hidden="true"></span>
+
+        <button id="replay-play-pause" type="button" disabled>▶ Play</button>
+        <button id="replay-step" type="button" disabled title="Step one event forward">Step ▸</button>
+        <button id="replay-reset" type="button" disabled title="Reset replay to beginning">⟳ Reset</button>
+
+        <span class="replay-separator" aria-hidden="true"></span>
+
+        <label for="replay-speed">Speed:</label>
+        <input
+          type="range"
+          id="replay-speed"
+          min="0.1"
+          max="16"
+          step="0.1"
+          value="1"
+          title="Playback speed"
+        />
+        <span id="replay-speed-label">1.0×</span>
+
+        <span class="replay-separator" aria-hidden="true"></span>
+
+        <label for="replay-progress-bar">Position:</label>
+        <input
+          type="range"
+          id="replay-progress-bar"
+          min="0"
+          max="100"
+          value="0"
+          step="0.01"
+          disabled
+          title="Seek to position in trace"
+        />
+
+        <span id="replay-status">No trace loaded</span>
+      </section>
+
+      <div id="chrome-shell-root"></div>
+      <audio id="audio" controls preload="metadata"></audio>
+    </header>
+
+    <div id="transcript-shell-root"></div>
+
+    <main class="workspace">
+      <section class="viewer-stage">
+        <section id="viewer" class="viewer empty">
+          <p>Load a fixture or trace file above to begin replay.</p>
+        </section>
+      </section>
+
+      <aside class="inspector">
+        <div id="inspector-shell-root"></div>
+      </aside>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+    <script type="module" src="./replay.js"></script>
+  </body>
+</html>

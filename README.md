@@ -351,15 +351,30 @@ cargo run -- web --open
 The hosted server exposes stable routes for the viewer and event APIs:
 
 ```text
-/                     viewer UI
+/                     live WaveDeck viewer (connects to SSE immediately)
+/replay               trace replay / fixture tooling (offline, deterministic)
+/screenplay           narrative screenplay view
 /assets/...           bundled static assets
-/api/demo-payload     bundled demo JSON fixture
+/fixtures/...         bundled fixture files (demo payload, sample traces)
+/api/demo-payload     bundled demo JSON fixture (alias for /fixtures/demo.json)
 /api/payload          JSON from --payload (when provided)
 /api/trace            JSONL from --trace (when provided)
 /api/trace-viewer-payload  converted viewer payload from --trace (when provided)
 /api/live-events      SSE stream of live LiveTraceEvent JSON (requires listen --web)
 /healthz              simple health check
 ```
+
+The main WaveDeck page (`/`) is **live-only**: it connects directly to the SSE
+stream on load and does not contain any fixture or demo branching.
+
+The **replay page** (`/replay`) is dedicated to offline trace exploration.
+It loads JSONL trace files (from built-in fixtures or uploaded local files) and
+replays events deterministically with full playback controls:
+
+- pause/resume
+- per-event stepping
+- seek to arbitrary position
+- configurable playback speed (0.1× – 16×)
 
 Open the hosted WaveDeck page and it will immediately connect to `/api/live-events`
 for the active listen session. The viewer renders multiple streams vertically with
@@ -376,6 +391,20 @@ visibly distinct from measured/aligned timings.
 Current milestone audio model still supports one shared `audio.url` timeline
 for all lanes, with optional event/marker `audio_ref` clip playback.
 
+### Fixture files
+
+Sample fixtures are organised under:
+
+```text
+examples/browser-transcript-player/fixtures/
+```
+
+| File | Description |
+|------|-------------|
+| `demo.json` | Static viewer payload with three word lanes and example events |
+| `live-trace.sample.jsonl` | Sample live trace JSONL (replay-able) |
+| `live-trace.sample.viewer.json` | Pre-converted viewer payload from the sample trace |
+
 ### Export runtime live trace JSONL into viewer payload JSON
 
 `listenbury listen --jsonl ...` and `listenbury dev continue --jsonl ...`
@@ -387,21 +416,14 @@ write runtime trace lines as `LiveTraceEvent` JSONL. `dev continue` also emits
 cargo run -- dev trace-viewer-export out/live-trace.jsonl out/live-trace.viewer.json
 ```
 
-Then load `out/live-trace.viewer.json` in a separate fixture/dev harness (not the
-live WaveDeck page served by `listenbury listen --web`).
+Then load `out/live-trace.viewer.json` in the replay page (`/replay`).
 
-A sample artifact is included:
-
-```text
-web/browser-transcript-player/live-trace.sample.jsonl
-```
-
-You can generate its corresponding viewer payload locally:
+The bundled sample trace can be regenerated with:
 
 ```bash
 cargo run -- dev trace-viewer-export \
-  web/browser-transcript-player/live-trace.sample.jsonl \
-  web/browser-transcript-player/live-trace.sample.viewer.json
+  examples/browser-transcript-player/fixtures/live-trace.sample.jsonl \
+  examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json
 ```
 
 ### Browser transcript player JSON format

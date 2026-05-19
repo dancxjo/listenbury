@@ -44,7 +44,7 @@ impl BoundServer {
             "Listenbury web viewer serving on http://{}",
             self.local_addr
         );
-        println!("Routes: /, /screenplay, /assets/*, /api/*, /api/live-events, /healthz");
+        println!("Routes: /, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/live-events, /healthz");
 
         for stream in self.listener.incoming() {
             let mut stream = match stream {
@@ -275,6 +275,9 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
     let path = target.split('?').next().unwrap_or("/");
     match path {
         "/" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
+        "/replay" | "/replay/" => {
+            HttpResponse::ok("text/html; charset=utf-8", assets::REPLAY_HTML)
+        }
         "/screenplay" | "/screenplay/" => {
             HttpResponse::ok("text/html; charset=utf-8", assets::SCREENPLAY_HTML)
         }
@@ -282,6 +285,9 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
 
         "/app.js" | "/assets/app.js" => {
             HttpResponse::ok("application/javascript; charset=utf-8", assets::APP_JS)
+        }
+        "/replay.js" | "/assets/replay.js" => {
+            HttpResponse::ok("application/javascript; charset=utf-8", assets::REPLAY_JS)
         }
         "/screenplay.js" | "/assets/screenplay.js" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
@@ -297,18 +303,22 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
         "/screenplay.css" | "/assets/screenplay.css" => {
             HttpResponse::ok("text/css; charset=utf-8", assets::SCREENPLAY_CSS)
         }
-        "/demo.json" | "/assets/demo.json" | "/api/demo-payload" => {
-            HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
-        }
         "/welcome.wav" | "/assets/welcome.wav" => {
             HttpResponse::static_asset("audio/wav", assets::WELCOME_WAV)
         }
         "/assets/index.html" => HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML),
-        "/assets/live-trace.sample.jsonl" => HttpResponse::static_asset(
+
+        // Fixture files (organised under /fixtures/*)
+        "/fixtures/demo.json" | "/api/demo-payload" => {
+            HttpResponse::static_asset("application/json; charset=utf-8", assets::DEMO_JSON)
+        }
+        "/fixtures/live-trace.sample.jsonl"
+        | "/assets/live-trace.sample.jsonl" => HttpResponse::static_asset(
             "application/x-ndjson; charset=utf-8",
             assets::LIVE_TRACE_SAMPLE_JSONL,
         ),
-        "/assets/live-trace.sample.viewer.json" => HttpResponse::static_asset(
+        "/fixtures/live-trace.sample.viewer.json"
+        | "/assets/live-trace.sample.viewer.json" => HttpResponse::static_asset(
             "application/json; charset=utf-8",
             assets::LIVE_TRACE_SAMPLE_VIEWER_JSON,
         ),
@@ -423,6 +433,34 @@ mod tests {
     }
 
     #[test]
+    fn serves_fixtures_under_fixtures_path() {
+        let demo = route_request("GET", "/fixtures/demo.json", &empty_state());
+        assert_eq!(demo.status, 200);
+        let body = String::from_utf8(demo.body).expect("utf8");
+        assert!(body.contains("\"Listenbury WaveDeck Demo\""));
+
+        let jsonl = route_request("GET", "/fixtures/live-trace.sample.jsonl", &empty_state());
+        assert_eq!(jsonl.status, 200);
+
+        let viewer_json =
+            route_request("GET", "/fixtures/live-trace.sample.viewer.json", &empty_state());
+        assert_eq!(viewer_json.status, 200);
+    }
+
+    #[test]
+    fn serves_replay_page_and_script() {
+        let page = route_request("GET", "/replay", &empty_state());
+        assert_eq!(page.status, 200);
+        assert_eq!(page.content_type, "text/html; charset=utf-8");
+        let body = String::from_utf8(page.body).expect("utf8 replay page");
+        assert!(body.contains("WaveDeck") && body.contains("replay"));
+
+        let script = route_request("GET", "/assets/replay.js", &empty_state());
+        assert_eq!(script.status, 200);
+        assert_eq!(script.content_type, "application/javascript; charset=utf-8");
+    }
+
+    #[test]
     fn payload_endpoint_requires_flag() {
         let response = route_request("GET", "/api/payload", &empty_state());
         assert_eq!(response.status, 404);
@@ -435,7 +473,7 @@ mod tests {
         std::fs::write(&payload_path, r#"{"title":"custom"}"#).expect("write payload");
         std::fs::write(
             &trace_path,
-            include_str!("../../web/browser-transcript-player/live-trace.sample.jsonl"),
+            include_str!("../../examples/browser-transcript-player/fixtures/live-trace.sample.jsonl"),
         )
         .expect("write trace");
 
@@ -466,7 +504,10 @@ mod tests {
     }
 
     #[test]
-    fn removed_demo_route_returns_404() {
+    fn old_demo_routes_return_404() {
+        // demo.json is now served under /fixtures/demo.json, not /assets/demo.json or /demo
+        let response = route_request("GET", "/assets/demo.json", &empty_state());
+        assert_eq!(response.status, 404);
         let response = route_request("GET", "/demo", &empty_state());
         assert_eq!(response.status, 404);
     }

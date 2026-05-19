@@ -9,9 +9,14 @@ pub(super) const SCREENPLAY_MODEL_JS: &str =
     include_str!("../../web/browser-transcript-player/screenplay-model.mjs");
 pub(super) const SCREENPLAY_CSS: &str =
     include_str!("../../web/browser-transcript-player/screenplay.css");
-pub(super) const DEMO_JSON: &str = include_str!("../../web/browser-transcript-player/demo.json");
+pub(super) const REPLAY_HTML: &str =
+    include_str!("../../web/browser-transcript-player/replay.html");
+pub(super) const REPLAY_JS: &str = include_str!("../../web/browser-transcript-player/replay.js");
+pub(super) const DEMO_JSON: &str =
+    include_str!("../../examples/browser-transcript-player/fixtures/demo.json");
 pub(super) const LIVE_TRACE_SAMPLE_JSONL: &str =
-    include_str!("../../web/browser-transcript-player/live-trace.sample.jsonl");
-pub(super) const LIVE_TRACE_SAMPLE_VIEWER_JSON: &str =
-    include_str!("../../web/browser-transcript-player/live-trace.sample.viewer.json");
+    include_str!("../../examples/browser-transcript-player/fixtures/live-trace.sample.jsonl");
+pub(super) const LIVE_TRACE_SAMPLE_VIEWER_JSON: &str = include_str!(
+    "../../examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json"
+);
 pub(super) const WELCOME_WAV: &[u8] = include_bytes!("../../welcome.wav");
