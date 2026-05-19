@@ -499,6 +499,75 @@ h1 {
   pointer-events: none;
 }
 
+/* ── Central waveform / oscilloscope panel ─────────────────────────────────── */
+
+.waveform-lane-label {
+  min-height: 7.5rem; /* 120 px — matches .waveform-track */
+}
+
+.waveform-panel-header {
+  border-left: 3px solid var(--accent);
+}
+
+.waveform-track {
+  min-height: 7.5rem; /* 120 px — tall enough to be the gravity-well anchor */
+  background:
+    linear-gradient(180deg, rgba(7, 10, 14, 0.96) 0%, rgba(12, 18, 24, 0.88) 100%);
+  border-bottom: 2px solid rgba(99, 210, 255, 0.22);
+}
+
+.waveform-panel-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Compact span chips rendered inside the waveform panel.
+   Override the vertical-centering from .timeline-chip so rows can be
+   stacked from the bottom via inline `style.bottom`. */
+.timeline-chip.waveform-span {
+  top: auto;
+  transform: none;
+  height: 16px;
+  min-height: 0;
+  min-width: 2px;
+  padding: 0 2px;
+  border-radius: 3px;
+  opacity: 0.86;
+  font-size: 0;        /* hide label text — width alone conveys timing */
+  overflow: hidden;
+  background: color-mix(in srgb, var(--lane-color, var(--accent)) 55%, transparent);
+  border-color: color-mix(in srgb, var(--lane-color, var(--accent)) 80%, transparent);
+  box-shadow: none;
+}
+
+.timeline-chip.waveform-span:hover {
+  opacity: 1;
+  z-index: 3;
+  font-size: 0.68rem;
+}
+
+.timeline-chip.waveform-span.selected {
+  opacity: 1;
+  z-index: 3;
+  border-color: var(--lane-color, var(--accent));
+  box-shadow: 0 0 0 1px var(--lane-color, var(--accent));
+}
+
+.timeline-chip.waveform-span.active {
+  opacity: 1;
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 55%, transparent);
+  box-shadow: 0 0 6px rgba(255, 209, 102, 0.35);
+}
+
+.timeline-chip.waveform-span.was-revised {
+  background: color-mix(in srgb, var(--warn) 40%, color-mix(in srgb, var(--lane-color, var(--accent)) 30%, transparent));
+}
+
 .event-track {
   min-height: 4.25rem;
 }
