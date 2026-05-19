@@ -231,6 +231,7 @@ function TranscriptRibbonPane({ projection }) {
       h("span", { className: "span-legend-item span-state-hypothetical" }, "Hypothesis"),
       h("span", { className: "span-legend-item span-state-stable" }, "Stable"),
       h("span", { className: "span-legend-item span-state-committed" }, "Committed"),
+      h("span", { className: "span-legend-item span-state-confirmed" }, "Confirmed"),
       h("span", { className: "span-legend-item span-state-revised" }, "Revised"),
     ),
   );
@@ -471,6 +472,7 @@ function createLiveSession() {
     viewerMarkers: [],     // accumulated point markers
     debugLog: [],          // debug entries, generated exactly once per input event
     maxElapsedMs: 0,
+    refinedTranscript: null,
     receivedOriginMs: performance.now(),
   };
 }
@@ -481,6 +483,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       id: turnId,
       transcriptCandidate: null,
       finalTranscript: null,
+      finalTranscriptElapsedMs: null,
       latestWordStream: null,
       latestTtsWordStream: null,
       wordStreamTimeOffsetMs: null,
@@ -489,7 +492,6 @@ function sessionGetOrCreateTurn(session, turnId) {
       generatedSpeechFragments: [],
       speechUnitsById: new Map(),
       generatedSpeechUnitOrder: [],
-      transcriptProposition: null,
     });
   }
   return session.turns.get(turnId);
