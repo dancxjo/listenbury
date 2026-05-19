@@ -49,6 +49,8 @@ const LIVE_EVENT_LANE = {
   asr_finished: "ASR",
   transcript: "ASR",
   transcript_candidate: "ASR",
+  transcript_proposition: "ASR",
+  transcription_refinement_error: "ASR",
   asr_timed_word_stream: "ASR",
   llm_generation_started: "LLM",
   first_llm_token: "LLM",
@@ -511,6 +513,7 @@ function sessionGetOrCreateTurn(session, turnId) {
       generatedSpeechFragments: [],
       speechUnitsById: new Map(),
       generatedSpeechUnitOrder: [],
+      transcriptProposition: null,
     });
   }
   return session.turns.get(turnId);
@@ -713,6 +716,13 @@ function reduceLiveEvent(session, event) {
       );
     }
     // Fall through to also emit as a lane marker below.
+  }
+
+  if (event.kind === "transcript_proposition" && event.text) {
+    const liveTurn = sessionGetOrCreateTurn(session, turn);
+    liveTurn.transcriptProposition = event.text;
+    log("stable", `Refined proposition: "${event.text}"`);
+    // Fall through to emit as a lane marker below.
   }
 
   // ── transcript: commit final text for this turn
@@ -968,7 +978,13 @@ function transcriptTokensFromSession(session) {
   const sortedTurns = [...session.turns.entries()].sort((a, b) => a[0] - b[0]);
 
   for (const [, liveTurn] of sortedTurns) {
-    if (liveTurn.finalTranscript != null) {
+    if (liveTurn.transcriptProposition && liveTurn.id === 0) {
+      tokens.push({
+        className: "transcript-token span-state-hypothetical",
+        text: liveTurn.transcriptProposition,
+        title: "rolling Whisper large v3 turbo proposition",
+      });
+    } else if (liveTurn.finalTranscript != null) {
       // Committed turn: use word-level commitment states when available.
       const wordStream = liveTurn.latestWordStream;
       if (wordStream?.words?.length > 0) {

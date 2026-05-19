@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::download_progress::DownloadProgress;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchProgress, bundle_assets, bundle_primary_path, find_asset,
+    FetchProgress, bundle_assets, bundle_primary_path, find_asset, find_bundle,
     manifest::{ModelBundle, ModelKind},
     paths::{asset_path, resolve_listenbury_home},
     selected_bundle,
@@ -125,6 +125,47 @@ pub(crate) fn resolve_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf
                     .is_some_and(|name| name.contains("ggml"))
         },
     )
+}
+
+#[cfg(feature = "asr-whisper")]
+pub(crate) fn resolve_refine_whisper_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+
+    if let Some(path) = std::env::var_os("LISTENBURY_REFINE_WHISPER_MODEL") {
+        return Ok(PathBuf::from(path));
+    }
+
+    #[cfg(feature = "model-download")]
+    {
+        let bundle = find_bundle(ModelKind::Whisper, "whisper-large-v3-turbo")
+            .context("Whisper large v3 turbo bundle is not registered")?;
+        ensure_bundle_available(bundle)?;
+        return bundle_primary_path(bundle);
+    }
+
+    #[cfg(not(feature = "model-download"))]
+    {
+        resolve_model_path(
+            None,
+            "LISTENBURY_REFINE_WHISPER_MODEL",
+            "Whisper refinement model",
+            "--refine-whisper-model",
+            None,
+            None,
+            |path| {
+                path.extension().is_some_and(|ext| ext == "bin")
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| {
+                            let name = name.to_ascii_lowercase();
+                            name.contains("ggml") && name.contains("large-v3-turbo")
+                        })
+            },
+        )
+    }
 }
 
 #[cfg(feature = "tts-piper")]

@@ -125,6 +125,11 @@ body {
   border-top: 1px solid var(--rule);
 }
 
+.proposition-turn {
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--rule);
+}
+
 .scene-heading {
   margin: 0 0 1rem;
   text-transform: uppercase;

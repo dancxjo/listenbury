@@ -126,8 +126,26 @@ pub(crate) struct MicTranscribeCommand {
     pub(crate) until_ctrl_c: bool,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
+    /// Slower Whisper model used for rolling refinement in --web mode.
+    #[arg(long)]
+    pub(crate) refine_whisper_model: Option<PathBuf>,
+    /// Rolling audio window refined by the slower model in --web mode.
+    #[arg(long, default_value_t = 90)]
+    pub(crate) refine_window_seconds: u64,
+    /// Minimum delay between queued rolling refinement passes in --web mode.
+    #[arg(long, default_value_t = 1_500)]
+    pub(crate) refine_interval_ms: u64,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// Start the screenplay and WaveDeck browser viewers; microphone capture runs until Ctrl-C.
+    #[arg(long)]
+    pub(crate) web: bool,
+    /// Host for the embedded web viewer (requires --web).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) web_host: String,
+    /// Port for the embedded web viewer (requires --web).
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) web_port: u16,
 }
 
 #[derive(Debug, Args)]
@@ -227,12 +245,30 @@ pub(crate) struct TranscribeCommand {
     pub(crate) input_wav: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
+    /// Slower Whisper model used for rolling refinement in --web mode.
+    #[arg(long)]
+    pub(crate) refine_whisper_model: Option<PathBuf>,
+    /// Rolling audio window refined by the slower model in --web mode.
+    #[arg(long, default_value_t = 90)]
+    pub(crate) refine_window_seconds: u64,
+    /// Minimum delay between queued rolling refinement passes in --web mode.
+    #[arg(long, default_value_t = 1_500)]
+    pub(crate) refine_interval_ms: u64,
     #[arg(long, default_value_t = 30)]
     pub(crate) seconds: u64,
     #[arg(long)]
     pub(crate) until_ctrl_c: bool,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// Start the screenplay and WaveDeck browser viewers; microphone capture runs until Ctrl-C.
+    #[arg(long)]
+    pub(crate) web: bool,
+    /// Host for the embedded web viewer (requires --web).
+    #[arg(long, default_value = "127.0.0.1")]
+    pub(crate) web_host: String,
+    /// Port for the embedded web viewer (requires --web).
+    #[arg(long, default_value_t = 8787)]
+    pub(crate) web_port: u16,
 }
 
 #[derive(Debug, Args)]
@@ -592,6 +628,36 @@ mod tests {
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+    }
+
+    #[test]
+    fn transcribe_web_accepts_refinement_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "transcribe",
+            "--web",
+            "--web-port",
+            "0",
+            "--refine-whisper-model",
+            "models/ggml-large-v3-turbo.bin",
+            "--refine-window-seconds",
+            "120",
+            "--refine-interval-ms",
+            "2000",
+        ])
+        .expect("transcribe web should parse refinement options");
+
+        let Some(Command::Transcribe(command)) = cli.command else {
+            panic!("expected transcribe command");
+        };
+        assert!(command.web);
+        assert_eq!(command.web_port, 0);
+        assert_eq!(
+            command.refine_whisper_model,
+            Some(PathBuf::from("models/ggml-large-v3-turbo.bin"))
+        );
+        assert_eq!(command.refine_window_seconds, 120);
+        assert_eq!(command.refine_interval_ms, 2_000);
     }
 
     #[test]
