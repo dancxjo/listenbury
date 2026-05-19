@@ -5123,7 +5123,16 @@ function playSelectionTarget(target, autoplay) {
     return false;
   }
   if (target.audioRef?.url) {
-    playAudioClip(target.audioRef, target.startMs, target.endMs, autoplay);
+    playAudioClip(
+      {
+        ...target.audioRef,
+        start_ms: target.startMs,
+        end_ms: target.endMs,
+      },
+      target.startMs,
+      target.endMs,
+      autoplay,
+    );
     return true;
   }
   if (!audio.src) {
@@ -5202,7 +5211,8 @@ function schedulePlaybackStopTimer() {
   state.playbackStopTimerId = window.setTimeout(
     () => {
       state.playbackStopTimerId = null;
-      enforcePlaybackStop();
+      stopPlaybackAtBoundary();
+      refreshPlaybackState();
     },
     Math.max(0, remainingMs),
   );
@@ -5213,13 +5223,20 @@ function enforcePlaybackStop() {
     return false;
   }
 
+  stopPlaybackAtBoundary();
+  return true;
+}
+
+function stopPlaybackAtBoundary() {
+  if (state.stopAtMs === null) {
+    return;
+  }
   const stopSeconds = state.stopAtMs / 1000;
   audio.pause();
   if (audio.currentTime !== stopSeconds) {
     audio.currentTime = stopSeconds;
   }
   clearPlaybackStop();
-  return true;
 }
 
 function formatRulerLabel(ms) {
