@@ -2847,7 +2847,7 @@ function drawCentralWaveform(canvas, trackContentWidth) {
     const timelineRatio = x / Math.max(1, cssWidth);
     const audioRatio = Math.min(1, timelineRatio * durationScale);
     const peakIndex = Math.min(peaks.length - 1, Math.floor(audioRatio * peaks.length));
-    const amp = Math.max(1, peaks[peakIndex] * maxAmp);
+    const amp = Math.max(0, peaks[peakIndex] * maxAmp);
     topY[x] = centerY - amp;
     botY[x] = centerY + amp;
   }
