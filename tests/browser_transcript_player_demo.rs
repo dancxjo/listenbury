@@ -368,3 +368,20 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
     assert!(js.contains("function autoplayWordClip"));
     assert!(js.contains("autoplayWordClip(laneIndex, itemIndex);"));
 }
+
+#[test]
+fn browser_transcript_player_selection_playback_is_bounded() {
+    let js = include_str!("../web/browser-transcript-player/app.js");
+
+    assert!(js.contains("function selectionPlaybackTarget"));
+    assert!(js.contains("function playSelectionTarget"));
+    assert!(js.contains("playSelectionTarget(selectionPlaybackTarget(), true);"));
+    assert!(js.contains(
+        "void seekSessionAudioToMs(target.startMs, { stopAtMs: target.endMs, autoplay });"
+    ));
+    assert!(js.contains("setPlaybackStop(startMs, endMs);"));
+    assert!(js.contains("const stopSeconds = state.stopAtMs / 1000;"));
+    assert!(js.contains("audio.currentTime = stopSeconds;"));
+    assert!(js.contains("playSelectionClipLabel: canPlaySelectionTarget(target) ? \"Play word clip\" : \"Play selected clip\""));
+    assert!(js.contains("playSelectionClipLabel: \"Play selected range\""));
+}

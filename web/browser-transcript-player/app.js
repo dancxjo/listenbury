@@ -409,7 +409,11 @@ function renderShell() {
 
 audio.addEventListener("timeupdate", () => {
   if (state.stopAtMs !== null && audio.currentTime * 1000 >= state.stopAtMs) {
+    const stopSeconds = state.stopAtMs / 1000;
     audio.pause();
+    if (audio.currentTime > stopSeconds) {
+      audio.currentTime = stopSeconds;
+    }
     clearPlaybackStop();
   }
   refreshPlaybackState();
@@ -1585,13 +1589,17 @@ function turnTranscriptText(liveTurn) {
 }
 
 function togglePlayback() {
-  if (!audio.src) {
-    uiState.statusMessage = "No audio source loaded.";
-    renderShell();
-    return;
-  }
-
   if (audio.paused) {
+    const target = selectionPlaybackTarget();
+    if (target && canPlaySelectionTarget(target)) {
+      playSelectionTarget(target, true);
+      return;
+    }
+    if (!audio.src) {
+      uiState.statusMessage = "No audio source loaded.";
+      renderShell();
+      return;
+    }
     void audio.play();
   } else {
     audio.pause();
@@ -4163,14 +4171,21 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
   }
 
   state.selectedItem = { type: "word", laneIndex, itemIndex: wordIndex };
-  if (seekAudio && audio.src) {
-    void seekSessionAudioToMs(word.resolvedTiming.start_ms);
+  state.brushSelection = null;
+  const target = wordPlaybackTarget(word);
+  if (!target) {
+    clearPlaybackStop();
+    return;
+  }
+  if (seekAudio && canPlaySelectionTarget(target)) {
+    playSelectionTarget(target, false);
+  } else {
+    clearPlaybackStop();
   }
 
-  clearPlaybackStop();
   ensureTimingVisible({
-    startMs: word.resolvedTiming.start_ms,
-    endMs: Math.max(word.resolvedTiming.end_ms, word.resolvedTiming.start_ms + 1),
+    startMs: target.startMs,
+    endMs: target.endMs,
   });
   updateChipStates();
   updateTimeRangeSelectionOverlays();
@@ -4188,18 +4203,25 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   }
 
   state.selectedItem = { type: "event", laneIndex, itemIndex: eventIndex };
+  state.brushSelection = null;
+  const target = eventPlaybackTarget(event);
+  if (!target) {
+    clearPlaybackStop();
+    return;
+  }
   if (seekAudio) {
-    if (event.audio_ref?.url) {
-      playAudioClip(event.audio_ref, event.start_ms, event.end_ms, false);
-    } else if (audio.src) {
-      void seekSessionAudioToMs(event.start_ms);
+    if (canPlaySelectionTarget(target)) {
+      playSelectionTarget(target, false);
+    } else {
+      clearPlaybackStop();
     }
+  } else {
+    clearPlaybackStop();
   }
 
-  clearPlaybackStop();
   ensureTimingVisible({
-    startMs: event.start_ms,
-    endMs: Math.max(event.end_ms, event.start_ms + 1),
+    startMs: target.startMs,
+    endMs: target.endMs,
   });
   updateChipStates();
   updateTimeRangeSelectionOverlays();
@@ -4489,6 +4511,7 @@ function finishTimeRangeSelection(event) {
       refreshPlaybackState();
     }
     updateTimeRangeSelectionOverlays();
+    renderShell();
     return;
   }
 
@@ -4504,6 +4527,7 @@ function finishTimeRangeSelection(event) {
   }, 0);
   state.brushSelection = selection;
   zoomToTimeSelection(selection);
+  renderShell();
 }
 
 function cancelTimeRangeSelection(event) {
@@ -4992,30 +5016,88 @@ function normalizeAudioRefMs(value, fallbackValue) {
   return Math.max(0, Math.round(Number.isFinite(value) ? value : fallbackValue));
 }
 
+function timingPlaybackTarget(timing, audioRef = null) {
+  if (!timing || !Number.isFinite(timing.startMs) || !Number.isFinite(timing.endMs)) {
+    return null;
+  }
+  const startMs = normalizeAudioRefMs(timing.startMs, 0);
+  const endMs = Math.max(normalizeAudioRefMs(timing.endMs, startMs + 1), startMs + 1);
+  return { startMs, endMs, audioRef };
+}
+
+function wordPlaybackTarget(word) {
+  return timingPlaybackTarget(
+    {
+      startMs: word?.resolvedTiming?.start_ms,
+      endMs: word?.resolvedTiming?.end_ms,
+    },
+    word?.audio_ref ?? null,
+  );
+}
+
+function eventPlaybackTarget(event) {
+  return timingPlaybackTarget(
+    {
+      startMs: event?.start_ms,
+      endMs: event?.end_ms,
+    },
+    event?.audio_ref ?? null,
+  );
+}
+
+function selectionPlaybackTarget() {
+  const brushSelection = clampTimeSelection(state.brushSelection);
+  if (brushSelection) {
+    return timingPlaybackTarget(brushSelection);
+  }
+  if (!state.selectedItem) {
+    return null;
+  }
+
+  const lane = state.lanes[state.selectedItem.laneIndex];
+  if (state.selectedItem.type === "event") {
+    return eventPlaybackTarget(lane?.events?.[state.selectedItem.itemIndex]);
+  }
+  return wordPlaybackTarget(lane?.words?.[state.selectedItem.itemIndex]);
+}
+
+function canPlaySelectionTarget(target) {
+  return Boolean(target && (target.audioRef?.url || audio.src));
+}
+
+function playSelectionTarget(target, autoplay) {
+  if (!target) {
+    return false;
+  }
+  if (target.audioRef?.url) {
+    playAudioClip(target.audioRef, target.startMs, target.endMs, autoplay);
+    return true;
+  }
+  if (!audio.src) {
+    uiState.statusMessage = "No audio source loaded.";
+    renderShell();
+    return false;
+  }
+  void seekSessionAudioToMs(target.startMs, { stopAtMs: target.endMs, autoplay });
+  return true;
+}
+
 function playSelectedClip() {
-  if (state.selectedItem?.type !== "event") {
-    return;
-  }
-  const event = state.lanes[state.selectedItem.laneIndex]?.events?.[state.selectedItem.itemIndex];
-  if (!event?.audio_ref?.url) {
-    return;
-  }
-  playAudioClip(event.audio_ref, event.start_ms, event.end_ms, true);
+  playSelectionTarget(selectionPlaybackTarget(), true);
 }
 
 function autoplayWordClip(laneIndex, wordIndex) {
   const word = state.lanes[laneIndex]?.words?.[wordIndex];
-  if (!word || !audio.src) {
+  const target = wordPlaybackTarget(word);
+  if (!canPlaySelectionTarget(target)) {
     return;
   }
-  const startMs = word.resolvedTiming.start_ms;
-  const endMs = Math.max(word.resolvedTiming.end_ms, startMs + 1);
-  void seekSessionAudioToMs(startMs, { stopAtMs: endMs, autoplay: true });
+  playSelectionTarget(target, true);
 }
 
 function playAudioClip(audioRef, fallbackStartMs, fallbackEndMs, autoplay) {
   const startMs = normalizeAudioRefMs(audioRef?.start_ms, fallbackStartMs);
-  const endMs = normalizeAudioRefMs(audioRef?.end_ms, fallbackEndMs);
+  const endMs = Math.max(normalizeAudioRefMs(audioRef?.end_ms, fallbackEndMs), startMs + 1);
   const targetUrl = audioRef?.url;
   if (!targetUrl) {
     return;
@@ -5074,6 +5156,35 @@ function formatPlaybackTime() {
 }
 
 function buildSelectionProjection() {
+  const brushSelection = clampTimeSelection(state.brushSelection);
+  if (brushSelection) {
+    const target = timingPlaybackTarget(brushSelection);
+    return {
+      canPlaySelectionClip: canPlaySelectionTarget(target),
+      playSelectionClipLabel: "Play selected range",
+      summaryParts: [
+        h("strong", null, "Selected time range"),
+        h("br"),
+        `${brushSelection.startMs}–${brushSelection.endMs} ms`,
+      ],
+      selectionJson: JSON.stringify(
+        {
+          type: "time_range",
+          start_ms: brushSelection.startMs,
+          end_ms: brushSelection.endMs,
+          duration_ms: Math.max(0, brushSelection.endMs - brushSelection.startMs),
+        },
+        null,
+        2,
+      ),
+      badge: {
+        className: "inspector-span-state diagnostic-kind-selected-time-range",
+        text: "Selected time range",
+      },
+      revisions: [],
+    };
+  }
+
   if (!state.selectedItem) {
     return {
       canPlaySelectionClip: false,
@@ -5098,9 +5209,10 @@ function buildSelectionProjection() {
         revisions: [],
       };
     }
+    const target = eventPlaybackTarget(event);
     return {
-      canPlaySelectionClip: Boolean(event.audio_ref?.url),
-      playSelectionClipLabel: event.audio_ref?.url ? "Play event clip" : "Play selected clip",
+      canPlaySelectionClip: canPlaySelectionTarget(target),
+      playSelectionClipLabel: canPlaySelectionTarget(target) ? "Play event clip" : "Play selected clip",
       summaryParts: [
         h("strong", null, selectionKindLabel("event", lane, event)),
         h("br"),
@@ -5151,9 +5263,10 @@ function buildSelectionProjection() {
       revisions: [],
     };
   }
+  const target = wordPlaybackTarget(word);
   return {
-    canPlaySelectionClip: false,
-    playSelectionClipLabel: "Play selected clip",
+    canPlaySelectionClip: canPlaySelectionTarget(target),
+    playSelectionClipLabel: canPlaySelectionTarget(target) ? "Play word clip" : "Play selected clip",
     summaryParts: [
       h("strong", null, "Transcript word"),
       h("br"),
