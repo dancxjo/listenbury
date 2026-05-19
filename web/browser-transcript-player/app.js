@@ -85,6 +85,9 @@ const liveEvents = [];
 let liveRenderScheduled = false;
 let lastLiveWaveformRefreshAt = 0;
 let liveWaveformRetryTimer = null;
+let waveformRefreshInFlightUrl = null;
+let nextWaveformPeakVersion = 1;
+const waveformPeakVersions = new WeakMap();
 // Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
 const LIVE_RENDER_DEBOUNCE_MS = 80;
 
@@ -150,10 +153,31 @@ const sourceLabels = {
 const DEFAULT_SELECTION_MESSAGE = "Select a word or event to inspect timing and metadata.";
 
 function RibbonToken({ token }) {
+  const className = [
+    token.className,
+    token.selection ? "transcript-token-button" : "",
+    token.selected ? "selected" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (token.selection) {
+    return h(
+      "button",
+      {
+        type: "button",
+        className,
+        title: token.title ?? `Play "${token.text}"`,
+        "aria-label": `Play transcript word: ${token.text}`,
+        "aria-pressed": Boolean(token.selected),
+        onClick: () => selectTranscriptToken(token),
+      },
+      token.text,
+    );
+  }
   return h(
     "span",
     {
-      className: token.className,
+      className,
       title: token.title,
     },
     token.text,
@@ -654,7 +678,15 @@ function committedAsrWordsThrough(session, elapsedMs) {
       continue;
     }
     if (turn.latestWordStream?.words?.length) {
-      words.push(...turn.latestWordStream.words);
+      for (let wordIndex = 0; wordIndex < turn.latestWordStream.words.length; wordIndex++) {
+        const word = turn.latestWordStream.words[wordIndex];
+        words.push({
+          ...word,
+          _turn: turn.id,
+          _streamWordKey: stableWordKey(word, wordIndex),
+          _streamWordIndex: wordIndex,
+        });
+      }
     } else {
       words.push(...transcriptWords(turn.finalTranscript, "Final"));
     }
@@ -665,11 +697,19 @@ function committedAsrWordsThrough(session, elapsedMs) {
 function confirmedTranscriptWords(text, previousWords, elapsedMs) {
   return transcriptWords(text, "Confirmed").map((word, index) => {
     const previous = previousWords[index];
+    const selectionMetadata = previous
+      ? {
+          _turn: previous._turn,
+          _streamWordKey: previous._streamWordKey,
+          _streamWordIndex: previous._streamWordIndex,
+        }
+      : {};
     if (!previous || previous.text === word.text) {
-      return word;
+      return { ...word, ...selectionMetadata };
     }
     return {
       ...word,
+      ...selectionMetadata,
       _revisions: [
         ...(previous._revisions ?? []),
         {
@@ -940,20 +980,26 @@ function liveSessionToViewerPayload(session) {
   for (const [turnId, liveTurn] of [...session.turns.entries()].sort((a, b) => a[0] - b[0])) {
     if (liveTurn.latestWordStream?.words?.length > 0) {
       const offsetMs = liveTurn.wordStreamTimeOffsetMs ?? 0;
-      for (const word of liveTurn.latestWordStream.words) {
+      for (let sourceWordIndex = 0; sourceWordIndex < liveTurn.latestWordStream.words.length; sourceWordIndex++) {
+        const word = liveTurn.latestWordStream.words[sourceWordIndex];
         asrWords.push({
           ...wordWithTimeOffset(word, offsetMs),
           id: nextWordId++,
           _turn: turnId,
+          _streamWordKey: stableWordKey(word, sourceWordIndex),
+          _streamWordIndex: sourceWordIndex,
         });
       }
     }
     if (liveTurn.latestTtsWordStream?.words?.length > 0) {
-      for (const word of liveTurn.latestTtsWordStream.words) {
+      for (let sourceWordIndex = 0; sourceWordIndex < liveTurn.latestTtsWordStream.words.length; sourceWordIndex++) {
+        const word = liveTurn.latestTtsWordStream.words[sourceWordIndex];
         ttsWords.push({
           ...word,
           id: nextWordId++,
           _turn: turnId,
+          _streamWordKey: stableWordKey(word, sourceWordIndex),
+          _streamWordIndex: sourceWordIndex,
         });
       }
     }
@@ -1188,10 +1234,13 @@ function transcriptTokensFromSession(session) {
 
   if (refined?.words?.length) {
     for (const word of refined.words) {
+      const selection = transcriptTokenSelectionFromWordMetadata(word);
       tokens.push({
         className: `transcript-token commit-confirmed${word._revisions?.length ? " was-revised" : ""}`,
         text: word.text,
         title: formatRevisionTooltip(word) || "confirmed by broader ASR context",
+        selection,
+        selected: isTranscriptTokenSelected(selection),
       });
     }
   } else if (refined?.text) {
@@ -1215,12 +1264,16 @@ function transcriptTokensFromSession(session) {
       // Committed turn: use word-level commitment states when available.
       const wordStream = liveTurn.latestWordStream;
       if (wordStream?.words?.length > 0) {
-        for (const word of wordStream.words) {
+        for (let wordIndex = 0; wordIndex < wordStream.words.length; wordIndex++) {
+          const word = wordStream.words[wordIndex];
+          const selection = transcriptTokenSelection(liveTurn.id, word, wordIndex, "Transcript Words");
           const commitClass = `commit-${commitmentClass(word.commitment)}`;
           tokens.push({
             className: `transcript-token ${commitClass}${word._revisions?.length ? " was-revised" : ""}`,
             text: word.text,
             title: formatRevisionTooltip(word) || null,
+            selection,
+            selected: isTranscriptTokenSelected(selection),
           });
         }
       } else {
@@ -1232,35 +1285,125 @@ function transcriptTokensFromSession(session) {
         });
       }
     } else if (liveTurn.transcriptCandidate) {
-      // In-progress turn: stable prefix + unstable tail from transcript_candidate.
-      const { stable_text, unstable_text } = liveTurn.transcriptCandidate;
-      if (stable_text) {
-        tokens.push({
-          className: "transcript-token span-state-stable",
-          text: stable_text,
-          title: null,
-        });
-      }
-      if (unstable_text) {
-        tokens.push({
-          className: "transcript-token span-state-hypothetical",
-          text: unstable_text,
-          title: null,
-        });
+      const wordStream = liveTurn.latestWordStream;
+      if (wordStream?.words?.length > 0) {
+        for (let wordIndex = 0; wordIndex < wordStream.words.length; wordIndex++) {
+          const word = wordStream.words[wordIndex];
+          const selection = transcriptTokenSelection(liveTurn.id, word, wordIndex, "Transcript Words");
+          const commitClass = `commit-${commitmentClass(word.commitment)}`;
+          tokens.push({
+            className: `transcript-token ${commitClass}`,
+            text: word.text,
+            title: null,
+            selection,
+            selected: isTranscriptTokenSelected(selection),
+          });
+        }
+      } else {
+        // In-progress fallback: stable prefix + unstable tail from transcript_candidate.
+        const { stable_text, unstable_text } = liveTurn.transcriptCandidate;
+        if (stable_text) {
+          tokens.push({
+            className: "transcript-token span-state-stable",
+            text: stable_text,
+            title: null,
+          });
+        }
+        if (unstable_text) {
+          tokens.push({
+            className: "transcript-token span-state-hypothetical",
+            text: unstable_text,
+            title: null,
+          });
+        }
       }
     } else if (liveTurn.latestWordStream?.words?.length > 0) {
       // Word-stream fallback when no transcript_candidate is available.
-      for (const word of liveTurn.latestWordStream.words) {
+      for (let wordIndex = 0; wordIndex < liveTurn.latestWordStream.words.length; wordIndex++) {
+        const word = liveTurn.latestWordStream.words[wordIndex];
+        const selection = transcriptTokenSelection(liveTurn.id, word, wordIndex, "Transcript Words");
         const commitClass = `commit-${commitmentClass(word.commitment)}`;
         tokens.push({
           className: `transcript-token ${commitClass}`,
           text: word.text,
           title: null,
+          selection,
+          selected: isTranscriptTokenSelected(selection),
         });
       }
     }
   }
   return tokens;
+}
+
+function transcriptTokenSelection(turnId, word, wordIndex, laneLabel) {
+  return {
+    turn: turnId,
+    wordKey: stableWordKey(word, wordIndex),
+    wordIndex,
+    laneLabel,
+  };
+}
+
+function transcriptTokenSelectionFromWordMetadata(word) {
+  if (word?._turn == null || !word?._streamWordKey || !Number.isFinite(word?._streamWordIndex)) {
+    return null;
+  }
+  return {
+    turn: word._turn,
+    wordKey: word._streamWordKey,
+    wordIndex: word._streamWordIndex,
+    laneLabel: "Transcript Words",
+  };
+}
+
+function selectTranscriptToken(token) {
+  const resolved = resolveTranscriptTokenSelection(token.selection);
+  if (!resolved) {
+    return;
+  }
+  selectWord(resolved.laneIndex, resolved.wordIndex, false);
+  autoplayWordClip(resolved.laneIndex, resolved.wordIndex);
+}
+
+function isTranscriptTokenSelected(selection) {
+  const resolved = resolveTranscriptTokenSelection(selection);
+  return Boolean(
+    resolved &&
+      state.selectedItem?.type === "word" &&
+      state.selectedItem.laneIndex === resolved.laneIndex &&
+      state.selectedItem.itemIndex === resolved.wordIndex,
+  );
+}
+
+function resolveTranscriptTokenSelection(selection) {
+  if (!selection) {
+    return null;
+  }
+  for (let laneIndex = 0; laneIndex < state.lanes.length; laneIndex++) {
+    const lane = state.lanes[laneIndex];
+    if (lane?.type !== "word" || (selection.laneLabel && lane.label !== selection.laneLabel)) {
+      continue;
+    }
+    const words = lane.words ?? [];
+    const keyedIndex = words.findIndex(
+      (word) =>
+        word._turn === selection.turn &&
+        word._streamWordKey === selection.wordKey,
+    );
+    if (keyedIndex !== -1) {
+      return { laneIndex, wordIndex: keyedIndex };
+    }
+    const fallbackIndex = words.findIndex(
+      (word) =>
+        word._turn === selection.turn &&
+        word._streamWordIndex === selection.wordIndex,
+    );
+    if (fallbackIndex !== -1) {
+      return { laneIndex, wordIndex: fallbackIndex };
+    }
+  }
+  return null;
 }
 
 // Map WordCommitment enum variant to a lowercase CSS class fragment.
@@ -1953,14 +2096,28 @@ async function loadWaveform(url, options = {}) {
   if (force && state.waveform.url === url && state.waveform.status === "loading") {
     return;
   }
-  state.waveform = {
-    url,
-    peaks: null,
-    durationMs: 0,
-    status: "loading",
-    energyEnvelope: null,
-    energyLandmarks: null,
-  };
+  if (force && waveformRefreshInFlightUrl === url) {
+    return;
+  }
+  const previousWaveform = state.waveform;
+  const preserveCurrentWaveform =
+    force &&
+    previousWaveform.url === url &&
+    previousWaveform.status === "ready" &&
+    previousWaveform.peaks?.length;
+  if (force) {
+    waveformRefreshInFlightUrl = url;
+  }
+  if (!preserveCurrentWaveform) {
+    state.waveform = {
+      url,
+      peaks: null,
+      durationMs: 0,
+      status: "loading",
+      energyEnvelope: null,
+      energyLandmarks: null,
+    };
+  }
   try {
     const response = await fetch(fetchUrl, { cache: "no-store" });
     if (!response.ok) {
@@ -1976,31 +2133,45 @@ async function loadWaveform(url, options = {}) {
     await context.close?.();
     const energyEnvelope = buildEnergyEnvelopeFromAudioBuffer(audioBuffer);
     const energyLandmarks = detectEnergyLandmarks(energyEnvelope);
-    state.waveform = {
+    const peaks = waveformPeaksFromAudioBuffer(audioBuffer);
+    const durationMs = Math.round(audioBuffer.duration * 1000);
+    const waveformUnchanged =
+      preserveCurrentWaveform &&
+      previousWaveform.durationMs === durationMs &&
+      waveformPeaksEqual(previousWaveform.peaks, peaks);
+    state.waveform = waveformUnchanged ? previousWaveform : {
       url,
-      peaks: waveformPeaksFromAudioBuffer(audioBuffer),
-      durationMs: Math.round(audioBuffer.duration * 1000),
+      peaks,
+      durationMs,
       status: "ready",
       energyEnvelope,
       energyLandmarks,
     };
-    reprojectWordTimingAgainstWaveform();
     clearLiveWaveformRetry();
-    // Re-render full shell so inspector/selection metadata reflects updated resolved timings.
-    render();
+    if (!waveformUnchanged) {
+      reprojectWordTimingAgainstWaveform();
+      // Re-render full shell so inspector/selection metadata reflects updated resolved timings.
+      render();
+    }
   } catch (err) {
     console.warn("Unable to build waveform overlay:", err);
-    state.waveform = {
-      url,
-      peaks: null,
-      durationMs: 0,
-      status: "error",
-      energyEnvelope: null,
-      energyLandmarks: null,
-    };
+    if (!preserveCurrentWaveform) {
+      state.waveform = {
+        url,
+        peaks: null,
+        durationMs: 0,
+        status: "error",
+        energyEnvelope: null,
+        energyLandmarks: null,
+      };
+    }
     const failedUrl = new URL(url, window.location.href);
     if (uiState.liveMode && failedUrl.pathname === "/api/live-session-audio.wav") {
       scheduleLiveWaveformRetry();
+    }
+  } finally {
+    if (force && waveformRefreshInFlightUrl === url) {
+      waveformRefreshInFlightUrl = null;
     }
   }
 }
@@ -2201,6 +2372,7 @@ function renderCustomTimeline() {
   const labelsCol = document.getElementById("timeline-labels-col");
   const scrollContent = document.getElementById("timeline-scroll-content");
   if (!labelsCol || !scrollContent) return;
+  const reusableCentralWaveformCanvas = document.getElementById("central-waveform-canvas");
 
   labelsCol.innerHTML = "";
   scrollContent.innerHTML = "";
@@ -2237,7 +2409,9 @@ function renderCustomTimeline() {
   scrollContent.append(rulerEl);
 
   // Central waveform/oscilloscope panel — shared timebase anchor for all lanes
-  appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs);
+  appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs, {
+    reusableCanvas: reusableCentralWaveformCanvas,
+  });
 
   const eventLanes = state.lanes.filter((lane) => lane.type === "event");
   if (eventLanes.length > 0) {
@@ -3191,7 +3365,7 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
  * compact span chips for every word lane so ASR and TTS timing can be
  * correlated at a glance.
  */
-function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs) {
+function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs, options = {}) {
   const wordLanes = state.lanes.filter((lane) => lane.type === "word");
 
   // Labels column entry
@@ -3223,12 +3397,14 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   trackEl.id = "waveform-panel";
 
   // Waveform canvas — fills the full panel height as background
-  const canvas = document.createElement("canvas");
+  const waveformCanvasWidth = centralWaveformCanvasWidth(trackContentWidth);
+  const canvas = options.reusableCanvas ?? document.createElement("canvas");
+  canvas.id = "central-waveform-canvas";
   canvas.className = "waveform-panel-canvas";
   canvas.setAttribute("aria-hidden", "true");
-  canvas.style.width = `${trackContentWidth}px`;
+  canvas.style.width = `${waveformCanvasWidth}px`;
   trackEl.append(canvas);
-  requestAnimationFrame(() => drawCentralWaveform(canvas, trackContentWidth));
+  scheduleCentralWaveformDraw(canvas, waveformCanvasWidth);
 
   const wordDeck = document.createElement("div");
   wordDeck.className = "waveform-word-deck";
@@ -3320,13 +3496,14 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
  * prominent filled envelope and stroked outline so it serves as the primary
  * visual timebase reference.
  */
-function drawCentralWaveform(canvas, trackContentWidth) {
-  const { renderedWidthPx, canvasWidthPx, cssHeight } = waveformCanvasMetrics(canvas, trackContentWidth, 120);
+function drawCentralWaveform(canvas, renderedWidthPx, signature = centralWaveformSignature(renderedWidthPx)) {
+  const { canvasWidthPx, cssHeight } = waveformCanvasMetrics(canvas, renderedWidthPx, 120);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(canvasWidthPx * dpr);
   canvas.height = Math.round(cssHeight * dpr);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
+    delete canvas.dataset.pendingWaveformSignature;
     return;
   }
 
@@ -3342,6 +3519,8 @@ function drawCentralWaveform(canvas, trackContentWidth) {
     ctx.moveTo(0, cssHeight / 2);
     ctx.lineTo(canvasWidthPx, cssHeight / 2);
     ctx.stroke();
+    canvas.dataset.waveformSignature = signature;
+    delete canvas.dataset.pendingWaveformSignature;
     return;
   }
 
@@ -3396,6 +3575,8 @@ function drawCentralWaveform(canvas, trackContentWidth) {
       renderedWidthPx,
     });
   }
+  canvas.dataset.waveformSignature = signature;
+  delete canvas.dataset.pendingWaveformSignature;
 }
 
 function drawEnergyDebugOverlays(ctx, metrics) {
@@ -3485,6 +3666,82 @@ function msToCanvasX(metrics, ms) {
   const timelinePx = pxForMs(Math.max(0, Math.round(ms ?? 0)));
   const ratio = metrics.renderedWidthPx > 0 ? metrics.canvasWidthPx / metrics.renderedWidthPx : 1;
   return Math.max(0, Math.min(metrics.canvasWidthPx, timelinePx * ratio));
+}
+
+function waveformPeakVersion(peaks) {
+  if (!peaks || typeof peaks !== "object") {
+    return 0;
+  }
+  let version = waveformPeakVersions.get(peaks);
+  if (!version) {
+    version = nextWaveformPeakVersion++;
+    waveformPeakVersions.set(peaks, version);
+  }
+  return version;
+}
+
+function waveformPeaksEqual(left, right) {
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index++) {
+    if (Math.abs((left[index] ?? 0) - (right[index] ?? 0)) > 0.000001) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function centralWaveformCanvasWidth(trackContentWidth) {
+  if (state.waveform.status !== "ready" || state.waveform.durationMs <= 0) {
+    return trackContentWidth;
+  }
+  return Math.max(1, Math.min(trackContentWidth, Math.ceil(pxForMs(state.waveform.durationMs))));
+}
+
+function centralWaveformSignature(renderedWidthPx) {
+  const canvasWidthPx = Math.max(1, Math.round(Math.min(renderedWidthPx, WAVEFORM_CANVAS_MAX_WIDTH_PX)));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const debugSignature = uiState.diagnosticsExpanded ? wordTimingDebugSignature() : "";
+  return [
+    state.waveform.status,
+    state.waveform.url ?? "",
+    state.waveform.durationMs,
+    waveformPeakVersion(state.waveform.peaks),
+    state.waveform.energyEnvelope?.frames?.length ?? 0,
+    renderedWidthPx,
+    canvasWidthPx,
+    dpr,
+    uiState.diagnosticsExpanded ? "debug" : "plain",
+    debugSignature,
+  ].join("|");
+}
+
+function wordTimingDebugSignature() {
+  return state.lanes
+    .filter((lane) => lane.type === "word")
+    .flatMap((lane) =>
+      lane.words.map((word) => {
+        const timing = word.resolvedTiming ?? word.timing ?? {};
+        const whisper = word.whisperTiming ?? {};
+        return [
+          timing.start_ms ?? "",
+          timing.end_ms ?? "",
+          whisper.start_ms ?? "",
+          whisper.end_ms ?? "",
+          word.timingResolution ?? "",
+        ].join(":");
+      }))
+    .join(",");
+}
+
+function scheduleCentralWaveformDraw(canvas, renderedWidthPx) {
+  const signature = centralWaveformSignature(renderedWidthPx);
+  if (canvas.dataset.waveformSignature === signature || canvas.dataset.pendingWaveformSignature === signature) {
+    return;
+  }
+  canvas.dataset.pendingWaveformSignature = signature;
+  requestAnimationFrame(() => drawCentralWaveform(canvas, renderedWidthPx, signature));
 }
 
 // Update only active/selected classes on existing chips (no DOM rebuild).
