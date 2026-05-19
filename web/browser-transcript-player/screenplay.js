@@ -123,7 +123,7 @@ function episodeHeader(episode, manuscript) {
 
   const metadata = document.createElement("p");
   metadata.className = "soft-note";
-  metadata.textContent = `${manuscript.chapters[0]?.title ?? "Chapter"} • ${episode.metadata.sessionTurns} turns • ${episode.metadata.eventCount} events • ${episode.metadata.startedAtMs}ms-${episode.metadata.endedAtMs}ms`;
+  metadata.textContent = formatEpisodeMetadata(episode, manuscript);
 
   const displayPolicy = document.createElement("p");
   displayPolicy.className = "soft-note";
@@ -133,7 +133,12 @@ function episodeHeader(episode, manuscript) {
   sceneList.className = "scene-list";
   for (const scene of episode.sceneList) {
     const item = document.createElement("li");
-    item.innerHTML = `<a href="#${scene.id}">${escapeHtml(scene.heading)}</a><span> — ${escapeHtml(scene.summary)}</span>`;
+    const link = document.createElement("a");
+    link.setAttribute("href", `#${scene.id}`);
+    link.textContent = scene.heading;
+    const detail = document.createElement("span");
+    detail.textContent = ` — ${scene.summary}`;
+    item.append(link, detail);
     sceneList.append(item);
   }
 
@@ -209,10 +214,11 @@ function dialogueLine(segments) {
   return line;
 }
 
-function escapeHtml(text) {
-  return String(text ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function formatEpisodeMetadata(episode, manuscript) {
+  return [
+    manuscript.chapters[0]?.title ?? "Chapter",
+    `${episode.metadata.sessionTurns} turns`,
+    `${episode.metadata.eventCount} events`,
+    `${episode.metadata.startedAtMs}ms-${episode.metadata.endedAtMs}ms`,
+  ].join(" • ");
 }
