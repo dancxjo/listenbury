@@ -11,8 +11,10 @@ use tracing::debug;
 use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
+use crate::linguistic::{PronunciationService, service::default_english_variety};
+#[cfg(feature = "tts-piper-native")]
 use crate::mouth::piper_native::{
-    GraphemeToPhoneme, NativePiperBackend, PiperVoiceConfig, SimpleEnglishG2p,
+    NativePiperBackend, PiperEncoder, PiperVoiceConfig,
 };
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
 use crate::mouth::tts::TextToSpeech;
@@ -107,7 +109,8 @@ impl PiperBackendPreference {
 #[derive(Debug)]
 struct NativeTextPiperBackend {
     backend: NativePiperBackend,
-    g2p: SimpleEnglishG2p,
+    pronunciation: PronunciationService,
+    encoder: PiperEncoder,
 }
 
 #[cfg(feature = "tts-piper-native")]
@@ -141,7 +144,11 @@ impl NativeTextPiperBackend {
             })?;
         Ok(Self {
             backend,
-            g2p: SimpleEnglishG2p::default(),
+            pronunciation: PronunciationService::new(
+                crate::mouth::piper_native::SimpleEnglishG2p::default(),
+                default_english_variety(),
+            ),
+            encoder: PiperEncoder,
         })
     }
 }
@@ -150,10 +157,11 @@ impl NativeTextPiperBackend {
 impl TtsBackend for NativeTextPiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let t0 = Instant::now();
-        let phonemes = self
-            .g2p
-            .phonemize(text)
-            .with_context(|| format!("failed to phonemize text `{text}` for native Piper"))?;
+        let phoneme_text = self
+            .pronunciation
+            .realize_text(text)
+            .with_context(|| format!("failed to realize phonemes for text `{text}`"))?;
+        let phonemes = self.encoder.encode(&phoneme_text);
         let ids = phonemes
             .to_piper_ids(self.backend.config())
             .with_context(|| {
