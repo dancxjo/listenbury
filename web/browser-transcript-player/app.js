@@ -37,6 +37,12 @@ import {
   refineWordTimingsWithEnergy,
 } from "/assets/energy-timing.mjs";
 import {
+  analyzeSpectrogramSamples,
+  appendSpectrogramSamples,
+  selectSpectrogramLevel,
+  spectrogramValueAt,
+} from "/assets/spectrogram.mjs";
+import {
   isVowel,
   projectPhonemesIntoWordInterval,
   stressPattern,
@@ -71,6 +77,9 @@ const WORD_DENSITY_LABEL_MIN_PX = 22;
 const WORD_DENSITY_BADGE_MIN_PX = 64;
 const HOVER_PREVIEW_OFFSET_PX = 14;
 const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
+const WAVEFORM_PEAK_BUCKETS = 2_400;
+const SPECTROGRAM_MIN_DB = -96;
+const SPECTROGRAM_MAX_DB = 0;
 const LIVE_WAVEFORM_REFRESH_MS = 2_000;
 const LIVE_WAVEFORM_GROWTH_REFRESH_MS = 1_000;
 const GRAPH_MAX_RENDER_NODES = 180;
@@ -96,6 +105,8 @@ let liveWaveformRetryTimer = null;
 let waveformRefreshInFlightUrl = null;
 let nextWaveformPeakVersion = 1;
 const waveformPeakVersions = new WeakMap();
+let nextSpectrogramVersion = 1;
+const spectrogramVersions = new WeakMap();
 // Debounce interval for live re-renders (ms). Balances UI responsiveness vs. render cost.
 const LIVE_RENDER_DEBOUNCE_MS = 80;
 
@@ -123,6 +134,7 @@ const state = {
     status: "idle",
     energyEnvelope: null,
     energyLandmarks: null,
+    spectrogram: null,
   },
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
@@ -2198,6 +2210,22 @@ function waitForAudioSeek(targetSeconds, timeoutMs) {
   });
 }
 
+function audioBufferToMonoSamples(audioBuffer) {
+  const sampleCount = audioBuffer?.length ?? 0;
+  const channelCount = audioBuffer?.numberOfChannels ?? 0;
+  const mono = new Float32Array(sampleCount);
+  if (sampleCount <= 0 || channelCount <= 0) {
+    return mono;
+  }
+  for (let channel = 0; channel < channelCount; channel++) {
+    const data = audioBuffer.getChannelData(channel);
+    for (let index = 0; index < sampleCount; index++) {
+      mono[index] += (data[index] ?? 0) / channelCount;
+    }
+  }
+  return mono;
+}
+
 async function loadWaveform(url, options = {}) {
   const { force = false, fetchUrl = url } = options;
   if (
@@ -2232,6 +2260,7 @@ async function loadWaveform(url, options = {}) {
       status: "loading",
       energyEnvelope: null,
       energyLandmarks: null,
+      spectrogram: null,
     };
   }
   try {
@@ -2247,15 +2276,30 @@ async function loadWaveform(url, options = {}) {
     const context = new AudioContextCtor();
     const audioBuffer = await context.decodeAudioData(buffer.slice(0));
     await context.close?.();
+    const monoSamples = audioBufferToMonoSamples(audioBuffer);
     const energyEnvelope = buildEnergyEnvelopeFromAudioBuffer(audioBuffer);
     const energyLandmarks = detectEnergyLandmarks(energyEnvelope);
+    const peaks = waveformPeaksFromAudioBuffer(audioBuffer);
+    const spectrogram =
+      preserveCurrentWaveform && previousWaveform.spectrogram
+        ? appendSpectrogramSamples(previousWaveform.spectrogram, monoSamples, {
+            sampleRate: audioBuffer.sampleRate,
+            minDb: SPECTROGRAM_MIN_DB,
+            maxDb: SPECTROGRAM_MAX_DB,
+          })
+        : analyzeSpectrogramSamples(monoSamples, {
+            sampleRate: audioBuffer.sampleRate,
+            minDb: SPECTROGRAM_MIN_DB,
+            maxDb: SPECTROGRAM_MAX_DB,
+          });
     const levels = buildWaveformResolutionLevels(audioBuffer);
     const peaks = waveformPeaksFromLevels(levels);
     const durationMs = Math.round(audioBuffer.duration * 1000);
     const waveformUnchanged =
       preserveCurrentWaveform &&
       previousWaveform.durationMs === durationMs &&
-      waveformPeaksEqual(previousWaveform.peaks, peaks);
+      waveformPeaksEqual(previousWaveform.peaks, peaks) &&
+      previousWaveform.spectrogram?.sampleCount === spectrogram.sampleCount;
     state.waveform = waveformUnchanged ? previousWaveform : {
       url,
       levels,
@@ -2264,6 +2308,7 @@ async function loadWaveform(url, options = {}) {
       status: "ready",
       energyEnvelope,
       energyLandmarks,
+      spectrogram,
     };
     clearLiveWaveformRetry();
     if (!waveformUnchanged) {
@@ -2282,6 +2327,7 @@ async function loadWaveform(url, options = {}) {
         status: "error",
         energyEnvelope: null,
         energyLandmarks: null,
+        spectrogram: null,
       };
     }
     const failedUrl = new URL(url, window.location.href);
@@ -2739,6 +2785,7 @@ function renderCustomTimeline() {
   if (state.followLatest) {
     applyFollowLatest();
   }
+  scheduleWaveformSpectrogramDraw(document.getElementById("waveform-spectrogram-canvas"));
 }
 
 // ── Graph inspection mode ───────────────────────────────────────────────────
@@ -3556,6 +3603,224 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
   ctx.stroke();
 }
 
+function spectrogramVersion(spectrogram) {
+  if (!spectrogram || typeof spectrogram !== "object") {
+    return 0;
+  }
+  let version = spectrogramVersions.get(spectrogram);
+  if (!version) {
+    version = nextSpectrogramVersion++;
+    spectrogramVersions.set(spectrogram, version);
+  }
+  return version;
+}
+
+function waveformSpectrogramPanelWidth() {
+  const col = getScrollContainer();
+  return Math.max(320, col?.clientWidth ?? 720);
+}
+
+function waveformSpectrogramSignature(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = Math.max(1, Math.round(rect.width || waveformSpectrogramPanelWidth()));
+  const cssHeight = Math.max(1, Math.round(rect.height || 112));
+  const viewport = getScrollViewport();
+  const level = selectSpectrogramLevel(state.waveform.spectrogram, {
+    pxPerSecond: state.zoomPxPerSecond,
+  });
+  return [
+    state.waveform.status,
+    state.waveform.url ?? "",
+    state.waveform.durationMs,
+    spectrogramVersion(state.waveform.spectrogram),
+    cssWidth,
+    cssHeight,
+    viewport.startMs.toFixed(2),
+    viewport.endMs.toFixed(2),
+    level?.id ?? "none",
+    Math.min(2, window.devicePixelRatio || 1),
+  ].join("|");
+}
+
+function scheduleWaveformSpectrogramDraw(canvas) {
+  if (!canvas) {
+    return;
+  }
+  const signature = waveformSpectrogramSignature(canvas);
+  if (
+    canvas.dataset.spectrogramSignature === signature ||
+    canvas.dataset.pendingSpectrogramSignature === signature
+  ) {
+    return;
+  }
+  canvas.dataset.pendingSpectrogramSignature = signature;
+  requestAnimationFrame(() => drawWaveformSpectrogram(canvas, signature));
+}
+
+function drawWaveformSpectrogram(canvas, signature = waveformSpectrogramSignature(canvas)) {
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = Math.max(1, Math.round(rect.width || waveformSpectrogramPanelWidth()));
+  const cssHeight = Math.max(1, Math.round(rect.height || 112));
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(cssWidth * dpr);
+  canvas.height = Math.round(cssHeight * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    delete canvas.dataset.pendingSpectrogramSignature;
+    return;
+  }
+
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.fillStyle = "rgba(7, 10, 14, 0.96)";
+  ctx.fillRect(0, 0, cssWidth, cssHeight);
+
+  const spectrogram = state.waveform.spectrogram;
+  const level = selectSpectrogramLevel(spectrogram, { pxPerSecond: state.zoomPxPerSecond });
+  if (!spectrogram || !level?.frames?.length) {
+    ctx.fillStyle = "rgba(157, 171, 186, 0.72)";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(state.waveform.status === "loading" ? "Analyzing spectrogram…" : "Spectrogram unavailable", 12, 20);
+    updateWaveformSpectrogramReadout(level);
+    canvas.dataset.spectrogramSignature = signature;
+    delete canvas.dataset.pendingSpectrogramSignature;
+    return;
+  }
+
+  const viewport = getScrollViewport();
+  const viewportDurationMs = Math.max(1, viewport.endMs - viewport.startMs);
+  const yToBin = new Int16Array(cssHeight);
+  for (let y = 0; y < cssHeight; y++) {
+    const normalized = 1 - y / Math.max(1, cssHeight - 1);
+    yToBin[y] = Math.max(0, Math.min(level.binCount - 1, Math.round(normalized * (level.binCount - 1))));
+  }
+  const image = ctx.createImageData(cssWidth, cssHeight);
+  for (let x = 0; x < cssWidth; x++) {
+    const columnStartMs = viewport.startMs + (x / cssWidth) * viewportDurationMs;
+    const columnEndMs = viewport.startMs + ((x + 1) / cssWidth) * viewportDurationMs;
+    const frameStart = Math.max(0, Math.floor(columnStartMs / level.hopMs));
+    const frameEnd = Math.max(
+      frameStart,
+      Math.min(level.frames.length - 1, Math.ceil(columnEndMs / level.hopMs)),
+    );
+    for (let y = 0; y < cssHeight; y++) {
+      const binIndex = yToBin[y];
+      let value = level.minValue;
+      for (let frameIndex = frameStart; frameIndex <= frameEnd; frameIndex++) {
+        value = Math.max(value, level.frames[frameIndex]?.[binIndex] ?? level.minValue);
+      }
+      const [r, g, b] = spectrogramColor(value, level.minValue, level.maxValue);
+      const pixelIndex = (y * cssWidth + x) * 4;
+      image.data[pixelIndex] = r;
+      image.data[pixelIndex + 1] = g;
+      image.data[pixelIndex + 2] = b;
+      image.data[pixelIndex + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  ctx.strokeStyle = "rgba(157, 171, 186, 0.18)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, cssHeight - 0.5);
+  ctx.lineTo(cssWidth, cssHeight - 0.5);
+  ctx.stroke();
+
+  updateWaveformSpectrogramReadout(level);
+  canvas.dataset.spectrogramSignature = signature;
+  delete canvas.dataset.pendingSpectrogramSignature;
+}
+
+function spectrogramColor(value, minValue = SPECTROGRAM_MIN_DB, maxValue = SPECTROGRAM_MAX_DB) {
+  const normalized = Math.max(0, Math.min(1, (value - minValue) / Math.max(1, maxValue - minValue)));
+  const hue = 220 - normalized * 170;
+  const saturation = 78 + normalized * 18;
+  const lightness = 10 + normalized * 56;
+  return hslToRgb(hue, saturation / 100, lightness / 100);
+}
+
+function hslToRgb(hueDeg, saturation, lightness) {
+  const hue = (((hueDeg % 360) + 360) % 360) / 360;
+  if (saturation === 0) {
+    const value = Math.round(lightness * 255);
+    return [value, value, value];
+  }
+  const q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - lightness * saturation;
+  const p = 2 * lightness - q;
+  return [hueToRgb(p, q, hue + 1 / 3), hueToRgb(p, q, hue), hueToRgb(p, q, hue - 1 / 3)].map(
+    (value) => Math.round(value * 255),
+  );
+}
+
+function hueToRgb(p, q, t) {
+  let value = t;
+  if (value < 0) value += 1;
+  if (value > 1) value -= 1;
+  if (value < 1 / 6) return p + (q - p) * 6 * value;
+  if (value < 1 / 2) return q;
+  if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
+  return p;
+}
+
+function spectrogramFrequencyLabels(sampleRate) {
+  const nyquist = Math.max(1, Math.round(sampleRate / 2));
+  const targetStep = nyquist / 4;
+  const preferredSteps = [500, 1000, 2000, 4000, 8000];
+  const step = preferredSteps.find((candidate) => candidate >= targetStep) ?? preferredSteps[preferredSteps.length - 1];
+  const labels = [];
+  for (let hz = 0; hz <= nyquist; hz += step) {
+    labels.push(hz);
+  }
+  if (labels[labels.length - 1] !== nyquist) {
+    labels.push(nyquist);
+  }
+  return [...new Set(labels)];
+}
+
+function updateWaveformSpectrogramReadout(level, message = null) {
+  const readout = document.getElementById("waveform-spectrogram-readout");
+  if (!readout) {
+    return;
+  }
+  if (message) {
+    readout.textContent = message;
+    return;
+  }
+  if (!level) {
+    readout.textContent = "Hover spectrogram for time / frequency / magnitude";
+    return;
+  }
+  readout.textContent = `Hover spectrogram · ${level.id} · FFT ${level.fftSize} · hop ${level.hopMs.toFixed(1)} ms`;
+}
+
+function updateWaveformSpectrogramHover(event) {
+  const canvas = document.getElementById("waveform-spectrogram-canvas");
+  const spectrogram = state.waveform.spectrogram;
+  const level = selectSpectrogramLevel(spectrogram, { pxPerSecond: state.zoomPxPerSecond });
+  if (!canvas || !level) {
+    return;
+  }
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return;
+  }
+  const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+  const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+  const viewport = getScrollViewport();
+  const timeMs = viewport.startMs + (x / rect.width) * Math.max(1, viewport.endMs - viewport.startMs);
+  const frequencyHz = (1 - y / rect.height) * level.nyquistHz;
+  const magnitude = spectrogramValueAt(level, timeMs, frequencyHz);
+  updateWaveformSpectrogramReadout(
+    level,
+    `Time: ${(timeMs / 1000).toFixed(2)}s · Frequency: ${Math.round(frequencyHz)} Hz · Magnitude: ${(magnitude ?? level.minValue).toFixed(0)} dB`,
+  );
+}
+
+function clearWaveformSpectrogramHover() {
+  updateWaveformSpectrogramReadout(
+    selectSpectrogramLevel(state.waveform.spectrogram, { pxPerSecond: state.zoomPxPerSecond }),
+  );
+}
+
 // ── Central waveform / oscilloscope panel ─────────────────────────────────────
 
 /**
@@ -3566,6 +3831,9 @@ function drawWaveformOverlay(canvas, trackContentWidth) {
  */
 function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth, nowMs, options = {}) {
   const wordLanes = state.lanes.filter((lane) => lane.type === "word");
+  const spectrogramLevel = selectSpectrogramLevel(state.waveform.spectrogram, {
+    pxPerSecond: state.zoomPxPerSecond,
+  });
 
   // Labels column entry
   const labelEl = document.createElement("div");
@@ -3573,11 +3841,14 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   const headerEl = document.createElement("div");
   headerEl.className = "lane-header waveform-panel-header";
   const h2El = document.createElement("h2");
-  h2El.textContent = "Waveform";
+  h2El.textContent = "Waveform & Spectrogram";
   headerEl.append(h2El);
   const metaEl = document.createElement("div");
   metaEl.className = "lane-meta waveform-lane-meta";
   if (state.waveform.status === "ready") {
+    metaEl.textContent = spectrogramLevel
+      ? `${(state.waveform.durationMs / 1000).toFixed(2)} s · ${spectrogramLevel.fftSize} FFT`
+      : `${(state.waveform.durationMs / 1000).toFixed(2)} s`;
     const durationEl = document.createElement("div");
     durationEl.textContent = formatSecondsFromMs(state.waveform.durationMs);
     const debugEl = document.createElement("div");
@@ -3599,6 +3870,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   const trackEl = document.createElement("div");
   trackEl.className = "lane-track waveform-track";
   trackEl.id = "waveform-panel";
+  trackEl.style.setProperty("--waveform-spectrogram-viewport-width", `${waveformSpectrogramPanelWidth()}px`);
 
   // Waveform canvas — fills the full panel height as background
   const waveformCanvasWidth = centralWaveformCanvasWidth(trackContentWidth);
@@ -3609,6 +3881,34 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   canvas.style.width = `${waveformCanvasWidth}px`;
   trackEl.append(canvas);
   scheduleCentralWaveformDraw(canvas, waveformCanvasWidth);
+
+  const spectrogramPanel = document.createElement("div");
+  spectrogramPanel.className = "waveform-spectrogram-panel";
+  spectrogramPanel.addEventListener("pointermove", updateWaveformSpectrogramHover);
+  spectrogramPanel.addEventListener("pointerleave", clearWaveformSpectrogramHover);
+  const spectrogramCanvas = document.createElement("canvas");
+  spectrogramCanvas.id = "waveform-spectrogram-canvas";
+  spectrogramCanvas.className = "waveform-spectrogram-canvas";
+  spectrogramCanvas.setAttribute("aria-label", "Spectrogram aligned to the waveform timeline");
+  spectrogramPanel.append(spectrogramCanvas);
+  const readout = document.createElement("div");
+  readout.id = "waveform-spectrogram-readout";
+  readout.className = "waveform-spectrogram-readout";
+  spectrogramPanel.append(readout);
+  const axis = document.createElement("div");
+  axis.className = "waveform-spectrogram-axis";
+  const sampleRate = state.waveform.spectrogram?.sampleRate ?? 16_000;
+  spectrogramFrequencyLabels(sampleRate).forEach((hz) => {
+    const label = document.createElement("span");
+    label.className = "waveform-spectrogram-axis-label";
+    label.style.top = `${(1 - hz / (sampleRate / 2)) * 100}%`;
+    label.textContent = hz >= 1000 ? `${(hz / 1000).toFixed(hz % 1000 === 0 ? 0 : 1)} kHz` : `${hz} Hz`;
+    axis.append(label);
+  });
+  spectrogramPanel.append(axis);
+  trackEl.append(spectrogramPanel);
+  updateWaveformSpectrogramReadout(spectrogramLevel);
+  scheduleWaveformSpectrogramDraw(spectrogramCanvas);
 
   const wordDeck = document.createElement("div");
   wordDeck.className = "waveform-word-deck";
@@ -4036,6 +4336,7 @@ function buildRulerTicks(maxDurationMs, viewportMs) {
 // ── Event handlers for the custom timeline ──────────────────────────────────
 
 function onTracksScroll() {
+  scheduleWaveformSpectrogramDraw(document.getElementById("waveform-spectrogram-canvas"));
   updateWaveformResolutionDebugReadout();
   if (_programmaticScroll) return;
   if (state.followLatest) {

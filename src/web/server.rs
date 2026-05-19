@@ -383,6 +383,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::ENERGY_TIMING_MJS,
         ),
+        "/spectrogram.mjs" | "/assets/spectrogram.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::SPECTROGRAM_MJS,
+        ),
         "/phoneme-projection.mjs" | "/assets/phoneme-projection.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::PHONEME_PROJECTION_MJS,
@@ -751,6 +755,13 @@ mod tests {
         assert_eq!(energy_module.status, 200);
         assert_eq!(
             energy_module.content_type,
+            "application/javascript; charset=utf-8"
+        );
+
+        let spectrogram_module = route_request("GET", "/assets/spectrogram.mjs", &empty_state());
+        assert_eq!(spectrogram_module.status, 200);
+        assert_eq!(
+            spectrogram_module.content_type,
             "application/javascript; charset=utf-8"
         );
     }
