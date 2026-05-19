@@ -447,7 +447,7 @@ function nextUnknownVoiceCue(session, key) {
   return `${UNKNOWN_VOICE_PREFIX}${session.unknownVoiceOrdinalByKey.get(stableKey)}`;
 }
 
-function resolveUserVoiceCue(turn) {
+function resolveTurnVoiceCue(turn) {
   return turn.userVoiceCue || `${UNKNOWN_VOICE_PREFIX}1`;
 }
 
@@ -550,7 +550,7 @@ function turnToBeats(turn) {
       id: `beat-turn-${turn.id}-voice`,
       type: "beat",
       kind: "voice_dialogue",
-      role: resolveUserVoiceCue(turn),
+      role: resolveTurnVoiceCue(turn),
       text: stringifySegments(userSegments(turn)),
       segments: userSegments(turn),
       sourceEventIds,

@@ -188,9 +188,9 @@ test("dialogue segments optionally carry span metadata", () => {
   }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
-  const userBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
   const llmBeat = episode.scenes[0].beats.find((beat) => beat.kind === "llm_dialogue");
-  assert.ok(userBeat.segments[0].spanMetadata?.length, "user segment should include optional span metadata");
+  assert.ok(voiceBeat.segments[0].spanMetadata?.length, "voice segment should include optional span metadata");
   assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
 });
 

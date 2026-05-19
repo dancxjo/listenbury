@@ -53,7 +53,7 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
             logical_id: format!("conversation_turn:{sequence}"),
             label: "ConversationTurn".to_string(),
             properties: props([
-                ("speaker", json!(speaker_role_name(speaker))),
+                ("speaker", json!(voice_label_name(speaker))),
                 ("text", json!(text)),
                 ("occurred_at", json!(occurred_at)),
             ]),
@@ -193,7 +193,7 @@ fn playback_node(
     }
 }
 
-fn speaker_role_name(role: &SpeakerRole) -> String {
+fn voice_label_name(role: &SpeakerRole) -> String {
     match role {
         SpeakerRole::Pete => "pete".to_string(),
         SpeakerRole::Named(name) => name.trim().to_lowercase(),
