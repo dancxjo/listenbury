@@ -1,6 +1,7 @@
 pub mod cmudict;
 pub mod orthography;
 pub mod phoneme;
+pub mod phonology;
 pub mod pronounce;
 pub mod service;
 pub mod sound_it_out;

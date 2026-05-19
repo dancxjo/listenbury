@@ -12,7 +12,9 @@ import assert from "node:assert/strict";
 
 import {
   isVowel,
+  phonemeFromArpabet,
   projectPhonemesIntoWordInterval,
+  realizePhonemeSequence,
   stressPattern,
 } from "./phoneme-projection.mjs";
 
@@ -61,7 +63,8 @@ test("single phoneme spans the full interval", () => {
   assert.equal(spans.length, 1);
   assert.equal(spans[0].start_ms, 100);
   assert.equal(spans[0].end_ms, 400);
-  assert.equal(spans[0].symbol, "AH1");
+  assert.equal(spans[0].symbol, "AH");
+  assert.equal(spans[0].sourceSymbol, "AH1");
 });
 
 test("TH R IY1 projects proportionally with vowel weighting", () => {
@@ -77,7 +80,8 @@ test("TH R IY1 projects proportionally with vowel weighting", () => {
   assert.equal(spans[1].symbol, "R");
   assert.equal(spans[1].start_ms, 6085);
   assert.equal(spans[1].end_ms, 6160); // 6085 + 75
-  assert.equal(spans[2].symbol, "IY1");
+  assert.equal(spans[2].symbol, "IY");
+  assert.equal(spans[2].sourceSymbol, "IY1");
   assert.equal(spans[2].start_ms, 6160);
   // Last phoneme always snaps to endMs.
   assert.equal(spans[2].end_ms, 6310);
@@ -110,19 +114,69 @@ test("all spans stay within [startMs, endMs]", () => {
   const phonemes = ["Z", "AY1", "L", "AH0", "F", "OW2", "N"]; // XYLOPHONE
   const spans = projectPhonemesIntoWordInterval(phonemes, 5985, 6342);
   for (const span of spans) {
-    assert.ok(span.start_ms >= 5985, `${span.symbol} start ${span.start_ms} < 5985`);
-    assert.ok(span.end_ms <= 6342, `${span.symbol} end ${span.end_ms} > 6342`);
+    assert.ok(span.start_ms >= 5985, `${span.sourceSymbol} start ${span.start_ms} < 5985`);
+    assert.ok(span.end_ms <= 6342, `${span.sourceSymbol} end ${span.end_ms} > 6342`);
   }
 });
 
 test("default source label is cmudict.proportional", () => {
   const spans = projectPhonemesIntoWordInterval(["K"], 0, 100);
-  assert.equal(spans[0].source, "cmudict.proportional");
+  assert.equal(spans[0].timingSource, "cmudict.proportional");
 });
 
 test("custom source label is forwarded", () => {
   const spans = projectPhonemesIntoWordInterval(["K"], 0, 100, "energy.assisted");
-  assert.equal(spans[0].source, "energy.assisted");
+  assert.equal(spans[0].timingSource, "energy.assisted");
+});
+
+test("maps ARPABET symbols to default IPA with stress metadata preserved", () => {
+  const phoneme = phonemeFromArpabet("IY1");
+  assert.equal(phoneme.symbol, "IY");
+  assert.equal(phoneme.sourceSymbol, "IY1");
+  assert.equal(phoneme.stress, "primary");
+  assert.deepEqual(phoneme.defaultPhoneString, [{ ipa: "iː", sourceSymbol: "IY1", status: "mapped" }]);
+  assert.equal(phoneme.realization.ipa, "iː");
+  assert.equal(phoneme.realization.method, "default");
+});
+
+test("unknown ARPABET symbols are explicit and safe", () => {
+  const phoneme = phonemeFromArpabet("QH9");
+  assert.equal(phoneme.symbol, "QH9");
+  assert.equal(phoneme.stress, null);
+  assert.equal(phoneme.defaultPhoneString[0].ipa, "?QH9");
+  assert.equal(phoneme.defaultPhoneString[0].status, "unknown_symbol");
+});
+
+test("applies opt-in intervocalic flapping allophone rule", () => {
+  const base = ["AE1", "T", "ER0"].map((token) => phonemeFromArpabet(token));
+  const realized = realizePhonemeSequence(base, { enabled: true, dialect: "american_english" });
+  assert.equal(realized[1].symbol, "T");
+  assert.equal(realized[1].realization.ipa, "ɾ");
+  assert.equal(realized[1].realization.method, "allophone_rule");
+  assert.equal(realized[1].realization.rule, "american_english_intervocalic_flapping");
+  assert.equal(
+    realized[1].realization.environment?.stress_context,
+    "between stressed vowel and unstressed vowel",
+  );
+});
+
+test("does not apply allophone rules unless enabled", () => {
+  const spans = projectPhonemesIntoWordInterval(["AE1", "T", "ER0"], 0, 300);
+  assert.equal(spans[1].realization.ipa, "t");
+  assert.equal(spans[1].realization.method, "default");
+});
+
+test("projected spans preserve default and realized IPA separately", () => {
+  const spans = projectPhonemesIntoWordInterval(
+    ["AE1", "T", "ER0"],
+    0,
+    300,
+    "cmudict.proportional",
+    { allophoneRules: { enabled: true } },
+  );
+  assert.equal(spans[1].sourceSymbol, "T");
+  assert.equal(spans[1].defaultPhoneString[0].ipa, "t");
+  assert.equal(spans[1].realization.ipa, "ɾ");
 });
 
 // ---------------------------------------------------------------------------
