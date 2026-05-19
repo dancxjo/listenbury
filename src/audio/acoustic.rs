@@ -18,6 +18,16 @@ const FORMANT_MAX_HZ: f32 = 5_500.0;
 const FORMANT_MIN_SEPARATION_HZ: f32 = 250.0;
 const FORMANT_MAX_COUNT: usize = 4;
 const EPSILON: f64 = 1e-12;
+const DEFAULT_BOUNDARY_UNCERTAINTY_MS: u64 = 24;
+const FALLBACK_BOUNDARY_UNCERTAINTY_MS: u64 = 32;
+const BOUNDARY_TOLERANCE_MS: f32 = 48.0;
+const MIN_BOUNDARY_GAP_MS: f32 = 0.5;
+const BASE_PHONE_CONFIDENCE: f32 = 0.42;
+const VOWEL_NUCLEUS_CONFIDENCE_BONUS: f32 = 0.18;
+const STOP_RELEASE_CONFIDENCE_BONUS: f32 = 0.16;
+const FRICATIVE_NOISE_CONFIDENCE_BONUS: f32 = 0.2;
+const MIN_PHONE_CONFIDENCE: f32 = 0.08;
+const MAX_PHONE_CONFIDENCE: f32 = 0.95;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -680,14 +690,14 @@ pub fn segment_pronunciation_with_acoustics(
     let boundary_points =
         collect_boundary_points(&analysis.energy_landmarks, word_start_ms, word_end_ms);
     let mut boundaries = vec![word_start_ms as f32];
-    let mut boundary_uncertainty = vec![24u64; priors.len()];
+    let mut boundary_uncertainty = vec![DEFAULT_BOUNDARY_UNCERTAINTY_MS; priors.len()];
     for index in 0..priors.len().saturating_sub(1) {
         let left_class = priors[index].phone_class.as_str();
         let right_class = priors[index + 1].phone_class.as_str();
         let preferred = preferred_boundary_types(left_class, right_class);
         let prior = priors[index].prior_end_ms;
         if let Some((resolved, dist)) =
-            nearest_boundary_candidate(prior, &boundary_points, &preferred, 48.0)
+            nearest_boundary_candidate(prior, &boundary_points, &preferred, BOUNDARY_TOLERANCE_MS)
         {
             boundaries.push(resolved);
             let uncertainty = dist.round().max(1.0) as u64;
@@ -697,7 +707,7 @@ pub fn segment_pronunciation_with_acoustics(
             }
         } else {
             boundaries.push(prior);
-            boundary_uncertainty[index] = 32;
+            boundary_uncertainty[index] = FALLBACK_BOUNDARY_UNCERTAINTY_MS;
         }
     }
     boundaries.push(word_end_ms as f32);
@@ -733,7 +743,10 @@ pub fn segment_pronunciation_with_acoustics(
                 method,
                 confidence,
                 features_used,
-                boundary_uncertainty_ms: boundary_uncertainty.get(index).copied().unwrap_or(24),
+                boundary_uncertainty_ms: boundary_uncertainty
+                    .get(index)
+                    .copied()
+                    .unwrap_or(DEFAULT_BOUNDARY_UNCERTAINTY_MS),
                 candidate_pronunciation_id: Some("default".to_string()),
             }
         })
@@ -888,7 +901,7 @@ fn normalize_boundaries(boundaries: &mut [f32], start_ms: f32, end_ms: f32) {
     if let Some(last) = boundaries.last_mut() {
         *last = end_ms;
     }
-    let min_gap = 0.5f32;
+    let min_gap = MIN_BOUNDARY_GAP_MS;
     for index in 1..boundaries.len() {
         boundaries[index] = boundaries[index].max(boundaries[index - 1] + min_gap);
     }
@@ -909,7 +922,7 @@ fn acoustic_method_and_confidence(
     level: Option<&SpectrogramLevel>,
 ) -> (String, f32, Vec<String>) {
     let class = prior.phone_class.as_str();
-    let mut confidence = 0.42f32;
+    let mut confidence = BASE_PHONE_CONFIDENCE;
     let mut features = vec!["duration.prior".to_string()];
     if (class == "vowel" || class == "diphthong")
         && landmarks
@@ -917,7 +930,7 @@ fn acoustic_method_and_confidence(
             .iter()
             .any(|peak| *peak >= start_ms && *peak <= end_ms)
     {
-        confidence += 0.18;
+        confidence += VOWEL_NUCLEUS_CONFIDENCE_BONUS;
         features.push("energy.peak_nucleus".to_string());
     }
     if class == "stop"
@@ -930,18 +943,18 @@ fn acoustic_method_and_confidence(
                 .iter()
                 .any(|point| *point + 20 >= start_ms && *point <= end_ms + 20))
     {
-        confidence += 0.16;
+        confidence += STOP_RELEASE_CONFIDENCE_BONUS;
         features.push("energy.release_or_closure".to_string());
     }
     if class == "fricative" {
         if let Some((low, high)) = spectral_band_mean(level, start_ms as f32, end_ms as f32) {
             if high > low + 4.0 {
-                confidence += 0.2;
+                confidence += FRICATIVE_NOISE_CONFIDENCE_BONUS;
                 features.push("spectrogram.high_frequency_noise".to_string());
             }
         }
     }
-    confidence = confidence.clamp(0.08, 0.95);
+    confidence = confidence.clamp(MIN_PHONE_CONFIDENCE, MAX_PHONE_CONFIDENCE);
     let method = if features.len() > 1 {
         default_method_for_class(class).to_string()
     } else {

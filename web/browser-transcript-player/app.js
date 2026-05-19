@@ -90,6 +90,8 @@ const WAVEFORM_SPAN_ROW_HEIGHT_PX = 20;
 const WAVEFORM_SPAN_ROW_GAP_PX = 2;
 const WAVEFORM_SPAN_ROW_STRIDE_PX = WAVEFORM_SPAN_ROW_HEIGHT_PX + WAVEFORM_SPAN_ROW_GAP_PX;
 const WAVEFORM_SPAN_ROW_MARGIN_PX = 4;
+const PROJECTED_PHONE_CONFIDENCE = 0.35;
+const PROJECTED_PHONE_BOUNDARY_UNCERTAINTY_MS = 30;
 
 // Serialize an open-span map key as [lane, turn, startKind].
 function openSpanKey(lane, turn, startKind) {
@@ -6206,9 +6208,9 @@ function buildPhoneSegmentationForWord(word, options = {}) {
     resolved_start_ms: span.start_ms,
     resolved_end_ms: span.end_ms,
     method: "projected.proportional",
-    confidence: 0.35,
+    confidence: PROJECTED_PHONE_CONFIDENCE,
     features_used: ["duration.prior"],
-    boundary_uncertainty_ms: 30,
+    boundary_uncertainty_ms: PROJECTED_PHONE_BOUNDARY_UNCERTAINTY_MS,
     candidate_pronunciation_id: "default",
   }));
   return {

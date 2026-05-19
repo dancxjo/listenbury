@@ -231,6 +231,8 @@ pub enum PronunciationLookupStatus {
 ///   "status": "exact"
 /// }
 /// ```
+// Intentionally not `Eq`: backend phone segmentation includes floating-point
+// confidence values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WordPronunciation {
