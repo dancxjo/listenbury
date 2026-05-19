@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildEnergyEnvelopeFromAudioBuffer,
+  calculateReverseWordBreaks,
   detectEnergyLandmarks,
   refineWordTimingsWithEnergy,
 } from "./energy-timing.mjs";
@@ -47,6 +48,26 @@ test("refinement snaps boundary into a clear silence gap", () => {
   assert.equal(refined[0].timingResolution, "energy.snapped");
   assert.ok(refined[1].resolvedTiming.start_ms >= refined[0].resolvedTiming.end_ms);
   assert.ok(refined[0].resolvedTiming.end_ms >= 430 && refined[0].resolvedTiming.end_ms <= 560);
+});
+
+test("reverse word-break layer calculates internal boundaries from the tail", () => {
+  const breaks = calculateReverseWordBreaks([
+    { text: "small", timing: { start_ms: 100, end_ms: 350 } },
+    { text: "word", timing: { start_ms: 350, end_ms: 650 } },
+    { text: "largest", timing: { start_ms: 650, end_ms: 1200 } },
+  ]);
+
+  assert.equal(breaks.length, 2);
+  assert.deepEqual(
+    breaks.map((boundary) => [boundary.leftIndex, boundary.rightIndex]),
+    [
+      [0, 1],
+      [1, 2],
+    ],
+  );
+  assert.equal(breaks[1].ms, 719);
+  assert.equal(breaks[0].ms, 444);
+  assert.equal(breaks[0].method, "reverse-text-breaks");
 });
 
 test("adjacent words with no clean gap do not snap aggressively", () => {

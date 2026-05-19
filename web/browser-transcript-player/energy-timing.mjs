@@ -18,6 +18,9 @@ const DEFAULT_REFINEMENT_CONFIG = {
   minSnapConfidence: 0.58,
 };
 const MIN_RESOLVED_DURATION_MS = 1;
+const DEFAULT_REVERSE_BREAK_CONFIG = {
+  minWordDurationMs: 20,
+};
 
 export function buildEnergyEnvelopeFromAudioBuffer(audioBuffer, options = {}) {
   if (!audioBuffer || typeof audioBuffer.length !== "number" || typeof audioBuffer.sampleRate !== "number") {
@@ -154,6 +157,10 @@ export function refineWordTimingsWithEnergy(words, envelope, landmarks, options 
   if (!Array.isArray(words) || !words.length) {
     return [];
   }
+  const reverseBreaks = calculateReverseWordBreaks(words, {
+    minWordDurationMs: config.minWordDurationMs,
+  });
+  const reverseBreaksByLeftIndex = new Map(reverseBreaks.map((boundary) => [boundary.leftIndex, boundary]));
 
   const timingWords = words.map((word) => {
     const start = Number(word?.timing?.start_ms);
@@ -164,6 +171,7 @@ export function refineWordTimingsWithEnergy(words, envelope, landmarks, options 
         energyTiming: null,
         resolvedTiming: null,
         timingResolution: "fallback-layout",
+        reverseWordBreak: null,
       };
     }
     return {
@@ -178,8 +186,17 @@ export function refineWordTimingsWithEnergy(words, envelope, landmarks, options 
       },
       timingResolution: "word.timing",
       energySnapConfidence: null,
+      reverseWordBreak: null,
     };
   });
+  for (const [leftIndex, boundary] of reverseBreaksByLeftIndex) {
+    if (timingWords[leftIndex]) {
+      timingWords[leftIndex].reverseWordBreak = boundary;
+    }
+    if (timingWords[leftIndex + 1]) {
+      timingWords[leftIndex + 1].reverseWordBreak = boundary;
+    }
+  }
 
   if (!frames.length) {
     return timingWords;
@@ -261,6 +278,92 @@ export function refineWordTimingsWithEnergy(words, envelope, landmarks, options 
 
   enforceMonotonicWordOrder(timingWords);
   return timingWords;
+}
+
+export function calculateReverseWordBreaks(words, options = {}) {
+  if (!Array.isArray(words) || words.length < 2) {
+    return [];
+  }
+  const config = { ...DEFAULT_REVERSE_BREAK_CONFIG, ...options };
+  const breaks = [];
+  let runStart = null;
+
+  for (let index = 0; index <= words.length; index++) {
+    if (index < words.length && usableWordTiming(words[index]?.timing)) {
+      if (runStart === null) {
+        runStart = index;
+      }
+      continue;
+    }
+    if (runStart !== null && index - runStart >= 2) {
+      breaks.push(...calculateReverseBreaksForRun(words, runStart, index, config));
+    }
+    runStart = null;
+  }
+
+  return breaks;
+}
+
+function calculateReverseBreaksForRun(words, startIndex, endIndex, config) {
+  const firstTiming = normalizedTiming(words[startIndex].timing);
+  const lastTiming = normalizedTiming(words[endIndex - 1].timing);
+  if (!firstTiming || !lastTiming || lastTiming.end_ms <= firstTiming.start_ms) {
+    return [];
+  }
+
+  const totalDuration = lastTiming.end_ms - firstTiming.start_ms;
+  const wordCount = endIndex - startIndex;
+  const minDuration = totalDuration >= wordCount * config.minWordDurationMs ? config.minWordDurationMs : 1;
+  const weights = words.slice(startIndex, endIndex).map(wordBreakWeight);
+  let remainingWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  let cursor = lastTiming.end_ms;
+  const boundaries = [];
+
+  for (let localIndex = weights.length - 1; localIndex > 0; localIndex--) {
+    const weight = weights[localIndex];
+    const remainingDuration = cursor - firstTiming.start_ms;
+    const maxDuration = Math.max(minDuration, remainingDuration - localIndex * minDuration);
+    const projectedDuration = Math.round((remainingDuration * weight) / Math.max(1, remainingWeight));
+    const wordDuration = Math.max(minDuration, Math.min(maxDuration, projectedDuration));
+    cursor -= wordDuration;
+    remainingWeight -= weight;
+
+    const leftIndex = startIndex + localIndex - 1;
+    const rightIndex = leftIndex + 1;
+    boundaries.push({
+      ms: cursor,
+      leftIndex,
+      rightIndex,
+      method: "reverse-text-breaks",
+      confidence: 0.45,
+    });
+  }
+
+  boundaries.reverse();
+  return boundaries;
+}
+
+function usableWordTiming(timing) {
+  return Boolean(normalizedTiming(timing));
+}
+
+function normalizedTiming(timing) {
+  const start = Number(timing?.start_ms);
+  const end = Number(timing?.end_ms);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+    return null;
+  }
+  const startMs = Math.max(0, Math.round(start));
+  return {
+    start_ms: startMs,
+    end_ms: Math.max(startMs, Math.round(end)),
+  };
+}
+
+function wordBreakWeight(word) {
+  const text = String(word?.text ?? "").trim();
+  const letters = text.match(/[\p{L}\p{N}]/gu)?.length ?? text.length;
+  return Math.max(1, letters);
 }
 
 function collectCandidatePoints(landmarks, finalMs) {

@@ -1550,6 +1550,35 @@ h1 {
   font-weight: 600;
   line-height: 1.4;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.transcript-literal-token {
+  display: inline;
+  padding: 0;
+  border-radius: 3px;
+}
+
+.transcript-literal-token-button {
+  min-height: 0;
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  vertical-align: baseline;
+}
+
+.transcript-literal-token-button:hover {
+  background: rgba(99, 210, 255, 0.12);
+}
+
+.transcript-literal-token.selected {
+  background: rgba(99, 210, 255, 0.18);
+  box-shadow: inset 0 -2px rgba(99, 210, 255, 0.7);
 }
 
 .transcript-ribbon-hint {

@@ -30,6 +30,7 @@ import {
 } from "/assets/shared/events/reducers.mjs";
 import {
   buildEnergyEnvelopeFromAudioBuffer,
+  calculateReverseWordBreaks,
   detectEnergyLandmarks,
   refineWordTimingsWithEnergy,
 } from "/assets/energy-timing.mjs";
@@ -191,6 +192,41 @@ function RibbonToken({ token }) {
   );
 }
 
+function TranscriptLiteralToken({ token, suffix = "" }) {
+  const className = [
+    "transcript-literal-token",
+    token.selection ? "transcript-literal-token-button" : "",
+    token.selected ? "selected" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const text = literalTranscriptTokenText(token.text);
+  if (token.selection) {
+    return h(
+      "button",
+      {
+        type: "button",
+        className,
+        title: token.title ?? `Play "${token.text}"`,
+        "aria-label": `Play transcript word: ${token.text}`,
+        "aria-pressed": Boolean(token.selected),
+        onClick: () => selectTranscriptToken(token),
+      },
+      text,
+      suffix,
+    );
+  }
+  return h(
+    "span",
+    {
+      className,
+      title: token.title,
+    },
+    text,
+    suffix,
+  );
+}
+
 function ConnectionChrome({ projection }) {
   return h(
     Fragment,
@@ -290,8 +326,12 @@ function TranscriptRibbonPane({ projection }) {
       { className: "transcript-ribbon-body" },
       h(
         "div",
-        { id: "transcript-ribbon-literal", className: "transcript-ribbon-literal" },
-        projection.literalTranscriptText,
+        {
+          id: "transcript-ribbon-literal",
+          className: "transcript-ribbon-literal",
+          "aria-label": projection.literalTranscriptText,
+        },
+        renderLiteralTranscriptTokens(projection.transcriptTokens),
       ),
       h(
         "span",
@@ -1369,8 +1409,22 @@ function transcriptTokensFromSession(session) {
 
 function literalTranscriptTextFromTokens(tokens) {
   return tokens
-    .map((token) => String(token.text ?? "").replace(/\s+/g, ""))
-    .join("");
+    .map((token) => String(token.text ?? ""))
+    .join(" ");
+}
+
+function literalTranscriptTokenText(text) {
+  return String(text ?? "").replace(/ /g, "\u00a0");
+}
+
+function renderLiteralTranscriptTokens(tokens) {
+  return tokens.map((token, index) =>
+    h(TranscriptLiteralToken, {
+      key: `literal-${index}`,
+      token,
+      suffix: index === tokens.length - 1 ? "" : "\u00a0",
+    }),
+  );
 }
 
 function transcriptTokenSelection(turnId, word, wordIndex, laneLabel) {
@@ -1792,6 +1846,7 @@ function normalizeWordLane(lane) {
       whisperTiming: hasMeasuredTiming ? word.timing : null,
       energyTiming,
       energySnapConfidence: null,
+      reverseWordBreak: null,
       resolvedTiming: timing,
       timingResolution: hasBackendEnergyTiming
         ? "energy.snapped"
@@ -1840,6 +1895,7 @@ function normalizeWordLane(lane) {
       whisperTiming: refinement.whisperTiming,
       energyTiming: refinement.energyTiming,
       energySnapConfidence: refinement.energySnapConfidence ?? null,
+      reverseWordBreak: refinement.reverseWordBreak ?? null,
       resolvedTiming: refinement.resolvedTiming ?? refinement.whisperTiming,
       timingResolution: refinement.timingResolution ?? "word.timing",
     };
