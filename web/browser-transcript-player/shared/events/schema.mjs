@@ -23,6 +23,7 @@ export const LIVE_EVENT_LANE = Object.freeze({
   transcript: "ASR",
   transcript_candidate: "ASR",
   transcript_proposition: "ASR",
+  transcript_confirmed: "ASR",
   transcription_refinement_error: "ASR",
   asr_timed_word_stream: "ASR",
   llm_generation_started: "LLM",
@@ -89,7 +90,7 @@ export const isGeneratedSpeechEventKind = isLlmTextEvent;
  * (i.e. the word is still speculative or provisional).
  */
 export function isProspectiveCommitment(commitment) {
-  return !["Final", "StableText", "Played"].includes(String(commitment ?? ""));
+  return !["Final", "Confirmed", "StableText", "Played"].includes(String(commitment ?? ""));
 }
 
 /**
@@ -97,5 +98,5 @@ export function isProspectiveCommitment(commitment) {
  * played back (i.e. it is committed or finalised).
  */
 export function isPlayedCommitment(commitment) {
-  return ["Final", "Played"].includes(String(commitment ?? ""));
+  return ["Final", "Confirmed", "Played"].includes(String(commitment ?? ""));
 }

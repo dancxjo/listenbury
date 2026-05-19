@@ -107,6 +107,7 @@ struct ActiveWebTranscribeGroup {
 struct FinalizedAsrSegment {
     frames: Vec<AudioFrame>,
     duration_ms: u64,
+    text: String,
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -974,9 +975,18 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
             if let Some(group) = state.active_groups.remove(&id) {
                 let output = transcribe_group(&group.frames, &mut state.recognizer)?;
                 let finalized_text = output.text.clone();
+                if confirms_existing_finalized_segments(state, &finalized_text) {
+                    emit_web_confirmed_transcript(
+                        state,
+                        finalized_text,
+                        ExactTimestamp::now(),
+                        state.finalized_segments.len(),
+                    )?;
+                    continue;
+                }
                 emit_web_transcribe_output(state, output, true, ExactTimestamp::now())?;
                 if !finalized_text.is_empty() {
-                    append_finalized_asr_segment(state, group.frames);
+                    append_finalized_asr_segment(state, group.frames, finalized_text);
                     queue_refinement_if_due(state);
                 }
             }
@@ -1033,6 +1043,28 @@ fn emit_web_transcribe_output(
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn emit_web_confirmed_transcript(
+    state: &mut WebTranscribeState,
+    text: String,
+    occurred_at: ExactTimestamp,
+    segment_count: usize,
+) -> Result<()> {
+    let turn = state.live_trace_turn.saturating_add(1);
+    state.live_trace_turn = turn;
+    println!("confirmed transcript segments={segment_count} text={text}");
+
+    let mut event = state.live_trace.event(turn, "transcript_confirmed", occurred_at);
+    event.text = Some(text.clone());
+    event.artifact = Some(json!({
+        "source": "whisper-large-v3-turbo",
+        "input": "consecutive_finalized_asr_segments",
+        "segment_count": segment_count,
+        "text": text,
+    }));
+    state.live_trace.emit(event)
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn web_transcribe_breath_group_config() -> BreathGroupConfig {
     let mut config = BreathGroupConfig::default();
     config.close_after_silence_frames = WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
@@ -1085,9 +1117,13 @@ fn emit_web_candidate_trace_event(
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn append_finalized_asr_segment(state: &mut WebTranscribeState, frames: Vec<AudioFrame>) {
+fn append_finalized_asr_segment(
+    state: &mut WebTranscribeState,
+    frames: Vec<AudioFrame>,
+    text: String,
+) {
     let duration_ms = total_frame_duration_ms(&frames);
-    if frames.is_empty() || duration_ms == 0 {
+    if frames.is_empty() || duration_ms == 0 || text.trim().is_empty() {
         return;
     }
 
@@ -1097,6 +1133,7 @@ fn append_finalized_asr_segment(state: &mut WebTranscribeState, frames: Vec<Audi
     state.finalized_segments.push_back(FinalizedAsrSegment {
         frames,
         duration_ms,
+        text,
     });
 
     trim_finalized_asr_segments(
@@ -1119,6 +1156,36 @@ fn trim_finalized_asr_segments(
         };
         *duration_ms = (*duration_ms).saturating_sub(segment.duration_ms);
     }
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn finalized_segments_text(segments: &VecDeque<FinalizedAsrSegment>) -> String {
+    segments
+        .iter()
+        .map(|segment| segment.text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn normalized_transcript_for_confirmation(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(|ch: char| ch.is_ascii_punctuation())
+        .to_ascii_lowercase()
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn confirms_existing_finalized_segments(state: &WebTranscribeState, text: &str) -> bool {
+    if state.finalized_segments.len() < 2 {
+        return false;
+    }
+    let previous = finalized_segments_text(&state.finalized_segments);
+    !previous.is_empty()
+        && normalized_transcript_for_confirmation(&previous)
+            == normalized_transcript_for_confirmation(text)
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -1192,7 +1259,7 @@ fn run_refinement_worker(
     while let Ok(work) = rx.recv() {
         match transcribe_group_with_finality(&work.frames, &mut recognizer, true) {
             Ok(output) if !output.text.is_empty() => {
-                let mut event = trace.event(0, "transcript_proposition", work.observed_at);
+                let mut event = trace.event(0, "transcript_confirmed", work.observed_at);
                 event.text = Some(output.text.clone());
                 event.artifact = Some(json!({
                     "source": "whisper-large-v3-turbo",

@@ -154,6 +154,8 @@ pub enum WordCommitment {
     Played,
     /// The word has been played and the result is confirmed.
     Final,
+    /// The word was confirmed by a later, higher-quality pass over broader context.
+    Confirmed,
     /// The word was abandoned before it could be played (e.g. interruption).
     Cancelled,
 }
