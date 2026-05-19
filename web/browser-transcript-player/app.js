@@ -1,4 +1,5 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
+import cytoscape from "https://esm.sh/cytoscape@3.30.2";
 
 const viewer = document.getElementById("viewer");
 const chromeShellRoot = document.getElementById("chrome-shell-root");
@@ -29,6 +30,8 @@ const WORD_DENSITY_BADGE_MIN_PX = 64;
 const HOVER_PREVIEW_OFFSET_PX = 14;
 const WAVEFORM_CANVAS_MAX_WIDTH_PX = 12_000;
 const WAVEFORM_PEAK_BUCKETS = 2_400;
+const GRAPH_MAX_RENDER_NODES = 180;
+const GRAPH_MAX_RENDER_EDGES = 260;
 
 // Lane assignment for live trace event kinds.
 const LIVE_EVENT_LANE = {
@@ -115,6 +118,20 @@ const state = {
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
   playbackCursorElements: [],
+  surfaceMode: "timeline",
+  graphFilters: {
+    modality: "all",
+    turn: "all",
+    timeWindow: "all",
+    commitment: "all",
+    revisionsOnly: false,
+    neighborhood: true,
+  },
+};
+
+const graphState = {
+  cy: null,
+  bound: false,
 };
 
 const uiState = {
@@ -190,6 +207,24 @@ function ConnectionChrome({ projection }) {
         onClick: () => toggleFollowLatest(),
       }, projection.followLatest ? "⬤ Follow" : "○ Follow"),
       h("button", { id: "zoom-reset", type: "button", "aria-label": "Reset zoom (0)", onClick: () => resetZoom() }, "⟳ Reset"),
+    ),
+    h(
+      "section",
+      { className: "toolbar view-toolbar", id: "view-toolbar", "aria-label": "WaveDeck surface mode" },
+      h("button", {
+        id: "mode-timeline",
+        type: "button",
+        className: projection.surfaceMode === "timeline" ? "active-toggle" : "",
+        "aria-pressed": projection.surfaceMode === "timeline",
+        onClick: () => setSurfaceMode("timeline"),
+      }, "Timeline"),
+      h("button", {
+        id: "mode-graph",
+        type: "button",
+        className: projection.surfaceMode === "graph" ? "active-toggle" : "",
+        "aria-pressed": projection.surfaceMode === "graph",
+        onClick: () => setSurfaceMode("graph"),
+      }, "Graph"),
     ),
     h(
       "section",
@@ -290,6 +325,7 @@ function buildShellProjection() {
     canZoom: state.lanes.length > 0,
     hasSelection: Boolean(state.selectedItem || state.brushSelection),
     followLatest: state.followLatest,
+    surfaceMode: state.surfaceMode,
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
     connectionStatusClass: uiState.connectionStatusClass,
@@ -1356,9 +1392,24 @@ function render() {
   }
 
   viewer.className = "viewer";
-  renderCustomTimeline();
+  if (state.surfaceMode === "graph") {
+    renderGraphInspectionMode();
+  } else {
+    renderCustomTimeline();
+  }
   renderSelection();
   renderShell();
+}
+
+function setSurfaceMode(mode) {
+  if (mode !== "timeline" && mode !== "graph") {
+    return;
+  }
+  if (state.surfaceMode === mode) {
+    return;
+  }
+  state.surfaceMode = mode;
+  render();
 }
 
 // ── Custom timeline renderer ───────────────────────────────────────────────
@@ -1672,6 +1723,637 @@ function renderCustomTimeline() {
   if (state.followLatest) {
     applyFollowLatest();
   }
+}
+
+// ── Graph inspection mode ───────────────────────────────────────────────────
+
+function renderGraphInspectionMode() {
+  const host = ensureGraphModeHost();
+  if (viewer.firstElementChild !== host) {
+    viewer.replaceChildren(host);
+  }
+  bindGraphControls();
+  const model = buildAlignmentGraphModel();
+  syncGraphControlOptions(model);
+  renderGraphSummary(model);
+  const cy = ensureAlignmentGraph();
+  updateAlignmentGraph(cy, model);
+}
+
+function ensureGraphModeHost() {
+  let host = document.getElementById("graph-mode-host");
+  if (host) {
+    return host;
+  }
+  host = document.createElement("section");
+  host.id = "graph-mode-host";
+  host.className = "graph-mode-host";
+  host.innerHTML = `
+    <header class="graph-toolbar">
+      <strong>Span / Alignment Graph</strong>
+      <span id="graph-summary" class="graph-summary"></span>
+      <label>Modality
+        <select id="graph-filter-modality"></select>
+      </label>
+      <label>Turn
+        <select id="graph-filter-turn"></select>
+      </label>
+      <label>Window
+        <select id="graph-filter-window">
+          <option value="all">All time</option>
+          <option value="viewport">Timeline viewport</option>
+          <option value="selection">Selection focus</option>
+        </select>
+      </label>
+      <label>Commitment
+        <select id="graph-filter-commitment"></select>
+      </label>
+      <label class="graph-toggle">
+        <input id="graph-filter-revisions" type="checkbox" />
+        Revisions only
+      </label>
+      <label class="graph-toggle">
+        <input id="graph-filter-neighborhood" type="checkbox" />
+        Focus neighborhood
+      </label>
+    </header>
+    <div id="alignment-graph" class="alignment-graph" role="img" aria-label="Span and alignment graph"></div>
+    <p class="graph-help">
+      Click a graph node to jump to timeline context. Word revisions render as lineage chains.
+    </p>
+  `;
+  return host;
+}
+
+function bindGraphControls() {
+  const modality = document.getElementById("graph-filter-modality");
+  const turn = document.getElementById("graph-filter-turn");
+  const windowFilter = document.getElementById("graph-filter-window");
+  const commitment = document.getElementById("graph-filter-commitment");
+  const revisions = document.getElementById("graph-filter-revisions");
+  const neighborhood = document.getElementById("graph-filter-neighborhood");
+  if (!modality || !turn || !windowFilter || !commitment || !revisions || !neighborhood) {
+    return;
+  }
+  modality.onchange = () => {
+    state.graphFilters.modality = modality.value;
+    renderGraphInspectionMode();
+  };
+  turn.onchange = () => {
+    state.graphFilters.turn = turn.value;
+    renderGraphInspectionMode();
+  };
+  windowFilter.onchange = () => {
+    state.graphFilters.timeWindow = windowFilter.value;
+    renderGraphInspectionMode();
+  };
+  commitment.onchange = () => {
+    state.graphFilters.commitment = commitment.value;
+    renderGraphInspectionMode();
+  };
+  revisions.onchange = () => {
+    state.graphFilters.revisionsOnly = revisions.checked;
+    renderGraphInspectionMode();
+  };
+  neighborhood.onchange = () => {
+    state.graphFilters.neighborhood = neighborhood.checked;
+    renderGraphInspectionMode();
+  };
+}
+
+function syncGraphControlOptions(model) {
+  syncSelectWithOptions(
+    document.getElementById("graph-filter-modality"),
+    [{ value: "all", label: "All" }, ...model.modalities.map((entry) => ({ value: entry, label: entry }))],
+    state.graphFilters.modality,
+  );
+  syncSelectWithOptions(
+    document.getElementById("graph-filter-turn"),
+    [{ value: "all", label: "All" }, ...model.turns.map((entry) => ({ value: String(entry), label: `Turn ${entry}` }))],
+    state.graphFilters.turn,
+  );
+  syncSelectWithOptions(
+    document.getElementById("graph-filter-commitment"),
+    [{ value: "all", label: "All" }, ...model.commitments.map((entry) => ({ value: entry, label: entry }))],
+    state.graphFilters.commitment,
+  );
+  const windowFilter = document.getElementById("graph-filter-window");
+  if (windowFilter && windowFilter.value !== state.graphFilters.timeWindow) {
+    windowFilter.value = state.graphFilters.timeWindow;
+  }
+  const revisions = document.getElementById("graph-filter-revisions");
+  if (revisions) {
+    revisions.checked = state.graphFilters.revisionsOnly;
+  }
+  const neighborhood = document.getElementById("graph-filter-neighborhood");
+  if (neighborhood) {
+    neighborhood.checked = state.graphFilters.neighborhood;
+  }
+}
+
+function syncSelectWithOptions(selectEl, options, currentValue) {
+  if (!selectEl) {
+    return;
+  }
+  const rendered = options.map((opt) => `<option value="${escapeHtml(opt.value)}">${escapeHtml(opt.label)}</option>`).join("");
+  selectEl.innerHTML = rendered;
+  selectEl.value = options.some((opt) => opt.value === currentValue) ? currentValue : options[0]?.value ?? "all";
+  if (currentValue !== selectEl.value) {
+    if (selectEl.id === "graph-filter-modality") {
+      state.graphFilters.modality = selectEl.value;
+    } else if (selectEl.id === "graph-filter-turn") {
+      state.graphFilters.turn = selectEl.value;
+    } else if (selectEl.id === "graph-filter-commitment") {
+      state.graphFilters.commitment = selectEl.value;
+    }
+  }
+}
+
+function renderGraphSummary(model) {
+  const summary = document.getElementById("graph-summary");
+  if (!summary) {
+    return;
+  }
+  summary.textContent = `${model.nodes.length} nodes · ${model.edges.length} edges`;
+}
+
+function ensureAlignmentGraph() {
+  const container = document.getElementById("alignment-graph");
+  if (!container) {
+    return null;
+  }
+  if (graphState.cy) {
+    if (graphState.cy.container() === container) {
+      return graphState.cy;
+    }
+    graphState.cy.destroy();
+    graphState.cy = null;
+    graphState.bound = false;
+  }
+  graphState.cy = cytoscape({
+    container,
+    minZoom: 0.2,
+    maxZoom: 3,
+    style: [
+      { selector: "node", style: { label: "data(label)", color: "#eef3f7", "font-size": 11, "text-wrap": "wrap", "text-max-width": 160, "text-valign": "center", "text-halign": "center", "background-color": "#36414f", width: 28, height: 28 } },
+      { selector: "edge", style: { width: 1.4, "line-color": "#5c6b7a", "target-arrow-color": "#5c6b7a", "target-arrow-shape": "triangle", "curve-style": "bezier", label: "data(label)", "font-size": 9, color: "#9dabba", "text-background-color": "#151a1f", "text-background-opacity": 0.9, "text-background-padding": "2px", "text-rotation": "autorotate" } },
+      { selector: "node[nodeType = 'word']", style: { "background-color": "#3d7ca0", shape: "round-rectangle" } },
+      { selector: "node[nodeType = 'event']", style: { "background-color": "#697f50" } },
+      { selector: "node[nodeType = 'revision']", style: { "background-color": "#9a6e2b", shape: "diamond" } },
+      { selector: "node[nodeType = 'audio']", style: { "background-color": "#4b5a8f", shape: "hexagon" } },
+      { selector: "node[nodeType = 'turn']", style: { "background-color": "#6b4a89", shape: "round-hexagon" } },
+      { selector: "node[nodeType = 'lexical']", style: { "background-color": "#2b7f72", shape: "tag" } },
+      { selector: "node[nodeType = 'phoneme']", style: { "background-color": "#7d3c74", shape: "rectangle" } },
+      { selector: "edge[edgeType = 'revision']", style: { "line-color": "#ffd166", "target-arrow-color": "#ffd166" } },
+      { selector: "edge[edgeType = 'alignment']", style: { "line-style": "dashed", "line-color": "#63d2ff", "target-arrow-color": "#63d2ff" } },
+      { selector: "edge[edgeType = 'contains']", style: { "line-color": "#8ee6a8", "target-arrow-color": "#8ee6a8" } },
+      { selector: ".selected", style: { "border-width": 2, "border-color": "#ff7a90" } },
+      { selector: ".related", style: { "line-color": "#ff7a90", "target-arrow-color": "#ff7a90", width: 2.1 } },
+      { selector: ".faded", style: { opacity: 0.28 } },
+    ],
+    elements: [],
+  });
+  if (!graphState.bound) {
+    graphState.bound = true;
+    graphState.cy.on("tap", "node", (event) => {
+      focusFromGraphNode(event.target);
+    });
+  }
+  return graphState.cy;
+}
+
+function updateAlignmentGraph(cy, model) {
+  if (!cy) {
+    return;
+  }
+  const nextElements = [
+    ...model.nodes.map((node) => ({ data: node })),
+    ...model.edges.map((edge) => ({ data: edge })),
+  ];
+  const nextIds = new Set(nextElements.map((element) => element.data.id));
+  cy.elements().forEach((element) => {
+    if (!nextIds.has(element.id())) {
+      element.remove();
+    }
+  });
+  const existing = new Set(cy.elements().map((element) => element.id()));
+  for (const element of nextElements) {
+    if (existing.has(element.data.id)) {
+      const current = cy.getElementById(element.data.id);
+      current.data(element.data);
+    } else {
+      cy.add(element);
+    }
+  }
+  cy.elements().removeClass("selected related faded");
+  const selectedId = selectedGraphNodeId();
+  if (selectedId) {
+    const selected = cy.getElementById(selectedId);
+    if (selected.nonempty()) {
+      selected.addClass("selected");
+      const neighborhood = selected.closedNeighborhood();
+      neighborhood.connectedEdges().addClass("related");
+      cy.elements().difference(neighborhood).addClass("faded");
+    }
+  }
+  const layout = cy.layout({
+    name: model.focusNodeId ? "breadthfirst" : "cose",
+    animate: false,
+    fit: true,
+    padding: 24,
+    roots: model.focusNodeId ? [model.focusNodeId] : undefined,
+    nodeDimensionsIncludeLabels: true,
+  });
+  layout.run();
+}
+
+function focusFromGraphNode(node) {
+  const selectionType = node.data("selectionType");
+  const laneIndex = parseInt(node.data("laneIndex"), 10);
+  const itemIndex = parseInt(node.data("itemIndex"), 10);
+  if (selectionType === "word" && Number.isFinite(laneIndex) && Number.isFinite(itemIndex)) {
+    state.surfaceMode = "timeline";
+    render();
+    selectWord(laneIndex, itemIndex, true);
+    return;
+  }
+  if (selectionType === "event" && Number.isFinite(laneIndex) && Number.isFinite(itemIndex)) {
+    state.surfaceMode = "timeline";
+    render();
+    selectEvent(laneIndex, itemIndex, true);
+    return;
+  }
+  const turn = node.data("turn");
+  if (Number.isFinite(turn)) {
+    state.graphFilters.turn = String(turn);
+    renderGraphInspectionMode();
+  }
+}
+
+function buildAlignmentGraphModel() {
+  const modalities = new Set();
+  const turns = new Set();
+  const commitments = new Set();
+  const nodes = [];
+  const edges = [];
+  const nodeIds = new Set();
+  const edgeIds = new Set();
+  const words = [];
+  const events = [];
+  const focusNodeId = selectedGraphNodeId();
+  const windowSelection = graphTimeWindow();
+
+  state.lanes.forEach((lane, laneIndex) => {
+    modalities.add(lane.label);
+    if (lane.type === "word") {
+      lane.words.forEach((word, wordIndex) => {
+        const turn = Number.isFinite(word._turn) ? word._turn : null;
+        if (turn !== null) turns.add(turn);
+        if (word.commitment) commitments.add(word.commitment);
+        words.push({ lane, laneIndex, word, wordIndex, turn });
+      });
+      return;
+    }
+    lane.events.forEach((event, eventIndex) => {
+      const turn = Number.isFinite(event.metadata?.turn) ? event.metadata.turn : null;
+      if (turn !== null) turns.add(turn);
+      events.push({ lane, laneIndex, event, eventIndex, turn });
+    });
+  });
+
+  const passesWindow = (startMs, endMs) => {
+    if (!windowSelection) {
+      return true;
+    }
+    return endMs >= windowSelection.startMs && startMs <= windowSelection.endMs;
+  };
+
+  for (const item of words) {
+    const startMs = item.word.resolvedTiming.start_ms;
+    const endMs = Math.max(item.word.resolvedTiming.end_ms, startMs + 1);
+    if (!passesWindow(startMs, endMs)) {
+      continue;
+    }
+    if (state.graphFilters.modality !== "all" && state.graphFilters.modality !== item.lane.label) {
+      continue;
+    }
+    if (state.graphFilters.turn !== "all" && String(item.turn ?? "none") !== state.graphFilters.turn) {
+      continue;
+    }
+    if (state.graphFilters.commitment !== "all" && item.word.commitment !== state.graphFilters.commitment) {
+      continue;
+    }
+    if (state.graphFilters.revisionsOnly && !(item.word._revisions?.length > 0)) {
+      continue;
+    }
+    addGraphWord(nodes, edges, nodeIds, edgeIds, item);
+  }
+
+  for (const item of events) {
+    const startMs = item.event.start_ms;
+    const endMs = Math.max(item.event.end_ms, startMs + 1);
+    if (!passesWindow(startMs, endMs)) {
+      continue;
+    }
+    if (state.graphFilters.modality !== "all" && state.graphFilters.modality !== item.lane.label) {
+      continue;
+    }
+    if (state.graphFilters.turn !== "all" && String(item.turn ?? "none") !== state.graphFilters.turn) {
+      continue;
+    }
+    if (state.graphFilters.revisionsOnly) {
+      continue;
+    }
+    addGraphEvent(nodes, edges, nodeIds, edgeIds, item);
+  }
+
+  addOverlapEdges(edges, edgeIds, words, events, nodeIds, passesWindow);
+  let filtered = { nodes, edges };
+  if (state.graphFilters.neighborhood && focusNodeId) {
+    filtered = graphNeighborhood(nodes, edges, focusNodeId);
+  }
+  filtered = capGraphSize(filtered.nodes, filtered.edges, focusNodeId, windowSelection);
+  return {
+    nodes: filtered.nodes,
+    edges: filtered.edges,
+    modalities: [...modalities].sort(),
+    turns: [...turns].sort((left, right) => left - right),
+    commitments: [...commitments].sort(),
+    focusNodeId,
+  };
+}
+
+function addGraphWord(nodes, edges, nodeIds, edgeIds, item) {
+  const wordNodeId = `word:${item.laneIndex}:${item.wordIndex}`;
+  const wordLabel = item.word.text || "(word)";
+  pushGraphNode(nodes, nodeIds, {
+    id: wordNodeId,
+    label: wordLabel,
+    nodeType: "word",
+    modality: item.lane.label,
+    turn: item.turn,
+    commitment: item.word.commitment ?? null,
+    selectionType: "word",
+    laneIndex: item.laneIndex,
+    itemIndex: item.wordIndex,
+    startMs: item.word.resolvedTiming.start_ms,
+    endMs: item.word.resolvedTiming.end_ms,
+  });
+  if (item.turn !== null) {
+    const turnNodeId = `turn:${item.turn}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: turnNodeId,
+      label: `Turn ${item.turn}`,
+      nodeType: "turn",
+      turn: item.turn,
+      selectionType: "turn",
+    });
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${turnNodeId}:${wordNodeId}:contains`,
+      source: turnNodeId,
+      target: wordNodeId,
+      edgeType: "contains",
+      label: "contains",
+    });
+  }
+  if (item.word.audio_ref?.url) {
+    const startMs = item.word.audio_ref.start_ms ?? item.word.resolvedTiming.start_ms;
+    const endMs = item.word.audio_ref.end_ms ?? item.word.resolvedTiming.end_ms;
+    const audioNodeId = `audio:${item.word.audio_ref.url}:${startMs}:${endMs}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: audioNodeId,
+      label: `Audio ${formatRulerLabel(startMs)}–${formatRulerLabel(endMs)}`,
+      nodeType: "audio",
+      modality: item.lane.label,
+      turn: item.turn,
+    });
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${wordNodeId}:${audioNodeId}:alignment`,
+      source: wordNodeId,
+      target: audioNodeId,
+      edgeType: "alignment",
+      label: "word↔audio",
+    });
+  }
+  if (item.word.lexical_span) {
+    const lexicalNodeId = `lexical:${item.word.lexical_span.start}:${item.word.lexical_span.end}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: lexicalNodeId,
+      label: `Text ${item.word.lexical_span.start}:${item.word.lexical_span.end}`,
+      nodeType: "lexical",
+      modality: item.lane.label,
+      turn: item.turn,
+    });
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${lexicalNodeId}:${wordNodeId}:contains`,
+      source: lexicalNodeId,
+      target: wordNodeId,
+      edgeType: "contains",
+      label: "contains",
+    });
+  }
+  const phonemes = Array.isArray(item.word.phonemes) ? item.word.phonemes : [];
+  phonemes.forEach((phoneme, index) => {
+    const phonemeNodeId = `phoneme:${item.laneIndex}:${item.wordIndex}:${index}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: phonemeNodeId,
+      label: String(phoneme?.label ?? phoneme?.text ?? phoneme ?? "phoneme"),
+      nodeType: "phoneme",
+      modality: item.lane.label,
+      turn: item.turn,
+    });
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${phonemeNodeId}:${wordNodeId}:alignment`,
+      source: phonemeNodeId,
+      target: wordNodeId,
+      edgeType: "alignment",
+      label: "phoneme↔word",
+    });
+  });
+  const revisions = item.word._revisions ?? [];
+  let revisionSourceId = null;
+  revisions.forEach((revision, index) => {
+    const revisionNodeId = `revision:${item.laneIndex}:${item.wordIndex}:${index}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: revisionNodeId,
+      label: revision.fromText ?? "revised",
+      nodeType: "revision",
+      modality: item.lane.label,
+      turn: item.turn,
+      atMs: revision.at_ms,
+    });
+    if (revisionSourceId) {
+      pushGraphEdge(edges, edgeIds, {
+        id: `edge:${revisionSourceId}:${revisionNodeId}:revision`,
+        source: revisionSourceId,
+        target: revisionNodeId,
+        edgeType: "revision",
+        label: "revision",
+      });
+    }
+    revisionSourceId = revisionNodeId;
+  });
+  if (revisionSourceId) {
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${revisionSourceId}:${wordNodeId}:revision`,
+      source: revisionSourceId,
+      target: wordNodeId,
+      edgeType: "revision",
+      label: "revision",
+    });
+  }
+}
+
+function addGraphEvent(nodes, edges, nodeIds, edgeIds, item) {
+  const eventNodeId = `event:${item.laneIndex}:${item.eventIndex}`;
+  pushGraphNode(nodes, nodeIds, {
+    id: eventNodeId,
+    label: item.event.label || item.event.kind,
+    nodeType: "event",
+    modality: item.lane.label,
+    turn: item.turn,
+    selectionType: "event",
+    laneIndex: item.laneIndex,
+    itemIndex: item.eventIndex,
+    startMs: item.event.start_ms,
+    endMs: item.event.end_ms,
+  });
+  if (item.turn !== null) {
+    const turnNodeId = `turn:${item.turn}`;
+    pushGraphNode(nodes, nodeIds, {
+      id: turnNodeId,
+      label: `Turn ${item.turn}`,
+      nodeType: "turn",
+      turn: item.turn,
+      selectionType: "turn",
+    });
+    pushGraphEdge(edges, edgeIds, {
+      id: `edge:${turnNodeId}:${eventNodeId}:contains`,
+      source: turnNodeId,
+      target: eventNodeId,
+      edgeType: "contains",
+      label: "contains",
+    });
+  }
+}
+
+function addOverlapEdges(edges, edgeIds, words, events, nodeIds, passesWindow) {
+  const activeWords = words.filter((item) => {
+    const startMs = item.word.resolvedTiming.start_ms;
+    const endMs = Math.max(item.word.resolvedTiming.end_ms, startMs + 1);
+    return passesWindow(startMs, endMs);
+  });
+  const activeEvents = events.filter((item) => {
+    const startMs = item.event.start_ms;
+    const endMs = Math.max(item.event.end_ms, startMs + 1);
+    return passesWindow(startMs, endMs);
+  });
+  for (const word of activeWords) {
+    const wordNodeId = `word:${word.laneIndex}:${word.wordIndex}`;
+    if (!nodeIds.has(wordNodeId)) {
+      continue;
+    }
+    for (const event of activeEvents) {
+      const eventNodeId = `event:${event.laneIndex}:${event.eventIndex}`;
+      if (!nodeIds.has(eventNodeId)) {
+        continue;
+      }
+      if (word.turn !== null && event.turn !== null && word.turn !== event.turn) {
+        continue;
+      }
+      const overlap = rangesOverlap(
+        word.word.resolvedTiming.start_ms,
+        word.word.resolvedTiming.end_ms,
+        event.event.start_ms,
+        event.event.end_ms,
+      );
+      if (!overlap) {
+        continue;
+      }
+      pushGraphEdge(edges, edgeIds, {
+        id: `edge:${wordNodeId}:${eventNodeId}:overlap`,
+        source: wordNodeId,
+        target: eventNodeId,
+        edgeType: "alignment",
+        label: "overlap",
+      });
+    }
+  }
+}
+
+function rangesOverlap(leftStart, leftEnd, rightStart, rightEnd) {
+  return Math.max(leftStart, rightStart) <= Math.min(leftEnd, rightEnd);
+}
+
+function graphTimeWindow() {
+  if (state.graphFilters.timeWindow === "selection") {
+    return state.brushSelection ?? selectedItemTiming();
+  }
+  if (state.graphFilters.timeWindow === "viewport") {
+    const col = getScrollContainer();
+    if (!col) {
+      return null;
+    }
+    return getScrollViewport();
+  }
+  return null;
+}
+
+function graphNeighborhood(nodes, edges, focusNodeId) {
+  const adjacency = new Map();
+  edges.forEach((edge) => {
+    if (!adjacency.has(edge.source)) adjacency.set(edge.source, new Set());
+    if (!adjacency.has(edge.target)) adjacency.set(edge.target, new Set());
+    adjacency.get(edge.source).add(edge.target);
+    adjacency.get(edge.target).add(edge.source);
+  });
+  const keep = new Set([focusNodeId]);
+  const neighbors = adjacency.get(focusNodeId) ?? new Set();
+  neighbors.forEach((nodeId) => keep.add(nodeId));
+  const filteredNodes = nodes.filter((node) => keep.has(node.id));
+  const filteredEdges = edges.filter((edge) => keep.has(edge.source) && keep.has(edge.target));
+  return filteredNodes.length ? { nodes: filteredNodes, edges: filteredEdges } : { nodes, edges };
+}
+
+function capGraphSize(nodes, edges, focusNodeId, windowSelection) {
+  const centerMs = windowSelection ? (windowSelection.startMs + windowSelection.endMs) / 2 : null;
+  const rankedNodes = [...nodes].sort((left, right) => {
+    if (left.id === focusNodeId) return -1;
+    if (right.id === focusNodeId) return 1;
+    if (centerMs == null) return 0;
+    const leftMid = Number.isFinite(left.startMs) && Number.isFinite(left.endMs) ? (left.startMs + left.endMs) / 2 : centerMs;
+    const rightMid = Number.isFinite(right.startMs) && Number.isFinite(right.endMs) ? (right.startMs + right.endMs) / 2 : centerMs;
+    return Math.abs(leftMid - centerMs) - Math.abs(rightMid - centerMs);
+  });
+  const keptNodes = rankedNodes.slice(0, GRAPH_MAX_RENDER_NODES);
+  const keptNodeIds = new Set(keptNodes.map((node) => node.id));
+  const keptEdges = edges
+    .filter((edge) => keptNodeIds.has(edge.source) && keptNodeIds.has(edge.target))
+    .slice(0, GRAPH_MAX_RENDER_EDGES);
+  return { nodes: keptNodes, edges: keptEdges };
+}
+
+function pushGraphNode(nodes, ids, node) {
+  if (ids.has(node.id)) {
+    return;
+  }
+  ids.add(node.id);
+  nodes.push(node);
+}
+
+function pushGraphEdge(edges, ids, edge) {
+  if (ids.has(edge.id)) {
+    return;
+  }
+  ids.add(edge.id);
+  edges.push(edge);
+}
+
+function selectedGraphNodeId() {
+  if (!state.selectedItem) {
+    return null;
+  }
+  return `${state.selectedItem.type}:${state.selectedItem.laneIndex}:${state.selectedItem.itemIndex}`;
 }
 
 function appendWaveformOverlay(trackEl, trackContentWidth) {
@@ -2026,6 +2708,9 @@ window.addEventListener("keydown", function onTimelineKeyDown(event) {
       updateChipStates();
       updateTimeRangeSelectionOverlays();
       renderSelection();
+      if (state.surfaceMode === "graph") {
+        renderGraphInspectionMode();
+      }
       renderShell();
       break;
   }
@@ -2060,6 +2745,9 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
   updateChipStates();
   updateTimeRangeSelectionOverlays();
   renderSelection();
+  if (state.surfaceMode === "graph") {
+    renderGraphInspectionMode();
+  }
   renderShell();
 }
 
@@ -2086,6 +2774,9 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   updateChipStates();
   updateTimeRangeSelectionOverlays();
   renderSelection();
+  if (state.surfaceMode === "graph") {
+    renderGraphInspectionMode();
+  }
   renderShell();
 }
 
