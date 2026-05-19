@@ -108,7 +108,10 @@ use listenbury::hearing::{SelfHearingState, SuppressionDecision};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::live_trace::{JsonlTraceWriter, LiveTraceRecorder, SseBroadcaster, TeeSink};
+use listenbury::live_trace::{
+    DiskTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink,
+    TraceRuntimeMetadata, TraceSessionMetadata,
+};
 #[cfg(any(
     test,
     all(
@@ -221,6 +224,13 @@ use std::sync::{
     feature = "tts-piper"
 ))]
 use std::time::{Duration, Instant};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use serde_json::json;
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -297,7 +307,43 @@ const MONO_CHANNELS: u16 = 1;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-type LiveTrace = LiveTraceRecorder<TeeSink<Option<JsonlTraceWriter>, Option<SseBroadcaster>>>;
+type LiveTrace = LiveTraceRecorder<TeeSink<Option<DiskTraceWriter>, Option<SseBroadcaster>>>;
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn live_trace_session_metadata(
+    session_id: SessionId,
+    trace_started_at: ExactTimestamp,
+    command: &LiveHalfDuplexCommand,
+) -> TraceSessionMetadata {
+    let mut runtime = TraceRuntimeMetadata::new("listenbury listen");
+    runtime.mode = Some(if command.duplex {
+        "continue_pipeline".to_string()
+    } else {
+        "half_duplex".to_string()
+    });
+    runtime.configuration = serde_json::from_value(json!({
+        "seconds": command.seconds,
+        "model_profile": format!("{:?}", command.model_profile),
+        "no_backchannels": command.no_backchannels,
+        "whisper_model": command.whisper_model.as_ref().map(|path| path.display().to_string()),
+        "llm_model": command.llm_model.as_ref().map(|path| path.display().to_string()),
+        "llm_gpu_layers": command.llm_gpu_layers,
+        "piper_bin": command.piper_bin.as_ref().map(|path| path.display().to_string()),
+        "piper_voice": command.piper_voice.as_ref().map(|path| path.display().to_string()),
+        "vad": format!("{:?}", command.vad),
+        "web": command.web,
+        "web_host": command.web_host,
+        "web_port": command.web_port,
+        "duplex": command.duplex,
+    }))
+    .expect("listen trace runtime configuration should serialize to an object");
+    TraceSessionMetadata::new(session_id, trace_started_at, runtime)
+}
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -474,10 +520,16 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     }
 
     let trace_started_at = ExactTimestamp::now();
+    let trace_session_id = SessionId::new();
     let trace_writer = command
         .jsonl
         .as_deref()
-        .map(JsonlTraceWriter::create)
+        .map(|path| {
+            DiskTraceWriter::create(
+                path,
+                live_trace_session_metadata(trace_session_id, trace_started_at, &command),
+            )
+        })
         .transpose()?;
     let paths = LiveHalfDuplexModelPaths::discover(&command)?;
     let mut recognizer = listenbury::WhisperSpeechRecognizer::new(&paths.whisper_model)
@@ -658,7 +710,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         None
     };
 
-    let mut trace = LiveTraceRecorder::new(trace_started_at, TeeSink(trace_writer, broadcaster));
+    let mut trace =
+        LiveTraceRecorder::with_session_id(trace_session_id, trace_started_at, TeeSink(trace_writer, broadcaster));
     trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
 
     println!(

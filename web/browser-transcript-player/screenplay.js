@@ -5,6 +5,11 @@ import {
   reduceNarrativeEvent,
 } from "/assets/screenplay-model.mjs";
 import { toTitleCase } from "/assets/scene-heading.mjs";
+import {
+  isTraceSessionEnvelope,
+  parseTraceEventsJsonl,
+  traceSessionLabel,
+} from "/assets/trace-session.mjs";
 
 const scriptRoot = document.getElementById("script");
 const statusEl = document.getElementById("connection-status");
@@ -26,8 +31,15 @@ const pageState = {
 
 let renderScheduled = false;
 
-connectLiveEvents();
+void initializeScreenplay();
 render();
+
+async function initializeScreenplay() {
+  const loadedAttachedTrace = await loadAttachedTraceSession();
+  if (!loadedAttachedTrace) {
+    connectLiveEvents();
+  }
+}
 
 function connectLiveEvents() {
   const source = new EventSource("/api/live-events");
@@ -70,6 +82,46 @@ function connectLiveEvents() {
     scheduleRender();
     source.close();
   };
+}
+
+async function loadAttachedTraceSession() {
+  try {
+    const sessionResponse = await fetch("/api/trace-session");
+    if (sessionResponse.ok) {
+      const sessionEnvelope = await sessionResponse.json();
+      if (isTraceSessionEnvelope(sessionEnvelope)) {
+        applyRecordedEvents(sessionEnvelope.events);
+        pageState.connectionStatus = "recorded";
+        pageState.connectionClass = "is-connected";
+        pageState.message = `Loaded recorded session: ${traceSessionLabel(sessionEnvelope, "attached trace")}`;
+        scheduleRender();
+        return true;
+      }
+    }
+    const traceResponse = await fetch("/api/trace");
+    if (!traceResponse.ok) {
+      return false;
+    }
+    const { events } = parseTraceEventsJsonl(await traceResponse.text());
+    if (!events.length) {
+      return false;
+    }
+    applyRecordedEvents(events);
+    pageState.connectionStatus = "recorded";
+    pageState.connectionClass = "is-connected";
+    pageState.message = "Loaded recorded trace.";
+    scheduleRender();
+    return true;
+  } catch (error) {
+    console.error("Failed to load recorded trace:", error);
+  }
+  return false;
+}
+
+function applyRecordedEvents(events) {
+  for (const event of events) {
+    reduceNarrativeEvent(session, event);
+  }
 }
 
 function scheduleRender() {

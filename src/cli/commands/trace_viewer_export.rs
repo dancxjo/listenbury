@@ -1,22 +1,19 @@
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 
 use anyhow::{Context, Result};
 
 use crate::cli::TraceViewerExportCommand;
 
 pub(crate) fn run_trace_viewer_export(command: TraceViewerExportCommand) -> Result<()> {
-    let input = File::open(&command.input_jsonl)
-        .with_context(|| format!("open live trace JSONL at {}", command.input_jsonl.display()))?;
-    let reader = BufReader::new(input);
-    let payload =
-        listenbury::trace::viewer_payload::live_trace_jsonl_reader_to_viewer_payload(reader)
-            .with_context(|| {
-                format!(
-                    "convert live trace JSONL {} into viewer payload",
-                    command.input_jsonl.display()
-                )
-            })?;
+    let events = listenbury::live_trace::read_live_trace_events(&command.input_jsonl)
+        .with_context(|| {
+            format!(
+                "read live trace events from {}",
+                command.input_jsonl.display()
+            )
+        })?;
+    let payload = listenbury::trace::viewer_payload::live_trace_events_to_viewer_payload(&events);
 
     if let Some(parent) = command
         .output_json
@@ -48,10 +45,11 @@ pub(crate) fn run_trace_viewer_export(command: TraceViewerExportCommand) -> Resu
         .with_context(|| format!("flush {}", command.output_json.display()))?;
 
     println!(
-        "wrote viewer payload with {} stream lanes, {} events, {} markers to {}",
+        "wrote viewer payload with {} stream lanes, {} events, {} markers from {} to {}",
         payload.streams.len(),
         payload.events.len(),
         payload.markers.len(),
+        command.input_jsonl.display(),
         command.output_json.display()
     );
     Ok(())
