@@ -114,6 +114,7 @@ const state = {
   suppressTimelineClick: false,
   itemTimingByKey: new Map(),   // itemKey → {startMs, endMs}
   chipElementByKey: new Map(),  // itemKey → DOM element
+  playbackCursorElements: [],
 };
 
 const uiState = {
@@ -1452,6 +1453,7 @@ function renderCustomTimeline() {
 
   state.chipElementByKey = new Map();
   state.itemTimingByKey = new Map();
+  state.playbackCursorElements = [];
 
   const nowMs = Math.round(audio.currentTime * 1000);
 
@@ -1523,6 +1525,19 @@ function renderCustomTimeline() {
     selLabel.className = "time-range-selection-label";
     selOverlay.append(selLabel);
     trackEl.append(selOverlay);
+
+    const focusOverlay = document.createElement("div");
+    focusOverlay.className = "selection-focus-overlay";
+    focusOverlay.setAttribute("aria-hidden", "true");
+    focusOverlay.hidden = true;
+    trackEl.append(focusOverlay);
+
+    const playbackCursor = document.createElement("div");
+    playbackCursor.className = "playback-cursor";
+    playbackCursor.setAttribute("aria-hidden", "true");
+    playbackCursor.hidden = true;
+    trackEl.append(playbackCursor);
+    state.playbackCursorElements.push(playbackCursor);
 
     if (lane.type === "word") {
       lane.words.forEach((word, wordIndex) => {
@@ -1652,6 +1667,7 @@ function renderCustomTimeline() {
   });
 
   updateTimeRangeSelectionOverlays();
+  updatePlaybackCursorOverlays();
 
   if (state.followLatest) {
     applyFollowLatest();
@@ -2016,6 +2032,7 @@ window.addEventListener("keydown", function onTimelineKeyDown(event) {
 });
 
 function refreshPlaybackState() {
+  updatePlaybackCursorOverlays();
   updateChipStates();
   renderShell();
 }
@@ -2036,7 +2053,12 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
   }
 
   clearPlaybackStop();
+  ensureTimingVisible({
+    startMs: word.resolvedTiming.start_ms,
+    endMs: Math.max(word.resolvedTiming.end_ms, word.resolvedTiming.start_ms + 1),
+  });
   updateChipStates();
+  updateTimeRangeSelectionOverlays();
   renderSelection();
   renderShell();
 }
@@ -2057,9 +2079,50 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
   }
 
   clearPlaybackStop();
+  ensureTimingVisible({
+    startMs: event.start_ms,
+    endMs: Math.max(event.end_ms, event.start_ms + 1),
+  });
   updateChipStates();
+  updateTimeRangeSelectionOverlays();
   renderSelection();
   renderShell();
+}
+
+function ensureTimingVisible(timing) {
+  if (!timing) {
+    return;
+  }
+  const col = getScrollContainer();
+  if (!col) {
+    return;
+  }
+  const startPx = pxForMs(timing.startMs);
+  const endPx = pxForMs(Math.max(timing.endMs, timing.startMs + 1));
+  const nextScrollLeft = scrollLeftForTimingFocus(
+    { startPx, endPx },
+    col.scrollLeft,
+    col.clientWidth,
+    col.scrollWidth,
+  );
+  if (nextScrollLeft === null) {
+    return;
+  }
+  _programmaticScroll = true;
+  col.scrollLeft = nextScrollLeft;
+  requestAnimationFrame(() => {
+    _programmaticScroll = false;
+  });
+}
+
+function scrollLeftForTimingFocus(bounds, viewportStartPx, viewportWidthPx, contentWidthPx) {
+  const viewportEndPx = viewportStartPx + viewportWidthPx;
+  if (bounds.startPx >= viewportStartPx && bounds.endPx <= viewportEndPx) {
+    return null;
+  }
+  const centerPx = (bounds.startPx + bounds.endPx) / 2;
+  const maxScrollLeft = Math.max(0, contentWidthPx - viewportWidthPx);
+  return Math.max(0, Math.min(maxScrollLeft, centerPx - viewportWidthPx / 2));
 }
 
 function zoomTimelineIn() {
@@ -2178,23 +2241,53 @@ function selectedItemTiming() {
 }
 
 function updateTimeRangeSelectionOverlays() {
-  const selection = activeTimeRangeSelection();
-  document.querySelectorAll(".lane-track .time-range-selection").forEach((overlay) => {
-    if (!selection) {
-      overlay.hidden = true;
+  const brushSelection = activeTimeRangeSelection();
+  const selectedTiming = brushSelection ? null : selectedItemTiming();
+  document.querySelectorAll(".lane-track").forEach((trackEl) => {
+    const overlay = trackEl.querySelector(".time-range-selection");
+    if (overlay) {
+      if (!brushSelection) {
+        overlay.hidden = true;
+      } else {
+        const startPx = pxForMs(brushSelection.startMs);
+        const widthPx = Math.max(0, pxForMs(brushSelection.endMs) - startPx);
+        overlay.hidden = false;
+        overlay.style.left = `${startPx}px`;
+        overlay.style.width = `${widthPx}px`;
+        const label = overlay.querySelector(".time-range-selection-label");
+        if (label) {
+          label.textContent = `${formatRulerLabel(brushSelection.startMs)}–${formatRulerLabel(brushSelection.endMs)}`;
+        }
+      }
+    }
+    const focusOverlay = trackEl.querySelector(".selection-focus-overlay");
+    if (!focusOverlay) {
       return;
     }
-    const startPx = pxForMs(selection.startMs);
-    const widthPx = Math.max(0, pxForMs(selection.endMs) - startPx);
-    overlay.hidden = false;
-    overlay.style.left = `${startPx}px`;
-    overlay.style.width = `${widthPx}px`;
-    const label = overlay.querySelector(".time-range-selection-label");
-    if (label) {
-      label.textContent = `${formatRulerLabel(selection.startMs)}–${formatRulerLabel(selection.endMs)}`;
+    if (!selectedTiming) {
+      focusOverlay.hidden = true;
+      return;
     }
+    const startPx = pxForMs(selectedTiming.startMs);
+    const widthPx = Math.max(0, pxForMs(selectedTiming.endMs) - startPx);
+    focusOverlay.hidden = false;
+    focusOverlay.style.left = `${startPx}px`;
+    focusOverlay.style.width = `${widthPx}px`;
   });
+  updatePlaybackCursorOverlays();
   updateZoomControls();
+}
+
+function updatePlaybackCursorOverlays() {
+  if (!state.playbackCursorElements.length) {
+    return;
+  }
+  const nowMs = Math.max(0, Math.min(state.maxDurationMs, Math.round(audio.currentTime * 1000)));
+  const leftPx = pxForMs(nowMs);
+  for (const cursor of state.playbackCursorElements) {
+    cursor.style.left = `${leftPx}px`;
+    cursor.hidden = false;
+  }
 }
 
 function activeTimeRangeSelection() {
