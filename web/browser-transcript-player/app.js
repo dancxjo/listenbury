@@ -330,6 +330,28 @@ function PlaybackToolbar({ projection }) {
   );
 }
 
+function TimelineTranscriptLiteralPane({ projection }) {
+  return h(
+    "div",
+    {
+      id: "timeline-transcript-literal",
+      className: "timeline-transcript-literal",
+      hidden: !projection.liveMode,
+      "aria-live": "polite",
+      "aria-label": projection.literalTranscriptText,
+    },
+    h("span", { className: "timeline-transcript-literal-label" }, "Transcript"),
+    h(
+      "div",
+      {
+        id: "transcript-ribbon-literal",
+        className: "transcript-ribbon-literal",
+      },
+      renderLiteralTranscriptTokens(projection.transcriptTokens),
+    ),
+  );
+}
+
 function TranscriptRibbonPane({ projection }) {
   return h(
     "div",
@@ -338,15 +360,6 @@ function TranscriptRibbonPane({ projection }) {
     h(
       "div",
       { className: "transcript-ribbon-body" },
-      h(
-        "div",
-        {
-          id: "transcript-ribbon-literal",
-          className: "transcript-ribbon-literal",
-          "aria-label": projection.literalTranscriptText,
-        },
-        renderLiteralTranscriptTokens(projection.transcriptTokens),
-      ),
       h(
         "span",
         { id: "transcript-ribbon-text", className: "transcript-ribbon-text" },
@@ -458,6 +471,10 @@ function renderShell() {
   const timelinePlaybackRoot = document.getElementById("timeline-playback-toolbar-root");
   if (timelinePlaybackRoot) {
     preactRender(h(PlaybackToolbar, { projection }), timelinePlaybackRoot);
+  }
+  const timelineTranscriptLiteralRoot = document.getElementById("timeline-transcript-literal-root");
+  if (timelineTranscriptLiteralRoot) {
+    preactRender(h(TimelineTranscriptLiteralPane, { projection }), timelineTranscriptLiteralRoot);
   }
   if (transcriptShellRoot) {
     preactRender(h(TranscriptRibbonPane, { projection }), transcriptShellRoot);
@@ -3472,6 +3489,10 @@ function createTimelinePlaybackDeck() {
   const deckEl = document.createElement("div");
   deckEl.className = "timeline-playback-deck";
 
+  const literalRoot = document.createElement("div");
+  literalRoot.id = "timeline-transcript-literal-root";
+  literalRoot.className = "timeline-transcript-literal-root";
+
   const toolbarRoot = document.createElement("div");
   toolbarRoot.id = "timeline-playback-toolbar-root";
   toolbarRoot.className = "timeline-playback-toolbar-root";
@@ -3481,7 +3502,7 @@ function createTimelinePlaybackDeck() {
   audioSlot.className = "timeline-audio-slot";
   audioSlot.append(audio);
 
-  deckEl.append(toolbarRoot, audioSlot);
+  deckEl.append(literalRoot, toolbarRoot, audioSlot);
   return deckEl;
 }
 
@@ -3663,16 +3684,17 @@ function spectrogramVersion(spectrogram) {
   return version;
 }
 
-function waveformSpectrogramPanelWidth() {
-  const col = getScrollContainer();
-  return Math.max(320, col?.clientWidth ?? 720);
+function spectrogramCanvasMetrics(canvas, renderedWidthPx, fallbackHeightPx = 112) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    renderedWidthPx: Math.max(1, renderedWidthPx),
+    canvasWidthPx: Math.max(1, Math.round(Math.min(renderedWidthPx, WAVEFORM_CANVAS_MAX_WIDTH_PX))),
+    cssHeight: Math.max(1, Math.round(rect.height || fallbackHeightPx)),
+  };
 }
 
-function waveformSpectrogramSignature(canvas) {
-  const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.round(rect.width || waveformSpectrogramPanelWidth()));
-  const cssHeight = Math.max(1, Math.round(rect.height || 112));
-  const viewport = getScrollViewport();
+function waveformSpectrogramSignature(canvas, renderedWidthPx = spectrogramRenderedWidth(canvas)) {
+  const { canvasWidthPx, cssHeight } = spectrogramCanvasMetrics(canvas, renderedWidthPx);
   const level = selectSpectrogramLevel(state.waveform.spectrogram, {
     pxPerSecond: state.zoomPxPerSecond,
   });
@@ -3681,20 +3703,29 @@ function waveformSpectrogramSignature(canvas) {
     state.waveform.url ?? "",
     state.waveform.durationMs,
     spectrogramVersion(state.waveform.spectrogram),
-    cssWidth,
+    renderedWidthPx,
+    canvasWidthPx,
     cssHeight,
-    viewport.startMs.toFixed(2),
-    viewport.endMs.toFixed(2),
     level?.id ?? "none",
+    level?.hopMs ?? "",
     Math.min(2, window.devicePixelRatio || 1),
   ].join("|");
 }
 
-function scheduleWaveformSpectrogramDraw(canvas) {
+function spectrogramRenderedWidth(canvas) {
+  return Math.max(
+    1,
+    Math.round(Number(canvas?.dataset.renderedWidthPx) || centralWaveformCanvasWidth(getTrackContentWidth())),
+  );
+}
+
+function scheduleWaveformSpectrogramDraw(canvas, renderedWidthPx = spectrogramRenderedWidth(canvas)) {
   if (!canvas) {
     return;
   }
-  const signature = waveformSpectrogramSignature(canvas);
+  canvas.dataset.renderedWidthPx = String(Math.max(1, Math.round(renderedWidthPx)));
+  syncWaveformSpectrogramScroll(canvas);
+  const signature = waveformSpectrogramSignature(canvas, renderedWidthPx);
   if (
     canvas.dataset.spectrogramSignature === signature ||
     canvas.dataset.pendingSpectrogramSignature === signature
@@ -3702,16 +3733,28 @@ function scheduleWaveformSpectrogramDraw(canvas) {
     return;
   }
   canvas.dataset.pendingSpectrogramSignature = signature;
-  requestAnimationFrame(() => drawWaveformSpectrogram(canvas, signature));
+  requestAnimationFrame(() => drawWaveformSpectrogram(canvas, renderedWidthPx, signature));
 }
 
-function drawWaveformSpectrogram(canvas, signature = waveformSpectrogramSignature(canvas)) {
-  const rect = canvas.getBoundingClientRect();
-  const cssWidth = Math.max(1, Math.round(rect.width || waveformSpectrogramPanelWidth()));
-  const cssHeight = Math.max(1, Math.round(rect.height || 112));
+function syncWaveformSpectrogramScroll(canvas = document.getElementById("waveform-spectrogram-canvas")) {
+  if (!canvas) {
+    return;
+  }
+  const col = getScrollContainer();
+  const scrollLeft = Math.max(0, col?.scrollLeft ?? 0);
+  canvas.style.transform = `translateX(${-scrollLeft}px)`;
+}
+
+function drawWaveformSpectrogram(
+  canvas,
+  renderedWidthPx = spectrogramRenderedWidth(canvas),
+  signature = waveformSpectrogramSignature(canvas, renderedWidthPx),
+) {
+  const { canvasWidthPx, cssHeight } = spectrogramCanvasMetrics(canvas, renderedWidthPx);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  canvas.width = Math.round(cssWidth * dpr);
+  canvas.width = Math.round(canvasWidthPx * dpr);
   canvas.height = Math.round(cssHeight * dpr);
+  canvas.style.width = `${Math.max(1, Math.round(renderedWidthPx))}px`;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     delete canvas.dataset.pendingSpectrogramSignature;
@@ -3719,9 +3762,9 @@ function drawWaveformSpectrogram(canvas, signature = waveformSpectrogramSignatur
   }
 
   ctx.scale(dpr, dpr);
-  ctx.clearRect(0, 0, cssWidth, cssHeight);
+  ctx.clearRect(0, 0, canvasWidthPx, cssHeight);
   ctx.fillStyle = "rgba(7, 10, 14, 0.96)";
-  ctx.fillRect(0, 0, cssWidth, cssHeight);
+  ctx.fillRect(0, 0, canvasWidthPx, cssHeight);
 
   const spectrogram = state.waveform.spectrogram;
   const level = selectSpectrogramLevel(spectrogram, { pxPerSecond: state.zoomPxPerSecond });
@@ -3735,33 +3778,34 @@ function drawWaveformSpectrogram(canvas, signature = waveformSpectrogramSignatur
     return;
   }
 
-  const viewport = getScrollViewport();
-  const viewportDurationMs = Math.max(1, viewport.endMs - viewport.startMs);
   const yToBin = new Int16Array(cssHeight);
   for (let y = 0; y < cssHeight; y++) {
     const normalized = 1 - y / Math.max(1, cssHeight - 1);
     yToBin[y] = Math.max(0, Math.min(level.binCount - 1, Math.round(normalized * (level.binCount - 1))));
   }
-  const image = ctx.createImageData(cssWidth, cssHeight);
-  for (let x = 0; x < cssWidth; x++) {
-    const columnStartMs = viewport.startMs + (x / cssWidth) * viewportDurationMs;
-    const columnEndMs = viewport.startMs + ((x + 1) / cssWidth) * viewportDurationMs;
-    const frameStart = Math.max(0, Math.floor(columnStartMs / level.hopMs));
-    const frameEnd = Math.max(
-      frameStart,
-      Math.min(level.frames.length - 1, Math.ceil(columnEndMs / level.hopMs)),
-    );
+  const palette = spectrogramColorPalette(level.minValue, level.maxValue);
+  const paletteScale = 255 / Math.max(1, level.maxValue - level.minValue);
+  const image = ctx.createImageData(canvasWidthPx, cssHeight);
+  for (let x = 0; x < canvasWidthPx; x++) {
+    const column = spectrogramColumnWindowAtCanvasX(x, canvasWidthPx, renderedWidthPx, level);
+    if (!column) {
+      continue;
+    }
+    const { frameStart, frameEnd } = column;
     for (let y = 0; y < cssHeight; y++) {
       const binIndex = yToBin[y];
       let value = level.minValue;
       for (let frameIndex = frameStart; frameIndex <= frameEnd; frameIndex++) {
         value = Math.max(value, level.frames[frameIndex]?.[binIndex] ?? level.minValue);
       }
-      const [r, g, b] = spectrogramColor(value, level.minValue, level.maxValue);
-      const pixelIndex = (y * cssWidth + x) * 4;
-      image.data[pixelIndex] = r;
-      image.data[pixelIndex + 1] = g;
-      image.data[pixelIndex + 2] = b;
+      const colorIndex = Math.max(
+        0,
+        Math.min(255, Math.round((value - level.minValue) * paletteScale)),
+      ) * 3;
+      const pixelIndex = (y * canvasWidthPx + x) * 4;
+      image.data[pixelIndex] = palette[colorIndex];
+      image.data[pixelIndex + 1] = palette[colorIndex + 1];
+      image.data[pixelIndex + 2] = palette[colorIndex + 2];
       image.data[pixelIndex + 3] = 255;
     }
   }
@@ -3770,12 +3814,39 @@ function drawWaveformSpectrogram(canvas, signature = waveformSpectrogramSignatur
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, cssHeight - 0.5);
-  ctx.lineTo(cssWidth, cssHeight - 0.5);
+  ctx.lineTo(canvasWidthPx, cssHeight - 0.5);
   ctx.stroke();
 
   updateWaveformSpectrogramReadout(level);
   canvas.dataset.spectrogramSignature = signature;
   delete canvas.dataset.pendingSpectrogramSignature;
+}
+
+function spectrogramColumnWindowAtCanvasX(canvasX, canvasWidthPx, renderedWidthPx, level) {
+  const startTimelinePx = renderedCanvasXToTimelinePx({
+    canvasX,
+    canvasWidthPx,
+    renderedWidthPx,
+  });
+  const endTimelinePx = renderedCanvasXToTimelinePx({
+    canvasX: canvasX + 1,
+    canvasWidthPx,
+    renderedWidthPx,
+  });
+  const startMs = currentTimeScale().pxToMs(startTimelinePx);
+  const endMs = currentTimeScale().pxToMs(endTimelinePx);
+  if (endMs < 0 || startMs > state.waveform.durationMs || state.waveform.durationMs <= 0) {
+    return null;
+  }
+  const frameStart = Math.max(0, Math.floor(Math.max(0, startMs) / level.hopMs));
+  const frameEnd = Math.max(
+    frameStart,
+    Math.min(level.frames.length - 1, Math.ceil(Math.min(state.waveform.durationMs, endMs) / level.hopMs)),
+  );
+  if (frameStart >= level.frames.length) {
+    return null;
+  }
+  return { frameStart, frameEnd };
 }
 
 function spectrogramColor(value, minValue = SPECTROGRAM_MIN_DB, maxValue = SPECTROGRAM_MAX_DB) {
@@ -3784,6 +3855,19 @@ function spectrogramColor(value, minValue = SPECTROGRAM_MIN_DB, maxValue = SPECT
   const saturation = 78 + normalized * 18;
   const lightness = 10 + normalized * 56;
   return hslToRgb(hue, saturation / 100, lightness / 100);
+}
+
+function spectrogramColorPalette(minValue = SPECTROGRAM_MIN_DB, maxValue = SPECTROGRAM_MAX_DB) {
+  const palette = new Uint8ClampedArray(256 * 3);
+  for (let index = 0; index < 256; index++) {
+    const value = minValue + (index / 255) * Math.max(1, maxValue - minValue);
+    const [r, g, b] = spectrogramColor(value, minValue, maxValue);
+    const offset = index * 3;
+    palette[offset] = r;
+    palette[offset + 1] = g;
+    palette[offset + 2] = b;
+  }
+  return palette;
 }
 
 function hslToRgb(hueDeg, saturation, lightness) {
@@ -3853,8 +3937,7 @@ function updateWaveformSpectrogramHover(event) {
   }
   const x = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
   const y = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
-  const viewport = getScrollViewport();
-  const timeMs = viewport.startMs + (x / rect.width) * Math.max(1, viewport.endMs - viewport.startMs);
+  const timeMs = Math.max(0, Math.min(state.waveform.durationMs, msForPx(x)));
   const frequencyHz = (1 - y / rect.height) * level.nyquistHz;
   const magnitude = spectrogramValueAt(level, timeMs, frequencyHz);
   updateWaveformSpectrogramReadout(
@@ -3918,7 +4001,8 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   const trackEl = document.createElement("div");
   trackEl.className = "lane-track waveform-track";
   trackEl.id = "waveform-panel";
-  trackEl.style.setProperty("--waveform-spectrogram-viewport-width", `${waveformSpectrogramPanelWidth()}px`);
+  const col = getScrollContainer();
+  trackEl.style.setProperty("--waveform-spectrogram-viewport-width", `${Math.max(320, col?.clientWidth ?? 720)}px`);
 
   // Waveform canvas — fills the full panel height as background
   const waveformCanvasWidth = centralWaveformCanvasWidth(trackContentWidth);
@@ -3938,6 +4022,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   spectrogramCanvas.id = "waveform-spectrogram-canvas";
   spectrogramCanvas.className = "waveform-spectrogram-canvas";
   spectrogramCanvas.setAttribute("aria-label", "Spectrogram aligned to the waveform timeline");
+  spectrogramCanvas.style.width = `${waveformCanvasWidth}px`;
   spectrogramPanel.append(spectrogramCanvas);
   const readout = document.createElement("div");
   readout.id = "waveform-spectrogram-readout";
@@ -3956,7 +4041,7 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   spectrogramPanel.append(axis);
   trackEl.append(spectrogramPanel);
   updateWaveformSpectrogramReadout(spectrogramLevel);
-  scheduleWaveformSpectrogramDraw(spectrogramCanvas);
+  scheduleWaveformSpectrogramDraw(spectrogramCanvas, waveformCanvasWidth);
 
   const wordDeck = document.createElement("div");
   wordDeck.className = "waveform-word-deck";
@@ -4402,7 +4487,7 @@ function buildRulerTicks(maxDurationMs, viewportMs) {
 // ── Event handlers for the custom timeline ──────────────────────────────────
 
 function onTracksScroll() {
-  scheduleWaveformSpectrogramDraw(document.getElementById("waveform-spectrogram-canvas"));
+  syncWaveformSpectrogramScroll();
   updateWaveformResolutionDebugReadout();
   if (_programmaticScroll) return;
   if (state.followLatest) {
@@ -4441,6 +4526,7 @@ function onTimelineWheel(event) {
   _programmaticScroll = true;
   const maxScrollLeft = Math.max(0, col.scrollWidth - col.clientWidth);
   col.scrollLeft = Math.max(0, Math.min(maxScrollLeft, pxForMs(anchorMs) - xInViewport));
+  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });
@@ -4764,6 +4850,7 @@ function ensureTimingVisible(timing) {
   }
   _programmaticScroll = true;
   col.scrollLeft = nextScrollLeft;
+  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });
@@ -4809,6 +4896,7 @@ function zoomToTimeSelection(selection) {
   if (col) {
     _programmaticScroll = true;
     col.scrollLeft = pxForMs(viewStartMs);
+    syncWaveformSpectrogramScroll();
     requestAnimationFrame(() => {
       _programmaticScroll = false;
     });
@@ -4829,6 +4917,7 @@ function zoomToFullSession() {
   if (col) {
     _programmaticScroll = true;
     col.scrollLeft = 0;
+    syncWaveformSpectrogramScroll();
     requestAnimationFrame(() => {
       _programmaticScroll = false;
     });
@@ -4862,6 +4951,7 @@ function applyFollowLatest() {
   const targetScroll = Math.max(0, getTrackContentWidth() - col.clientWidth);
   _programmaticScroll = true;
   col.scrollLeft = targetScroll;
+  syncWaveformSpectrogramScroll();
   requestAnimationFrame(() => {
     _programmaticScroll = false;
   });

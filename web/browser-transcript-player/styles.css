@@ -497,6 +497,32 @@ h1 {
   align-items: center;
 }
 
+.timeline-transcript-literal-root {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.timeline-transcript-literal {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.timeline-transcript-literal[hidden] {
+  display: none;
+}
+
+.timeline-transcript-literal-label {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+}
+
 .playback-toolbar {
   justify-content: flex-start;
 }
@@ -575,9 +601,10 @@ h1 {
 }
 
 .waveform-spectrogram-canvas {
-  width: 100%;
   height: 100%;
   display: block;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 .waveform-spectrogram-readout {
@@ -1372,6 +1399,11 @@ h1 {
 
   .timeline-playback-deck {
     width: 100%;
+  }
+
+  .timeline-transcript-literal {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
   }
 
   .playback-toolbar {
