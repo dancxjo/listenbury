@@ -213,7 +213,9 @@ use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::word::{TranscriptWord, transcript_to_word_stream};
+use listenbury::word::{
+    TranscriptWord, transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -3675,9 +3677,10 @@ impl ContinueEar {
                                             &output.text,
                                         )
                                     } else {
-                                        let mut stream = transcript_to_word_stream(
+                                        let mut stream = transcript_to_energy_snapped_word_stream(
                                             WordStreamId(next_stream_id),
                                             &output.words,
+                                            &work.frames,
                                         );
                                         stream.source = WordStreamSource::LiveAsr;
                                         stream

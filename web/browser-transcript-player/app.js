@@ -1776,21 +1776,37 @@ function normalizeWordLane(lane) {
   const totalWords = lane.stream.words.length || 1;
   const baseWords = lane.stream.words.map((word, wordIndex) => {
     const hasMeasuredTiming = Boolean(word.timing);
+    const hasBackendEnergyTiming = hasMeasuredTiming && word.boundary_source === "RefinedAcoustic";
     const timing = hasMeasuredTiming
       ? word.timing
       : fallbackTiming(totalWords, wordIndex, inferPayloadDuration(lane.stream));
+    const energyTiming = hasBackendEnergyTiming
+      ? {
+          ...timing,
+          method: "backend-acoustic-refiner",
+          confidence: word.timing_confidence ?? null,
+        }
+      : null;
     return {
       ...word,
       whisperTiming: hasMeasuredTiming ? word.timing : null,
-      energyTiming: null,
+      energyTiming,
       energySnapConfidence: null,
       resolvedTiming: timing,
-      timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
+      timingResolution: hasBackendEnergyTiming
+        ? "energy.snapped"
+        : hasMeasuredTiming
+          ? "word.timing"
+          : "fallback-layout",
       timingSourceDetail: describeTimingSource(
         {
           ...word,
-          timingResolution: hasMeasuredTiming ? "word.timing" : "fallback-layout",
-          energyTiming: null,
+          timingResolution: hasBackendEnergyTiming
+            ? "energy.snapped"
+            : hasMeasuredTiming
+              ? "word.timing"
+              : "fallback-layout",
+          energyTiming,
         },
         hasMeasuredTiming,
       ),

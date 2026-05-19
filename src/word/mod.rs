@@ -23,7 +23,7 @@ pub mod tts_export;
 
 pub use export::{
     HeuristicAcousticWordBoundaryRefiner, NoopWordBoundaryRefiner, TranscriptWord,
-    WordBoundaryRefiner, transcript_to_word_stream,
+    WordBoundaryRefiner, transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
 };
 pub use stream::{
     AudioRef, BoundarySource, PronunciationLookupStatus, TextSpan, TimedWordStream, WordCommitment,

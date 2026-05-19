@@ -124,7 +124,7 @@ pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> 
                 commitment: WordCommitment::Final,
                 boundary_source,
                 audio_ref: None,
-            pronunciation: None,
+                pronunciation: None,
             }
         })
         .collect();
@@ -134,6 +134,18 @@ pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> 
         source: WordStreamSource::RecordedAudio,
         words: word_nodes,
     }
+}
+
+/// Convert ASR words into a [`TimedWordStream`] and immediately refine their
+/// boundaries against the sentence audio.
+pub fn transcript_to_energy_snapped_word_stream(
+    id: WordStreamId,
+    words: &[TranscriptWord],
+    audio: &[AudioFrame],
+) -> TimedWordStream {
+    let mut stream = transcript_to_word_stream(id, words);
+    HeuristicAcousticWordBoundaryRefiner.refine(audio, &mut stream);
+    stream
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +596,46 @@ mod tests {
         );
         assert_eq!(
             stream.words[1].boundary_source,
+            BoundarySource::RefinedAcoustic
+        );
+    }
+
+    #[test]
+    fn energy_snapped_export_refines_asr_words_against_audio() {
+        let words = vec![
+            TranscriptWord {
+                text: "snap".into(),
+                start_ms: Some(0),
+                end_ms: Some(250),
+                confidence: Some(0.8),
+            },
+            TranscriptWord {
+                text: "here".into(),
+                start_ms: Some(250),
+                end_ms: Some(600),
+                confidence: Some(0.8),
+            },
+        ];
+        let mut samples = vec![0.8f32; 700];
+        samples[205..300].fill(0.0);
+        let audio = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 1_000,
+            channels: 1,
+            samples,
+            voice_signatures: Vec::new(),
+        }];
+
+        let stream = transcript_to_energy_snapped_word_stream(WordStreamId(12), &words, &audio);
+
+        let boundary = stream.words[0].timing.expect("left timing").end_ms;
+        assert_eq!(
+            boundary,
+            stream.words[1].timing.expect("right timing").start_ms
+        );
+        assert!((205..=300).contains(&boundary));
+        assert_eq!(
+            stream.words[0].boundary_source,
             BoundarySource::RefinedAcoustic
         );
     }
