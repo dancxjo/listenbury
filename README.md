@@ -551,7 +551,9 @@ Optional web flags:
 listenbury listen --web --web-host 0.0.0.0 --web-port 9000
 ```
 
-WaveDeck is live-only and shows a pulsing **Live** indicator. Playback and timeline zoom controls stay available so you can drag-zoom into a time range as the DAW-style timeline updates. Event kinds are grouped into timeline lanes:
+WaveDeck is live-only and shows a pulsing **Live** indicator. Playback and timeline zoom controls stay available so you can drag-zoom into a time range as the DAW-style timeline updates. A new **Graph** mode (Cytoscape.js) provides span/alignment inspection with revision lineage chains, node-driven timeline focus, and filters for modality, turn, time window, commitment, and revision presence.
+
+Event kinds are grouped into timeline lanes:
 
 | Lane | Events |
 |---|---|

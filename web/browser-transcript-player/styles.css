@@ -134,6 +134,14 @@ h1 {
   min-width: 4.75rem;
 }
 
+.view-toolbar {
+  grid-column: 1 / -1;
+}
+
+.view-toolbar button {
+  min-width: 6rem;
+}
+
 .file-picker {
   min-height: 2.35rem;
   display: inline-flex;
@@ -227,6 +235,63 @@ h1 {
   overflow: hidden;
   display: flex;
   width: 100%;
+}
+
+.graph-mode-host {
+  min-height: 24rem;
+  border: 1px solid rgba(157, 171, 186, 0.18);
+  border-radius: 8px;
+  background: rgba(12, 15, 19, 0.84);
+  display: grid;
+  grid-template-rows: auto minmax(20rem, 1fr) auto;
+}
+
+.graph-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.graph-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.graph-toolbar select {
+  min-height: 1.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(21, 26, 31, 0.86);
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.graph-toggle input {
+  accent-color: var(--accent);
+}
+
+.graph-summary {
+  color: var(--accent);
+  font-size: 0.76rem;
+  margin-right: 0.25rem;
+}
+
+.alignment-graph {
+  min-height: 20rem;
+}
+
+.graph-help {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.65rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  border-top: 1px solid rgba(44, 55, 66, 0.5);
 }
 
 /* Labels column — fixed width, never scrolls horizontally */
