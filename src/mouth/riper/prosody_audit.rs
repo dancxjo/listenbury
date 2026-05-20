@@ -121,7 +121,7 @@ impl RiperStyleProfile {
                 focus_strength: 1.14,
                 finality_strength: 1.04,
             }),
-            "fast_backchannel" => Some(Self {
+            "fast_backchannel" | "fastbackchannel" => Some(Self {
                 base_rate: 1.25,
                 pitch_range: 0.92,
                 energy: 1.02,

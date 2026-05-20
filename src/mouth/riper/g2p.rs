@@ -669,7 +669,7 @@ fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
     match stress {
         LexicalStressLevel::Primary => Stress::Primary,
         LexicalStressLevel::Secondary => Stress::Secondary,
-        LexicalStressLevel::Unstressed => Stress::None,
+        LexicalStressLevel::Unstressed => Stress::Reduced,
     }
 }
 
