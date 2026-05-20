@@ -9,11 +9,9 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use tracing::debug;
 
 use crate::audio::frame::AudioFrame;
-#[cfg(feature = "tts-piper-native")]
-use crate::linguistic::{PronunciationService, service::default_english_variety};
 use crate::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
-use crate::mouth::piper_native::{NativePiperBackend, PiperEncoder, PiperVoiceConfig};
+use crate::mouth::piper_native::{NativePiperBackend, PiperVoiceConfig, SimpleEnglishG2p};
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
@@ -107,8 +105,7 @@ impl PiperBackendPreference {
 #[derive(Debug)]
 struct NativeTextPiperBackend {
     backend: NativePiperBackend,
-    pronunciation: PronunciationService,
-    encoder: PiperEncoder,
+    phonemizer: SimpleEnglishG2p,
 }
 
 #[cfg(feature = "tts-piper-native")]
@@ -142,11 +139,7 @@ impl NativeTextPiperBackend {
             })?;
         Ok(Self {
             backend,
-            pronunciation: PronunciationService::new(
-                crate::mouth::piper_native::SimpleEnglishG2p::default(),
-                default_english_variety(),
-            ),
-            encoder: PiperEncoder,
+            phonemizer: SimpleEnglishG2p::default(),
         })
     }
 }
@@ -155,11 +148,11 @@ impl NativeTextPiperBackend {
 impl TtsBackend for NativeTextPiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let t0 = Instant::now();
-        let phoneme_text = self
-            .pronunciation
-            .realize_text(text)
-            .with_context(|| format!("failed to realize phonemes for text `{text}`"))?;
-        let phonemes = self.encoder.encode(&phoneme_text);
+        let phonemes = self
+            .phonemizer
+            .phonemize_unit(text)
+            .with_context(|| format!("failed to realize native Piper phonemes for text `{text}`"))?
+            .phonemes;
         let ids = phonemes
             .to_piper_ids(self.backend.config())
             .with_context(|| {

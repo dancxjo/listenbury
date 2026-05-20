@@ -6,15 +6,13 @@ use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::audio::write_wav;
 #[cfg(feature = "tts-piper-native")]
-use listenbury::linguistic::{PronunciationService, service::default_english_variety};
-#[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::piper::ProcessPiperBackend;
 #[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::piper_native::{
-    NativePiperBackend, PiperEncoder, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence,
-    PiperVoiceConfig, SimpleEnglishG2p,
+    NativePiperBackend, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig,
+    SimpleEnglishG2p,
 };
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
@@ -271,15 +269,15 @@ fn resolve_native_ids(
                 .collect(),
         }
     } else {
-        let pronunciation =
-            PronunciationService::new(SimpleEnglishG2p::default(), default_english_variety());
-        let phoneme_text = pronunciation.realize_text(&args.text).with_context(|| {
-            format!(
-                "failed to realize phonemes for text `{}` for native Piper",
-                args.text
-            )
-        })?;
-        PiperEncoder.encode(&phoneme_text)
+        SimpleEnglishG2p::default()
+            .phonemize_unit(&args.text)
+            .with_context(|| {
+                format!(
+                    "failed to realize native Piper phonemes for text `{}`",
+                    args.text
+                )
+            })?
+            .phonemes
     };
 
     phoneme_sequence
