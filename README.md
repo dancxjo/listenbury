@@ -266,9 +266,12 @@ just build
 ```
 
 The default build enables the portable local stack, including audio capture,
-resampling, WebRTC VAD, ASR, local LLM, Piper TTS, native Piper scaffolding,
-webcam support, and model download support. CUDA and Metal accelerator variants
-remain explicit opt-ins because they depend on the target machine and platform.
+resampling, WebRTC VAD, ASR, local LLM, Piper TTS, Riper scaffolding,
+webcam support, and model download support. Riper is Listenbury's own custom
+translation of Piper: it runs Piper-compatible voice models through our local
+phoneme, prosody, and ONNX execution path instead of shelling out to the Piper
+process. CUDA and Metal accelerator variants remain explicit opt-ins because
+they depend on the target machine and platform.
 
 CUDA build:
 
@@ -550,6 +553,14 @@ Synthesizes and plays speech using Piper.
 listenbury say "Testing one two three."
 ```
 
+### `riper-compare`
+
+Compares external Piper process synthesis with Riper.
+
+```bash
+listenbury riper-compare "Testing one two three."
+```
+
 ### `reply`
 
 Runs a WAV through ASR, generates a reply, and synthesizes the response.
@@ -624,7 +635,7 @@ LISTENBURY_WHISPER_MODEL=/path/to/model.bin
 LISTENBURY_LLM_MODEL=/path/to/model.gguf
 LISTENBURY_PIPER_BIN=/path/to/piper
 LISTENBURY_PIPER_VOICE=/path/to/voice.onnx
-LISTENBURY_PIPER_BACKEND=process # process|native|native-fallback
+LISTENBURY_PIPER_BACKEND=process # process|riper|riper-fallback
 PETE_LLM=gpt-oss
 PETE_VOICE=Amy
 ```

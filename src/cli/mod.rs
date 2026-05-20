@@ -28,8 +28,11 @@ enum Command {
     Transcribe(TranscribeCommand),
     #[command(about = "Speak text aloud")]
     Say(SayCommand),
-    #[command(about = "Compare process-backed and native Piper synthesis")]
-    PiperCompare(PiperCompareCommand),
+    #[command(
+        alias = "piper-compare",
+        about = "Compare process-backed Piper and Riper synthesis"
+    )]
+    RiperCompare(RiperCompareCommand),
     #[command(
         alias = "live-half-duplex",
         about = "Listen and reply in a live voice loop"
@@ -284,19 +287,19 @@ pub(crate) struct SayCommand {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct PiperCompareCommand {
+pub(crate) struct RiperCompareCommand {
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) native_voice: Option<PathBuf>,
+    pub(crate) riper_voice: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) native_config: Option<PathBuf>,
+    pub(crate) riper_config: Option<PathBuf>,
     #[arg(long)]
     pub(crate) process_output_wav: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) native_output_wav: Option<PathBuf>,
+    pub(crate) riper_output_wav: Option<PathBuf>,
     #[arg(long)]
     pub(crate) phonemes: Option<String>,
     /// Text to compare. Defaults to a phonetic pangram-style utterance.
@@ -501,7 +504,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
-        Command::PiperCompare(cmd) => commands::run_piper_compare(cmd),
+        Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
         Command::Listen(cmd) => {
             if cmd.duplex {
                 commands::run_continue(continue_command_from_listen_command(cmd))
@@ -696,40 +699,40 @@ mod tests {
     }
 
     #[test]
-    fn piper_compare_parses_text_and_optional_outputs() {
+    fn riper_compare_parses_text_and_optional_outputs() {
         let cli = Cli::try_parse_from([
             "listenbury",
-            "piper-compare",
+            "riper-compare",
             "--process-output-wav",
             "out/process.wav",
-            "--native-output-wav",
-            "out/native.wav",
+            "--riper-output-wav",
+            "out/riper.wav",
             "I",
             "see.",
         ])
-        .expect("piper-compare should parse text and optional output paths");
+        .expect("riper-compare should parse text and optional output paths");
 
-        let Some(Command::PiperCompare(command)) = cli.command else {
-            panic!("expected piper-compare command");
+        let Some(Command::RiperCompare(command)) = cli.command else {
+            panic!("expected riper-compare command");
         };
         assert_eq!(
             command.process_output_wav,
             Some(PathBuf::from("out/process.wav"))
         );
         assert_eq!(
-            command.native_output_wav,
-            Some(PathBuf::from("out/native.wav"))
+            command.riper_output_wav,
+            Some(PathBuf::from("out/riper.wav"))
         );
         assert_eq!(command.words, ["I", "see."]);
     }
 
     #[test]
-    fn piper_compare_accepts_default_utterance() {
-        let cli = Cli::try_parse_from(["listenbury", "piper-compare"])
-            .expect("piper-compare should allow its default utterance");
+    fn riper_compare_accepts_default_utterance() {
+        let cli = Cli::try_parse_from(["listenbury", "riper-compare"])
+            .expect("riper-compare should allow its default utterance");
 
-        let Some(Command::PiperCompare(command)) = cli.command else {
-            panic!("expected piper-compare command");
+        let Some(Command::RiperCompare(command)) = cli.command else {
+            panic!("expected riper-compare command");
         };
         assert!(command.words.is_empty());
     }

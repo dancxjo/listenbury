@@ -1,5 +1,5 @@
 use crate::linguistic::phoneme::{PhonemeText, PhonemeTextUnit};
-use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
+use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 
 const WORD_SEPARATOR: &str = " ";
 const PHRASE_BREAK: &str = "|";

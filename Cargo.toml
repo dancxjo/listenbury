@@ -36,7 +36,7 @@ default = [
     "asr-whisper-async",
     "asr-whisper-quantization",
     "tts-piper",
-    "tts-piper-native",
+    "tts-riper",
     "vision-webcam",
     "model-download",
 ]
@@ -52,7 +52,7 @@ asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
 asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = []
-tts-piper-native = ["tts-piper", "dep:ort"]
+tts-riper = ["tts-piper", "dep:ort"]
 vision-webcam = []
 model-download = ["dep:ureq", "dep:dirs", "dep:inquire"]
 

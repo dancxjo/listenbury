@@ -14,8 +14,8 @@ use crate::linguistic::phonology::{
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
 use crate::linguistic::variety::{LinguisticVariety, Phonology};
-use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
-use crate::mouth::piper_native::text::{
+use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
+use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
@@ -170,9 +170,9 @@ pub enum PhonemeProsodyCandidateEvent {
 pub enum G2pError {
     #[error(transparent)]
     Normalization(#[from] TextNormalizationError),
-    #[error("unsupported word `{word}` for native Piper simple English G2P")]
+    #[error("unsupported word `{word}` for Riper simple English G2P")]
     UnsupportedWord { word: String },
-    #[error("unsupported initial `{initial}` for native Piper simple English G2P")]
+    #[error("unsupported initial `{initial}` for Riper simple English G2P")]
     UnsupportedInitial { initial: char },
 }
 
@@ -534,7 +534,7 @@ struct WordPhoneRealization {
 
 fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
     if let Some(phones) = cmudict::bundled().lookup(word) {
-        return Some(cmu_phones_to_native_piper_symbols(phones));
+        return Some(cmu_phones_to_riper_symbols(phones));
     }
 
     let ortho = OrthographicWord::new(word);
@@ -567,7 +567,7 @@ fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
     FALLBACK.get_or_init(|| SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback()))
 }
 
-fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> WordPhoneRealization {
+fn cmu_phones_to_riper_symbols(phones: &[CmuPhoneme]) -> WordPhoneRealization {
     let phonology_sequence = phones
         .iter()
         .map(|phone| phoneme_from_arpabet(&cmu_phone_source_symbol(phone), "cmudict"))
@@ -704,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn applies_intervocalic_flap_for_native_piper() {
+    fn applies_intervocalic_flap_for_riper() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");
         assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "ɾ", "AH", "L"]);
@@ -977,7 +977,7 @@ mod tests {
         use super::*;
         use crate::linguistic::phoneme::PhonemeTextUnit;
         use crate::linguistic::variety::{LinguisticVariety, Phonology, VarietyTag};
-        use crate::mouth::piper_native::encoder::PiperEncoder;
+        use crate::mouth::riper::encoder::PiperEncoder;
 
         fn en_us() -> LinguisticVariety {
             LinguisticVariety::tagged(

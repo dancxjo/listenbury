@@ -268,7 +268,7 @@ impl SoundItOutRules {
     }
 
     /// Approximate English fallback rules using the ARPAbet symbols already
-    /// used by CMUdict and the native Piper path.
+    /// used by CMUdict and the Riper path.
     ///
     /// This is intentionally a fallback, not a replacement for CMUdict. It is
     /// deterministic and broad enough for unknown words, acronyms, names, and

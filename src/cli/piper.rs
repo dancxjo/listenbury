@@ -1,20 +1,20 @@
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::play_audio_frames;
 use crate::cli::model_paths::resolve_piper_voice;
-use crate::cli::{PiperCompareCommand, SayCommand};
+use crate::cli::{RiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::audio::write_wav;
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 use listenbury::mouth::backend::TtsBackend;
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 use listenbury::mouth::piper::ProcessPiperBackend;
-#[cfg(feature = "tts-piper-native")]
-use listenbury::mouth::piper_native::{
-    NativePiperBackend, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig,
+use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
+#[cfg(feature = "tts-riper")]
+use listenbury::mouth::riper::{
+    PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
     SimpleEnglishG2p,
 };
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{PiperConfig, PiperTextToSpeech};
 use std::path::{Path, PathBuf};
@@ -37,100 +37,100 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_piper_compare(command: PiperCompareCommand) -> Result<()> {
-    #[cfg(not(feature = "tts-piper-native"))]
+pub(crate) fn run_riper_compare(command: RiperCompareCommand) -> Result<()> {
+    #[cfg(not(feature = "tts-riper"))]
     {
         let _ = command;
         anyhow::bail!(
-            "listenbury piper-compare requires the `tts-piper-native` feature to compare native synthesis"
+            "listenbury riper-compare requires the `tts-riper` feature to compare Riper synthesis"
         );
     }
 
-    #[cfg(feature = "tts-piper-native")]
+    #[cfg(feature = "tts-riper")]
     {
-        run_piper_compare_impl(command)
+        run_riper_compare_impl(command)
     }
 }
 
-#[cfg(feature = "tts-piper-native")]
-fn run_piper_compare_impl(command: PiperCompareCommand) -> Result<()> {
-    let args = PiperCompareArgs::from_command(command)?;
+#[cfg(feature = "tts-riper")]
+fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
+    let args = RiperCompareArgs::from_command(command)?;
 
     let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
     let process_voice = resolve_piper_voice(args.piper_voice.clone())?;
     let process_config = piper_config_for_voice(piper_bin.clone(), process_voice)?;
     let process_stats = synthesize_process_for_compare(&process_config, &args.text)?;
 
-    let native_model_path = args
-        .native_voice
+    let riper_model_path = args
+        .riper_voice
         .clone()
         .unwrap_or_else(|| process_config.model_path.clone());
-    let native_config_path = args
-        .native_config
+    let riper_config_path = args
+        .riper_config
         .clone()
         .or_else(|| process_config.config_path.clone())
-        .unwrap_or_else(|| native_model_path.with_extension("onnx.json"));
-    let native_voice_config = read_native_voice_config(&native_config_path)?;
-    let native_ids = resolve_native_ids(&args, &native_voice_config)?;
-    let native_stats = synthesize_native_for_compare(
-        &native_model_path,
-        &native_voice_config,
-        &native_ids,
+        .unwrap_or_else(|| riper_model_path.with_extension("onnx.json"));
+    let riper_voice_config = read_riper_voice_config(&riper_config_path)?;
+    let riper_ids = resolve_riper_ids(&args, &riper_voice_config)?;
+    let riper_stats = synthesize_riper_for_compare(
+        &riper_model_path,
+        &riper_voice_config,
+        &riper_ids,
         &args.text,
     )?;
 
-    report_compare_stats(&process_stats, &native_stats);
+    report_compare_stats(&process_stats, &riper_stats);
 
     if let Some(output) = args.process_output_wav {
         write_say_wav(&output, &process_stats.frames)?;
     }
-    if let Some(output) = args.native_output_wav {
-        write_say_wav(&output, &native_stats.frames)?;
+    if let Some(output) = args.riper_output_wav {
+        write_say_wav(&output, &riper_stats.frames)?;
     }
 
     Ok(())
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 #[derive(Debug)]
-struct PiperCompareArgs {
+struct RiperCompareArgs {
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
-    native_voice: Option<PathBuf>,
-    native_config: Option<PathBuf>,
+    riper_voice: Option<PathBuf>,
+    riper_config: Option<PathBuf>,
     process_output_wav: Option<PathBuf>,
-    native_output_wav: Option<PathBuf>,
+    riper_output_wav: Option<PathBuf>,
     phonemes: Option<String>,
     text: String,
 }
 
-#[cfg(feature = "tts-piper-native")]
-impl PiperCompareArgs {
-    fn from_command(command: PiperCompareCommand) -> Result<Self> {
+#[cfg(feature = "tts-riper")]
+impl RiperCompareArgs {
+    fn from_command(command: RiperCompareCommand) -> Result<Self> {
         anyhow::ensure!(
             !command.words.is_empty(),
-            "missing text to compare; try `listenbury piper-compare \"I see.\"`"
+            "missing text to compare; try `listenbury riper-compare \"I see.\"`"
         );
         let text = command.words.join(" ");
         anyhow::ensure!(
             !text.trim().is_empty(),
-            "missing text to compare; try `listenbury piper-compare \"I see.\"`"
+            "missing text to compare; try `listenbury riper-compare \"I see.\"`"
         );
 
         Ok(Self {
             piper_bin: command.piper_bin,
             piper_voice: command.piper_voice,
-            native_voice: command.native_voice,
-            native_config: command.native_config,
+            riper_voice: command.riper_voice,
+            riper_config: command.riper_config,
             process_output_wav: command.process_output_wav,
-            native_output_wav: command.native_output_wav,
+            riper_output_wav: command.riper_output_wav,
             phonemes: command.phonemes,
             text,
         })
     }
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 #[derive(Debug, Clone)]
 struct SynthesisStats {
     frames: Vec<AudioFrame>,
@@ -138,7 +138,7 @@ struct SynthesisStats {
     audio: AudioStats,
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 #[derive(Debug, Clone, PartialEq)]
 struct AudioStats {
     sample_rate_hz: u32,
@@ -149,7 +149,7 @@ struct AudioStats {
     peak_abs: f32,
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 impl AudioStats {
     fn from_frames(frames: &[AudioFrame], label: &str) -> Result<Self> {
         let Some(first) = frames.first() else {
@@ -207,7 +207,7 @@ impl AudioStats {
     }
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<SynthesisStats> {
     let mut backend = ProcessPiperBackend::new(config.clone());
     let t0 = Instant::now();
@@ -221,29 +221,29 @@ fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<Sy
     })
 }
 
-#[cfg(feature = "tts-piper-native")]
-fn synthesize_native_for_compare(
+#[cfg(feature = "tts-riper")]
+fn synthesize_riper_for_compare(
     model_path: &Path,
     config: &PiperVoiceConfig,
     ids: &PiperIdSequence,
     text: &str,
 ) -> Result<SynthesisStats> {
-    let mut backend = NativePiperBackend::load(model_path, config.clone()).with_context(|| {
+    let mut backend = RiperBackend::load(model_path, config.clone()).with_context(|| {
         format!(
-            "failed to initialize native Piper backend from model {}",
+            "failed to initialize Riper backend from model {}",
             model_path.display()
         )
     })?;
     let t0 = Instant::now();
     let frames = backend.synthesize_id_frames(ids).with_context(|| {
         format!(
-            "native Piper synthesis failed for model {} and text `{}`",
+            "Riper synthesis failed for model {} and text `{}`",
             model_path.display(),
             text
         )
     })?;
     let runtime = t0.elapsed();
-    let audio = AudioStats::from_frames(&frames, "native")?;
+    let audio = AudioStats::from_frames(&frames, "riper")?;
     Ok(SynthesisStats {
         frames,
         runtime,
@@ -251,16 +251,16 @@ fn synthesize_native_for_compare(
     })
 }
 
-#[cfg(feature = "tts-piper-native")]
-fn resolve_native_ids(
-    args: &PiperCompareArgs,
+#[cfg(feature = "tts-riper")]
+fn resolve_riper_ids(
+    args: &RiperCompareArgs,
     config: &PiperVoiceConfig,
 ) -> Result<PiperIdSequence> {
     let phoneme_sequence = if let Some(raw) = args.phonemes.as_ref() {
         let symbols: Vec<_> = raw.split_whitespace().collect();
         anyhow::ensure!(
             !symbols.is_empty(),
-            "native phoneme override was empty; pass symbols like --phonemes \"OW K EY |\""
+            "Riper phoneme override was empty; pass symbols like --phonemes \"OW K EY |\""
         );
         PiperPhonemeSequence {
             phonemes: symbols
@@ -271,12 +271,7 @@ fn resolve_native_ids(
     } else {
         SimpleEnglishG2p::default()
             .phonemize_unit(&args.text)
-            .with_context(|| {
-                format!(
-                    "failed to realize native Piper phonemes for text `{}`",
-                    args.text
-                )
-            })?
+            .with_context(|| format!("failed to realize Riper phonemes for text `{}`", args.text))?
             .phonemes
     };
 
@@ -285,36 +280,33 @@ fn resolve_native_ids(
         .or_else(|_| espeak_compatible_ids(&phoneme_sequence, config))
         .with_context(|| {
             format!(
-                "native voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
+                "Riper voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
                 args.text
             )
         })
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 fn espeak_compatible_ids(
     phoneme_sequence: &PiperPhonemeSequence,
     config: &PiperVoiceConfig,
-) -> std::result::Result<
-    PiperIdSequence,
-    listenbury::mouth::piper_native::PiperPhonemeIdConversionError,
-> {
+) -> std::result::Result<PiperIdSequence, listenbury::mouth::riper::PiperPhonemeIdConversionError> {
     let sequence = espeak_compatible_sequence(phoneme_sequence, config)?;
     sequence.to_piper_ids(config)
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 fn espeak_compatible_sequence(
     phoneme_sequence: &PiperPhonemeSequence,
     config: &PiperVoiceConfig,
 ) -> std::result::Result<
     PiperPhonemeSequence,
-    listenbury::mouth::piper_native::PiperPhonemeIdConversionError,
+    listenbury::mouth::riper::PiperPhonemeIdConversionError,
 > {
     let mut symbols = vec![PiperPhoneme("^".to_string())];
     for phoneme in &phoneme_sequence.phonemes {
         let expanded = expand_espeak_phoneme(&phoneme.0, config).ok_or_else(|| {
-            listenbury::mouth::piper_native::PiperPhonemeIdConversionError::UnknownPhoneme {
+            listenbury::mouth::riper::PiperPhonemeIdConversionError::UnknownPhoneme {
                 symbol: phoneme.0.clone(),
             }
         })?;
@@ -335,7 +327,7 @@ fn espeak_compatible_sequence(
     })
 }
 
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
     let expanded = match symbol {
         "AA" => &["ɑ"][..],
@@ -394,37 +386,33 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         })
 }
 
-#[cfg(feature = "tts-piper-native")]
-fn read_native_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
+#[cfg(feature = "tts-riper")]
+fn read_riper_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
     let json = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read native Piper config at {}", path.display()))?;
-    PiperVoiceConfig::from_json_str(&json).with_context(|| {
-        format!(
-            "failed to parse native Piper config JSON at {}",
-            path.display()
-        )
-    })
+        .with_context(|| format!("failed to read Riper config at {}", path.display()))?;
+    PiperVoiceConfig::from_json_str(&json)
+        .with_context(|| format!("failed to parse Riper config JSON at {}", path.display()))
 }
 
-#[cfg(feature = "tts-piper-native")]
-fn report_compare_stats(process: &SynthesisStats, native: &SynthesisStats) {
+#[cfg(feature = "tts-riper")]
+fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
     println!("process runtime: {}ms", process.runtime.as_millis());
-    println!("native inference: {}ms", native.runtime.as_millis());
+    println!("Riper inference: {}ms", riper.runtime.as_millis());
     println!(
-        "process sample rate: {} Hz | native sample rate: {} Hz",
-        process.audio.sample_rate_hz, native.audio.sample_rate_hz
+        "process sample rate: {} Hz | Riper sample rate: {} Hz",
+        process.audio.sample_rate_hz, riper.audio.sample_rate_hz
     );
     println!(
-        "process duration: {:.2}ms | native duration: {:.2}ms",
-        process.audio.duration_ms, native.audio.duration_ms
+        "process duration: {:.2}ms | Riper duration: {:.2}ms",
+        process.audio.duration_ms, riper.audio.duration_ms
     );
     println!(
-        "process samples: {} | native samples: {}",
-        process.audio.sample_count, native.audio.sample_count
+        "process samples: {} | Riper samples: {}",
+        process.audio.sample_count, riper.audio.sample_count
     );
     println!(
-        "process rms/peak: {:.5}/{:.5} | native rms/peak: {:.5}/{:.5}",
-        process.audio.rms, process.audio.peak_abs, native.audio.rms, native.audio.peak_abs
+        "process rms/peak: {:.5}/{:.5} | Riper rms/peak: {:.5}/{:.5}",
+        process.audio.rms, process.audio.peak_abs, riper.audio.rms, riper.audio.peak_abs
     );
 }
 
@@ -720,15 +708,15 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-piper-native")]
-    fn piper_compare_args_joins_words_into_text() {
-        let args = PiperCompareArgs::from_command(PiperCompareCommand {
+    #[cfg(feature = "tts-riper")]
+    fn riper_compare_args_joins_words_into_text() {
+        let args = RiperCompareArgs::from_command(RiperCompareCommand {
             piper_bin: None,
             piper_voice: None,
-            native_voice: None,
-            native_config: None,
+            riper_voice: None,
+            riper_config: None,
             process_output_wav: None,
-            native_output_wav: None,
+            riper_output_wav: None,
             phonemes: None,
             words: vec!["Okay.".to_string(), "Again.".to_string()],
         })
@@ -768,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-piper-native")]
+    #[cfg(feature = "tts-riper")]
     fn espeak_compatible_ids_match_piper_debug_shape_for_okay() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
@@ -809,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-piper-native")]
+    #[cfg(feature = "tts-riper")]
     fn espeak_compatible_ids_support_lollipop_guild_sentence_symbols() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
@@ -857,8 +845,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-piper-native")]
-    fn espeak_compatible_ids_preserve_native_flap_symbol() {
+    #[cfg(feature = "tts-riper")]
+    fn espeak_compatible_ids_preserve_riper_flap_symbol() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
             {
@@ -885,7 +873,7 @@ mod tests {
         };
 
         let ids = espeak_compatible_ids(&sequence, &config)
-            .expect("flapped native sequence should map to eSpeak Piper IDs");
+            .expect("flapped Riper sequence should map to eSpeak Piper IDs");
 
         assert_eq!(
             ids,
@@ -896,7 +884,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-piper-native")]
+    #[cfg(feature = "tts-riper")]
     fn audio_stats_computes_duration_rms_and_peak() {
         let stats = AudioStats::from_frames(
             &[AudioFrame {

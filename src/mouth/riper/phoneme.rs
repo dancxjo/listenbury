@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::mouth::piper_native::config::PiperVoiceConfig;
+use crate::mouth::riper::config::PiperVoiceConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperPhoneme(pub String);

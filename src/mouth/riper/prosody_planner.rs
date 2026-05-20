@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mouth::piper_native::g2p::{
-    LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId,
-};
-use crate::mouth::piper_native::text::{ProsodyBoundaryHint, ProsodyCommitment};
+use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId};
+use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment};
 
 const PAUSE_MS_DEFAULT: u64 = 140;
 const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
@@ -186,7 +184,7 @@ pub struct ProsodyList {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NativePiperProsodyRealization {
+pub struct RiperProsodyRealization {
     pub candidate_id: SpeechCandidateId,
     pub phone_duration_overrides_ms: Vec<Option<u64>>,
     pub word_duration_overrides_ms: Vec<Option<u64>>,
@@ -205,10 +203,10 @@ impl ProsodyList {
         });
     }
 
-    pub fn realize_for_native_piper(
+    pub fn realize_for_riper(
         &self,
         candidate: &PhonemeProsodyCandidate,
-    ) -> NativePiperProsodyRealization {
+    ) -> RiperProsodyRealization {
         let mut phone_duration_overrides_ms = vec![None; candidate.phonemes.phonemes.len()];
         let mut word_duration_overrides_ms = vec![None; candidate.word_targets.len()];
         let mut pauses = Vec::new();
@@ -271,7 +269,7 @@ impl ProsodyList {
 
         if !advisory_ops.is_empty() {
             diagnostics.push(
-                "native Piper currently applies duration and pause hints; pitch/energy/accent controls remain advisory"
+                "Riper currently applies duration and pause hints; pitch/energy/accent controls remain advisory"
                     .to_string(),
             );
         }
@@ -281,7 +279,7 @@ impl ProsodyList {
             advisory_ops.len()
         ));
 
-        NativePiperProsodyRealization {
+        RiperProsodyRealization {
             candidate_id: candidate.id,
             phone_duration_overrides_ms,
             word_duration_overrides_ms,
@@ -646,7 +644,7 @@ fn target_phoneme_indexes(
 
 #[cfg(test)]
 mod tests {
-    use crate::mouth::piper_native::g2p::{
+    use crate::mouth::riper::g2p::{
         PhonemeProsodyCandidateEvent, PhonemeProsodyCandidateTracker, SimpleEnglishG2p,
     };
 
@@ -825,14 +823,14 @@ mod tests {
     }
 
     #[test]
-    fn native_realization_reports_realized_vs_advisory_hints() {
+    fn riper_realization_reports_realized_vs_advisory_hints() {
         let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
         let mut planner = BreathGroupProsodyPlanner::new();
 
         let candidate_events = tracker.ingest_text("I see, okay.").expect("candidate");
         let candidate = latest_candidate(&candidate_events);
         let planned = planner.plan_candidate(candidate);
-        let realized = planned.realize_for_native_piper(candidate);
+        let realized = planned.realize_for_riper(candidate);
 
         assert!(!realized.realized_ops.is_empty());
         assert!(!realized.advisory_ops.is_empty());

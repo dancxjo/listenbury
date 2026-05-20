@@ -8,16 +8,15 @@ use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 
 use super::{
-    PiperEncoder, PiperIdSequence, PiperVoiceConfig, SimpleEnglishG2p,
+    PiperIdSequence, PiperVoiceConfig, SimpleEnglishG2p,
     prosody_controls::{
-        ControlStatusEntry, PiperProsodyControls, PiperSynthesisDiagnostics,
-        ProsodyControlStatus,
+        ControlStatusEntry, PiperProsodyControls, PiperSynthesisDiagnostics, ProsodyControlStatus,
     },
 };
 
-const NATIVE_PIPER_FRAME_SAMPLES: usize = 1024;
+const RIPER_FRAME_SAMPLES: usize = 1024;
 // Piper ONNX vits output is a single waveform tensor for one speaker stream.
-const NATIVE_PIPER_CHANNELS: u16 = 1;
+const RIPER_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperModelContract {
@@ -26,7 +25,7 @@ pub struct PiperModelContract {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NativePiperPcm {
+pub struct RiperPcm {
     pub sample_rate_hz: u32,
     pub samples: Vec<f32>,
 }
@@ -50,13 +49,13 @@ struct PiperInferenceContract {
 }
 
 #[derive(Debug)]
-pub struct NativePiperBackend {
+pub struct RiperBackend {
     config: PiperVoiceConfig,
     model_path: PathBuf,
     session: Option<Session>,
 }
 
-impl NativePiperBackend {
+impl RiperBackend {
     pub fn load(model_path: impl AsRef<Path>, config: PiperVoiceConfig) -> Result<Self> {
         validate_config(&config)?;
         initialize_ort_runtime()?;
@@ -154,7 +153,7 @@ impl NativePiperBackend {
         &self.model_path
     }
 
-    pub fn synthesize_ids(&mut self, ids: &PiperIdSequence) -> Result<NativePiperPcm> {
+    pub fn synthesize_ids(&mut self, ids: &PiperIdSequence) -> Result<RiperPcm> {
         let scales = inference_scales(&self.config);
         self.synthesize_ids_with_scales(ids, scales)
     }
@@ -177,7 +176,7 @@ impl NativePiperBackend {
         &mut self,
         ids: &PiperIdSequence,
         controls: Option<&PiperProsodyControls>,
-    ) -> Result<(NativePiperPcm, PiperSynthesisDiagnostics)> {
+    ) -> Result<(RiperPcm, PiperSynthesisDiagnostics)> {
         let config_scales = inference_scales(&self.config);
 
         let (effective_scales, mut control_statuses) = match controls {
@@ -190,8 +189,7 @@ impl NativePiperBackend {
         let mut inserted_pause_ms = 0u64;
         if let Some(controls) = controls {
             for pause in &controls.pause_overrides {
-                let silence_samples =
-                    compute_silence_samples(pause.millis, pcm.sample_rate_hz)?;
+                let silence_samples = compute_silence_samples(pause.millis, pcm.sample_rate_hz)?;
                 pcm.samples
                     .extend(std::iter::repeat(0.0_f32).take(silence_samples));
                 inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
@@ -247,7 +245,7 @@ impl NativePiperBackend {
 
     pub fn synthesize_id_frames(&mut self, ids: &PiperIdSequence) -> Result<Vec<AudioFrame>> {
         let pcm = self.synthesize_ids(ids)?;
-        Ok(native_pcm_to_audio_frames(pcm, NATIVE_PIPER_FRAME_SAMPLES))
+        Ok(riper_pcm_to_audio_frames(pcm, RIPER_FRAME_SAMPLES))
     }
 
     /// Synthesize phoneme IDs with optional prosody controls and return
@@ -262,7 +260,7 @@ impl NativePiperBackend {
     ) -> Result<(Vec<AudioFrame>, PiperSynthesisDiagnostics)> {
         let (pcm, diagnostics) = self.synthesize_ids_with_controls(ids, controls)?;
         Ok((
-            native_pcm_to_audio_frames(pcm, NATIVE_PIPER_FRAME_SAMPLES),
+            riper_pcm_to_audio_frames(pcm, RIPER_FRAME_SAMPLES),
             diagnostics,
         ))
     }
@@ -273,7 +271,7 @@ impl NativePiperBackend {
         &mut self,
         ids: &PiperIdSequence,
         scales: [f32; 3],
-    ) -> Result<NativePiperPcm> {
+    ) -> Result<RiperPcm> {
         ensure!(
             !ids.ids.is_empty(),
             "Piper ID sequence cannot be empty for ONNX synthesis"
@@ -383,7 +381,7 @@ impl NativePiperBackend {
             "Piper ONNX inference returned an empty waveform output"
         );
 
-        Ok(NativePiperPcm {
+        Ok(RiperPcm {
             sample_rate_hz,
             samples: samples.to_vec(),
         })
@@ -447,21 +445,21 @@ fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
     candidates.pop()
 }
 
-impl TtsBackend for NativePiperBackend {
+impl TtsBackend for RiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let phonemes = SimpleEnglishG2p::default()
             .phonemize_unit(text)
-            .with_context(|| format!("failed to realize native Piper phonemes for text `{text}`"))?
+            .with_context(|| format!("failed to realize Riper phonemes for text `{text}`"))?
             .phonemes;
         let ids = phonemes.to_piper_ids(&self.config).with_context(|| {
             format!(
-                "failed to map phonemes to IDs for native Piper model {}",
+                "failed to map phonemes to IDs for Riper model {}",
                 self.model_path.display()
             )
         })?;
         self.synthesize_id_frames(&ids).with_context(|| {
             format!(
-                "native Piper ONNX synthesis failed for model {}",
+                "Riper ONNX synthesis failed for model {}",
                 self.model_path.display()
             )
         })
@@ -761,8 +759,7 @@ fn compute_controlled_scales(
     (scales, statuses)
 }
 
-/// Compute the PCM duration in milliseconds from sample count and sample rate.
-fn pcm_duration_ms(pcm: &NativePiperPcm) -> u64 {
+fn pcm_duration_ms(pcm: &RiperPcm) -> u64 {
     if pcm.sample_rate_hz == 0 {
         return 0;
     }
@@ -793,7 +790,7 @@ fn compute_silence_samples(millis: u64, sample_rate_hz: u32) -> Result<usize> {
     })
 }
 
-fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<AudioFrame> {
+fn riper_pcm_to_audio_frames(pcm: RiperPcm, frame_samples: usize) -> Vec<AudioFrame> {
     assert!(frame_samples > 0, "frame_samples must be greater than zero");
     if pcm.samples.is_empty() {
         return Vec::new();
@@ -804,7 +801,7 @@ fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<
         .map(|chunk| AudioFrame {
             captured_at: crate::time::ExactTimestamp::now(),
             sample_rate_hz: pcm.sample_rate_hz,
-            channels: NATIVE_PIPER_CHANNELS,
+            channels: RIPER_CHANNELS,
             samples: chunk
                 .iter()
                 .map(|sample| if sample.is_finite() { *sample } else { 0.0 })
@@ -844,7 +841,7 @@ mod tests {
             .expect("time should advance")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "listenbury-native-piper-{label}-{}-{ts}.onnx",
+            "listenbury-riper-{label}-{}-{ts}.onnx",
             std::process::id()
         ))
     }
@@ -852,8 +849,8 @@ mod tests {
     #[test]
     fn load_returns_clear_error_for_missing_model_file() {
         let model_path = unique_path("missing-model");
-        let error = NativePiperBackend::load(&model_path, voice_config())
-            .expect_err("missing model should fail");
+        let error =
+            RiperBackend::load(&model_path, voice_config()).expect_err("missing model should fail");
 
         assert_eq!(
             error.to_string(),
@@ -872,8 +869,8 @@ mod tests {
         let mut config = voice_config();
         config.phoneme_id_map.clear();
 
-        let error = NativePiperBackend::load(&model_path, config)
-            .expect_err("empty phoneme map should fail");
+        let error =
+            RiperBackend::load(&model_path, config).expect_err("empty phoneme map should fail");
         assert_eq!(
             error.to_string(),
             "missing required Piper voice config field `phoneme_id_map`"
@@ -885,15 +882,14 @@ mod tests {
     #[test]
     fn synthesize_surfaces_clear_g2p_error_for_unsupported_text() {
         let model_path = unique_path("unimplemented");
-        let mut backend =
-            NativePiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
 
         let error = backend
             .synthesize("Q.")
             .expect_err("unsupported text should fail before ONNX inference");
         let rendered = format!("{error:#}");
         assert!(
-            rendered.contains("failed to realize native Piper phonemes for text `Q.`"),
+            rendered.contains("failed to realize Riper phonemes for text `Q.`"),
             "expected phonemize context, got: {rendered}"
         );
         assert!(
@@ -923,7 +919,7 @@ mod tests {
     #[test]
     fn synthesize_ids_requires_loaded_session() {
         let model_path = unique_path("unloaded-session");
-        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path, voice_config());
 
         let error = backend
             .synthesize_ids(&PiperIdSequence { ids: vec![1, 2, 3] })
@@ -934,7 +930,7 @@ mod tests {
     #[test]
     fn synthesize_ids_rejects_empty_id_sequence() {
         let model_path = unique_path("empty-ids");
-        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path, voice_config());
 
         let error = backend
             .synthesize_ids(&PiperIdSequence { ids: Vec::new() })
@@ -948,7 +944,7 @@ mod tests {
     #[test]
     fn synthesize_id_frames_requires_loaded_session() {
         let model_path = unique_path("unloaded-session-frames");
-        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path, voice_config());
 
         let error = backend
             .synthesize_id_frames(&PiperIdSequence { ids: vec![1, 2, 3] })
@@ -1022,9 +1018,9 @@ mod tests {
     }
 
     #[test]
-    fn native_pcm_to_audio_frames_returns_empty_for_empty_pcm() {
-        let frames = native_pcm_to_audio_frames(
-            NativePiperPcm {
+    fn riper_pcm_to_audio_frames_returns_empty_for_empty_pcm() {
+        let frames = riper_pcm_to_audio_frames(
+            RiperPcm {
                 sample_rate_hz: 22_050,
                 samples: Vec::new(),
             },
@@ -1035,9 +1031,9 @@ mod tests {
     }
 
     #[test]
-    fn native_pcm_to_audio_frames_coerces_non_finite_samples() {
-        let frames = native_pcm_to_audio_frames(
-            NativePiperPcm {
+    fn riper_pcm_to_audio_frames_coerces_non_finite_samples() {
+        let frames = riper_pcm_to_audio_frames(
+            RiperPcm {
                 sample_rate_hz: 22_050,
                 samples: vec![0.1, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.2],
             },
@@ -1050,9 +1046,9 @@ mod tests {
     }
 
     #[test]
-    fn native_pcm_to_audio_frames_preserves_sample_rate_and_mono_channel() {
-        let frames = native_pcm_to_audio_frames(
-            NativePiperPcm {
+    fn riper_pcm_to_audio_frames_preserves_sample_rate_and_mono_channel() {
+        let frames = riper_pcm_to_audio_frames(
+            RiperPcm {
                 sample_rate_hz: 16_000,
                 samples: vec![0.1, 0.2, 0.3],
             },
@@ -1065,9 +1061,9 @@ mod tests {
     }
 
     #[test]
-    fn native_pcm_to_audio_frames_chunks_using_requested_frame_size() {
-        let frames = native_pcm_to_audio_frames(
-            NativePiperPcm {
+    fn riper_pcm_to_audio_frames_chunks_using_requested_frame_size() {
+        let frames = riper_pcm_to_audio_frames(
+            RiperPcm {
                 sample_rate_hz: 22_050,
                 samples: vec![0.0, 0.1, 0.2, 0.3, 0.4],
             },
@@ -1088,8 +1084,14 @@ mod tests {
         let config_scales = [0.667_f32, 1.0, 0.8];
         let controls = PiperProsodyControls::default();
         let (scales, statuses) = compute_controlled_scales(config_scales, &controls);
-        assert_eq!(scales, config_scales, "no overrides should leave scales unchanged");
-        assert!(statuses.is_empty(), "no overrides should produce no status entries");
+        assert_eq!(
+            scales, config_scales,
+            "no overrides should leave scales unchanged"
+        );
+        assert!(
+            statuses.is_empty(),
+            "no overrides should produce no status entries"
+        );
     }
 
     #[test]
@@ -1109,7 +1111,10 @@ mod tests {
         assert_eq!(statuses.len(), 1);
         assert_eq!(statuses[0].name, "length_scale");
         assert_eq!(statuses[0].status, ProsodyControlStatus::Realized);
-        assert!(statuses[0].detail.contains("1.500"), "detail should mention new value");
+        assert!(
+            statuses[0].detail.contains("1.500"),
+            "detail should mention new value"
+        );
     }
 
     #[test]
@@ -1148,22 +1153,32 @@ mod tests {
             ..Default::default()
         };
         let (scales, statuses) = compute_controlled_scales(config_scales, &controls);
-        assert!((scales[0] - 0.4).abs() < f32::EPSILON, "noise_scale override");
-        assert!((scales[1] - 1.2).abs() < f32::EPSILON, "length_scale override");
+        assert!(
+            (scales[0] - 0.4).abs() < f32::EPSILON,
+            "noise_scale override"
+        );
+        assert!(
+            (scales[1] - 1.2).abs() < f32::EPSILON,
+            "length_scale override"
+        );
         assert!((scales[2] - 0.6).abs() < f32::EPSILON, "noise_w override");
         assert_eq!(statuses.len(), 3);
         let names: Vec<_> = statuses.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"noise_scale"));
         assert!(names.contains(&"length_scale"));
         assert!(names.contains(&"noise_w"));
-        assert!(statuses.iter().all(|s| s.status == ProsodyControlStatus::Realized));
+        assert!(
+            statuses
+                .iter()
+                .all(|s| s.status == ProsodyControlStatus::Realized)
+        );
     }
 
     // --- pcm_duration_ms tests ---
 
     #[test]
     fn pcm_duration_ms_is_zero_for_empty_samples() {
-        let pcm = NativePiperPcm {
+        let pcm = RiperPcm {
             sample_rate_hz: 22_050,
             samples: Vec::new(),
         };
@@ -1173,7 +1188,7 @@ mod tests {
     #[test]
     fn pcm_duration_ms_computes_correct_duration() {
         // 22050 samples at 22050 Hz = 1000 ms
-        let pcm = NativePiperPcm {
+        let pcm = RiperPcm {
             sample_rate_hz: 22_050,
             samples: vec![0.0; 22_050],
         };
@@ -1183,7 +1198,7 @@ mod tests {
     #[test]
     fn pcm_duration_ms_handles_partial_second() {
         // 11025 samples at 22050 Hz = 500 ms
-        let pcm = NativePiperPcm {
+        let pcm = RiperPcm {
             sample_rate_hz: 22_050,
             samples: vec![0.0; 11_025],
         };
@@ -1192,7 +1207,7 @@ mod tests {
 
     #[test]
     fn pcm_duration_ms_is_zero_for_zero_sample_rate() {
-        let pcm = NativePiperPcm {
+        let pcm = RiperPcm {
             sample_rate_hz: 0,
             samples: vec![0.0; 100],
         };
@@ -1204,7 +1219,7 @@ mod tests {
     #[test]
     fn synthesize_ids_with_controls_fails_when_session_not_loaded() {
         let model_path = unique_path("controls-no-session");
-        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path, voice_config());
         let ids = PiperIdSequence { ids: vec![1, 2] };
         let error = backend
             .synthesize_ids_with_controls(&ids, None)
@@ -1215,7 +1230,7 @@ mod tests {
     #[test]
     fn synthesize_ids_with_controls_fails_on_empty_ids() {
         let model_path = unique_path("controls-empty-ids");
-        let mut backend = NativePiperBackend::unloaded_for_tests(model_path, voice_config());
+        let mut backend = RiperBackend::unloaded_for_tests(model_path, voice_config());
         let ids = PiperIdSequence { ids: Vec::new() };
         let error = backend
             .synthesize_ids_with_controls(&ids, None)
@@ -1230,8 +1245,8 @@ mod tests {
     //     with a mock PCM; we test the post-synthesis diagnostics path by verifying the
     //     control statuses that would be built for various controls configurations) ---
 
-    fn mock_pcm(sample_rate_hz: u32, samples: Vec<f32>) -> NativePiperPcm {
-        NativePiperPcm {
+    fn mock_pcm(sample_rate_hz: u32, samples: Vec<f32>) -> RiperPcm {
+        RiperPcm {
             sample_rate_hz,
             samples,
         }
@@ -1242,16 +1257,15 @@ mod tests {
     fn build_diagnostics_from_controls(
         config_scales: [f32; 3],
         ids: &[i64],
-        mut pcm: NativePiperPcm,
+        mut pcm: RiperPcm,
         controls: &PiperProsodyControls,
     ) -> PiperSynthesisDiagnostics {
         let (effective_scales, mut statuses) = compute_controlled_scales(config_scales, controls);
 
         let mut inserted_pause_ms = 0u64;
         for pause in &controls.pause_overrides {
-            let silence_samples =
-                compute_silence_samples(pause.millis, pcm.sample_rate_hz)
-                    .expect("test pause duration should be reasonable");
+            let silence_samples = compute_silence_samples(pause.millis, pcm.sample_rate_hz)
+                .expect("test pause duration should be reasonable");
             pcm.samples
                 .extend(std::iter::repeat(0.0_f32).take(silence_samples));
             inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
@@ -1302,12 +1316,10 @@ mod tests {
     #[test]
     fn diagnostics_records_pause_as_approximated() {
         let controls = PiperProsodyControls {
-            pause_overrides: vec![
-                super::super::prosody_controls::PiperPauseOverride {
-                    millis: 200,
-                    label: "after sentence".to_string(),
-                },
-            ],
+            pause_overrides: vec![super::super::prosody_controls::PiperPauseOverride {
+                millis: 200,
+                label: "after sentence".to_string(),
+            }],
             ..Default::default()
         };
         let pcm = mock_pcm(22_050, vec![0.0; 22_050]); // 1 second of audio
@@ -1342,10 +1354,11 @@ mod tests {
         let diag = build_diagnostics_from_controls([0.667, 1.0, 0.8], &[1], pcm, &controls);
         assert_eq!(diag.inserted_pause_ms, 250);
         assert_eq!(diag.control_statuses.len(), 2);
-        assert!(diag
-            .control_statuses
-            .iter()
-            .all(|s| s.status == ProsodyControlStatus::Approximated));
+        assert!(
+            diag.control_statuses
+                .iter()
+                .all(|s| s.status == ProsodyControlStatus::Approximated)
+        );
     }
 
     #[test]
@@ -1366,19 +1379,21 @@ mod tests {
             diag.control_statuses[0].status,
             ProsodyControlStatus::AdvisoryOnly
         );
-        assert!(diag.control_statuses[0].name.contains("phoneme_duration_override"));
+        assert!(
+            diag.control_statuses[0]
+                .name
+                .contains("phoneme_duration_override")
+        );
         assert!(diag.control_statuses[0].detail.contains("phoneme index 2"));
     }
 
     #[test]
     fn diagnostics_records_boundary_override_as_advisory() {
         let controls = PiperProsodyControls {
-            boundary_overrides: vec![
-                super::super::prosody_controls::PiperBoundaryOverride {
-                    after_index: 4,
-                    strong: true,
-                },
-            ],
+            boundary_overrides: vec![super::super::prosody_controls::PiperBoundaryOverride {
+                after_index: 4,
+                strong: true,
+            }],
             ..Default::default()
         };
         let pcm = mock_pcm(22_050, vec![0.0; 100]);
@@ -1394,12 +1409,10 @@ mod tests {
     #[test]
     fn diagnostics_records_weak_boundary_override_detail() {
         let controls = PiperProsodyControls {
-            boundary_overrides: vec![
-                super::super::prosody_controls::PiperBoundaryOverride {
-                    after_index: 1,
-                    strong: false,
-                },
-            ],
+            boundary_overrides: vec![super::super::prosody_controls::PiperBoundaryOverride {
+                after_index: 1,
+                strong: false,
+            }],
             ..Default::default()
         };
         let pcm = mock_pcm(22_050, vec![0.0; 100]);
@@ -1417,12 +1430,10 @@ mod tests {
                     millis: 60,
                 },
             ],
-            boundary_overrides: vec![
-                super::super::prosody_controls::PiperBoundaryOverride {
-                    after_index: 0,
-                    strong: false,
-                },
-            ],
+            boundary_overrides: vec![super::super::prosody_controls::PiperBoundaryOverride {
+                after_index: 0,
+                strong: false,
+            }],
             ..Default::default()
         };
         let pcm = mock_pcm(22_050, vec![0.0; 100]);

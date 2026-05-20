@@ -44,7 +44,7 @@ const TOPIC_CATALOG = [
   {
     key: "phonology-workbench",
     topicLabel: "PHONOLOGY WORKBENCH",
-    chapterTitle: "Phonology and the Native Piper Spine",
+    chapterTitle: "Phonology and the Riper Spine",
     action:
       "The conversation narrows to speech mechanics, phonology, and the shape of Pete's own mouth and ear.",
     keywords: [/\bphonolog/i, /\bpiper\b/i, /\bmouth\b/i, /\bhear\b/i, /\bvowel\b/i, /\bconsonant\b/i],

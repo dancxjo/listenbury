@@ -1,8 +1,8 @@
-#![cfg(feature = "tts-piper-native")]
+#![cfg(feature = "tts-riper")]
 
 use std::{env, fs, path::PathBuf};
 
-use listenbury::mouth::piper_native::{NativePiperBackend, PiperIdSequence, PiperVoiceConfig};
+use listenbury::mouth::riper::{PiperIdSequence, PiperVoiceConfig, RiperBackend};
 
 #[test]
 #[ignore = "set LISTENBURY_TEST_PIPER_MODEL, LISTENBURY_TEST_PIPER_CONFIG, and LISTENBURY_TEST_PIPER_IDS for a local Piper model/config; ensure ONNX Runtime shared library is available"]
@@ -27,8 +27,7 @@ fn synthesizes_real_local_piper_model_ids_when_configured() {
             .collect(),
     };
 
-    let mut backend =
-        NativePiperBackend::load(&model_path, config).expect("load local Piper model");
+    let mut backend = RiperBackend::load(&model_path, config).expect("load local Piper model");
     let contract = backend
         .validate_model_contract()
         .expect("validate ONNX model contract");

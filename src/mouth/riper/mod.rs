@@ -1,4 +1,4 @@
-#[cfg(feature = "tts-piper-native")]
+#[cfg(feature = "tts-riper")]
 pub mod backend;
 pub mod config;
 pub mod encoder;
@@ -8,8 +8,8 @@ pub mod prosody_controls;
 pub mod prosody_planner;
 pub mod text;
 
-#[cfg(feature = "tts-piper-native")]
-pub use backend::{NativePiperBackend, NativePiperPcm, PiperModelContract};
+#[cfg(feature = "tts-riper")]
+pub use backend::{PiperModelContract, RiperBackend, RiperPcm};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
 pub use encoder::PiperEncoder;
 pub use g2p::{
@@ -27,11 +27,11 @@ pub use prosody_controls::{
     PiperProsodyControls, PiperSynthesisDiagnostics, ProsodyControlStatus,
 };
 pub use prosody_planner::{
-    BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner,
-    NativePiperProsodyRealization, PauseOp, PauseStrengthClass, ProsodyAccentKind,
-    ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyEnergyClass, ProsodyList,
-    ProsodyOp, ProsodyOperation, ProsodyOverlay, ProsodyOverlaySource, ProsodyPitchShape,
-    ProsodyRateClass, ProsodyTarget,
+    BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner, PauseOp,
+    PauseStrengthClass, ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy,
+    ProsodyEnergyClass, ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay,
+    ProsodyOverlaySource, ProsodyPitchShape, ProsodyRateClass, ProsodyTarget,
+    RiperProsodyRealization,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

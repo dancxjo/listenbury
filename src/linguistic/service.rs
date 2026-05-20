@@ -15,10 +15,10 @@ use crate::linguistic::{
 /// # Construction
 ///
 /// Use [`PronunciationService::new`] to supply a custom realizer and variety.
-/// For the native Piper path, [`SimpleEnglishG2p`] with a General American
+/// For the Riper path, [`SimpleEnglishG2p`] with a General American
 /// English variety is the recommended default.
 ///
-/// [`SimpleEnglishG2p`]: crate::mouth::piper_native::SimpleEnglishG2p
+/// [`SimpleEnglishG2p`]: crate::mouth::riper::SimpleEnglishG2p
 pub struct PronunciationService {
     pronouncer: Box<dyn OrthographyToPhonemes + Send + Sync>,
     variety: LinguisticVariety,
@@ -58,8 +58,8 @@ impl std::fmt::Debug for PronunciationService {
 }
 
 /// Build the default English (US) variety used by [`PronunciationService`] when
-/// backed by the native Piper path.
-#[cfg(feature = "tts-piper-native")]
+/// backed by the Riper path.
+#[cfg(feature = "tts-riper")]
 pub fn default_english_variety() -> LinguisticVariety {
     use crate::linguistic::variety::{Phonology, VarietyTag};
     LinguisticVariety::tagged(
