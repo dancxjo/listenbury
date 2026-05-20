@@ -19,6 +19,8 @@ const FOCUS_INTENSIFIERS: &[&str] = &["so", "very", "really", "especially", "ext
 const FOCUS_PRECISION_ADVERBS: &[&str] = &["precisely", "exactly", "specifically", "particularly"];
 const FOCUS_CONTRAST_MARKERS: &[&str] = &["but", "not", "instead", "rather"];
 const FOCUS_CORRECTIVE_PARTICLES: &[&str] = &["actually", "even", "only", "just"];
+const FUNCTION_WORD_GIVEN_STRENGTH: u8 = 24;
+const FUNCTION_WORD_DEEMPHASIS_STRENGTH: u8 = 42;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
@@ -565,11 +567,7 @@ fn default_emphasis_ops(
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
                 },
-                kind: if matches!(focus.reason, FocusAccentReason::ContrastMarker) {
-                    ProsodyAccentKind::Contrastive
-                } else {
-                    ProsodyAccentKind::Focus
-                },
+                kind: focus_reason_accent_kind(focus.reason),
                 strength: focus.strength,
             });
             ops.push(ProsodyOp::ApplyRhetoric {
@@ -593,7 +591,7 @@ fn default_emphasis_ops(
                     index: target.word_index,
                 },
                 kind: ProsodyAccentKind::GivenInformation,
-                strength: 24,
+                strength: FUNCTION_WORD_GIVEN_STRENGTH,
             });
             ops.push(ProsodyOp::AdjustEnergy {
                 target: ProsodyTarget::WordIndex {
@@ -606,17 +604,17 @@ fn default_emphasis_ops(
                     index: target.word_index,
                 },
                 op: ProsodyOperation::Deemphasize,
-                strength: 42,
+                strength: FUNCTION_WORD_DEEMPHASIS_STRENGTH,
             });
         }
 
-        let should_reduce_vowel = !focus_by_word.contains_key(&target.word_index)
+        let should_accelerate_function_word_rate = !focus_by_word.contains_key(&target.word_index)
             && !is_content_word(&target.normalized_text);
         ops.push(ProsodyOp::AdjustRate {
             target: ProsodyTarget::WordIndex {
                 index: target.word_index,
             },
-            rate: if should_reduce_vowel
+            rate: if should_accelerate_function_word_rate
                 || is_parenthetical(candidate, target.text_range.start, target.text_range.end)
             {
                 ProsodyRateClass::Faster
@@ -697,6 +695,14 @@ fn focus_status_from_commitment(commitment: ProsodyCommitment) -> FocusAccentSta
         ProsodyCommitment::Playable => FocusAccentStatus::Playable,
         ProsodyCommitment::Committed => FocusAccentStatus::Committed,
         ProsodyCommitment::Cancelled => FocusAccentStatus::Cancelled,
+    }
+}
+
+fn focus_reason_accent_kind(reason: FocusAccentReason) -> ProsodyAccentKind {
+    if matches!(reason, FocusAccentReason::ContrastMarker) {
+        ProsodyAccentKind::Contrastive
+    } else {
+        ProsodyAccentKind::Focus
     }
 }
 
