@@ -17,8 +17,6 @@ pub enum ProsodyControlStatus {
     /// The control intent was recorded but no Piper runtime knob is available;
     /// the audio is unchanged by this control.
     AdvisoryOnly,
-    /// Alias for advisory controls in diagnostics output that uses shorter wording.
-    Advisory,
     /// The control is not supported by the current model path and was ignored.
     IgnoredUnsupported,
     /// The control was queued but not yet applied (reserved for future use).
@@ -157,7 +155,6 @@ mod tests {
             ProsodyControlStatus::Realized,
             ProsodyControlStatus::Approximated,
             ProsodyControlStatus::AdvisoryOnly,
-            ProsodyControlStatus::Advisory,
             ProsodyControlStatus::IgnoredUnsupported,
             ProsodyControlStatus::Deferred,
         ];

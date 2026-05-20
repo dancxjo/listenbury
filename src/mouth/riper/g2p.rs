@@ -669,7 +669,7 @@ fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
     match stress {
         LexicalStressLevel::Primary => Stress::Primary,
         LexicalStressLevel::Secondary => Stress::Secondary,
-        LexicalStressLevel::Unstressed => Stress::Reduced,
+        LexicalStressLevel::Unstressed => Stress::None,
     }
 }
 
@@ -679,16 +679,46 @@ fn is_default_function_word(word: &str) -> bool {
         "the"
             | "a"
             | "an"
+            | "if"
+            | "then"
+            | "than"
             | "of"
             | "to"
             | "for"
+            | "from"
+            | "with"
+            | "by"
+            | "as"
+            | "in"
+            | "on"
+            | "at"
             | "are"
             | "is"
             | "was"
             | "were"
+            | "be"
+            | "been"
+            | "am"
+            | "it"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "he"
+            | "she"
+            | "they"
+            | "we"
+            | "you"
+            | "i"
+            | "me"
+            | "my"
+            | "your"
+            | "our"
+            | "their"
             | "because"
             | "and"
             | "or"
+            | "but"
     )
 }
 
