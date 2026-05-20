@@ -1,4 +1,8 @@
-use crate::mouth::piper_native::g2p::{PhonemeProsodyCandidate, SpeechCandidateId};
+use serde::{Deserialize, Serialize};
+
+use crate::mouth::piper_native::g2p::{
+    LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId,
+};
 use crate::mouth::piper_native::text::{ProsodyBoundaryHint, ProsodyCommitment};
 
 const PAUSE_MS_DEFAULT: u64 = 140;
@@ -8,24 +12,24 @@ const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
 const CONTOUR_FINAL_CLOSURE: (f32, f32, f32) = (0.08_f32, 0.92_f32, 0.86_f32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoundaryState {
     Continuing,
     PossibleClosure,
     FinalClosure,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyEnergy {
     Low,
     Neutral,
     Elevated,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProsodyContour {
     pub energy: ProsodyEnergy,
     pub continuation_bias: f32,
@@ -33,7 +37,7 @@ pub struct ProsodyContour {
     pub speaking_rate_hint: f32,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BreathGroupCandidate {
     pub id: BreathGroupId,
     pub source_candidate_id: SpeechCandidateId,
@@ -43,7 +47,7 @@ pub struct BreathGroupCandidate {
     pub commitment: ProsodyCommitment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProsodyOverlay {
     pub target: ProsodyTarget,
     pub operation: ProsodyOperation,
@@ -51,7 +55,7 @@ pub struct ProsodyOverlay {
     pub source: ProsodyOverlaySource,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyTarget {
     WholeCandidate,
     WordIndex { index: usize },
@@ -59,7 +63,7 @@ pub enum ProsodyTarget {
     PhonemeRange { start: usize, end: usize },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyOperation {
     Emphasize,
     Deemphasize,
@@ -71,7 +75,7 @@ pub enum ProsodyOperation {
     Finality,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyOverlaySource {
     Emoji(String),
     PromptTag(String),
@@ -79,39 +83,88 @@ pub enum ProsodyOverlaySource {
     Inference,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProsodyPitchShape {
+    Level,
+    Rise,
+    Fall,
+    RiseFall,
+    FallRise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProsodyAccentKind {
+    LexicalStress,
+    Contrastive,
+    Focus,
+    GivenInformation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProsodyRateClass {
+    Slower,
+    Neutral,
+    Faster,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProsodyEnergyClass {
+    Lower,
+    Neutral,
+    Higher,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PauseStrengthClass {
+    Light,
+    Medium,
+    Strong,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PauseOp {
     pub after: ProsodyTarget,
     pub millis: u64,
+    pub strength: PauseStrengthClass,
     pub commitment: ProsodyCommitment,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProsodyBoundaryHintOp {
     Continuing,
     PossibleClosure,
     FinalClosure,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProsodyOp {
     SetBaseContour(ProsodyContour),
-    Stress {
+    SetAccent {
         target: ProsodyTarget,
+        accent: ProsodyAccentKind,
         strength: u8,
+    },
+    PreserveLexicalStress {
+        target: ProsodyTarget,
+        stress: LexicalStressLevel,
+    },
+    SetPitchShape {
+        target: ProsodyTarget,
+        shape: ProsodyPitchShape,
+        strength: u8,
+    },
+    AdjustRate {
+        target: ProsodyTarget,
+        rate: ProsodyRateClass,
+    },
+    AdjustEnergy {
+        target: ProsodyTarget,
+        energy: ProsodyEnergyClass,
     },
     ApplyRhetoric {
         target: ProsodyTarget,
         op: ProsodyOperation,
         strength: u8,
-    },
-    Stretch {
-        target: ProsodyTarget,
-        factor: f32,
-    },
-    Compress {
-        target: ProsodyTarget,
-        factor: f32,
     },
     InsertPause(PauseOp),
     SetBoundary {
@@ -120,10 +173,21 @@ pub enum ProsodyOp {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProsodyList {
     pub base: BreathGroupCandidate,
     pub ops: Vec<ProsodyOp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NativePiperProsodyRealization {
+    pub candidate_id: SpeechCandidateId,
+    pub phone_duration_overrides_ms: Vec<Option<u64>>,
+    pub word_duration_overrides_ms: Vec<Option<u64>>,
+    pub pauses: Vec<PauseOp>,
+    pub realized_ops: Vec<ProsodyOp>,
+    pub advisory_ops: Vec<ProsodyOp>,
+    pub diagnostics: Vec<String>,
 }
 
 impl ProsodyList {
@@ -133,6 +197,93 @@ impl ProsodyList {
             op: overlay.operation,
             strength: overlay.strength,
         });
+    }
+
+    pub fn realize_for_native_piper(
+        &self,
+        candidate: &PhonemeProsodyCandidate,
+    ) -> NativePiperProsodyRealization {
+        let mut phone_duration_overrides_ms = vec![None; candidate.phonemes.phonemes.len()];
+        let mut word_duration_overrides_ms = vec![None; candidate.word_targets.len()];
+        let mut pauses = Vec::new();
+        let mut realized_ops = Vec::new();
+        let mut advisory_ops = Vec::new();
+        let mut diagnostics = Vec::new();
+
+        for op in &self.ops {
+            match op {
+                ProsodyOp::AdjustRate { target, rate } => {
+                    let factor = match rate {
+                        ProsodyRateClass::Slower => 1.15_f32,
+                        ProsodyRateClass::Neutral => 1.0_f32,
+                        ProsodyRateClass::Faster => 0.9_f32,
+                    };
+                    if apply_word_duration_factor(
+                        candidate,
+                        target,
+                        factor,
+                        &mut word_duration_overrides_ms,
+                    ) {
+                        realized_ops.push(op.clone());
+                    } else {
+                        advisory_ops.push(op.clone());
+                    }
+                }
+                ProsodyOp::PreserveLexicalStress { target, stress } => {
+                    let factor = match stress {
+                        LexicalStressLevel::Primary => 1.2_f32,
+                        LexicalStressLevel::Secondary => 1.1_f32,
+                        LexicalStressLevel::Unstressed => 0.95_f32,
+                    };
+                    if apply_phone_duration_factor(
+                        candidate,
+                        target,
+                        factor,
+                        &mut phone_duration_overrides_ms,
+                    ) {
+                        realized_ops.push(op.clone());
+                    } else {
+                        advisory_ops.push(op.clone());
+                    }
+                }
+                ProsodyOp::InsertPause(pause) => {
+                    pauses.push(pause.clone());
+                    realized_ops.push(op.clone());
+                }
+                ProsodyOp::SetBoundary { .. }
+                | ProsodyOp::SetBaseContour(_)
+                | ProsodyOp::SetAccent { .. } => {
+                    advisory_ops.push(op.clone());
+                }
+                ProsodyOp::SetPitchShape { .. }
+                | ProsodyOp::AdjustEnergy { .. }
+                | ProsodyOp::ApplyRhetoric { .. } => {
+                    advisory_ops.push(op.clone());
+                }
+            }
+        }
+
+        if !advisory_ops.is_empty() {
+            diagnostics.push(
+                "native Piper currently applies duration and pause hints; pitch/energy/accent controls remain advisory"
+                    .to_string(),
+            );
+        }
+        diagnostics.push(format!(
+            "realized_ops={}, advisory_ops={}",
+            realized_ops.len(),
+            advisory_ops.len()
+        ));
+
+        NativePiperProsodyRealization {
+            candidate_id: candidate.id,
+            phone_duration_overrides_ms,
+            word_duration_overrides_ms,
+            pauses,
+            realized_ops,
+            advisory_ops,
+            diagnostics,
+        }
     }
 }
 
@@ -191,6 +342,27 @@ impl BreathGroupProsodyPlanner {
                 BoundaryState::FinalClosure => ProsodyBoundaryHintOp::FinalClosure,
             },
         });
+        ops.push(ProsodyOp::SetPitchShape {
+            target: ProsodyTarget::WholeCandidate,
+            shape: match boundary_state {
+                BoundaryState::Continuing => ProsodyPitchShape::Rise,
+                BoundaryState::PossibleClosure => ProsodyPitchShape::FallRise,
+                BoundaryState::FinalClosure => ProsodyPitchShape::Fall,
+            },
+            strength: if matches!(boundary_state, BoundaryState::FinalClosure) {
+                96
+            } else {
+                64
+            },
+        });
+        ops.push(ProsodyOp::AdjustEnergy {
+            target: ProsodyTarget::WholeCandidate,
+            energy: match base.contour.energy {
+                ProsodyEnergy::Low => ProsodyEnergyClass::Lower,
+                ProsodyEnergy::Neutral => ProsodyEnergyClass::Neutral,
+                ProsodyEnergy::Elevated => ProsodyEnergyClass::Higher,
+            },
+        });
 
         if base.contour.pause_likelihood >= 0.5 {
             ops.push(ProsodyOp::InsertPause(PauseOp {
@@ -200,9 +372,15 @@ impl BreathGroupProsodyPlanner {
                 } else {
                     PAUSE_MS_DEFAULT
                 },
+                strength: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
+                    PauseStrengthClass::Strong
+                } else {
+                    PauseStrengthClass::Medium
+                },
                 commitment: base.commitment,
             }));
         }
+        ops.extend(default_emphasis_ops(candidate, boundary_state));
 
         let planned = ProsodyList { base, ops };
         self.active = Some(planned.clone());
@@ -259,6 +437,242 @@ fn build_contour(
         continuation_bias,
         pause_likelihood,
         speaking_rate_hint,
+    }
+}
+
+fn default_emphasis_ops(
+    candidate: &PhonemeProsodyCandidate,
+    boundary_state: BoundaryState,
+) -> Vec<ProsodyOp> {
+    let mut ops = Vec::new();
+    let word_count = candidate.word_targets.len();
+    if word_count == 0 {
+        return ops;
+    }
+
+    for target in &candidate.word_targets {
+        let is_content = is_content_word(&target.normalized_text);
+        if is_content {
+            let mut strength = 50;
+            if has_quote_emphasis(candidate, target.text_range.start, target.text_range.end) {
+                strength = 78;
+            }
+            ops.push(ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                accent: ProsodyAccentKind::Focus,
+                strength,
+            });
+        } else {
+            ops.push(ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                accent: ProsodyAccentKind::GivenInformation,
+                strength: 28,
+            });
+            ops.push(ProsodyOp::AdjustEnergy {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                energy: ProsodyEnergyClass::Lower,
+            });
+        }
+        ops.push(ProsodyOp::AdjustRate {
+            target: ProsodyTarget::WordIndex {
+                index: target.word_index,
+            },
+            rate: if is_parenthetical(candidate, target.text_range.start, target.text_range.end) {
+                ProsodyRateClass::Faster
+            } else {
+                ProsodyRateClass::Neutral
+            },
+        });
+    }
+
+    for lexical in &candidate.lexical_stress {
+        ops.push(ProsodyOp::PreserveLexicalStress {
+            target: ProsodyTarget::PhonemeRange {
+                start: lexical.phoneme_index,
+                end: lexical.phoneme_index + 1,
+            },
+            stress: lexical.stress,
+        });
+    }
+
+    if word_count <= 5
+        && let Some(final_content) = candidate
+            .word_targets
+            .iter()
+            .rev()
+            .find(|target| is_content_word(&target.normalized_text))
+    {
+        ops.push(ProsodyOp::SetPitchShape {
+            target: ProsodyTarget::WordIndex {
+                index: final_content.word_index,
+            },
+            shape: match boundary_state {
+                BoundaryState::FinalClosure => ProsodyPitchShape::Fall,
+                BoundaryState::Continuing | BoundaryState::PossibleClosure => {
+                    ProsodyPitchShape::RiseFall
+                }
+            },
+            strength: 84,
+        });
+        ops.push(ProsodyOp::SetAccent {
+            target: ProsodyTarget::WordIndex {
+                index: final_content.word_index,
+            },
+            accent: ProsodyAccentKind::Contrastive,
+            strength: 86,
+        });
+    }
+
+    ops
+}
+
+fn is_content_word(word: &str) -> bool {
+    !matches!(
+        word,
+        "a" | "an"
+            | "the"
+            | "and"
+            | "or"
+            | "but"
+            | "if"
+            | "then"
+            | "than"
+            | "to"
+            | "of"
+            | "in"
+            | "on"
+            | "at"
+            | "for"
+            | "from"
+            | "with"
+            | "by"
+            | "as"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "be"
+            | "been"
+            | "am"
+            | "it"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "he"
+            | "she"
+            | "they"
+            | "we"
+            | "you"
+            | "i"
+            | "me"
+            | "my"
+            | "your"
+            | "our"
+            | "their"
+    )
+}
+
+fn has_quote_emphasis(candidate: &PhonemeProsodyCandidate, start: usize, end: usize) -> bool {
+    let before = candidate.text[..start].chars().next_back();
+    let after = candidate.text[end..].chars().next();
+    before.is_some_and(is_quote_mark) || after.is_some_and(is_quote_mark)
+}
+
+fn is_parenthetical(candidate: &PhonemeProsodyCandidate, start: usize, end: usize) -> bool {
+    let before = candidate.text[..start].chars().next_back();
+    let after = candidate.text[end..].chars().next();
+    before == Some('(') || after == Some(')')
+}
+
+fn is_quote_mark(ch: char) -> bool {
+    matches!(ch, '"' | '\'' | '“' | '”' | '‘' | '’')
+}
+
+fn apply_phone_duration_factor(
+    candidate: &PhonemeProsodyCandidate,
+    target: &ProsodyTarget,
+    factor: f32,
+    out: &mut [Option<u64>],
+) -> bool {
+    let mut any = false;
+    for idx in target_phoneme_indexes(candidate, target) {
+        if let Some(current) = candidate
+            .phone_hints
+            .iter()
+            .find(|hint| hint.phoneme_index == idx)
+            .and_then(|hint| hint.approximate_duration_ms)
+        {
+            out[idx] = Some((current as f32 * factor).round().max(1.0) as u64);
+            any = true;
+        }
+    }
+    any
+}
+
+fn apply_word_duration_factor(
+    candidate: &PhonemeProsodyCandidate,
+    target: &ProsodyTarget,
+    factor: f32,
+    out: &mut [Option<u64>],
+) -> bool {
+    let mut any = false;
+    for idx in target_word_indexes(candidate, target) {
+        if let Some(current) = candidate
+            .word_hints
+            .iter()
+            .find(|hint| hint.word_index == idx)
+            .and_then(|hint| hint.approximate_duration_ms)
+        {
+            if idx < out.len() {
+                out[idx] = Some((current as f32 * factor).round().max(1.0) as u64);
+                any = true;
+            }
+        }
+    }
+    any
+}
+
+fn target_word_indexes(candidate: &PhonemeProsodyCandidate, target: &ProsodyTarget) -> Vec<usize> {
+    match target {
+        ProsodyTarget::WholeCandidate => candidate
+            .word_targets
+            .iter()
+            .map(|w| w.word_index)
+            .collect(),
+        ProsodyTarget::WordIndex { index } => vec![*index],
+        ProsodyTarget::WordRange { start, end } => (*start..*end).collect(),
+        ProsodyTarget::PhonemeRange { start, end } => (*start..*end)
+            .filter_map(|idx| candidate.phoneme_to_word.get(idx).and_then(|word| *word))
+            .collect(),
+    }
+}
+
+fn target_phoneme_indexes(
+    candidate: &PhonemeProsodyCandidate,
+    target: &ProsodyTarget,
+) -> Vec<usize> {
+    match target {
+        ProsodyTarget::WholeCandidate => (0..candidate.phonemes.phonemes.len()).collect(),
+        ProsodyTarget::WordIndex { index } => candidate
+            .word_targets
+            .iter()
+            .find(|w| w.word_index == *index)
+            .map(|w| (w.phoneme_range.start..w.phoneme_range.end).collect())
+            .unwrap_or_default(),
+        ProsodyTarget::WordRange { start, end } => candidate
+            .word_targets
+            .iter()
+            .filter(|w| w.word_index >= *start && w.word_index < *end)
+            .flat_map(|w| w.phoneme_range.start..w.phoneme_range.end)
+            .collect(),
+        ProsodyTarget::PhonemeRange { start, end } => (*start..*end).collect(),
     }
 }
 
@@ -377,5 +791,89 @@ mod tests {
         assert_eq!(planned.base.boundary_state, BoundaryState::Continuing);
         assert!(planned.base.contour.pause_likelihood >= 0.5);
         assert!(planned.base.contour.continuation_bias > 0.7);
+    }
+
+    #[test]
+    fn default_emphasis_planner_marks_content_vs_function_words() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let candidate = tracker.ingest_text("the warm light").expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+
+        assert!(planned.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex { index: 0 },
+                accent: ProsodyAccentKind::GivenInformation,
+                ..
+            }
+        )));
+        assert!(planned.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex { index: 1 },
+                accent: ProsodyAccentKind::Focus,
+                ..
+            }
+        )));
+        assert!(
+            planned
+                .ops
+                .iter()
+                .any(|op| matches!(op, ProsodyOp::PreserveLexicalStress { .. }))
+        );
+    }
+
+    #[test]
+    fn provisional_cadence_uses_non_final_pitch_shape_until_commitment() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let first = tracker
+            .ingest_text("I think this works.")
+            .expect("candidate");
+        let provisional = planner.plan_candidate(latest_candidate(&first));
+        assert!(provisional.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::SetPitchShape {
+                target: ProsodyTarget::WholeCandidate,
+                shape: ProsodyPitchShape::FallRise,
+                ..
+            }
+        )));
+
+        let mut committed_candidate = latest_candidate(&first).clone();
+        committed_candidate.mark_committed();
+        let final_plan = planner.plan_candidate(&committed_candidate);
+        assert!(final_plan.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::SetPitchShape {
+                target: ProsodyTarget::WholeCandidate,
+                shape: ProsodyPitchShape::Fall,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn native_realization_reports_realized_vs_advisory_hints() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let candidate_events = tracker.ingest_text("I see, okay.").expect("candidate");
+        let candidate = latest_candidate(&candidate_events);
+        let planned = planner.plan_candidate(candidate);
+        let realized = planned.realize_for_native_piper(candidate);
+
+        assert!(!realized.realized_ops.is_empty());
+        assert!(!realized.advisory_ops.is_empty());
+        assert!(!realized.diagnostics.is_empty());
+        assert!(
+            realized
+                .diagnostics
+                .iter()
+                .any(|line| line.contains("advisory"))
+        );
     }
 }
