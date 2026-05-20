@@ -205,7 +205,7 @@ impl SimpleEnglishG2p {
                     let start = symbols.len();
                     symbols.extend(word_realization.symbols.iter().cloned());
                     let end = symbols.len();
-                    phoneme_to_word.extend(std::iter::repeat_n(Some(word_index), end - start));
+                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
                     word_targets.push(WordProsodyTarget {
                         word_index,
                         text_range: token_span.clone(),
@@ -239,7 +239,7 @@ impl SimpleEnglishG2p {
                     let start = symbols.len();
                     symbols.extend(initial_symbols.iter().copied().map(String::from));
                     let end = symbols.len();
-                    phoneme_to_word.extend(std::iter::repeat_n(Some(word_index), end - start));
+                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
                     word_targets.push(WordProsodyTarget {
                         word_index,
                         text_range: token_span.clone(),

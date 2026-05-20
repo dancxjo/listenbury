@@ -11,6 +11,12 @@ const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
 const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
 const CONTOUR_FINAL_CLOSURE: (f32, f32, f32) = (0.08_f32, 0.92_f32, 0.86_f32);
+const FUNCTION_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "if", "then", "than", "to", "of", "in", "on", "at",
+    "for", "from", "with", "by", "as", "is", "are", "was", "were", "be", "been", "am", "it",
+    "this", "that", "these", "those", "he", "she", "they", "we", "you", "i", "me", "my", "your",
+    "our", "their",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
@@ -141,7 +147,7 @@ pub enum ProsodyOp {
     SetBaseContour(ProsodyContour),
     SetAccent {
         target: ProsodyTarget,
-        accent: ProsodyAccentKind,
+        kind: ProsodyAccentKind,
         strength: u8,
     },
     PreserveLexicalStress {
@@ -461,7 +467,7 @@ fn default_emphasis_ops(
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
                 },
-                accent: ProsodyAccentKind::Focus,
+                kind: ProsodyAccentKind::Focus,
                 strength,
             });
         } else {
@@ -469,7 +475,7 @@ fn default_emphasis_ops(
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
                 },
-                accent: ProsodyAccentKind::GivenInformation,
+                kind: ProsodyAccentKind::GivenInformation,
                 strength: 28,
             });
             ops.push(ProsodyOp::AdjustEnergy {
@@ -524,7 +530,7 @@ fn default_emphasis_ops(
             target: ProsodyTarget::WordIndex {
                 index: final_content.word_index,
             },
-            accent: ProsodyAccentKind::Contrastive,
+            kind: ProsodyAccentKind::Contrastive,
             strength: 86,
         });
     }
@@ -533,50 +539,7 @@ fn default_emphasis_ops(
 }
 
 fn is_content_word(word: &str) -> bool {
-    !matches!(
-        word,
-        "a" | "an"
-            | "the"
-            | "and"
-            | "or"
-            | "but"
-            | "if"
-            | "then"
-            | "than"
-            | "to"
-            | "of"
-            | "in"
-            | "on"
-            | "at"
-            | "for"
-            | "from"
-            | "with"
-            | "by"
-            | "as"
-            | "is"
-            | "are"
-            | "was"
-            | "were"
-            | "be"
-            | "been"
-            | "am"
-            | "it"
-            | "this"
-            | "that"
-            | "these"
-            | "those"
-            | "he"
-            | "she"
-            | "they"
-            | "we"
-            | "you"
-            | "i"
-            | "me"
-            | "my"
-            | "your"
-            | "our"
-            | "their"
-    )
+    !FUNCTION_WORDS.contains(&word)
 }
 
 fn has_quote_emphasis(candidate: &PhonemeProsodyCandidate, start: usize, end: usize) -> bool {
@@ -630,24 +593,29 @@ fn apply_word_duration_factor(
             .find(|hint| hint.word_index == idx)
             .and_then(|hint| hint.approximate_duration_ms)
         {
-            if idx < out.len() {
-                out[idx] = Some((current as f32 * factor).round().max(1.0) as u64);
-                any = true;
-            }
+            out[idx] = Some((current as f32 * factor).round().max(1.0) as u64);
+            any = true;
         }
     }
     any
 }
 
 fn target_word_indexes(candidate: &PhonemeProsodyCandidate, target: &ProsodyTarget) -> Vec<usize> {
+    let word_len = candidate.word_targets.len();
     match target {
         ProsodyTarget::WholeCandidate => candidate
             .word_targets
             .iter()
             .map(|w| w.word_index)
             .collect(),
-        ProsodyTarget::WordIndex { index } => vec![*index],
-        ProsodyTarget::WordRange { start, end } => (*start..*end).collect(),
+        ProsodyTarget::WordIndex { index } => {
+            if *index < word_len {
+                vec![*index]
+            } else {
+                Vec::new()
+            }
+        }
+        ProsodyTarget::WordRange { start, end } => (*start..(*end).min(word_len)).collect(),
         ProsodyTarget::PhonemeRange { start, end } => (*start..*end)
             .filter_map(|idx| candidate.phoneme_to_word.get(idx).and_then(|word| *word))
             .collect(),
@@ -805,7 +773,7 @@ mod tests {
             op,
             ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex { index: 0 },
-                accent: ProsodyAccentKind::GivenInformation,
+                kind: ProsodyAccentKind::GivenInformation,
                 ..
             }
         )));
@@ -813,7 +781,7 @@ mod tests {
             op,
             ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex { index: 1 },
-                accent: ProsodyAccentKind::Focus,
+                kind: ProsodyAccentKind::Focus,
                 ..
             }
         )));

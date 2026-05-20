@@ -116,7 +116,7 @@ pub struct TextNormalizer;
 
 impl TextNormalizer {
     pub fn normalize(&self, input: &str) -> Result<NormalizedText, TextNormalizationError> {
-        let trimmed_start = input.len() - input.trim_start().len();
+        let trim_offset = input.len() - input.trim_start().len();
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(TextNormalizationError::EmptyInput);
@@ -133,7 +133,7 @@ impl TextNormalizer {
             let next = chars.get(index + 1).map(|(_, next)| *next);
             if ch.is_ascii_alphanumeric() || matches!(ch, '@' | '/' | '_') {
                 if current.is_empty() {
-                    current_start = Some(trimmed_start + byte_offset);
+                    current_start = Some(trim_offset + byte_offset);
                 }
                 current.push(ch);
                 continue;
@@ -150,14 +150,14 @@ impl TextNormalizer {
                             &mut token_spans,
                             &mut current,
                             &mut current_start,
-                            trimmed_start + byte_offset,
+                            trim_offset + byte_offset,
                         );
                     }
                 }
                 '.' => {
                     if next.is_some_and(|next| should_treat_as_internal_dot(&current, next)) {
                         if current.is_empty() {
-                            current_start = Some(trimmed_start + byte_offset);
+                            current_start = Some(trim_offset + byte_offset);
                         }
                         current.push(ch);
                         continue;
@@ -167,7 +167,7 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset + 1,
+                        trim_offset + byte_offset + 1,
                     );
                 }
                 '!' | '?' => {
@@ -176,13 +176,13 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset,
+                        trim_offset + byte_offset,
                     );
                 }
                 ':' => {
                     if next.is_some_and(|next| next == '/') && looks_like_url_prefix(&current) {
                         if current.is_empty() {
-                            current_start = Some(trimmed_start + byte_offset);
+                            current_start = Some(trim_offset + byte_offset);
                         }
                         current.push(':');
                         continue;
@@ -192,13 +192,13 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset,
+                        trim_offset + byte_offset,
                     );
                     push_phrase_break(
                         &mut tokens,
                         &mut token_spans,
-                        trimmed_start + byte_offset,
-                        trimmed_start + byte_offset + 1,
+                        trim_offset + byte_offset,
+                        trim_offset + byte_offset + 1,
                     );
                     saw_phrase_break = true;
                 }
@@ -208,13 +208,13 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset,
+                        trim_offset + byte_offset,
                     );
                     push_phrase_break(
                         &mut tokens,
                         &mut token_spans,
-                        trimmed_start + byte_offset,
-                        trimmed_start + byte_offset + 1,
+                        trim_offset + byte_offset,
+                        trim_offset + byte_offset + 1,
                     );
                     saw_phrase_break = true;
                 }
@@ -224,7 +224,7 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset,
+                        trim_offset + byte_offset,
                     );
                 }
                 '"' | '(' | ')' | '[' | ']' | '{' | '}' => {
@@ -233,7 +233,7 @@ impl TextNormalizer {
                         &mut token_spans,
                         &mut current,
                         &mut current_start,
-                        trimmed_start + byte_offset,
+                        trim_offset + byte_offset,
                     );
                 }
                 _ => return Err(TextNormalizationError::UnsupportedCharacter { ch, byte_offset }),
@@ -245,7 +245,7 @@ impl TextNormalizer {
             &mut token_spans,
             &mut current,
             &mut current_start,
-            trimmed_start + trimmed.len(),
+            trim_offset + trimmed.len(),
         );
 
         if tokens.is_empty() {
