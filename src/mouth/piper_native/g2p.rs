@@ -507,6 +507,21 @@ mod tests {
     }
 
     #[test]
+    fn phonemizes_lollipop_guild_sentence() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("We represent the lollipop guild.")
+            .expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec![
+                "W", "IY", " ", "R", "EH", "P", "R", "AH", "Z", "EH", "N", "T", " ", "DH", "AH",
+                " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|"
+            ]
+        );
+    }
+
+    #[test]
     fn candidate_complete_sentence_stays_provisional_until_committed() {
         let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
         let events = tracker.ingest_text("Okay.").expect("candidate");

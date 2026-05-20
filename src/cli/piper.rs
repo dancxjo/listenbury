@@ -6,12 +6,14 @@ use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
 use listenbury::audio::write_wav;
 #[cfg(feature = "tts-piper-native")]
+use listenbury::linguistic::{PronunciationService, service::default_english_variety};
+#[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::piper::ProcessPiperBackend;
 #[cfg(feature = "tts-piper-native")]
 use listenbury::mouth::piper_native::{
-    GraphemeToPhoneme, NativePiperBackend, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence,
+    NativePiperBackend, PiperEncoder, PiperIdSequence, PiperPhoneme, PiperPhonemeSequence,
     PiperVoiceConfig, SimpleEnglishG2p,
 };
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
@@ -55,6 +57,7 @@ pub(crate) fn run_piper_compare(command: PiperCompareCommand) -> Result<()> {
 #[cfg(feature = "tts-piper-native")]
 fn run_piper_compare_impl(command: PiperCompareCommand) -> Result<()> {
     let args = PiperCompareArgs::from_command(command)?;
+
     let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
     let process_voice = resolve_piper_voice(args.piper_voice.clone())?;
     let process_config = piper_config_for_voice(piper_bin.clone(), process_voice)?;
@@ -268,9 +271,15 @@ fn resolve_native_ids(
                 .collect(),
         }
     } else {
-        let g2p = SimpleEnglishG2p::default();
-        g2p.phonemize(&args.text)
-            .with_context(|| format!("failed to phonemize text `{}` for native Piper", args.text))?
+        let pronunciation =
+            PronunciationService::new(SimpleEnglishG2p::default(), default_english_variety());
+        let phoneme_text = pronunciation.realize_text(&args.text).with_context(|| {
+            format!(
+                "failed to realize phonemes for text `{}` for native Piper",
+                args.text
+            )
+        })?;
+        PiperEncoder.encode(&phoneme_text)
     };
 
     phoneme_sequence
@@ -334,22 +343,43 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         "AA" => &["ɑ"][..],
         "AH" => &["ə"],
         "AY" => &["a", "ɪ"],
+        "AE" => &["æ"],
+        "AO" => &["ɔ"],
+        "AW" => &["a", "ʊ"],
+        "B" => &["b"],
+        "CH" => &["t", "ʃ"],
         "D" => &["d"],
+        "DH" => &["ð"],
         "EH" => &["ɛ"],
         "ER" => &["ɚ"],
         "EY" => &["ˈ", "e", "ɪ"],
         "F" => &["f"],
+        "G" => &["ɡ"],
+        "HH" => &["h"],
         "IH" => &["ɪ"],
         "IY" => &["i"],
         "JH" => &["d", "ʒ"],
         "K" => &["k"],
         "L" => &["l"],
+        "M" => &["m"],
+        "N" => &["n"],
         "NG" => &["ŋ"],
         "OW" => &["o", "ʊ"],
+        "OY" => &["ɔ", "ɪ"],
+        "P" => &["p"],
         "R" => &["ɹ"],
         "S" => &["s"],
+        "SH" => &["ʃ"],
         "T" => &["t"],
+        "TH" => &["θ"],
         "TS" => &["t", "s"],
+        "UH" => &["ʊ"],
+        "UW" => &["u"],
+        "V" => &["v"],
+        "W" => &["w"],
+        "Y" => &["j"],
+        "Z" => &["z"],
+        "ZH" => &["ʒ"],
         "|" => &["."],
         _ if config.phoneme_id_map.contains_key(symbol) => return Some(vec![symbol.to_string()]),
         _ => return None,
@@ -778,6 +808,54 @@ mod tests {
                 ids: vec![1, 0, 27, 0, 100, 0, 23, 0, 120, 0, 18, 0, 74, 0, 10, 0, 2]
             }
         );
+    }
+
+    #[test]
+    #[cfg(feature = "tts-piper-native")]
+    fn espeak_compatible_ids_support_lollipop_guild_sentence_symbols() {
+        let config = PiperVoiceConfig::from_json_str(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "_": [0],
+                "^": [1],
+                "$": [2],
+                " ": [3],
+                ".": [10],
+                "a": [11],
+                "d": [12],
+                "i": [13],
+                "l": [14],
+                "n": [15],
+                "p": [16],
+                "t": [17],
+                "w": [18],
+                "z": [19],
+                "ð": [20],
+                "ɡ": [21],
+                "ɪ": [22],
+                "ɛ": [23],
+                "ɑ": [24],
+                "ə": [25],
+                "ɹ": [26]
+              }
+            }
+            "#,
+        )
+        .expect("voice config should parse");
+        let sequence = PiperPhonemeSequence {
+            phonemes: [
+                "W", "IY", " ", "R", "EH", "P", "R", "AH", "Z", "EH", "N", "T", " ", "DH", "AH",
+                " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|",
+            ]
+            .into_iter()
+            .map(|symbol| PiperPhoneme(symbol.to_string()))
+            .collect(),
+        };
+
+        espeak_compatible_ids(&sequence, &config)
+            .expect("sentence ARPAbet symbols should map to eSpeak Piper IDs");
     }
 
     #[test]

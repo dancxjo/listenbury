@@ -109,7 +109,9 @@ impl Default for RealizationConfig {
 pub fn phoneme_from_arpabet(symbol: &str, source: &str) -> Phoneme {
     let (base, stress) = split_arpabet_symbol(symbol);
     let phone = default_phone_for_arpabet(&base, symbol);
-    let default_phone_string = PhoneString { phones: vec![phone] };
+    let default_phone_string = PhoneString {
+        phones: vec![phone],
+    };
     let ipa = default_phone_string.phones[0].ipa.clone();
     Phoneme {
         symbol: base,
@@ -181,9 +183,18 @@ fn word_position(index: usize, len: usize) -> WordPosition {
 
 fn split_arpabet_symbol(symbol: &str) -> (String, Option<Stress>) {
     match symbol.chars().last() {
-        Some('1') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Primary)),
-        Some('2') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Secondary)),
-        Some('0') => (symbol[..symbol.len() - 1].to_string(), Some(Stress::Unstressed)),
+        Some('1') => (
+            symbol[..symbol.len() - 1].to_string(),
+            Some(Stress::Primary),
+        ),
+        Some('2') => (
+            symbol[..symbol.len() - 1].to_string(),
+            Some(Stress::Secondary),
+        ),
+        Some('0') => (
+            symbol[..symbol.len() - 1].to_string(),
+            Some(Stress::Unstressed),
+        ),
         _ => (symbol.to_string(), None),
     }
 }
@@ -248,7 +259,20 @@ fn default_phone_for_arpabet(base: &str, source_symbol: &str) -> Phone {
 fn is_vowel_symbol(base: &str) -> bool {
     matches!(
         base,
-        "AA" | "AE" | "AH" | "AO" | "AW" | "AY" | "EH" | "ER" | "EY" | "IH" | "IY" | "OW" | "OY" | "UH" | "UW"
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
     )
 }
 
@@ -294,7 +318,10 @@ mod tests {
             },
         );
         assert_eq!(realized[1].realization.ipa, "ɾ");
-        assert_eq!(realized[1].realization.method, RealizationMethod::AllophoneRule);
+        assert_eq!(
+            realized[1].realization.method,
+            RealizationMethod::AllophoneRule
+        );
         assert_eq!(
             realized[1].realization.rule.as_deref(),
             Some("american_english_intervocalic_flapping")

@@ -60,7 +60,7 @@ impl std::fmt::Debug for PronunciationService {
 /// Build the default English (US) variety used by [`PronunciationService`] when
 /// backed by the native Piper path.
 #[cfg(feature = "tts-piper-native")]
-pub(crate) fn default_english_variety() -> LinguisticVariety {
+pub fn default_english_variety() -> LinguisticVariety {
     use crate::linguistic::variety::{Phonology, VarietyTag};
     LinguisticVariety::tagged(
         VarietyTag::new("en_US"),

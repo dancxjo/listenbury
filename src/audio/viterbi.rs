@@ -23,7 +23,7 @@ use crate::audio::features::AcousticFeatureStream;
 use crate::audio::hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
 };
-use crate::audio::phone_class::{classify_frame, CoarsePhoneClass};
+use crate::audio::phone_class::{CoarsePhoneClass, classify_frame};
 
 // ---------------------------------------------------------------------------
 // Phone state
@@ -134,7 +134,11 @@ pub fn viterbi_align_pronunciation(
     // Compute overall path score (geometric mean of per-frame emission scores).
     let path_score: f32 = {
         let total_log: f32 = (0..n_frames)
-            .map(|f| emit(f, phone_assignment[f]).ln().max(MIN_LOG_EMISSION_SCORE))
+            .map(|f| {
+                emit(f, phone_assignment[f])
+                    .ln()
+                    .max(MIN_LOG_EMISSION_SCORE)
+            })
             .sum();
         // Exponentiate the per-frame average to get a 0..1 score.
         (total_log / n_frames as f32).exp().clamp(0.0, 1.0)
@@ -310,8 +314,7 @@ fn phone_class_match_score(detected: CoarsePhoneClass, expected: &str) -> f32 {
             detected == CoarsePhoneClass::StopClosure || detected == CoarsePhoneClass::StopBurst
         }
         "nasal" => {
-            detected == CoarsePhoneClass::Nasal
-                || detected == CoarsePhoneClass::VowelOrSonorant
+            detected == CoarsePhoneClass::Nasal || detected == CoarsePhoneClass::VowelOrSonorant
         }
         "approximant_liquid" => {
             detected == CoarsePhoneClass::ApproximantLiquid
@@ -488,10 +491,7 @@ mod tests {
             hop_ms: 10.0,
             frames: vec![voiced_frame(0), voiced_frame(10), voiced_frame(20)],
         };
-        let phones = vec![
-            PhoneState::new("A", "vowel"),
-            PhoneState::new("B", "stop"),
-        ];
+        let phones = vec![PhoneState::new("A", "vowel"), PhoneState::new("B", "stop")];
         let hyps = viterbi_align_pronunciation(&phones, 0, 30, &stream);
         assert_eq!(hyps.len(), 2);
         assert_eq!(hyps[0].start_ms, 0);
@@ -569,7 +569,10 @@ mod tests {
         let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
         let prov = &hyps[0].provenance;
         let evidence = prov["emission_evidence"].as_array().expect("array");
-        assert!(!evidence.is_empty(), "emission_evidence should be non-empty");
+        assert!(
+            !evidence.is_empty(),
+            "emission_evidence should be non-empty"
+        );
         // Each entry should have detected_class and match_score.
         let first = &evidence[0];
         assert!(first["detected_class"].is_string());
@@ -654,7 +657,10 @@ mod tests {
         assert_eq!(hyps.len(), 4);
         // All phones must be in order.
         for i in 1..hyps.len() {
-            assert!(hyps[i].start_ms >= hyps[i - 1].start_ms, "phones out of order");
+            assert!(
+                hyps[i].start_ms >= hyps[i - 1].start_ms,
+                "phones out of order"
+            );
         }
         // First phone starts at word start.
         assert_eq!(hyps[0].start_ms, 0);
@@ -716,10 +722,7 @@ mod tests {
                 voiced_frame(2040),     // IY
             ],
         };
-        let phones = vec![
-            PhoneState::new("K", "stop"),
-            PhoneState::new("IY", "vowel"),
-        ];
+        let phones = vec![PhoneState::new("K", "stop"), PhoneState::new("IY", "vowel")];
         let hyps = viterbi_align_pronunciation(&phones, 2000, 2050, &stream);
         assert_eq!(hyps.len(), 2);
         assert!(hyps[0].start_ms < hyps[1].start_ms);

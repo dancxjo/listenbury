@@ -1224,9 +1224,11 @@ mod tests {
             segmentation.phone_spans[0].end_ms <= segmentation.phone_spans[1].start_ms
                 && segmentation.phone_spans[1].end_ms <= segmentation.phone_spans[2].start_ms
         );
-        assert!(segmentation
-            .phone_spans
-            .iter()
-            .all(|span| span.start_ms <= span.end_ms));
+        assert!(
+            segmentation
+                .phone_spans
+                .iter()
+                .all(|span| span.start_ms <= span.end_ms)
+        );
     }
 }

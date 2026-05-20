@@ -139,7 +139,7 @@ fn confidence_for_pause_duration(duration_ms: u64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::acoustic::{EnergySilence, EnergyLandmarks};
+    use crate::audio::acoustic::{EnergyLandmarks, EnergySilence};
 
     fn empty_landmarks() -> EnergyLandmarks {
         EnergyLandmarks {
@@ -212,12 +212,10 @@ mod tests {
             onsets: vec![100, 600],
             offsets: vec![400, 900],
             valleys: vec![200, 700],
-            silences: vec![
-                EnergySilence {
-                    start_ms: 1000,
-                    end_ms: 1200,
-                },
-            ],
+            silences: vec![EnergySilence {
+                start_ms: 1000,
+                end_ms: 1200,
+            }],
             peaks: vec![150, 650],
         };
         let hyps = generate_boundary_hypotheses(&lm, None);

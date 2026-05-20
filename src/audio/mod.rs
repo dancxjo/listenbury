@@ -18,21 +18,21 @@ pub mod wav;
 
 pub use crate::audio::frame::AudioFrame;
 pub use acoustic::{
-    analyze_audio_frames, analyze_mono_samples, segment_pronunciation_with_acoustics,
-    AcousticAnalysis,
+    AcousticAnalysis, analyze_audio_frames, analyze_mono_samples,
+    segment_pronunciation_with_acoustics,
 };
 pub use boundary::generate_boundary_hypotheses;
 pub use dtw::{DtwTemplate, DtwTemplateMatcher};
-pub use features::{build_feature_stream, AcousticFeatureFrame, AcousticFeatureStream};
+pub use features::{AcousticFeatureFrame, AcousticFeatureStream, build_feature_stream};
 pub use hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
 };
 pub use lattice::{
-    fuse_hypotheses, FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind,
-    HypothesisLattice,
+    FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind, HypothesisLattice,
+    fuse_hypotheses,
 };
-pub use phone_class::{classify_frame, generate_phone_class_hypotheses, CoarsePhoneClass};
-pub use viterbi::{viterbi_align_pronunciation, PhoneState};
+pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};
+pub use viterbi::{PhoneState, viterbi_align_pronunciation};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };

@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 
 use crate::audio::{
-    analyze_audio_frames, read_wav_frames, segment_pronunciation_with_acoustics, write_wav_bytes,
-    AcousticAnalysis, AudioFrame,
+    AcousticAnalysis, AudioFrame, analyze_audio_frames, read_wav_frames,
+    segment_pronunciation_with_acoustics, write_wav_bytes,
 };
-use crate::live_trace::{read_trace_jsonl, read_trace_session, SseBroadcaster};
-use crate::trace::viewer_payload::{trace_session_to_viewer_payload, ViewerPayload};
+use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
+use crate::trace::viewer_payload::{ViewerPayload, trace_session_to_viewer_payload};
 
 use super::assets;
 
@@ -445,12 +445,10 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::MECHANICAL_ASR_MJS,
         ),
-        "/viterbi-phone-alignment.mjs" | "/assets/viterbi-phone-alignment.mjs" => {
-            HttpResponse::ok(
-                "application/javascript; charset=utf-8",
-                assets::VITERBI_PHONE_ALIGNMENT_MJS,
-            )
-        }
+        "/viterbi-phone-alignment.mjs" | "/assets/viterbi-phone-alignment.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::VITERBI_PHONE_ALIGNMENT_MJS,
+        ),
         "/hypothesis-lattice.mjs" | "/assets/hypothesis-lattice.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::HYPOTHESIS_LATTICE_MJS,
@@ -1288,14 +1286,18 @@ mod tests {
         assert_eq!(ranged.status, 206);
         assert_eq!(ranged.content_type, "audio/wav");
         assert_eq!(ranged.body, full.body[4..=11]);
-        assert!(ranged
-            .headers
-            .iter()
-            .any(|(name, value)| { *name == "Accept-Ranges" && value == "bytes" }));
-        assert!(ranged
-            .headers
-            .iter()
-            .any(|(name, value)| { *name == "Content-Range" && value == "bytes 4-11/244" }));
+        assert!(
+            ranged
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Accept-Ranges" && value == "bytes" })
+        );
+        assert!(
+            ranged
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Content-Range" && value == "bytes 4-11/244" })
+        );
     }
 
     #[test]
@@ -1307,10 +1309,12 @@ mod tests {
             Some("bytes=999999999-1000000000"),
         );
         assert_eq!(response.status, 416);
-        assert!(response
-            .headers
-            .iter()
-            .any(|(name, value)| { *name == "Content-Range" && value.starts_with("bytes */") }));
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(name, value)| { *name == "Content-Range" && value.starts_with("bytes */") })
+        );
     }
 
     #[test]

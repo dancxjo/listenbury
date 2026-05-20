@@ -165,11 +165,7 @@ fn band_energies(level: &SpectrogramLevel, spec_frame: Option<&[f32]>) -> (f32, 
     };
     let high = if high_min <= high_max {
         let count = high_max - high_min + 1;
-        spec_frame[high_min..=high_max]
-            .iter()
-            .copied()
-            .sum::<f32>()
-            / count as f32
+        spec_frame[high_min..=high_max].iter().copied().sum::<f32>() / count as f32
     } else {
         -60.0
     };
@@ -198,7 +194,7 @@ fn compute_spectral_flux(current: Option<&[f32]>, previous: Option<&[f32]>) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::acoustic::{EnergyFrame, EnergyEnvelope};
+    use crate::audio::acoustic::{EnergyEnvelope, EnergyFrame};
 
     fn make_envelope(frames: Vec<EnergyFrame>) -> EnergyEnvelope {
         EnergyEnvelope {
@@ -230,7 +226,9 @@ mod tests {
 
     #[test]
     fn zero_crossing_rate_is_high_for_alternating_signal() {
-        let samples: Vec<f32> = (0..100).map(|i| if i % 2 == 0 { 0.5 } else { -0.5 }).collect();
+        let samples: Vec<f32> = (0..100)
+            .map(|i| if i % 2 == 0 { 0.5 } else { -0.5 })
+            .collect();
         let zcr = compute_zero_crossing_rate(&samples);
         assert!(zcr > 0.9, "expected high ZCR, got {zcr}");
     }

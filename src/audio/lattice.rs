@@ -115,7 +115,11 @@ impl HypothesisLattice {
     /// The old hypothesis is updated to [`HypothesisStatus::Revised`] and
     /// a [`HypothesisEdgeKind::RevisionOf`] edge is added from the new one
     /// to the old one so the full history remains inspectable.
-    pub fn revise(&mut self, old_id: &SpanHypothesisId, revised: SpanHypothesis) -> SpanHypothesisId {
+    pub fn revise(
+        &mut self,
+        old_id: &SpanHypothesisId,
+        revised: SpanHypothesis,
+    ) -> SpanHypothesisId {
         if let Some(old) = self.hypotheses.iter_mut().find(|h| &h.id == old_id) {
             old.status = HypothesisStatus::Revised;
         }

@@ -119,10 +119,7 @@ pub fn classify_frame(frame: &AcousticFeatureFrame) -> (CoarsePhoneClass, Vec<St
     }
 
     // Approximant / liquid: moderate ZCR, moderate energy, slow spectral change.
-    if frame.zero_crossing_rate < 0.18
-        && frame.rms_energy > 0.01
-        && frame.spectral_flux < 0.12
-    {
+    if frame.zero_crossing_rate < 0.18 && frame.rms_energy > 0.01 && frame.spectral_flux < 0.12 {
         features_used.push("zcr.moderate".to_string());
         features_used.push("energy.moderate".to_string());
         features_used.push("spectral_flux.slow".to_string());
@@ -213,8 +210,7 @@ mod tests {
     #[test]
     fn high_zcr_and_high_freq_classifies_as_fricative() {
         // High ZCR (0.20 > 0.15) and high-band close to low-band.
-        let (class, features) =
-            classify_frame(&frame(0.04, 0.06, 0.20, 0.05, -20.0, -15.0, 10));
+        let (class, features) = classify_frame(&frame(0.04, 0.06, 0.20, 0.05, -20.0, -15.0, 10));
         assert_eq!(class, CoarsePhoneClass::Fricative);
         assert!(features.contains(&"zcr.high".to_string()));
         assert!(features.contains(&"band.high_freq".to_string()));
@@ -222,8 +218,7 @@ mod tests {
 
     #[test]
     fn high_flux_and_energy_classifies_as_stop_burst() {
-        let (class, features) =
-            classify_frame(&frame(0.08, 0.12, 0.12, 0.20, -18.0, -30.0, 20));
+        let (class, features) = classify_frame(&frame(0.08, 0.12, 0.12, 0.20, -18.0, -30.0, 20));
         assert_eq!(class, CoarsePhoneClass::StopBurst);
         assert!(features.contains(&"spectral_flux.high".to_string()));
     }
@@ -237,8 +232,7 @@ mod tests {
 
     #[test]
     fn low_zcr_high_energy_low_band_dominant_classifies_as_vowel() {
-        let (class, features) =
-            classify_frame(&frame(0.06, 0.09, 0.05, 0.04, -12.0, -25.0, 40));
+        let (class, features) = classify_frame(&frame(0.06, 0.09, 0.05, 0.04, -12.0, -25.0, 40));
         assert_eq!(class, CoarsePhoneClass::VowelOrSonorant);
         assert!(features.contains(&"energy.voiced".to_string()));
     }

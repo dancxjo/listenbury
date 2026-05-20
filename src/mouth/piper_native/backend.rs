@@ -5,9 +5,10 @@ use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;
+use crate::linguistic::{PronunciationService, service::default_english_variety};
 use crate::mouth::backend::TtsBackend;
 
-use super::{GraphemeToPhoneme, PiperIdSequence, PiperVoiceConfig, SimpleEnglishG2p};
+use super::{PiperEncoder, PiperIdSequence, PiperVoiceConfig, SimpleEnglishG2p};
 
 const NATIVE_PIPER_FRAME_SAMPLES: usize = 1024;
 // Piper ONNX vits output is a single waveform tensor for one speaker stream.
@@ -330,10 +331,12 @@ fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
 
 impl TtsBackend for NativePiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
-        let g2p = SimpleEnglishG2p::default();
-        let phonemes = g2p
-            .phonemize(text)
-            .with_context(|| format!("failed to phonemize text `{text}` for native Piper"))?;
+        let pronunciation =
+            PronunciationService::new(SimpleEnglishG2p::default(), default_english_variety());
+        let phoneme_text = pronunciation
+            .realize_text(text)
+            .with_context(|| format!("failed to realize phonemes for text `{text}`"))?;
+        let phonemes = PiperEncoder.encode(&phoneme_text);
         let ids = phonemes.to_piper_ids(&self.config).with_context(|| {
             format!(
                 "failed to map phonemes to IDs for native Piper model {}",

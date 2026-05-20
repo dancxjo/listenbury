@@ -83,9 +83,7 @@ pub fn dtw_align(query: &[Vec<f32>], template: &[Vec<f32>]) -> (f32, Vec<[usize;
     for i in 1..n {
         for j in 1..m {
             let local = euclidean_distance(&query[i], &template[j]);
-            let min_prev = cost[i - 1][j]
-                .min(cost[i][j - 1])
-                .min(cost[i - 1][j - 1]);
+            let min_prev = cost[i - 1][j].min(cost[i][j - 1]).min(cost[i - 1][j - 1]);
             cost[i][j] = local + min_prev;
         }
     }
@@ -259,10 +257,7 @@ mod tests {
     fn matcher_returns_best_match_first() {
         let mut matcher = DtwTemplateMatcher::new();
         // Template "a": identical to the query.
-        matcher.register(DtwTemplate::new(
-            "a",
-            vec_frames(&[&[1.0], &[2.0], &[3.0]]),
-        ));
+        matcher.register(DtwTemplate::new("a", vec_frames(&[&[1.0], &[2.0], &[3.0]])));
         // Template "b": very different.
         matcher.register(DtwTemplate::new(
             "b",

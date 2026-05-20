@@ -299,7 +299,8 @@ pub(crate) struct PiperCompareCommand {
     pub(crate) native_output_wav: Option<PathBuf>,
     #[arg(long)]
     pub(crate) phonemes: Option<String>,
-    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    /// Text to compare. Defaults to a phonetic pangram-style utterance.
+    #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
 }
 
@@ -720,6 +721,17 @@ mod tests {
             Some(PathBuf::from("out/native.wav"))
         );
         assert_eq!(command.words, ["I", "see."]);
+    }
+
+    #[test]
+    fn piper_compare_accepts_default_utterance() {
+        let cli = Cli::try_parse_from(["listenbury", "piper-compare"])
+            .expect("piper-compare should allow its default utterance");
+
+        let Some(Command::PiperCompare(command)) = cli.command else {
+            panic!("expected piper-compare command");
+        };
+        assert!(command.words.is_empty());
     }
 
     #[test]
