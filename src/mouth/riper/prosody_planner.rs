@@ -345,7 +345,7 @@ impl ProsodyList {
             })
             .collect::<Vec<_>>();
         let pause_hint = pauses.last().copied();
-        let direct_address_pause = self.ops.iter().find_map(|op| match op {
+        let direct_address_pause_op = self.ops.iter().find_map(|op| match op {
             ProsodyOp::InsertPause(pause)
                 if matches!(pause.reason, PauseReason::DirectAddressBoundary) =>
             {
@@ -438,7 +438,7 @@ impl ProsodyList {
                         None
                     },
                     pause_behavior: if is_vocative_span {
-                        Some(if direct_address_pause.is_some() {
+                        Some(if direct_address_pause_op.is_some() {
                             "reduced".to_string()
                         } else {
                             "suppressed".to_string()

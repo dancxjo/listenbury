@@ -3,6 +3,8 @@ use thiserror::Error;
 
 use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 
+const MAX_VOCATIVE_WORDS: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedText {
     pub tokens: Vec<NormalizedToken>,
@@ -411,7 +413,7 @@ fn detect_addressee_span(
         .split_ascii_whitespace()
         .filter(|word| !word.is_empty())
         .collect::<Vec<_>>();
-    if words.is_empty() || words.len() > 3 {
+    if words.is_empty() || words.len() > MAX_VOCATIVE_WORDS {
         return None;
     }
 
@@ -462,7 +464,7 @@ fn has_discourse_cue(prefix: &str) -> bool {
     matches!(
         words.last().map(String::as_str),
         Some("listen" | "look" | "see")
-    ) || words.ends_with(&["you".to_string(), "see".to_string()])
+    ) || matches!(words.as_slice(), [.., prev, last] if prev == "you" && last == "see")
 }
 
 fn is_likely_vocative_noun(word: &str) -> bool {
