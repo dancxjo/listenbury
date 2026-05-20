@@ -411,6 +411,12 @@ impl ProsodyList {
                     span.start < word_target.text_range.end
                         && span.end > word_target.text_range.start
                 });
+                let reduction = candidate
+                    .sentence_analysis
+                    .tokens
+                    .iter()
+                    .find(|analysis| analysis.word_index == Some(word_target.word_index))
+                    .and_then(|analysis| analysis.reduction_diagnostic.clone());
                 PhoLikeDiagnosticEntry {
                     word: word_target.normalized_text.clone(),
                     span: if is_vocative_span {
@@ -451,6 +457,7 @@ impl ProsodyList {
                         None
                     },
                     pitch_hint,
+                    reduction,
                     realization_status: ProsodyRealizationStatus::Requested,
                 }
             })
@@ -1469,5 +1476,28 @@ mod tests {
         assert_eq!(dave.span.as_deref(), Some("Dave"));
         assert_eq!(dave.classification.as_deref(), Some("vocative"));
         assert_eq!(dave.pause_behavior.as_deref(), Some("suppressed"));
+    }
+
+    #[test]
+    fn diagnostics_expose_to_reduction_provenance() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker.ingest_text("We need to leave.").expect("candidate");
+        let latest = latest_candidate(&candidate);
+        let planned = planner.plan_candidate(latest);
+        let diagnostics = planned.pho_like_diagnostics(latest);
+        let to_entry = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "to")
+            .expect("to diagnostic");
+        let reduction = to_entry.reduction.as_ref().expect("reduction diagnostic");
+        assert_eq!(reduction.citation, "T UW1");
+        assert_eq!(reduction.realized, "T AH0");
+        assert_eq!(reduction.reason, "unstressed_function_word_before_verb");
+        assert_eq!(
+            reduction.status,
+            crate::mouth::riper::ReductionStatus::Applied
+        );
     }
 }

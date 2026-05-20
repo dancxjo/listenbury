@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::mouth::riper::sentence_analysis::ReductionDiagnostic;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stress {
     None,
@@ -158,6 +160,7 @@ pub struct PhoLikeDiagnosticEntry {
     pub classification: Option<String>,
     pub pause_behavior: Option<String>,
     pub pitch_hint: Option<String>,
+    pub reduction: Option<ReductionDiagnostic>,
     pub realization_status: ProsodyRealizationStatus,
 }
 

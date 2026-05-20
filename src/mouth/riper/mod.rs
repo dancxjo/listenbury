@@ -7,6 +7,7 @@ pub mod phoneme;
 pub mod prosody_audit;
 pub mod prosody_controls;
 pub mod prosody_planner;
+pub mod sentence_analysis;
 pub mod text;
 
 #[cfg(feature = "tts-riper")]
@@ -37,6 +38,10 @@ pub use prosody_planner::{
     ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyEnergyClass,
     ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay, ProsodyOverlaySource,
     ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RiperProsodyRealization,
+};
+pub use sentence_analysis::{
+    HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole, ReductionClass, ReductionDiagnostic,
+    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticRole, TokenAnalysis,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,
