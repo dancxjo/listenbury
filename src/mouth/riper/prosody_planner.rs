@@ -9,7 +9,10 @@ use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_v
 
 const PAUSE_MS_DEFAULT: u64 = 140;
 const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
+const PAUSE_MS_BREATH: u64 = 180;
 const PAUSE_MS_VOCATIVE_REDUCTION: u64 = 60;
+const BREATH_PAUSE_WORD_INTERVAL: usize = 9;
+const BREATH_PAUSE_MIN_WORDS_AFTER: usize = 4;
 const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
 const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
@@ -569,6 +572,7 @@ impl BreathGroupProsodyPlanner {
                 commitment: base.commitment,
             }));
         }
+        ops.extend(default_breath_pause_ops(candidate, base.commitment));
         let focus_plan = default_emphasis_ops(candidate, boundary_state);
         ops.extend(focus_plan.ops);
 
@@ -812,6 +816,36 @@ fn default_emphasis_ops(
     }
 
     FocusAccentPlan { ops, diagnostics }
+}
+
+fn default_breath_pause_ops(
+    candidate: &PhonemeProsodyCandidate,
+    commitment: ProsodyCommitment,
+) -> Vec<ProsodyOp> {
+    candidate
+        .word_targets
+        .iter()
+        .filter(|target| {
+            let words_after = candidate
+                .word_targets
+                .len()
+                .saturating_sub(target.word_index + 1);
+            target.word_index + 1 >= BREATH_PAUSE_WORD_INTERVAL
+                && (target.word_index + 1) % BREATH_PAUSE_WORD_INTERVAL == 0
+                && words_after >= BREATH_PAUSE_MIN_WORDS_AFTER
+        })
+        .map(|target| {
+            ProsodyOp::InsertPause(PauseOp {
+                after: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                millis: PAUSE_MS_BREATH,
+                strength: PauseStrengthClass::Light,
+                reason: PauseReason::Breath,
+                commitment,
+            })
+        })
+        .collect()
 }
 
 fn is_content_word(word: &str) -> bool {
@@ -1393,6 +1427,35 @@ mod tests {
         assert_eq!(
             committed_pause.map(|p| p.reason),
             Some(PauseReason::SentenceBoundary)
+        );
+    }
+
+    #[test]
+    fn long_runs_plan_light_breath_pauses() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let candidate = tracker
+            .ingest_text(
+                "We represent the lollipop guild because the machine needs another minute before returning today.",
+            )
+            .expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+        let breath_pause = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::InsertPause(pause) if matches!(pause.reason, PauseReason::Breath) => {
+                Some(pause)
+            }
+            _ => None,
+        });
+
+        assert_eq!(
+            breath_pause.map(|pause| pause.millis),
+            Some(PAUSE_MS_BREATH)
+        );
+        assert_eq!(
+            breath_pause.map(|pause| &pause.after),
+            Some(&ProsodyTarget::WordIndex { index: 8 }),
+            "breath should fall after the ninth word"
         );
     }
 

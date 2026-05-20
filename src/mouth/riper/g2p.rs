@@ -26,6 +26,8 @@ use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
 const PHRASE_BREAK_SYMBOL: &str = "|";
+const BREATH_BREAK_WORD_INTERVAL: usize = 9;
+const BREATH_BREAK_MIN_WORDS_AFTER: usize = 4;
 
 pub trait GraphemeToPhoneme {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence>;
@@ -48,6 +50,7 @@ pub struct PhonemizedUnit {
 pub enum PhoneLengthClass {
     Short,
     Medium,
+    Long,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +233,12 @@ impl SimpleEnglishG2p {
             .count();
         let mut emitted_pronounceable = 0usize;
 
-        for (token, token_span) in normalized.tokens.iter().zip(normalized.token_spans.iter()) {
+        for (token_index, (token, token_span)) in normalized
+            .tokens
+            .iter()
+            .zip(normalized.token_spans.iter())
+            .enumerate()
+        {
             match token {
                 NormalizedToken::Word(word) => {
                     let word_realization = word_to_phones_with_metadata(word)
@@ -262,7 +270,11 @@ impl SimpleEnglishG2p {
                     emitted_pronounceable += 1;
                     word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
-                        symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
+                        symbols.push(inter_word_boundary_symbol(
+                            emitted_pronounceable,
+                            pronounceable_count,
+                            normalized.tokens.get(token_index + 1),
+                        ));
                         phoneme_to_word.push(None);
                     }
                 }
@@ -282,7 +294,11 @@ impl SimpleEnglishG2p {
                     emitted_pronounceable += 1;
                     word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
-                        symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
+                        symbols.push(inter_word_boundary_symbol(
+                            emitted_pronounceable,
+                            pronounceable_count,
+                            normalized.tokens.get(token_index + 1),
+                        ));
                         phoneme_to_word.push(None);
                     }
                 }
@@ -310,6 +326,8 @@ impl SimpleEnglishG2p {
                 symbol: symbol.clone(),
                 class: if symbol == WORD_SEPARATOR_SYMBOL || symbol == PHRASE_BREAK_SYMBOL {
                     PhoneLengthClass::Short
+                } else if is_nucleus_symbol(symbol) {
+                    PhoneLengthClass::Long
                 } else {
                     PhoneLengthClass::Medium
                 },
@@ -522,6 +540,7 @@ fn build_candidate(
             approximate_duration_ms: Some(match hint.class {
                 PhoneLengthClass::Short => 70,
                 PhoneLengthClass::Medium => 120,
+                PhoneLengthClass::Long => 145,
             }),
             source: TimingHintSource::HeuristicFromPhonemeClass,
         })
@@ -595,6 +614,65 @@ fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
 
 fn word_to_phones(word: &str) -> Option<Vec<String>> {
     word_to_phones_with_metadata(word).map(|realization| realization.symbols)
+}
+
+fn inter_word_boundary_symbol(
+    emitted_pronounceable: usize,
+    pronounceable_count: usize,
+    next_token: Option<&NormalizedToken>,
+) -> String {
+    if should_insert_breath_break(emitted_pronounceable, pronounceable_count, next_token) {
+        PHRASE_BREAK_SYMBOL
+    } else {
+        WORD_SEPARATOR_SYMBOL
+    }
+    .to_string()
+}
+
+fn should_insert_breath_break(
+    emitted_pronounceable: usize,
+    pronounceable_count: usize,
+    next_token: Option<&NormalizedToken>,
+) -> bool {
+    emitted_pronounceable >= BREATH_BREAK_WORD_INTERVAL
+        && emitted_pronounceable % BREATH_BREAK_WORD_INTERVAL == 0
+        && pronounceable_count.saturating_sub(emitted_pronounceable) >= BREATH_BREAK_MIN_WORDS_AFTER
+        && !matches!(next_token, Some(NormalizedToken::PhraseBreak))
+}
+
+fn is_nucleus_symbol(symbol: &str) -> bool {
+    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
+    matches!(
+        base,
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
+            | "a"
+            | "e"
+            | "i"
+            | "o"
+            | "u"
+            | "æ"
+            | "ɑ"
+            | "ɔ"
+            | "ə"
+            | "ɛ"
+            | "ɚ"
+            | "ɪ"
+            | "ʊ"
+            | "ʌ"
+    )
 }
 
 fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
@@ -794,6 +872,61 @@ mod tests {
         assert_eq!(
             symbols(&unit.phonemes),
             vec!["Z", "AY", "L", "AH0", "F", "OW", "N"]
+        );
+    }
+
+    #[test]
+    fn vowel_nuclei_get_longer_timing_hints() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let events = tracker.ingest_text("see").expect("candidate");
+        let candidate = match events.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate,
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        let vowel_hint = candidate
+            .phone_hints
+            .iter()
+            .find(|hint| candidate.phonemes.phonemes[hint.phoneme_index].0 == "IY")
+            .expect("IY nucleus timing hint");
+        let consonant_hint = candidate
+            .phone_hints
+            .iter()
+            .find(|hint| candidate.phonemes.phonemes[hint.phoneme_index].0 == "S")
+            .expect("S timing hint");
+
+        assert!(
+            vowel_hint.approximate_duration_ms > consonant_hint.approximate_duration_ms,
+            "vowel nuclei should be held longer than neighboring consonants"
+        );
+        assert_eq!(vowel_hint.approximate_duration_ms, Some(145));
+    }
+
+    #[test]
+    fn long_runs_insert_periodic_breath_breaks() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit(
+                "We represent the lollipop guild because the machine needs another minute before returning today.",
+            )
+            .expect("phonemize");
+        let needs = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "needs")
+            .expect("needs target");
+
+        assert_eq!(
+            unit.phonemes.phonemes[needs.phoneme_range.end].0, "|",
+            "long unpunctuated runs should take a breath after the ninth word"
+        );
+        assert!(
+            symbols(&unit.phonemes)
+                .iter()
+                .filter(|symbol| symbol.as_str() == "|")
+                .count()
+                >= 2,
+            "breath break should coexist with the final sentence break"
         );
     }
 

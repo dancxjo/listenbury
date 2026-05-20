@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
@@ -12,7 +12,9 @@ use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
 #[cfg(feature = "tts-riper")]
-use crate::mouth::riper::{PiperVoiceConfig, RiperBackend, SimpleEnglishG2p};
+use crate::mouth::riper::{
+    PiperIdSequence, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend, SimpleEnglishG2p,
+};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
 
@@ -152,14 +154,7 @@ impl TtsBackend for RiperTextBackend {
             .phonemize_unit(text)
             .with_context(|| format!("failed to realize Riper phonemes for text `{text}`"))?
             .phonemes;
-        let ids = phonemes
-            .to_piper_ids(self.backend.config())
-            .with_context(|| {
-                format!(
-                    "failed to map phonemes to IDs for Riper model {}",
-                    self.backend.model_path().display()
-                )
-            })?;
+        let ids = phonemes.to_riper_text_ids(self.backend.config(), self.backend.model_path())?;
         let frames = self
             .backend
             .synthesize_id_frames(&ids)
@@ -171,6 +166,31 @@ impl TtsBackend for RiperTextBackend {
             "RiperTextBackend synthesis complete"
         );
         Ok(frames)
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+trait RiperTextPhonemeIds {
+    fn to_riper_text_ids(
+        &self,
+        config: &PiperVoiceConfig,
+        model_path: &Path,
+    ) -> Result<PiperIdSequence>;
+}
+
+#[cfg(feature = "tts-riper")]
+impl RiperTextPhonemeIds for PiperPhonemeSequence {
+    fn to_riper_text_ids(
+        &self,
+        config: &PiperVoiceConfig,
+        model_path: &Path,
+    ) -> Result<PiperIdSequence> {
+        self.to_piper_ids_compatible(config).with_context(|| {
+            format!(
+                "failed to map phonemes to IDs for Riper model {}",
+                model_path.display()
+            )
+        })
     }
 }
 
@@ -657,6 +677,78 @@ mod tests {
             .expect_err("Riper mode should fail without Riper backend");
         assert!(error.to_string().contains("Riper backend is unavailable"));
         assert!(error.to_string().contains("missing Riper config"));
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn riper_text_id_conversion_accepts_cmudict_uw_for_espeak_voice_maps() {
+        let config = PiperVoiceConfig::from_json_str(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "_": [0],
+                "^": [1],
+                "$": [2],
+                "u": [33]
+              }
+            }
+            "#,
+        )
+        .expect("voice config should parse");
+        let phonemes = PiperPhonemeSequence {
+            phonemes: vec![crate::mouth::riper::PiperPhoneme("UW".to_string())],
+        };
+
+        let ids = phonemes
+            .to_riper_text_ids(&config, Path::new("/tmp/voice.onnx"))
+            .expect("CMUdict UW should convert to the eSpeak symbol used by Piper");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 0, 33, 0, 2]
+            }
+        );
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn riper_text_id_conversion_preserves_already_flap_for_espeak_voice_maps() {
+        let config = PiperVoiceConfig::from_json_str(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "_": [0],
+                "^": [1],
+                "$": [2],
+                "i": [10],
+                "l": [11],
+                "ɔ": [12],
+                "ɛ": [13],
+                "ɹ": [14],
+                "ɾ": [15]
+              }
+            }
+            "#,
+        )
+        .expect("voice config should parse");
+        let phonemes = SimpleEnglishG2p::default()
+            .phonemize_unit("already")
+            .expect("already should phonemize")
+            .phonemes;
+
+        let ids = phonemes
+            .to_riper_text_ids(&config, Path::new("/tmp/voice.onnx"))
+            .expect("already should keep the tap in the compatible ID path");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 0, 12, 0, 11, 0, 14, 0, 13, 0, 15, 0, 10, 0, 2]
+            }
+        );
     }
 
     #[cfg(feature = "tts-riper")]
