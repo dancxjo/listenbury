@@ -82,6 +82,9 @@ pub fn viterbi_align_pronunciation(
     // ---- Viterbi DP --------------------------------------------------------
     // dp[f][p] = best log-probability of reaching phone p at frame f.
     // bt[f][p] = phone index at frame f-1 on the best path to (f, p).
+    //
+    // Clamp log scores to this floor to avoid -inf polluting the DP.
+    const MIN_LOG_EMISSION_SCORE: f32 = -20.0;
     let neg_inf: f32 = f32::NEG_INFINITY;
     let mut dp = vec![vec![neg_inf; n_phones]; n_frames];
     let mut bt = vec![vec![0usize; n_phones]; n_frames];
@@ -93,7 +96,7 @@ pub fn viterbi_align_pronunciation(
     };
 
     // Initialise frame 0.
-    dp[0][0] = emit(0, 0).ln().max(-20.0);
+    dp[0][0] = emit(0, 0).ln().max(MIN_LOG_EMISSION_SCORE);
     // Phones 1..n_phones cannot be reached at frame 0 (enforce left-to-right).
     // dp[0][p>0] stays at neg_inf.
 
@@ -110,7 +113,7 @@ pub fn viterbi_align_pronunciation(
                 (stay, p)
             };
             dp[f][p] = if best > neg_inf {
-                best + emit(f, p).ln().max(-20.0)
+                best + emit(f, p).ln().max(MIN_LOG_EMISSION_SCORE)
             } else {
                 neg_inf
             };
@@ -127,6 +130,18 @@ pub fn viterbi_align_pronunciation(
             p = bt[f][p];
         }
     }
+
+    // Compute overall path score (geometric mean of per-frame emission scores).
+    let path_score: f32 = {
+        let total_log: f32 = (0..n_frames)
+            .map(|f| emit(f, phone_assignment[f]).ln().max(MIN_LOG_EMISSION_SCORE))
+            .sum();
+        // Exponentiate the per-frame average to get a 0..1 score.
+        (total_log / n_frames as f32).exp().clamp(0.0, 1.0)
+    };
+
+    // Pre-compute proportional alternative for each phone (used in provenance).
+    let proportional_alts = proportional_fallback(phones, word_start_ms, word_end_ms);
 
     // ---- Build hypotheses --------------------------------------------------
     let mut hypotheses = Vec::with_capacity(n_phones);
@@ -164,6 +179,85 @@ pub fn viterbi_align_pronunciation(
                 / assigned_frames.len() as f32
         };
 
+        // Collect per-frame emission evidence strings.
+        let emission_evidence: Vec<serde_json::Value> = assigned_frames
+            .iter()
+            .map(|&fi| {
+                let frame = word_frames[fi];
+                let (class, features) = classify_frame(frame);
+                let match_score = phone_class_match_score(class, &phones[phone_idx].phone_class);
+                json!({
+                    "frame_start_ms": frame.frame_start_ms,
+                    "detected_class": class.as_str(),
+                    "features": features,
+                    "match_score": match_score,
+                })
+            })
+            .collect();
+
+        // Collect conflict frames (detected class does not match expected).
+        let conflicts: Vec<serde_json::Value> = assigned_frames
+            .iter()
+            .filter(|&&fi| {
+                let frame = word_frames[fi];
+                let (class, _) = classify_frame(frame);
+                phone_class_match_score(class, &phones[phone_idx].phone_class) < 0.5
+            })
+            .map(|&fi| {
+                let frame = word_frames[fi];
+                let (class, _) = classify_frame(frame);
+                json!({
+                    "frame_start_ms": frame.frame_start_ms,
+                    "detected_class": class.as_str(),
+                    "expected_class": phones[phone_idx].phone_class,
+                })
+            })
+            .collect();
+
+        // Collect boundary evidence from the first and last assigned frames.
+        let start_boundary_evidence = assigned_frames.first().map(|&fi| {
+            let frame = word_frames[fi];
+            json!({
+                "frame_start_ms": frame.frame_start_ms,
+                "rms_energy": frame.rms_energy,
+                "spectral_flux": frame.spectral_flux,
+                "zcr": frame.zero_crossing_rate,
+            })
+        });
+        let end_boundary_evidence = assigned_frames.last().map(|&fi| {
+            let frame = word_frames[fi];
+            json!({
+                "frame_end_ms": frame.frame_end_ms,
+                "rms_energy": frame.rms_energy,
+                "spectral_flux": frame.spectral_flux,
+                "zcr": frame.zero_crossing_rate,
+            })
+        });
+
+        // Proportional alternative boundary for this phone.
+        let alternative_boundary = proportional_alts.get(phone_idx).map(|h| {
+            json!({
+                "start_ms": h.start_ms,
+                "end_ms": h.end_ms,
+                "method": "viterbi.proportional_fallback",
+                "score": h.score,
+            })
+        });
+
+        // Collect the features used for emission scoring from all assigned frames.
+        let mut features_used: Vec<String> = assigned_frames
+            .iter()
+            .flat_map(|&fi| {
+                let frame = word_frames[fi];
+                let (_, features) = classify_frame(frame);
+                features
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        features_used.insert(0, "viterbi.forced_alignment".to_string());
+        features_used.push(format!("phone_class.{}", phones[phone_idx].phone_class));
+
         hypotheses.push(SpanHypothesis {
             id: SpanHypothesisId::new(),
             kind: SpanHypothesisKind::PronunciationAlignment,
@@ -173,17 +267,23 @@ pub fn viterbi_align_pronunciation(
             score,
             confidence: score.clamp(0.0, 1.0),
             source: HypothesisSource::ViterbiAlignment,
-            features_used: vec![
-                "viterbi.forced_alignment".to_string(),
-                format!("phone_class.{}", phones[phone_idx].phone_class),
-            ],
+            features_used,
             status: HypothesisStatus::Provisional,
             provenance: json!({
                 "phone": phones[phone_idx].symbol,
                 "phone_class": phones[phone_idx].phone_class,
+                "method": "viterbi.fused_heuristic",
                 "assigned_frames": assigned_frames.len(),
                 "word_start_ms": word_start_ms,
                 "word_end_ms": word_end_ms,
+                "path_score": path_score,
+                "emission_evidence": emission_evidence,
+                "boundary_evidence": {
+                    "start": start_boundary_evidence,
+                    "end": end_boundary_evidence,
+                },
+                "conflicts": conflicts,
+                "alternative_boundaries": alternative_boundary,
             }),
         });
     }
@@ -257,7 +357,13 @@ fn proportional_fallback(
                 provenance: json!({
                     "phone": phone.symbol,
                     "phone_class": phone.phone_class,
+                    "method": "viterbi.proportional_fallback",
                     "fallback": true,
+                    "emission_evidence": [],
+                    "boundary_evidence": { "start": null, "end": null },
+                    "conflicts": [],
+                    "alternative_boundaries": null,
+                    "path_score": 0.30,
                 }),
             }
         })
@@ -424,5 +530,271 @@ mod tests {
         assert_eq!(prov["phone_class"], "vowel");
         assert_eq!(prov["word_start_ms"], 0);
         assert_eq!(prov["word_end_ms"], 20);
+    }
+
+    // ---- New acceptance-criteria tests ------------------------------------
+
+    #[test]
+    fn provenance_includes_method_field() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![voiced_frame(0), voiced_frame(10)],
+        };
+        let phones = vec![PhoneState::new("AH", "vowel")];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
+        let prov = &hyps[0].provenance;
+        assert_eq!(prov["method"], "viterbi.fused_heuristic");
+    }
+
+    #[test]
+    fn provenance_includes_path_score() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![voiced_frame(0), voiced_frame(10)],
+        };
+        let phones = vec![PhoneState::new("AH", "vowel")];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
+        let prov = &hyps[0].provenance;
+        let path_score = prov["path_score"].as_f64().expect("path_score is a number");
+        assert!(path_score >= 0.0 && path_score <= 1.0);
+    }
+
+    #[test]
+    fn provenance_includes_emission_evidence() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![voiced_frame(0), voiced_frame(10)],
+        };
+        let phones = vec![PhoneState::new("AH", "vowel")];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
+        let prov = &hyps[0].provenance;
+        let evidence = prov["emission_evidence"].as_array().expect("array");
+        assert!(!evidence.is_empty(), "emission_evidence should be non-empty");
+        // Each entry should have detected_class and match_score.
+        let first = &evidence[0];
+        assert!(first["detected_class"].is_string());
+        assert!(first["match_score"].is_number());
+    }
+
+    #[test]
+    fn provenance_includes_boundary_evidence() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![voiced_frame(0), voiced_frame(10)],
+        };
+        let phones = vec![PhoneState::new("AH", "vowel")];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
+        let prov = &hyps[0].provenance;
+        assert!(
+            prov["boundary_evidence"].is_object(),
+            "boundary_evidence should be an object"
+        );
+        let be = &prov["boundary_evidence"];
+        assert!(!be["start"].is_null() || !be["end"].is_null());
+    }
+
+    #[test]
+    fn provenance_includes_alternative_boundaries() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![fricative_frame(0), voiced_frame(10), voiced_frame(20)],
+        };
+        let phones = vec![
+            PhoneState::new("S", "fricative"),
+            PhoneState::new("IY", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 30, &stream);
+        assert_eq!(hyps.len(), 2);
+        let prov = &hyps[0].provenance;
+        // alternative_boundaries comes from proportional fallback.
+        assert!(!prov["alternative_boundaries"].is_null());
+    }
+
+    #[test]
+    fn fallback_method_is_proportional() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![voiced_frame(500)], // outside word interval
+        };
+        let phones = vec![
+            PhoneState::new("TH", "fricative"),
+            PhoneState::new("IY", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 200, &stream);
+        for h in &hyps {
+            assert_eq!(h.provenance["method"], "viterbi.proportional_fallback");
+        }
+    }
+
+    // ---- Vowel-heavy word --------------------------------------------------
+    // Word "audio": [AO, D, IY, OW] — three vowels, one stop.
+
+    #[test]
+    fn vowel_heavy_word_aligns_correctly() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![
+                voiced_frame(0),   // AO
+                voiced_frame(10),  // AO
+                voiced_frame(20),  // AO
+                silence_frame(30), // D (stop closure)
+                voiced_frame(40),  // IY
+                voiced_frame(50),  // IY
+                voiced_frame(60),  // OW
+                voiced_frame(70),  // OW
+            ],
+        };
+        let phones = vec![
+            PhoneState::new("AO", "vowel"),
+            PhoneState::new("D", "stop"),
+            PhoneState::new("IY", "vowel"),
+            PhoneState::new("OW", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 80, &stream);
+        assert_eq!(hyps.len(), 4);
+        // All phones must be in order.
+        for i in 1..hyps.len() {
+            assert!(hyps[i].start_ms >= hyps[i - 1].start_ms, "phones out of order");
+        }
+        // First phone starts at word start.
+        assert_eq!(hyps[0].start_ms, 0);
+        // Last phone ends at word end.
+        assert_eq!(hyps.last().unwrap().end_ms, 80);
+    }
+
+    // ---- Fricative + vowel (e.g. "see" = S IY) ----------------------------
+
+    #[test]
+    fn fricative_plus_vowel_word_aligns_correctly() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![
+                fricative_frame(1000),
+                fricative_frame(1010),
+                fricative_frame(1020),
+                voiced_frame(1030),
+                voiced_frame(1040),
+                voiced_frame(1050),
+            ],
+        };
+        let phones = vec![
+            PhoneState::new("S", "fricative"),
+            PhoneState::new("IY", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 1000, 1060, &stream);
+        assert_eq!(hyps.len(), 2);
+        // Fricative should be assigned first, vowel second.
+        assert!(hyps[0].start_ms < hyps[1].start_ms);
+        // S should cover the first part; end of S <= start of IY.
+        assert!(hyps[0].end_ms <= hyps[1].start_ms);
+    }
+
+    // ---- Stop + vowel (e.g. "key" = K IY) ---------------------------------
+
+    fn stop_burst_frame(start_ms: u64) -> AcousticFeatureFrame {
+        AcousticFeatureFrame {
+            frame_start_ms: start_ms,
+            frame_end_ms: start_ms + 10,
+            rms_energy: 0.07,
+            peak_amplitude: 0.10,
+            zero_crossing_rate: 0.10,
+            spectral_flux: 0.18, // high flux → stop_burst
+            low_band_energy_db: -18.0,
+            high_band_energy_db: -30.0,
+        }
+    }
+
+    #[test]
+    fn stop_plus_vowel_word_aligns_correctly() {
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![
+                silence_frame(2000),    // K stop closure
+                stop_burst_frame(2010), // K burst
+                voiced_frame(2020),     // IY
+                voiced_frame(2030),     // IY
+                voiced_frame(2040),     // IY
+            ],
+        };
+        let phones = vec![
+            PhoneState::new("K", "stop"),
+            PhoneState::new("IY", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 2000, 2050, &stream);
+        assert_eq!(hyps.len(), 2);
+        assert!(hyps[0].start_ms < hyps[1].start_ms);
+        assert!(hyps[0].end_ms <= hyps[1].end_ms);
+        assert_eq!(hyps.last().unwrap().end_ms, 2050);
+    }
+
+    // ---- Noisy / contradictory frames -------------------------------------
+    // All frames look like silence even though we expect fricative + vowel.
+    // The aligner records conflicts in provenance.
+
+    #[test]
+    fn contradictory_frames_record_conflicts_in_provenance() {
+        // Use silence frames for a fricative + vowel sequence → all mismatch.
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![
+                silence_frame(0),
+                silence_frame(10),
+                silence_frame(20),
+                silence_frame(30),
+            ],
+        };
+        let phones = vec![
+            PhoneState::new("S", "fricative"),
+            PhoneState::new("IY", "vowel"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 0, 40, &stream);
+        assert_eq!(hyps.len(), 2);
+        // Conflicts should be recorded because silence doesn't match fricative/vowel.
+        let conflicts_0 = hyps[0].provenance["conflicts"]
+            .as_array()
+            .expect("conflicts array");
+        let conflicts_1 = hyps[1].provenance["conflicts"]
+            .as_array()
+            .expect("conflicts array");
+        // At least one of the phones should have conflicts.
+        assert!(
+            !conflicts_0.is_empty() || !conflicts_1.is_empty(),
+            "expected at least one conflict entry for mismatched frames"
+        );
+    }
+
+    // ---- Monotonicity under any frame sequence ----------------------------
+
+    #[test]
+    fn monotonicity_enforced_for_three_phone_sequence() {
+        // Intentionally scrambled frame types to stress-test the DP.
+        let stream = AcousticFeatureStream {
+            hop_ms: 10.0,
+            frames: vec![
+                voiced_frame(500),
+                fricative_frame(510),
+                silence_frame(520),
+                voiced_frame(530),
+                fricative_frame(540),
+                silence_frame(550),
+            ],
+        };
+        let phones = vec![
+            PhoneState::new("F", "fricative"),
+            PhoneState::new("AH", "vowel"),
+            PhoneState::new("N", "nasal"),
+        ];
+        let hyps = viterbi_align_pronunciation(&phones, 500, 560, &stream);
+        assert_eq!(hyps.len(), 3);
+        for i in 1..hyps.len() {
+            assert!(
+                hyps[i].start_ms >= hyps[i - 1].start_ms,
+                "monotonicity violated: hyp[{}].start_ms={} < hyp[{}].start_ms={}",
+                i,
+                hyps[i].start_ms,
+                i - 1,
+                hyps[i - 1].start_ms
+            );
+        }
     }
 }

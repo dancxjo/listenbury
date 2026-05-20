@@ -28,6 +28,8 @@ pub(super) const PHONEME_PROJECTION_MJS: &str =
     include_str!("../../web/browser-transcript-player/phoneme-projection.mjs");
 pub(super) const MECHANICAL_ASR_MJS: &str =
     include_str!("../../web/browser-transcript-player/mechanical-asr.mjs");
+pub(super) const VITERBI_PHONE_ALIGNMENT_MJS: &str =
+    include_str!("../../web/browser-transcript-player/viterbi-phone-alignment.mjs");
 pub(super) const HYPOTHESIS_LATTICE_MJS: &str =
     include_str!("../../web/browser-transcript-player/hypothesis-lattice.mjs");
 pub(super) const DEMO_JSON: &str =

@@ -434,6 +434,12 @@ fn route_request_with_range(
             "application/javascript; charset=utf-8",
             assets::MECHANICAL_ASR_MJS,
         ),
+        "/viterbi-phone-alignment.mjs" | "/assets/viterbi-phone-alignment.mjs" => {
+            HttpResponse::ok(
+                "application/javascript; charset=utf-8",
+                assets::VITERBI_PHONE_ALIGNMENT_MJS,
+            )
+        }
         "/hypothesis-lattice.mjs" | "/assets/hypothesis-lattice.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
             assets::HYPOTHESIS_LATTICE_MJS,
@@ -960,6 +966,17 @@ mod tests {
         );
         let body = String::from_utf8(mechanical_asr.body).expect("utf8");
         assert!(body.contains("boundaryHypothesesFromLandmarks"));
+
+        let viterbi_module =
+            route_request("GET", "/assets/viterbi-phone-alignment.mjs", &empty_state());
+        assert_eq!(viterbi_module.status, 200);
+        assert_eq!(
+            viterbi_module.content_type,
+            "application/javascript; charset=utf-8"
+        );
+        let body = String::from_utf8(viterbi_module.body).expect("utf8");
+        assert!(body.contains("phoneSpansFromHypotheses"));
+        assert!(body.contains("drawViterbiPhoneSpans"));
 
         let hypothesis_lattice =
             route_request("GET", "/assets/hypothesis-lattice.mjs", &empty_state());
