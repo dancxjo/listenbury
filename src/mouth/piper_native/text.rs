@@ -1,8 +1,10 @@
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedText {
     pub tokens: Vec<NormalizedToken>,
+    pub token_spans: Vec<std::ops::Range<usize>>,
     pub boundary: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
@@ -15,7 +17,7 @@ pub enum NormalizedToken {
     PhraseBreak,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyBoundaryHint {
     None,
     PhraseBreak,
@@ -23,7 +25,7 @@ pub enum ProsodyBoundaryHint {
     FinalSentenceEnd,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProsodyCommitment {
     Provisional,
     Prepared,
@@ -32,7 +34,7 @@ pub enum ProsodyCommitment {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PunctuationCommitmentState {
     SafeToPrepare,
     SafeToPlay,
@@ -114,19 +116,25 @@ pub struct TextNormalizer;
 
 impl TextNormalizer {
     pub fn normalize(&self, input: &str) -> Result<NormalizedText, TextNormalizationError> {
+        let trim_offset = input.len() - input.trim_start().len();
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(TextNormalizationError::EmptyInput);
         }
 
         let mut tokens = Vec::new();
+        let mut token_spans = Vec::new();
         let mut current = String::new();
+        let mut current_start = None;
         let mut saw_phrase_break = false;
         let punctuation_commitment = HeuristicPunctuationCommitmentClassifier.classify(trimmed);
         let chars: Vec<(usize, char)> = trimmed.char_indices().collect();
         for (index, (byte_offset, ch)) in chars.iter().copied().enumerate() {
             let next = chars.get(index + 1).map(|(_, next)| *next);
             if ch.is_ascii_alphanumeric() || matches!(ch, '@' | '/' | '_') {
+                if current.is_empty() {
+                    current_start = Some(trim_offset + byte_offset);
+                }
                 current.push(ch);
                 continue;
             }
@@ -137,44 +145,108 @@ impl TextNormalizer {
                     {
                         current.push('\'');
                     } else {
-                        push_word_token(&mut tokens, &mut current);
+                        push_word_token(
+                            &mut tokens,
+                            &mut token_spans,
+                            &mut current,
+                            &mut current_start,
+                            trim_offset + byte_offset,
+                        );
                     }
                 }
                 '.' => {
                     if next.is_some_and(|next| should_treat_as_internal_dot(&current, next)) {
+                        if current.is_empty() {
+                            current_start = Some(trim_offset + byte_offset);
+                        }
                         current.push(ch);
                         continue;
                     }
-                    finalize_period_token(&mut tokens, &mut current);
+                    finalize_period_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset + 1,
+                    );
                 }
                 '!' | '?' => {
-                    push_word_token(&mut tokens, &mut current);
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
                 }
                 ':' => {
                     if next.is_some_and(|next| next == '/') && looks_like_url_prefix(&current) {
+                        if current.is_empty() {
+                            current_start = Some(trim_offset + byte_offset);
+                        }
                         current.push(':');
                         continue;
                     }
-                    push_word_token(&mut tokens, &mut current);
-                    push_phrase_break(&mut tokens);
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
+                    push_phrase_break(
+                        &mut tokens,
+                        &mut token_spans,
+                        trim_offset + byte_offset,
+                        trim_offset + byte_offset + 1,
+                    );
                     saw_phrase_break = true;
                 }
                 ',' | ';' => {
-                    push_word_token(&mut tokens, &mut current);
-                    push_phrase_break(&mut tokens);
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
+                    push_phrase_break(
+                        &mut tokens,
+                        &mut token_spans,
+                        trim_offset + byte_offset,
+                        trim_offset + byte_offset + 1,
+                    );
                     saw_phrase_break = true;
                 }
                 ' ' | '\t' | '\n' | '\r' => {
-                    push_word_token(&mut tokens, &mut current);
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
                 }
                 '"' | '(' | ')' | '[' | ']' | '{' | '}' => {
-                    push_word_token(&mut tokens, &mut current);
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
                 }
                 _ => return Err(TextNormalizationError::UnsupportedCharacter { ch, byte_offset }),
             }
         }
 
-        push_word_token(&mut tokens, &mut current);
+        push_word_token(
+            &mut tokens,
+            &mut token_spans,
+            &mut current,
+            &mut current_start,
+            trim_offset + trimmed.len(),
+        );
 
         if tokens.is_empty() {
             return Err(TextNormalizationError::EmptyInput);
@@ -193,6 +265,7 @@ impl TextNormalizer {
 
         Ok(NormalizedText {
             tokens,
+            token_spans,
             boundary,
             commitment: ProsodyCommitment::Provisional,
             punctuation_commitment,
@@ -200,10 +273,19 @@ impl TextNormalizer {
     }
 }
 
-fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String) {
+fn finalize_period_token(
+    tokens: &mut Vec<NormalizedToken>,
+    token_spans: &mut Vec<std::ops::Range<usize>>,
+    current: &mut String,
+    current_start: &mut Option<usize>,
+    token_end: usize,
+) {
     if current.is_empty() {
         return;
     }
+    let start = current_start
+        .take()
+        .expect("token start should be tracked for non-empty token");
 
     if current.len() == 1 && current.chars().all(|ch| ch.is_ascii_alphabetic()) {
         let initial = current
@@ -212,6 +294,7 @@ fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String
             .expect("single-character token should have one char")
             .to_ascii_lowercase();
         tokens.push(NormalizedToken::Initial(initial));
+        token_spans.push(start..token_end);
         current.clear();
         return;
     }
@@ -223,26 +306,44 @@ fn finalize_period_token(tokens: &mut Vec<NormalizedToken>, current: &mut String
         && let Some(expanded) = expand_known_abbreviation(&lower)
     {
         tokens.push(NormalizedToken::Word(expanded.to_string()));
+        token_spans.push(start..token_end);
         return;
     }
 
     tokens.push(NormalizedToken::Word(lower));
+    token_spans.push(start..token_end);
 }
 
-fn push_word_token(tokens: &mut Vec<NormalizedToken>, current: &mut String) {
+fn push_word_token(
+    tokens: &mut Vec<NormalizedToken>,
+    token_spans: &mut Vec<std::ops::Range<usize>>,
+    current: &mut String,
+    current_start: &mut Option<usize>,
+    token_end: usize,
+) {
     if current.is_empty() {
         return;
     }
+    let start = current_start
+        .take()
+        .expect("token start should be tracked for non-empty token");
     let lower = current.to_ascii_lowercase();
     current.clear();
     tokens.push(NormalizedToken::Word(lower));
+    token_spans.push(start..token_end);
 }
 
-fn push_phrase_break(tokens: &mut Vec<NormalizedToken>) {
+fn push_phrase_break(
+    tokens: &mut Vec<NormalizedToken>,
+    token_spans: &mut Vec<std::ops::Range<usize>>,
+    start: usize,
+    end: usize,
+) {
     if matches!(tokens.last(), Some(NormalizedToken::PhraseBreak)) {
         return;
     }
     tokens.push(NormalizedToken::PhraseBreak);
+    token_spans.push(start..end);
 }
 
 fn expand_known_abbreviation(token: &str) -> Option<&'static str> {
@@ -421,6 +522,26 @@ mod tests {
             normalized.tokens,
             vec![NormalizedToken::Word("hello".to_string())]
         );
+    }
+
+    #[test]
+    fn tracks_token_byte_spans_in_original_text() {
+        let normalized = TextNormalizer
+            .normalize("  F. Scott, \"okay\"  ")
+            .expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Initial('f'),
+                NormalizedToken::Word("scott".to_string()),
+                NormalizedToken::PhraseBreak,
+                NormalizedToken::Word("okay".to_string())
+            ]
+        );
+        assert_eq!(normalized.token_spans[0], 2..4);
+        assert_eq!(normalized.token_spans[1], 5..10);
+        assert_eq!(normalized.token_spans[2], 10..11);
+        assert_eq!(normalized.token_spans[3], 13..17);
     }
 
     #[test]

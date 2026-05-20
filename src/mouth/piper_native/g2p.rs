@@ -1,10 +1,11 @@
 use std::sync::OnceLock;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::linguistic::cmudict;
-use crate::linguistic::cmudict::CmuPhoneme;
+use crate::linguistic::cmudict::{CmuPhoneme, Stress};
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
@@ -31,6 +32,9 @@ pub trait GraphemeToPhoneme {
 pub struct PhonemizedUnit {
     pub phonemes: PiperPhonemeSequence,
     pub length_hints: Vec<PhoneLengthHint>,
+    pub word_targets: Vec<WordProsodyTarget>,
+    pub phoneme_to_word: Vec<Option<usize>>,
+    pub lexical_stress: Vec<LexicalStressTarget>,
     pub boundary: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
@@ -48,7 +52,7 @@ pub struct PhoneLengthHint {
     pub class: PhoneLengthClass,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpeechCandidateId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +75,35 @@ pub struct WordTimingHint {
     pub source: TimingHintSource,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LexicalStressLevel {
+    Primary,
+    Secondary,
+    Unstressed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LexicalStressSource {
+    Cmudict,
+    HeuristicFallback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexicalStressTarget {
+    pub word_index: usize,
+    pub phoneme_index: usize,
+    pub stress: LexicalStressLevel,
+    pub source: LexicalStressSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WordProsodyTarget {
+    pub word_index: usize,
+    pub text_range: std::ops::Range<usize>,
+    pub phoneme_range: std::ops::Range<usize>,
+    pub normalized_text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhonemeProsodyCandidate {
     pub id: SpeechCandidateId,
@@ -78,6 +111,9 @@ pub struct PhonemeProsodyCandidate {
     pub phonemes: PiperPhonemeSequence,
     pub phone_hints: Vec<PhoneTimingHint>,
     pub word_hints: Vec<WordTimingHint>,
+    pub word_targets: Vec<WordProsodyTarget>,
+    pub phoneme_to_word: Vec<Option<usize>>,
+    pub lexical_stress: Vec<LexicalStressTarget>,
     pub boundary_hint: ProsodyBoundaryHint,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
@@ -149,6 +185,10 @@ impl SimpleEnglishG2p {
     pub fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError> {
         let normalized = self.normalizer.normalize(text)?;
         let mut symbols = Vec::new();
+        let mut word_targets = Vec::new();
+        let mut phoneme_to_word = Vec::new();
+        let mut lexical_stress = Vec::new();
+        let mut word_index = 0usize;
 
         let pronounceable_count = normalized
             .tokens
@@ -157,29 +197,66 @@ impl SimpleEnglishG2p {
             .count();
         let mut emitted_pronounceable = 0usize;
 
-        for token in &normalized.tokens {
+        for (token, token_span) in normalized.tokens.iter().zip(normalized.token_spans.iter()) {
             match token {
                 NormalizedToken::Word(word) => {
-                    let word_symbols = word_to_phones(word)
+                    let word_realization = word_to_phones_with_metadata(word)
                         .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
-                    symbols.extend(word_symbols);
+                    let start = symbols.len();
+                    symbols.extend(word_realization.symbols.iter().cloned());
+                    let end = symbols.len();
+                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
+                    word_targets.push(WordProsodyTarget {
+                        word_index,
+                        text_range: token_span.clone(),
+                        phoneme_range: start..end,
+                        normalized_text: word.clone(),
+                    });
+                    lexical_stress.extend(
+                        word_realization
+                            .stress_by_phone
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(offset, stress)| {
+                                stress.map(|stress| LexicalStressTarget {
+                                    word_index,
+                                    phoneme_index: start + offset,
+                                    stress,
+                                    source: word_realization.stress_source,
+                                })
+                            }),
+                    );
                     emitted_pronounceable += 1;
+                    word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
                         symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
+                        phoneme_to_word.push(None);
                     }
                 }
                 NormalizedToken::Initial(initial) => {
                     let initial_symbols = initial_to_phones(*initial)
                         .ok_or(G2pError::UnsupportedInitial { initial: *initial })?;
+                    let start = symbols.len();
                     symbols.extend(initial_symbols.iter().copied().map(String::from));
+                    let end = symbols.len();
+                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
+                    word_targets.push(WordProsodyTarget {
+                        word_index,
+                        text_range: token_span.clone(),
+                        phoneme_range: start..end,
+                        normalized_text: initial.to_ascii_lowercase().to_string(),
+                    });
                     emitted_pronounceable += 1;
+                    word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
                         symbols.push(WORD_SEPARATOR_SYMBOL.to_string());
+                        phoneme_to_word.push(None);
                     }
                 }
                 NormalizedToken::PhraseBreak => {
                     if !matches!(symbols.last(), Some(last) if last == PHRASE_BREAK_SYMBOL) {
                         symbols.push(PHRASE_BREAK_SYMBOL.to_string());
+                        phoneme_to_word.push(None);
                     }
                 }
             }
@@ -191,6 +268,7 @@ impl SimpleEnglishG2p {
         ) && !matches!(symbols.last(), Some(last) if last == PHRASE_BREAK_SYMBOL)
         {
             symbols.push(PHRASE_BREAK_SYMBOL.to_string());
+            phoneme_to_word.push(None);
         }
 
         let length_hints = symbols
@@ -210,6 +288,9 @@ impl SimpleEnglishG2p {
                 phonemes: symbols.into_iter().map(PiperPhoneme).collect(),
             },
             length_hints,
+            word_targets,
+            phoneme_to_word,
+            lexical_stress,
             boundary: normalized.boundary,
             commitment: normalized.commitment,
             punctuation_commitment: normalized.punctuation_commitment,
@@ -412,12 +493,18 @@ fn build_candidate(
         })
         .collect();
 
-    let word_hints = text
-        .split_ascii_whitespace()
-        .enumerate()
-        .map(|(word_index, word)| WordTimingHint {
-            word_index,
-            approximate_duration_ms: Some((word.len() as u64).saturating_mul(90)),
+    let word_hints = phonemized
+        .word_targets
+        .iter()
+        .map(|target| WordTimingHint {
+            word_index: target.word_index,
+            approximate_duration_ms: Some(
+                (target
+                    .text_range
+                    .end
+                    .saturating_sub(target.text_range.start) as u64)
+                    .saturating_mul(90),
+            ),
             source: TimingHintSource::HeuristicFromWordLength,
         })
         .collect();
@@ -428,6 +515,9 @@ fn build_candidate(
         phonemes: phonemized.phonemes,
         phone_hints,
         word_hints,
+        word_targets: phonemized.word_targets,
+        phoneme_to_word: phonemized.phoneme_to_word,
+        lexical_stress: phonemized.lexical_stress,
         boundary_hint: phonemized.boundary,
         commitment: ProsodyCommitment::Provisional,
         punctuation_commitment: phonemized.punctuation_commitment,
@@ -435,7 +525,14 @@ fn build_candidate(
     }
 }
 
-fn word_to_phones(word: &str) -> Option<Vec<String>> {
+#[derive(Debug, Clone)]
+struct WordPhoneRealization {
+    symbols: Vec<String>,
+    stress_by_phone: Vec<Option<LexicalStressLevel>>,
+    stress_source: LexicalStressSource,
+}
+
+fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
     if let Some(phones) = cmudict::bundled().lookup(word) {
         return Some(cmu_phones_to_native_piper_symbols(phones));
     }
@@ -446,12 +543,23 @@ fn word_to_phones(word: &str) -> Option<Vec<String>> {
         .realize_word(&variety, &ortho)
         .ok()
         .map(|seq| {
-            seq.phonemes
+            let symbols = seq
+                .phonemes
                 .into_iter()
                 .map(|phoneme| phoneme.symbol)
-                .collect()
+                .collect::<Vec<_>>();
+            let stress_by_phone = vec![None; symbols.len()];
+            WordPhoneRealization {
+                symbols,
+                stress_by_phone,
+                stress_source: LexicalStressSource::HeuristicFallback,
+            }
         })
-        .filter(|phones: &Vec<String>| !phones.is_empty())
+        .filter(|realization| !realization.symbols.is_empty())
+}
+
+fn word_to_phones(word: &str) -> Option<Vec<String>> {
+    word_to_phones_with_metadata(word).map(|realization| realization.symbols)
 }
 
 fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
@@ -459,7 +567,7 @@ fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
     FALLBACK.get_or_init(|| SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback()))
 }
 
-fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> Vec<String> {
+fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> WordPhoneRealization {
     let phonology_sequence = phones
         .iter()
         .map(|phone| phoneme_from_arpabet(&cmu_phone_source_symbol(phone), "cmudict"))
@@ -472,7 +580,7 @@ fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> Vec<String> {
         },
     );
 
-    phones
+    let symbols = phones
         .iter()
         .zip(realized.iter())
         .map(|(source, realized)| {
@@ -486,7 +594,16 @@ fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> Vec<String> {
                 source.base.clone()
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    let stress_by_phone = phones
+        .iter()
+        .map(|phone| cmu_stress_level(phone.stress))
+        .collect();
+    WordPhoneRealization {
+        symbols,
+        stress_by_phone,
+        stress_source: LexicalStressSource::Cmudict,
+    }
 }
 
 fn cmu_phone_source_symbol(phone: &CmuPhoneme) -> String {
@@ -501,6 +618,15 @@ fn cmu_stress_digit(stress: crate::linguistic::cmudict::Stress) -> char {
         crate::linguistic::cmudict::Stress::Primary => '1',
         crate::linguistic::cmudict::Stress::Secondary => '2',
         crate::linguistic::cmudict::Stress::Unstressed => '0',
+    }
+}
+
+fn cmu_stress_level(stress: Option<Stress>) -> Option<LexicalStressLevel> {
+    match stress {
+        Some(Stress::Primary) => Some(LexicalStressLevel::Primary),
+        Some(Stress::Secondary) => Some(LexicalStressLevel::Secondary),
+        Some(Stress::Unstressed) => Some(LexicalStressLevel::Unstressed),
+        None => None,
     }
 }
 
@@ -658,6 +784,15 @@ mod tests {
         assert_eq!(candidate.stable_prefix_len, 0);
         assert!(!candidate.phone_hints.is_empty());
         assert_eq!(candidate.word_hints.len(), 1);
+        assert_eq!(candidate.word_targets.len(), 1);
+        assert_eq!(candidate.word_targets[0].text_range, 0..5);
+        assert!(!candidate.lexical_stress.is_empty());
+        assert_eq!(candidate.phoneme_to_word[0], Some(0));
+        assert_eq!(
+            candidate.phoneme_to_word.last(),
+            Some(&None),
+            "sentence boundary marker should not map to a word"
+        );
 
         let mut committed = candidate.clone();
         committed.mark_prepared();
@@ -746,6 +881,51 @@ mod tests {
 
         assert_eq!(second_candidate.id, first_candidate.id);
         assert_eq!(second_candidate.stable_prefix_len, "I see.".len());
+    }
+
+    #[test]
+    fn candidate_tracks_word_and_phoneme_index_mappings() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let events = tracker.ingest_text(" I see, okay ").expect("candidate");
+        let candidate = match events.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        assert_eq!(candidate.word_targets.len(), 3);
+        assert_eq!(candidate.word_targets[0].text_range, 1..2);
+        assert_eq!(candidate.word_targets[1].text_range, 3..6);
+        assert_eq!(candidate.word_targets[2].text_range, 8..12);
+        for target in &candidate.word_targets {
+            for idx in target.phoneme_range.clone() {
+                assert_eq!(candidate.phoneme_to_word[idx], Some(target.word_index));
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_preserves_cmudict_lexical_stress_metadata() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let events = tracker.ingest_text("xylophone").expect("candidate");
+        let candidate = match events.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate.clone(),
+            other => panic!("unexpected event: {other:?}"),
+        };
+
+        assert!(
+            candidate
+                .lexical_stress
+                .iter()
+                .any(|stress| stress.stress == LexicalStressLevel::Primary),
+            "expected at least one primary lexical stress target"
+        );
+        assert!(
+            candidate
+                .lexical_stress
+                .iter()
+                .any(|stress| stress.stress == LexicalStressLevel::Secondary),
+            "expected at least one secondary lexical stress target"
+        );
     }
 
     #[test]
