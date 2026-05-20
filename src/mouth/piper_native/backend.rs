@@ -163,7 +163,7 @@ impl NativePiperBackend {
     /// Synthesize phoneme IDs with optional prosody controls and return both
     /// the PCM output and diagnostics describing how each control was handled.
     ///
-    /// When `controls` is `None` this is equivalent to [`synthesize_ids`],
+    /// When `controls` is `None` this is equivalent to [`Self::synthesize_ids`],
     /// producing empty diagnostics and default acoustic parameters.
     ///
     /// # Control handling
@@ -254,7 +254,7 @@ impl NativePiperBackend {
     /// Synthesize phoneme IDs with optional prosody controls and return
     /// [`AudioFrame`]s alongside diagnostics.
     ///
-    /// Equivalent to calling [`synthesize_ids_with_controls`] and then
+    /// Equivalent to calling [`Self::synthesize_ids_with_controls`] and then
     /// converting the resulting PCM into audio frames.
     pub fn synthesize_id_frames_with_controls(
         &mut self,
