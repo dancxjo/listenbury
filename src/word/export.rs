@@ -24,7 +24,7 @@
 use crate::audio::frame::AudioFrame;
 use crate::word::stream::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
-    WordStreamSource, WordTiming,
+    WordStreamSource, WordTiming, attach_cmudict_pronunciations,
 };
 
 const MIN_REFINED_WORD_DURATION_MS: u64 = 20;
@@ -129,11 +129,13 @@ pub fn transcript_to_word_stream(id: WordStreamId, words: &[TranscriptWord]) -> 
         })
         .collect();
 
-    TimedWordStream {
+    let mut stream = TimedWordStream {
         id,
         source: WordStreamSource::RecordedAudio,
         words: word_nodes,
-    }
+    };
+    attach_cmudict_pronunciations(&mut stream);
+    stream
 }
 
 /// Convert ASR words into a [`TimedWordStream`] and immediately refine their

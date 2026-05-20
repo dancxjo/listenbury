@@ -389,3 +389,15 @@ fn browser_transcript_player_selection_playback_is_bounded() {
     assert!(js.contains("playSelectionClipLabel: canPlaySelectionTarget(target) ? \"Play word clip\" : \"Play selected clip\""));
     assert!(js.contains("playSelectionClipLabel: \"Play selected range\""));
 }
+
+#[test]
+fn browser_transcript_player_renders_phoneme_alignment_rows() {
+    let js = include_str!("../web/browser-transcript-player/app.js");
+    let css = include_str!("../web/browser-transcript-player/styles.css");
+
+    assert!(js.contains("function createPhonemeAlignmentChips"));
+    assert!(js.contains("phoneme-alignment-chip"));
+    assert!(js.contains("for (const phonemeChip of createPhonemeAlignmentChips(word))"));
+    assert!(css.contains(".word-track"));
+    assert!(css.contains(".phoneme-alignment-chip"));
+}

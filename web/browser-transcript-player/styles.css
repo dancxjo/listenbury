@@ -485,6 +485,19 @@ h1 {
   border-bottom: 1px solid rgba(44, 55, 66, 0.5);
 }
 
+.word-track {
+  background:
+    linear-gradient(180deg, transparent 0 67%, rgba(99, 210, 255, 0.055) 67% 100%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(157, 171, 186, 0.12),
+      rgba(157, 171, 186, 0.12) 1px,
+      transparent 1px,
+      transparent 6%
+    ),
+    rgba(12, 15, 19, 0.48);
+}
+
 .timeline-playback-deck {
   width: 100%;
   padding: 0.55rem 0.65rem;
@@ -921,6 +934,35 @@ h1 {
 .phoneme-tick.is-vowel {
   color: rgba(99, 210, 255, 0.6);
   background: rgba(99, 210, 255, 0.04);
+}
+
+.phoneme-alignment-chip {
+  position: absolute;
+  z-index: 1;
+  bottom: 0.42rem;
+  min-width: 1px;
+  height: 1.15rem;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 0 0.12rem;
+  border-left: 1px solid rgba(238, 243, 247, 0.18);
+  border-radius: 2px;
+  background: rgba(238, 243, 247, 0.055);
+  color: rgba(238, 243, 247, 0.68);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.phoneme-alignment-chip.is-vowel {
+  border-color: rgba(99, 210, 255, 0.42);
+  background: rgba(99, 210, 255, 0.12);
+  color: rgba(153, 225, 255, 0.92);
 }
 
 /* Hide the phoneme strip on tiny chips so it doesn't clutter. */

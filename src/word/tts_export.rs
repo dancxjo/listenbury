@@ -24,7 +24,7 @@
 use crate::audio::frame::AudioFrame;
 use crate::word::stream::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
-    WordStreamSource, WordTiming,
+    WordStreamSource, WordTiming, attach_cmudict_pronunciations,
 };
 
 // ---------------------------------------------------------------------------
@@ -78,11 +78,13 @@ pub fn generated_text_to_word_stream(id: WordStreamId, text: &str) -> TimedWordS
         })
         .collect();
 
-    TimedWordStream {
+    let mut stream = TimedWordStream {
         id,
         source: WordStreamSource::SyntheticSpeech,
         words: word_nodes,
-    }
+    };
+    attach_cmudict_pronunciations(&mut stream);
+    stream
 }
 
 /// Iterate over words in `text`, yielding `(word_str, byte_start, byte_end)`.

@@ -2686,6 +2686,7 @@ function renderCustomTimeline() {
     trackEl.className = [
       "lane-track",
       "event-track",
+      lane.type === "word" ? "word-track" : "",
       "diagnostic-track",
       `lane-${classToken(lane.label)}`,
     ]
@@ -2776,6 +2777,10 @@ function renderCustomTimeline() {
         appendAlignmentHandles(chip, word);
         trackEl.append(chip);
         state.chipElementByKey.set(key, chip);
+
+        for (const phonemeChip of createPhonemeAlignmentChips(word)) {
+          trackEl.append(phonemeChip);
+        }
       });
     } else {
       lane.events.forEach((event, eventIndex) => {
@@ -5377,7 +5382,7 @@ function createPhonemeStrip(word) {
     tick.className = ["phoneme-tick", isVowelTick ? "is-vowel" : ""].filter(Boolean).join(" ");
     const defaultIpa = span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?";
     const realizedIpa = span.realization?.ipa ?? defaultIpa;
-    tick.textContent = realizedIpa;
+    tick.textContent = span.sourceSymbol ?? span.symbol ?? realizedIpa;
     // Position proportionally within the chip.
     const leftPct = ((span.start_ms - startMs) / duration) * 100;
     const widthPct = ((span.end_ms - span.start_ms) / duration) * 100;
@@ -5398,6 +5403,34 @@ function createPhonemeStrip(word) {
   }
 
   return strip;
+}
+
+function createPhonemeAlignmentChips(word) {
+  const spans = buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }) ?? [];
+  if (!spans.length) return [];
+  return spans.map((span) => {
+    const startMs = span.start_ms;
+    const endMs = Math.max(span.end_ms, startMs + 1);
+    const css = intervalToCss(startMs, endMs, 1);
+    const chip = document.createElement("span");
+    const isVowelChip = isVowel(span.sourceSymbol);
+    chip.className = ["phoneme-alignment-chip", isVowelChip ? "is-vowel" : ""]
+      .filter(Boolean)
+      .join(" ");
+    chip.style.left = css.left;
+    chip.style.width = css.width;
+    chip.textContent = span.sourceSymbol ?? span.symbol ?? span.phone ?? "?";
+    const defaultIpa = span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? span.phone ?? "?";
+    const realizedIpa = span.realization?.ipa ?? span.phone ?? defaultIpa;
+    chip.title = [
+      `${word.text}: ${span.sourceSymbol ?? span.symbol ?? "?"}`,
+      `default /${defaultIpa}/`,
+      `realized [${realizedIpa}]`,
+      `${startMs}–${endMs} ms`,
+      `method: ${span.method ?? span.timingSource ?? "projected.proportional"}`,
+    ].join(" · ");
+    return chip;
+  });
 }
 
 function createProsodyStrip(level) {

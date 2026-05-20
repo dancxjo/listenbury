@@ -9,7 +9,7 @@ use crate::live_trace::LiveTraceEvent;
 use crate::live_trace::{TraceSessionAudioArtifact, TraceSessionEnvelope};
 use crate::word::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
-    WordStreamSource, WordTiming,
+    WordStreamSource, WordTiming, attach_cmudict_pronunciations,
 };
 
 const DEFAULT_WORD_SLOT_MS: u64 = 240;
@@ -130,13 +130,15 @@ pub fn live_trace_events_to_viewer_payload(events: &[LiveTraceEvent]) -> ViewerP
     let text_lanes = collect_text_lanes(&sorted);
     let (viewer_events, viewer_markers) = collect_event_lanes(&sorted);
 
-    ViewerPayload {
+    let mut payload = ViewerPayload {
         title: "Listenbury Live Trace".to_string(),
         audio: None,
         streams: text_lanes,
         events: viewer_events,
         markers: viewer_markers,
-    }
+    };
+    enrich_payload_pronunciations(&mut payload);
+    payload
 }
 
 pub fn trace_session_to_viewer_payload(session: &TraceSessionEnvelope) -> ViewerPayload {
@@ -158,6 +160,12 @@ fn canonical_session_audio(artifacts: &[TraceSessionAudioArtifact]) -> Option<Vi
         sample_rate_hz: Some(artifact.sample_rate_hz),
         channels: Some(artifact.channels),
     })
+}
+
+fn enrich_payload_pronunciations(payload: &mut ViewerPayload) {
+    for lane in &mut payload.streams {
+        attach_cmudict_pronunciations(&mut lane.stream);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -826,6 +834,20 @@ mod tests {
             })
         );
         assert_eq!(lane.stream.words[0].timing_confidence, Some(0.91));
+        assert_eq!(
+            lane.stream.words[0]
+                .pronunciation
+                .as_ref()
+                .map(|pronunciation| pronunciation.phonemes.as_slice()),
+            Some(
+                &[
+                    "HH".to_string(),
+                    "AH0".to_string(),
+                    "L".to_string(),
+                    "OW1".to_string()
+                ][..]
+            )
+        );
     }
 
     #[test]

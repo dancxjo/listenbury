@@ -7,6 +7,11 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::linguistic::{
+    CmuPhoneme, PronunciationEntry, PronunciationStatus as CmudictPronunciationStatus, Stress,
+    cmudict,
+};
+
 // ---------------------------------------------------------------------------
 // Identifier newtypes
 // ---------------------------------------------------------------------------
@@ -296,6 +301,74 @@ pub struct WordPhoneSpan {
     pub candidate_pronunciation_id: Option<String>,
 }
 
+impl WordPronunciation {
+    /// Build viewer-facing pronunciation metadata from a CMUdict lookup.
+    pub fn from_cmudict_entry(entry: &PronunciationEntry) -> Self {
+        let phonemes = entry
+            .candidates
+            .first()
+            .map(|candidate| candidate.iter().map(cmu_phoneme_token).collect())
+            .unwrap_or_default();
+        let stress_pattern = entry
+            .candidates
+            .first()
+            .map(|candidate| {
+                candidate
+                    .iter()
+                    .filter_map(|phoneme| phoneme.stress.map(stress_digit))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Self {
+            source: entry.source.to_string(),
+            lookup: entry.lookup.clone(),
+            phonemes,
+            stress_pattern,
+            status: pronunciation_status_from_cmudict(entry.status),
+            phone_segmentation: None,
+        }
+    }
+}
+
+/// Attach CMUdict pronunciation metadata to words that do not already carry it.
+pub fn attach_cmudict_pronunciations(stream: &mut TimedWordStream) {
+    let pronouncer = cmudict::bundled();
+    for word in &mut stream.words {
+        if word.pronunciation.is_some() {
+            continue;
+        }
+        let entry = pronouncer.lookup_entry(&word.text);
+        word.pronunciation = Some(WordPronunciation::from_cmudict_entry(&entry));
+    }
+}
+
+fn cmu_phoneme_token(phoneme: &CmuPhoneme) -> String {
+    match phoneme.stress {
+        Some(stress) => format!("{}{}", phoneme.base, stress_digit(stress)),
+        None => phoneme.base.clone(),
+    }
+}
+
+fn stress_digit(stress: Stress) -> char {
+    match stress {
+        Stress::Primary => '1',
+        Stress::Secondary => '2',
+        Stress::Unstressed => '0',
+    }
+}
+
+fn pronunciation_status_from_cmudict(
+    status: CmudictPronunciationStatus,
+) -> PronunciationLookupStatus {
+    match status {
+        CmudictPronunciationStatus::Exact => PronunciationLookupStatus::Exact,
+        CmudictPronunciationStatus::Normalized => PronunciationLookupStatus::Normalized,
+        CmudictPronunciationStatus::Guessed => PronunciationLookupStatus::Guessed,
+        CmudictPronunciationStatus::Missing => PronunciationLookupStatus::Missing,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -366,10 +439,12 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::RecordedAudio);
         assert_eq!(stream.words.len(), 3);
         assert!(stream.words.iter().all(|w| w.timing.is_some()));
-        assert!(stream
-            .words
-            .iter()
-            .all(|w| w.commitment == WordCommitment::Final));
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|w| w.commitment == WordCommitment::Final)
+        );
     }
 
     /// Verify that a generated-text stream can be constructed *without* timing
@@ -415,10 +490,12 @@ mod tests {
         assert_eq!(stream.source, WordStreamSource::GeneratedText);
         assert_eq!(stream.words.len(), 4);
         assert!(stream.words.iter().all(|w| w.timing.is_none()));
-        assert!(stream
-            .words
-            .iter()
-            .all(|w| w.commitment == WordCommitment::StableText));
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|w| w.commitment == WordCommitment::StableText)
+        );
     }
 
     /// Verify that a synthetic-speech stream can be constructed with playback
@@ -515,5 +592,39 @@ mod tests {
         assert!(WordTiming::new(300, 100).is_none()); // end before start is rejected
         let t = WordTiming::new(200, 600).unwrap();
         assert_eq!(t.duration_ms(), 400);
+    }
+
+    #[test]
+    fn attaches_cmudict_pronunciation_metadata() {
+        let mut stream = TimedWordStream {
+            id: WordStreamId(7),
+            source: WordStreamSource::RecordedAudio,
+            words: vec![WordNode {
+                id: WordId(1),
+                text: "three,".to_string(),
+                lexical_span: None,
+                timing: Some(WordTiming {
+                    start_ms: 100,
+                    end_ms: 400,
+                }),
+                timing_confidence: Some(0.9),
+                commitment: WordCommitment::Final,
+                boundary_source: BoundarySource::Whisper,
+                audio_ref: None,
+                pronunciation: None,
+            }],
+        };
+
+        attach_cmudict_pronunciations(&mut stream);
+
+        let pronunciation = stream.words[0]
+            .pronunciation
+            .as_ref()
+            .expect("pronunciation should be attached");
+        assert_eq!(pronunciation.source, "cmudict");
+        assert_eq!(pronunciation.lookup, "three");
+        assert_eq!(pronunciation.phonemes, ["TH", "R", "IY1"]);
+        assert_eq!(pronunciation.stress_pattern, "1");
+        assert_eq!(pronunciation.status, PronunciationLookupStatus::Normalized);
     }
 }
