@@ -125,6 +125,7 @@ impl TextNormalizer {
             return Err(TextNormalizationError::EmptyInput);
         }
 
+        let vocative_detection = detect_vocative(trimmed, trim_offset);
         let mut tokens = Vec::new();
         let mut token_spans = Vec::new();
         let mut current = String::new();
@@ -213,13 +214,17 @@ impl TextNormalizer {
                         &mut current_start,
                         trim_offset + byte_offset,
                     );
-                    push_phrase_break(
-                        &mut tokens,
-                        &mut token_spans,
-                        trim_offset + byte_offset,
-                        trim_offset + byte_offset + 1,
-                    );
-                    saw_phrase_break = true;
+                    let is_vocative_comma =
+                        ch == ',' && vocative_detection.comma_offsets.contains(&byte_offset);
+                    if !is_vocative_comma {
+                        push_phrase_break(
+                            &mut tokens,
+                            &mut token_spans,
+                            trim_offset + byte_offset,
+                            trim_offset + byte_offset + 1,
+                        );
+                        saw_phrase_break = true;
+                    }
                 }
                 ' ' | '\t' | '\n' | '\r' => {
                     push_word_token(
@@ -265,7 +270,12 @@ impl TextNormalizer {
         } else {
             ProsodyBoundaryHint::None
         };
-        let boundary_kind = classify_phrase_boundary_kind(trimmed, saw_phrase_break, boundary);
+        let boundary_kind = classify_phrase_boundary_kind(
+            trimmed,
+            saw_phrase_break,
+            boundary,
+            !vocative_detection.spans.is_empty(),
+        );
 
         Ok(NormalizedText {
             tokens,
@@ -282,7 +292,11 @@ fn classify_phrase_boundary_kind(
     input: &str,
     saw_phrase_break: bool,
     boundary: ProsodyBoundaryHint,
+    has_vocative: bool,
 ) -> PhraseBoundaryKind {
+    if has_vocative {
+        return PhraseBoundaryKind::Vocative;
+    }
     let Some(last) = input
         .trim_end_matches(|ch: char| ch.is_ascii_whitespace() || is_quote_or_bracket(ch))
         .chars()
@@ -305,6 +319,166 @@ fn classify_phrase_boundary_kind(
         _ if saw_phrase_break => PhraseBoundaryKind::MinorPhrase,
         _ => PhraseBoundaryKind::None,
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct VocativeDetection {
+    spans: Vec<std::ops::Range<usize>>,
+    comma_offsets: Vec<usize>,
+}
+
+pub(crate) fn detect_vocative_spans(input: &str) -> Vec<std::ops::Range<usize>> {
+    let trim_offset = input.len() - input.trim_start().len();
+    let trimmed = input.trim();
+    detect_vocative(trimmed, trim_offset).spans
+}
+
+fn detect_vocative(trimmed: &str, trim_offset: usize) -> VocativeDetection {
+    if trimmed.is_empty() {
+        return VocativeDetection::default();
+    }
+
+    let comma_offsets = trimmed
+        .match_indices(',')
+        .map(|(idx, _)| idx)
+        .collect::<Vec<_>>();
+    if comma_offsets.is_empty() {
+        return VocativeDetection::default();
+    }
+
+    let mut spans = Vec::new();
+    let mut keep_commas = std::collections::BTreeSet::new();
+
+    if let Some(last_comma) = comma_offsets.last().copied()
+        && trimmed[..last_comma]
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic())
+        && let Some(vocative_span) = detect_addressee_span(&trimmed[last_comma + 1..], false)
+    {
+        let start = trim_offset + last_comma + 1 + vocative_span.start;
+        let end = trim_offset + last_comma + 1 + vocative_span.end;
+        spans.push(start..end);
+        keep_commas.insert(last_comma);
+    }
+
+    for window in comma_offsets.windows(2) {
+        let [left_comma, right_comma] = [window[0], window[1]];
+        if !has_discourse_cue(&trimmed[..left_comma]) {
+            continue;
+        }
+        if let Some(vocative_span) =
+            detect_addressee_span(&trimmed[left_comma + 1..right_comma], true)
+        {
+            let start = trim_offset + left_comma + 1 + vocative_span.start;
+            let end = trim_offset + left_comma + 1 + vocative_span.end;
+            spans.push(start..end);
+            keep_commas.insert(left_comma);
+            keep_commas.insert(right_comma);
+        }
+    }
+
+    VocativeDetection {
+        spans,
+        comma_offsets: keep_commas.into_iter().collect(),
+    }
+}
+
+fn detect_addressee_span(
+    segment: &str,
+    require_vocative_noun: bool,
+) -> Option<std::ops::Range<usize>> {
+    let leading_ws = segment.len() - segment.trim_start().len();
+    let mut trimmed = segment.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let trailing_punctuation = trimmed
+        .chars()
+        .rev()
+        .take_while(|ch| matches!(ch, '.' | '!' | '?'))
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if trailing_punctuation > 0 {
+        trimmed = &trimmed[..trimmed.len() - trailing_punctuation];
+        trimmed = trimmed.trim_end();
+    }
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let words = trimmed
+        .split_ascii_whitespace()
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() || words.len() > 3 {
+        return None;
+    }
+
+    let lower_words = words
+        .iter()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .collect::<Vec<_>>();
+    if lower_words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "who" | "which" | "that" | "where" | "when" | "unfortunately" | "however"
+        )
+    }) {
+        return None;
+    }
+    let has_capitalized = words.iter().any(|word| {
+        word.chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+    });
+    let has_vocative_noun = lower_words
+        .iter()
+        .any(|word| is_likely_vocative_noun(word.as_str()));
+    if (!has_capitalized && !has_vocative_noun) || (require_vocative_noun && !has_vocative_noun) {
+        return None;
+    }
+
+    let span_start = leading_ws;
+    let span_end = leading_ws + trimmed.len();
+    Some(span_start..span_end)
+}
+
+fn has_discourse_cue(prefix: &str) -> bool {
+    let words = prefix
+        .split_ascii_whitespace()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return false;
+    }
+    matches!(
+        words.last().map(String::as_str),
+        Some("listen" | "look" | "see")
+    ) || words.ends_with(&["you".to_string(), "see".to_string()])
+}
+
+fn is_likely_vocative_noun(word: &str) -> bool {
+    matches!(
+        word,
+        "professor"
+            | "interlocutor"
+            | "sir"
+            | "madam"
+            | "friend"
+            | "friends"
+            | "team"
+            | "folks"
+            | "everyone"
+            | "everybody"
+    )
 }
 
 fn is_quote_or_bracket(ch: char) -> bool {
@@ -501,6 +675,71 @@ mod tests {
 
         let exclamation = TextNormalizer.normalize("Listen!").expect("normalize");
         assert_eq!(exclamation.boundary_kind, PhraseBoundaryKind::Exclamation);
+    }
+
+    #[test]
+    fn detects_sentence_final_vocative_and_suppresses_comma_break() {
+        let normalized = TextNormalizer
+            .normalize("Thank you, Dave.")
+            .expect("normalize");
+        assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("thank".to_string()),
+                NormalizedToken::Word("you".to_string()),
+                NormalizedToken::Word("dave".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn detects_comma_surrounded_vocative_with_discourse_cues() {
+        let listen = TextNormalizer
+            .normalize("Listen, professor, this matters.")
+            .expect("normalize");
+        assert_eq!(listen.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            !listen
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
+
+        let see = TextNormalizer
+            .normalize("You see, interlocutor, the system has revealed itself.")
+            .expect("normalize");
+        assert_eq!(see.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            !see.tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
+    }
+
+    #[test]
+    fn keeps_parenthetical_and_appositional_commas_as_phrase_breaks() {
+        let parenthetical = TextNormalizer
+            .normalize("The machine, unfortunately, exploded.")
+            .expect("normalize");
+        assert_ne!(parenthetical.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            parenthetical
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
+
+        let apposition = TextNormalizer
+            .normalize("My brother, who lives in Tacoma, arrived.")
+            .expect("normalize");
+        assert_ne!(apposition.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            apposition
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
     }
 
     #[test]
