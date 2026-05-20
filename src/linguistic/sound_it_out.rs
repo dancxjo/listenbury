@@ -74,46 +74,90 @@ impl SoundItOutRules {
         Self { variety, mappings }
     }
 
+    /// Build rules for a transparent orthography where each listed grapheme is
+    /// itself the phoneme symbol.
+    pub fn one_to_one<I, S>(variety: VarietyTag, graphemes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::new(
+            variety,
+            graphemes
+                .into_iter()
+                .map(|grapheme| {
+                    let grapheme = grapheme.into();
+                    GraphemeRule::new(
+                        grapheme.clone(),
+                        PhonemeSeq::new(vec![Phoneme::new(grapheme)]),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Build rules for a transparent orthography where each listed grapheme
+    /// maps to exactly one explicit phoneme symbol.
+    pub fn one_to_one_with_symbols<I, G, P>(variety: VarietyTag, mappings: I) -> Self
+    where
+        I: IntoIterator<Item = (G, P)>,
+        G: Into<String>,
+        P: Into<String>,
+    {
+        Self::new(
+            variety,
+            mappings
+                .into_iter()
+                .map(|(grapheme, phoneme)| {
+                    GraphemeRule::new(
+                        grapheme,
+                        PhonemeSeq::new(vec![Phoneme::new(phoneme.into())]),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     /// Pre-built rule set for Esperanto.
     ///
     /// Esperanto has a perfectly regular, transparent orthography: every letter
     /// maps to exactly one phoneme.  Special letters (ĉ ĝ ĥ ĵ ŝ ŭ) are single
     /// Unicode code-points and are handled before the plain ASCII fallbacks.
     pub fn esperanto() -> Self {
-        Self::new(
+        Self::one_to_one_with_symbols(
             VarietyTag::new("eo"),
             vec![
                 // Special Esperanto letters (digraph-like phonemes as single codepoints)
-                rule("ĉ", &["t͡ʃ"]),
-                rule("ĝ", &["d͡ʒ"]),
-                rule("ĥ", &["x"]),
-                rule("ĵ", &["ʒ"]),
-                rule("ŝ", &["ʃ"]),
-                rule("ŭ", &["w"]),
+                ("ĉ", "t͡ʃ"),
+                ("ĝ", "d͡ʒ"),
+                ("ĥ", "x"),
+                ("ĵ", "ʒ"),
+                ("ŝ", "ʃ"),
+                ("ŭ", "w"),
                 // Vowels
-                rule("a", &["a"]),
-                rule("e", &["e"]),
-                rule("i", &["i"]),
-                rule("o", &["o"]),
-                rule("u", &["u"]),
+                ("a", "a"),
+                ("e", "e"),
+                ("i", "i"),
+                ("o", "o"),
+                ("u", "u"),
                 // Consonants
-                rule("b", &["b"]),
-                rule("c", &["t͡s"]),
-                rule("d", &["d"]),
-                rule("f", &["f"]),
-                rule("g", &["g"]),
-                rule("h", &["h"]),
-                rule("j", &["j"]),
-                rule("k", &["k"]),
-                rule("l", &["l"]),
-                rule("m", &["m"]),
-                rule("n", &["n"]),
-                rule("p", &["p"]),
-                rule("r", &["r"]),
-                rule("s", &["s"]),
-                rule("t", &["t"]),
-                rule("v", &["v"]),
-                rule("z", &["z"]),
+                ("b", "b"),
+                ("c", "t͡s"),
+                ("d", "d"),
+                ("f", "f"),
+                ("g", "g"),
+                ("h", "h"),
+                ("j", "j"),
+                ("k", "k"),
+                ("l", "l"),
+                ("m", "m"),
+                ("n", "n"),
+                ("p", "p"),
+                ("r", "r"),
+                ("s", "s"),
+                ("t", "t"),
+                ("v", "v"),
+                ("z", "z"),
             ],
         )
     }
@@ -136,6 +180,15 @@ impl SoundItOutRules {
                 rule("ae", &["ae̯"]),
                 rule("oe", &["oe̯"]),
                 rule("au", &["au̯"]),
+                rule("æ", &["ae̯"]),
+                rule("œ", &["oe̯"]),
+                // Long vowels marked with macrons.
+                rule("ā", &["aː"]),
+                rule("ē", &["eː"]),
+                rule("ī", &["iː"]),
+                rule("ō", &["oː"]),
+                rule("ū", &["uː"]),
+                rule("ȳ", &["yː"]),
                 // Vowels
                 rule("a", &["a"]),
                 rule("e", &["e"]),
@@ -165,6 +218,53 @@ impl SoundItOutRules {
                 rule("z", &["z"]),
             ],
         )
+    }
+
+    /// Pre-built rule set for modern Turkish.
+    ///
+    /// Turkish is close to phonemic at the letter level.  The rule for `ğ`
+    /// uses /ɰ/ as a deterministic approximation; in real Turkish it often
+    /// lengthens or smooths adjacent vowels rather than surfacing as a stable
+    /// consonant. The combining dot rule also tolerates decomposed dotted-i
+    /// input.
+    pub fn turkish() -> Self {
+        let mut rules = Self::one_to_one_with_symbols(
+            VarietyTag::new("tr"),
+            vec![
+                ("a", "a"),
+                ("b", "b"),
+                ("c", "d͡ʒ"),
+                ("ç", "t͡ʃ"),
+                ("d", "d"),
+                ("e", "e"),
+                ("f", "f"),
+                ("g", "g"),
+                ("ğ", "ɰ"),
+                ("h", "h"),
+                ("ı", "ɯ"),
+                ("i", "i"),
+                ("j", "ʒ"),
+                ("k", "k"),
+                ("l", "l"),
+                ("m", "m"),
+                ("n", "n"),
+                ("o", "o"),
+                ("ö", "ø"),
+                ("p", "p"),
+                ("r", "r"),
+                ("s", "s"),
+                ("ş", "ʃ"),
+                ("t", "t"),
+                ("u", "u"),
+                ("ü", "y"),
+                ("v", "v"),
+                ("y", "j"),
+                ("z", "z"),
+            ],
+        );
+        rules.mappings.push(rule("'", &[]));
+        rules.mappings.push(rule("\u{307}", &[]));
+        rules
     }
 
     /// Approximate English fallback rules using the ARPAbet symbols already
@@ -238,9 +338,9 @@ impl SoundItOutRules {
 
 /// A deterministic grapheme-to-phoneme pronouncer based on declarative rules.
 ///
-/// The pronouncer works by scanning the (lowercased) input left-to-right and
-/// greedily selecting the rule whose `grapheme` is the **longest** prefix of the
-/// remaining text.  When two rules match a grapheme of equal length the one with
+/// The pronouncer works by scanning normalized input left-to-right and greedily
+/// selecting the rule whose `grapheme` is the **longest** prefix of the
+/// remaining text. When two rules match a grapheme of equal length the one with
 /// the higher `priority` value is chosen.
 pub struct SoundItOutPronouncer {
     rules: SoundItOutRules,
@@ -252,9 +352,9 @@ impl SoundItOutPronouncer {
     }
 
     /// Apply the grapheme rules to a single word string, returning the phoneme
-    /// sequence.  The input is lowercased before matching.
+    /// sequence. The input is case-normalized before matching.
     fn apply_rules_to_word(&self, text: &str) -> Result<PhonemeSeq, PhonologyError> {
-        let normalized = text.to_lowercase();
+        let normalized = self.normalize_word(text);
         let mut remaining = normalized.as_str();
         let mut phonemes: Vec<Phoneme> = Vec::new();
 
@@ -283,6 +383,14 @@ impl SoundItOutPronouncer {
         }
 
         Ok(PhonemeSeq::new(phonemes))
+    }
+
+    fn normalize_word(&self, text: &str) -> String {
+        if self.rules.variety.0 == "tr" {
+            turkish_lowercase(text)
+        } else {
+            text.to_lowercase()
+        }
     }
 }
 
@@ -388,6 +496,18 @@ fn rule(grapheme: &str, symbols: &[&str]) -> GraphemeRule {
     )
 }
 
+fn turkish_lowercase(text: &str) -> String {
+    let mut lowered = String::new();
+    for ch in text.chars() {
+        match ch {
+            'I' => lowered.push('ı'),
+            'İ' => lowered.push('i'),
+            _ => lowered.extend(ch.to_lowercase()),
+        }
+    }
+    lowered
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -406,6 +526,10 @@ mod tests {
 
     fn english_fallback() -> SoundItOutPronouncer {
         SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback())
+    }
+
+    fn turkish() -> SoundItOutPronouncer {
+        SoundItOutPronouncer::new(SoundItOutRules::turkish())
     }
 
     fn variety() -> LinguisticVariety {
@@ -480,6 +604,27 @@ mod tests {
         assert_eq!(symbols(&seq), vec!["t͡s", "e", "l", "o"]);
     }
 
+    #[test]
+    fn one_to_one_rules_map_graphemes_to_themselves() {
+        let rules = SoundItOutRules::one_to_one(VarietyTag::new("test"), ["a", "ĉ"]);
+        let p = SoundItOutPronouncer::new(rules);
+        let word = OrthographicWord::new("aĉ");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["a", "ĉ"]);
+    }
+
+    #[test]
+    fn one_to_one_rules_can_use_explicit_symbols() {
+        let rules = SoundItOutRules::one_to_one_with_symbols(
+            VarietyTag::new("test"),
+            [("c", "t͡s"), ("a", "a")],
+        );
+        let p = SoundItOutPronouncer::new(rules);
+        let word = OrthographicWord::new("ca");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["t͡s", "a"]);
+    }
+
     // ------------------------------------------------------------------
     // Classical Latin
     // ------------------------------------------------------------------
@@ -536,6 +681,22 @@ mod tests {
     }
 
     #[test]
+    fn latin_macrons_mark_long_vowels() {
+        let p = latin();
+        let word = OrthographicWord::new("Rōmānī");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["r", "oː", "m", "aː", "n", "iː"]);
+    }
+
+    #[test]
+    fn latin_ligature_diphthongs_are_supported() {
+        let p = latin();
+        let word = OrthographicWord::new("cælum");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["k", "ae̯", "l", "u", "m"]);
+    }
+
+    #[test]
     fn latin_realize_text_multi_word() {
         let p = latin();
         let text = p.realize_text(&variety(), "vita brevis").unwrap();
@@ -543,6 +704,42 @@ mod tests {
         assert!(matches!(&text.units[0], PhonemeTextUnit::Word { .. }));
         assert_eq!(text.units[1], PhonemeTextUnit::WordBoundary);
         assert!(matches!(&text.units[2], PhonemeTextUnit::Word { .. }));
+    }
+
+    // ------------------------------------------------------------------
+    // Turkish
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn turkish_maps_diacritic_letters() {
+        let p = turkish();
+        let word = OrthographicWord::new("çığ");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["t͡ʃ", "ɯ", "ɰ"]);
+    }
+
+    #[test]
+    fn turkish_uppercase_dotted_i_normalized() {
+        let p = turkish();
+        let word = OrthographicWord::new("İstanbul");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["i", "s", "t", "a", "n", "b", "u", "l"]);
+    }
+
+    #[test]
+    fn turkish_uppercase_dotless_i_normalized() {
+        let p = turkish();
+        let word = OrthographicWord::new("IĞDIR");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["ɯ", "ɰ", "d", "ɯ", "r"]);
+    }
+
+    #[test]
+    fn turkish_apostrophe_is_ignored_inside_words() {
+        let p = turkish();
+        let word = OrthographicWord::new("Ankara'da");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["a", "n", "k", "a", "r", "a", "d", "a"]);
     }
 
     // ------------------------------------------------------------------

@@ -860,6 +860,45 @@ mod tests {
 
     #[test]
     #[cfg(feature = "tts-piper-native")]
+    fn espeak_compatible_ids_preserve_native_flap_symbol() {
+        let config = PiperVoiceConfig::from_json_str(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "_": [0],
+                "^": [1],
+                "$": [2],
+                "b": [10],
+                "l": [11],
+                "ɑ": [12],
+                "ə": [13],
+                "ɾ": [14]
+              }
+            }
+            "#,
+        )
+        .expect("voice config should parse");
+        let sequence = PiperPhonemeSequence {
+            phonemes: ["B", "AA", "ɾ", "AH", "L"]
+                .into_iter()
+                .map(|symbol| PiperPhoneme(symbol.to_string()))
+                .collect(),
+        };
+
+        let ids = espeak_compatible_ids(&sequence, &config)
+            .expect("flapped native sequence should map to eSpeak Piper IDs");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 0, 10, 0, 12, 0, 14, 0, 13, 0, 11, 0, 2]
+            }
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "tts-piper-native")]
     fn audio_stats_computes_duration_rms_and_peak() {
         let stats = AudioStats::from_frames(
             &[AudioFrame {

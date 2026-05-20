@@ -4,8 +4,12 @@ use anyhow::Result;
 use thiserror::Error;
 
 use crate::linguistic::cmudict;
+use crate::linguistic::cmudict::CmuPhoneme;
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
+use crate::linguistic::phonology::{
+    RealizationConfig, RealizationMethod, phoneme_from_arpabet, realize_sequence,
+};
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
 use crate::linguistic::variety::{LinguisticVariety, Phonology};
@@ -433,7 +437,7 @@ fn build_candidate(
 
 fn word_to_phones(word: &str) -> Option<Vec<String>> {
     if let Some(phones) = cmudict::bundled().lookup(word) {
-        return Some(phones.iter().map(|p| p.base.clone()).collect());
+        return Some(cmu_phones_to_native_piper_symbols(phones));
     }
 
     let ortho = OrthographicWord::new(word);
@@ -453,6 +457,51 @@ fn word_to_phones(word: &str) -> Option<Vec<String>> {
 fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
     static FALLBACK: OnceLock<SoundItOutPronouncer> = OnceLock::new();
     FALLBACK.get_or_init(|| SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback()))
+}
+
+fn cmu_phones_to_native_piper_symbols(phones: &[CmuPhoneme]) -> Vec<String> {
+    let phonology_sequence = phones
+        .iter()
+        .map(|phone| phoneme_from_arpabet(&cmu_phone_source_symbol(phone), "cmudict"))
+        .collect::<Vec<_>>();
+    let realized = realize_sequence(
+        &phonology_sequence,
+        &RealizationConfig {
+            enable_allophone_rules: true,
+            ..RealizationConfig::default()
+        },
+    );
+
+    phones
+        .iter()
+        .zip(realized.iter())
+        .map(|(source, realized)| {
+            if matches!(
+                realized.realization.method,
+                RealizationMethod::AllophoneRule
+            ) && realized.realization.ipa == "ɾ"
+            {
+                "ɾ".to_string()
+            } else {
+                source.base.clone()
+            }
+        })
+        .collect()
+}
+
+fn cmu_phone_source_symbol(phone: &CmuPhoneme) -> String {
+    match phone.stress {
+        Some(stress) => format!("{}{}", phone.base, cmu_stress_digit(stress)),
+        None => phone.base.clone(),
+    }
+}
+
+fn cmu_stress_digit(stress: crate::linguistic::cmudict::Stress) -> char {
+    match stress {
+        crate::linguistic::cmudict::Stress::Primary => '1',
+        crate::linguistic::cmudict::Stress::Secondary => '2',
+        crate::linguistic::cmudict::Stress::Unstressed => '0',
+    }
 }
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
@@ -525,6 +574,23 @@ mod tests {
         assert_eq!(
             symbols(&unit.phonemes),
             vec!["Z", "AY", "L", "AH", "F", "OW", "N"]
+        );
+    }
+
+    #[test]
+    fn applies_intervocalic_flap_for_native_piper() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("bottle").expect("phonemize");
+        assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "ɾ", "AH", "L"]);
+    }
+
+    #[test]
+    fn does_not_flap_without_stress_context() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("represent").expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec!["R", "EH", "P", "R", "IH", "Z", "EH", "N", "T"]
         );
     }
 
