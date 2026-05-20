@@ -132,8 +132,13 @@ impl TextNormalizer {
             }
 
             match ch {
-                '\'' => {
-                    return Err(TextNormalizationError::UnsupportedCharacter { ch, byte_offset });
+                '\'' | '’' => {
+                    if !current.is_empty() && next.is_some_and(|next| next.is_ascii_alphanumeric())
+                    {
+                        current.push('\'');
+                    } else {
+                        push_word_token(&mut tokens, &mut current);
+                    }
                 }
                 '.' => {
                     if next.is_some_and(|next| should_treat_as_internal_dot(&current, next)) {
@@ -391,6 +396,30 @@ mod tests {
         assert_eq!(
             email.punctuation_commitment,
             PunctuationCommitmentState::SafeToPrepare
+        );
+    }
+
+    #[test]
+    fn keeps_internal_apostrophes_in_contractions() {
+        let normalized = TextNormalizer.normalize("It's ready").expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("it's".to_string()),
+                NormalizedToken::Word("ready".to_string())
+            ]
+        );
+
+        let curly = TextNormalizer.normalize("It’s ready").expect("normalize");
+        assert_eq!(curly.tokens, normalized.tokens);
+    }
+
+    #[test]
+    fn treats_quote_apostrophes_as_punctuation() {
+        let normalized = TextNormalizer.normalize("'Hello'").expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![NormalizedToken::Word("hello".to_string())]
         );
     }
 

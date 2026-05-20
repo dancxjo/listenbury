@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use thiserror::Error;
 
@@ -5,7 +7,8 @@ use crate::linguistic::cmudict;
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
-use crate::linguistic::variety::LinguisticVariety;
+use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
+use crate::linguistic::variety::{LinguisticVariety, Phonology};
 use crate::mouth::piper_native::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::piper_native::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -429,8 +432,27 @@ fn build_candidate(
 }
 
 fn word_to_phones(word: &str) -> Option<Vec<String>> {
-    let phones = cmudict::bundled().lookup(word)?;
-    Some(phones.iter().map(|p| p.base.clone()).collect())
+    if let Some(phones) = cmudict::bundled().lookup(word) {
+        return Some(phones.iter().map(|p| p.base.clone()).collect());
+    }
+
+    let ortho = OrthographicWord::new(word);
+    let variety = LinguisticVariety::untagged("en-US-fallback", Phonology::new("English fallback"));
+    fallback_english_pronouncer()
+        .realize_word(&variety, &ortho)
+        .ok()
+        .map(|seq| {
+            seq.phonemes
+                .into_iter()
+                .map(|phoneme| phoneme.symbol)
+                .collect()
+        })
+        .filter(|phones: &Vec<String>| !phones.is_empty())
+}
+
+fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
+    static FALLBACK: OnceLock<SoundItOutPronouncer> = OnceLock::new();
+    FALLBACK.get_or_init(|| SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback()))
 }
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
@@ -504,6 +526,38 @@ mod tests {
             symbols(&unit.phonemes),
             vec!["Z", "AY", "L", "AH", "F", "OW", "N"]
         );
+    }
+
+    #[test]
+    fn phonemizes_unknown_words_with_english_fallback() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("MBROLA developped").expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec![
+                "M", "B", "R", "OW", "L", "AH", " ", "D", "EH", "V", "EH", "L", "OW", "P", "P",
+                "EH", "D"
+            ]
+        );
+    }
+
+    #[test]
+    fn phonemizes_contractions_and_unknown_words_together() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("MBROLA was developped. It's ready.")
+            .expect("phonemize");
+        assert!(symbols(&unit.phonemes).iter().any(|symbol| symbol == "S"));
+        assert_eq!(unit.boundary, ProsodyBoundaryHint::PossibleSentenceEnd);
+    }
+
+    #[test]
+    fn phonemizes_piper_compare_sample_with_fallbacks() {
+        let g2p = SimpleEnglishG2p::default();
+        g2p.phonemize_unit(
+            "Yo ho ho and a bottle of rum. I am a computer voice. MBROLA was developped by Thierry Dutoit. It's a speech synthesizer based on the concatenation of diphones. It takes a list of phonemes as input, together with prosodic information, and produces speech at the sampling frequency of the diphone database.",
+        )
+        .expect("sample text should phonemize");
     }
 
     #[test]
@@ -708,8 +762,8 @@ mod tests {
             assert_eq!(
                 sym(&seq),
                 vec![
-                    "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH",
-                    "R", "AH", "L", "D"
+                    "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH", "R",
+                    "AH", "L", "D"
                 ]
             );
         }

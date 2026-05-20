@@ -166,6 +166,74 @@ impl SoundItOutRules {
             ],
         )
     }
+
+    /// Approximate English fallback rules using the ARPAbet symbols already
+    /// used by CMUdict and the native Piper path.
+    ///
+    /// This is intentionally a fallback, not a replacement for CMUdict. It is
+    /// deterministic and broad enough for unknown words, acronyms, names, and
+    /// misspellings to remain pronounceable when no dictionary entry exists.
+    pub fn english_arpabet_fallback() -> Self {
+        Self::new(
+            VarietyTag::new("en-US-fallback"),
+            vec![
+                rule("tion", &["SH", "AH", "N"]),
+                rule("sion", &["ZH", "AH", "N"]),
+                rule("ough", &["OW"]),
+                rule("eigh", &["EY"]),
+                rule("tch", &["CH"]),
+                rule("kn", &["N"]),
+                rule("wr", &["R"]),
+                rule("wh", &["W"]),
+                rule("qu", &["K", "W"]),
+                rule("ck", &["K"]),
+                rule("ch", &["CH"]),
+                rule("sh", &["SH"]),
+                rule("th", &["TH"]),
+                rule("ph", &["F"]),
+                rule("ng", &["NG"]),
+                rule("ee", &["IY"]),
+                rule("ea", &["IY"]),
+                rule("oo", &["UW"]),
+                rule("ou", &["AW"]),
+                rule("ow", &["OW"]),
+                rule("ai", &["EY"]),
+                rule("ay", &["EY"]),
+                rule("oa", &["OW"]),
+                rule("oi", &["OY"]),
+                rule("oy", &["OY"]),
+                rule("au", &["AO"]),
+                rule("aw", &["AO"]),
+                rule("a", &["AH"]),
+                rule("b", &["B"]),
+                rule("c", &["K"]),
+                rule("d", &["D"]),
+                rule("e", &["EH"]),
+                rule("f", &["F"]),
+                rule("g", &["G"]),
+                rule("h", &["HH"]),
+                rule("i", &["IH"]),
+                rule("j", &["JH"]),
+                rule("k", &["K"]),
+                rule("l", &["L"]),
+                rule("m", &["M"]),
+                rule("n", &["N"]),
+                rule("o", &["OW"]),
+                rule("p", &["P"]),
+                rule("q", &["K"]),
+                rule("r", &["R"]),
+                rule("s", &["S"]),
+                rule("t", &["T"]),
+                rule("u", &["AH"]),
+                rule("v", &["V"]),
+                rule("w", &["W"]),
+                rule("x", &["K", "S"]),
+                rule("y", &["IY"]),
+                rule("z", &["Z"]),
+                rule("'", &[]),
+            ],
+        )
+    }
 }
 
 /// A deterministic grapheme-to-phoneme pronouncer based on declarative rules.
@@ -312,7 +380,7 @@ impl OrthographyToPhonemes for SoundItOutPronouncer {
 // ---------------------------------------------------------------------------
 
 /// Convenience constructor for a [`GraphemeRule`] from a grapheme string and a
-/// slice of IPA symbol strings.
+/// slice of phoneme symbol strings.
 fn rule(grapheme: &str, symbols: &[&str]) -> GraphemeRule {
     GraphemeRule::new(
         grapheme,
@@ -334,6 +402,10 @@ mod tests {
 
     fn latin() -> SoundItOutPronouncer {
         SoundItOutPronouncer::new(SoundItOutRules::classical_latin())
+    }
+
+    fn english_fallback() -> SoundItOutPronouncer {
+        SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback())
     }
 
     fn variety() -> LinguisticVariety {
@@ -418,6 +490,22 @@ mod tests {
         let word = OrthographicWord::new("vita");
         let seq = p.realize_word(&variety(), &word).unwrap();
         assert_eq!(symbols(&seq), vec!["w", "i", "t", "a"]);
+    }
+
+    #[test]
+    fn english_fallback_sounds_out_unknown_tokens_as_arpabet() {
+        let p = english_fallback();
+        let word = OrthographicWord::new("mbrola");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["M", "B", "R", "OW", "L", "AH"]);
+    }
+
+    #[test]
+    fn english_fallback_handles_common_digraphs_and_apostrophes() {
+        let p = english_fallback();
+        let word = OrthographicWord::new("quoth's");
+        let seq = p.realize_word(&variety(), &word).unwrap();
+        assert_eq!(symbols(&seq), vec!["K", "W", "OW", "TH", "S"]);
     }
 
     #[test]
