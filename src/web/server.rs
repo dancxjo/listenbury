@@ -1,7 +1,10 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Context, Result};
 
@@ -10,6 +13,7 @@ use crate::audio::{
     segment_pronunciation_with_acoustics, write_wav_bytes,
 };
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
+use crate::time::ExactTimestamp;
 use crate::trace::viewer_payload::{ViewerPayload, trace_session_to_viewer_payload};
 
 use super::assets;
@@ -22,6 +26,7 @@ pub struct ServeConfig {
     pub trace: Option<PathBuf>,
     pub broadcaster: Option<SseBroadcaster>,
     pub live_audio: Option<LiveSessionAudioStore>,
+    pub input_control: WebInputControl,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +35,25 @@ struct ServerState {
     trace: Option<PathBuf>,
     broadcaster: Option<SseBroadcaster>,
     live_audio: Option<LiveSessionAudioStore>,
+    input_control: WebInputControl,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WebInputControl {
+    native_capture_enabled: Option<Arc<AtomicBool>>,
+    browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
+}
+
+impl WebInputControl {
+    pub fn new(
+        native_capture_enabled: Option<Arc<AtomicBool>>,
+        browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
+    ) -> Self {
+        Self {
+            native_capture_enabled,
+            browser_audio_tx,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -113,7 +137,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/session-audio/*, /api/live-events, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/session-audio/*, /api/live-events, /api/browser-audio, /api/input-status, /api/native-mic, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -203,7 +227,29 @@ impl HttpResponse {
             content_type: "text/plain; charset=utf-8",
             cache_control: "no-store",
             body: message.into().into_bytes(),
-            headers: vec![("Allow", "GET, HEAD".to_string())],
+            headers: vec![("Allow", "GET, HEAD, POST".to_string())],
+        }
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: 400,
+            reason: "Bad Request",
+            content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
+            body: message.into().into_bytes(),
+            headers: Vec::new(),
+        }
+    }
+
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: 503,
+            reason: "Service Unavailable",
+            content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
+            body: message.into().into_bytes(),
+            headers: Vec::new(),
         }
     }
 
@@ -255,6 +301,7 @@ pub fn bind(config: ServeConfig) -> Result<BoundServer> {
         trace: config.trace,
         broadcaster: config.broadcaster,
         live_audio: config.live_audio,
+        input_control: config.input_control,
     });
 
     Ok(BoundServer {
@@ -267,6 +314,7 @@ pub fn bind(config: ServeConfig) -> Result<BoundServer> {
 fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result<()> {
     let mut first_line = String::new();
     let mut headers = Vec::<(String, String)>::new();
+    let mut body = Vec::<u8>::new();
     {
         let mut reader = BufReader::new(
             stream
@@ -286,6 +334,13 @@ fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result
             if let Some((name, value)) = trimmed.split_once(':') {
                 headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
             }
+        }
+        if let Some(content_length) = request_header(&headers, "content-length") {
+            let content_length = content_length
+                .parse::<usize>()
+                .context("parse Content-Length header")?;
+            body.resize(content_length, 0);
+            reader.read_exact(&mut body).context("read request body")?;
         }
     }
 
@@ -307,7 +362,8 @@ fn handle_connection(stream: &mut TcpStream, state: &Arc<ServerState>) -> Result
     }
 
     let range_header = request_header(&headers, "range");
-    let response = route_request_with_range(method, target, state, range_header);
+    let response =
+        route_request_with_range_and_body(method, target, state, range_header, &headers, &body);
     write_response(stream, &response, is_head)?;
     Ok(())
 }
@@ -394,17 +450,48 @@ fn route_request(method: &str, target: &str, state: &Arc<ServerState>) -> HttpRe
     route_request_with_range(method, target, state, None)
 }
 
+#[cfg(test)]
 fn route_request_with_range(
     method: &str,
     target: &str,
     state: &Arc<ServerState>,
     range_header: Option<&str>,
 ) -> HttpResponse {
+    route_request_with_range_and_body(method, target, state, range_header, &[], &[])
+}
+
+fn route_request_with_range_and_body(
+    method: &str,
+    target: &str,
+    state: &Arc<ServerState>,
+    range_header: Option<&str>,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> HttpResponse {
+    let path = target.split('?').next().unwrap_or("/");
+    if path == "/api/input-status" {
+        if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
+            return HttpResponse::method_not_allowed("only GET/HEAD are supported\n");
+        }
+        return HttpResponse::ok("application/json; charset=utf-8", input_status_json(state));
+    }
+    if path == "/api/native-mic" {
+        if !method.eq_ignore_ascii_case("POST") {
+            return HttpResponse::method_not_allowed("only POST is supported\n");
+        }
+        return update_native_mic(state, body);
+    }
+    if path == "/api/browser-audio" {
+        if !method.eq_ignore_ascii_case("POST") {
+            return HttpResponse::method_not_allowed("only POST is supported\n");
+        }
+        return receive_browser_audio(state, headers, body);
+    }
+
     if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
         return HttpResponse::method_not_allowed("only GET/HEAD are supported\n");
     }
 
-    let path = target.split('?').next().unwrap_or("/");
     match path {
         "/" | "/wavedeck" | "/wavedeck/" => {
             HttpResponse::ok("text/html; charset=utf-8", assets::INDEX_HTML)
@@ -562,6 +649,96 @@ fn route_request_with_range(
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
         _ => HttpResponse::not_found("not found\n"),
+    }
+}
+
+fn input_status_json(state: &Arc<ServerState>) -> Vec<u8> {
+    let native_available = state.input_control.native_capture_enabled.is_some();
+    let native_enabled = state
+        .input_control
+        .native_capture_enabled
+        .as_ref()
+        .is_some_and(|enabled| enabled.load(Ordering::Relaxed));
+    let browser_available =
+        state.input_control.browser_audio_tx.is_some() || state.live_audio.is_some();
+    format!(
+        "{{\"nativeMic\":{{\"available\":{},\"enabled\":{}}},\"browserMic\":{{\"available\":{}}}}}\n",
+        native_available, native_enabled, browser_available
+    )
+    .into_bytes()
+}
+
+fn update_native_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
+    let Some(native_capture_enabled) = state.input_control.native_capture_enabled.as_ref() else {
+        return HttpResponse::not_found("native microphone control is not available\n");
+    };
+    let payload: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(payload) => payload,
+        Err(error) => return HttpResponse::bad_request(format!("invalid JSON body: {error}\n")),
+    };
+    let Some(enabled) = payload.get("enabled").and_then(serde_json::Value::as_bool) else {
+        return HttpResponse::bad_request("expected JSON body with boolean field enabled\n");
+    };
+    native_capture_enabled.store(enabled, Ordering::Relaxed);
+    HttpResponse::ok("application/json; charset=utf-8", input_status_json(state))
+}
+
+fn receive_browser_audio(
+    state: &Arc<ServerState>,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> HttpResponse {
+    if body.is_empty() {
+        return HttpResponse::bad_request("audio body must not be empty\n");
+    }
+    if body.len() % std::mem::size_of::<f32>() != 0 {
+        return HttpResponse::bad_request("audio body must contain little-endian f32 samples\n");
+    }
+    if body.len() > 512 * 1024 {
+        return HttpResponse::bad_request("audio chunk is too large\n");
+    }
+    let sample_rate_hz = match request_header(headers, "x-sample-rate-hz")
+        .unwrap_or("16000")
+        .parse::<u32>()
+    {
+        Ok(sample_rate_hz) if (8_000..=192_000).contains(&sample_rate_hz) => sample_rate_hz,
+        _ => return HttpResponse::bad_request("invalid X-Sample-Rate-Hz header\n"),
+    };
+    let channels = match request_header(headers, "x-channels")
+        .unwrap_or("1")
+        .parse::<u16>()
+    {
+        Ok(channels) if (1..=2).contains(&channels) => channels,
+        _ => return HttpResponse::bad_request("invalid X-Channels header\n"),
+    };
+
+    let samples = body
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).clamp(-1.0, 1.0))
+        .collect::<Vec<_>>();
+    let frame = AudioFrame {
+        captured_at: ExactTimestamp::now(),
+        sample_rate_hz,
+        channels,
+        samples,
+        voice_signatures: Vec::new(),
+    };
+
+    if let Some(tx) = &state.input_control.browser_audio_tx {
+        match tx.try_send(frame) {
+            Ok(()) => HttpResponse::accepted("browser audio accepted\n"),
+            Err(crossbeam_channel::TrySendError::Full(_)) => {
+                HttpResponse::service_unavailable("browser audio queue is full\n")
+            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                HttpResponse::service_unavailable("browser audio processor is disconnected\n")
+            }
+        }
+    } else if let Some(live_audio) = &state.live_audio {
+        live_audio.push_frame(frame);
+        HttpResponse::accepted("browser audio recorded\n")
+    } else {
+        HttpResponse::not_found("browser audio input is not available\n")
     }
 }
 
@@ -871,6 +1048,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: None,
+            input_control: WebInputControl::default(),
         })
     }
 
@@ -880,6 +1058,7 @@ mod tests {
             trace: None,
             broadcaster: Some(SseBroadcaster::new()),
             live_audio: None,
+            input_control: WebInputControl::default(),
         })
     }
 
@@ -1029,6 +1208,7 @@ mod tests {
             trace: Some(trace_path.clone()),
             broadcaster: None,
             live_audio: None,
+            input_control: WebInputControl::default(),
         });
 
         let payload_response = route_request("GET", "/api/payload", &state);
@@ -1159,6 +1339,7 @@ mod tests {
             trace: Some(root.clone()),
             broadcaster: None,
             live_audio: None,
+            input_control: WebInputControl::default(),
         });
         let response = route_request("GET", "/api/session-audio/session-audio", &state);
         assert_eq!(response.status, 200);
@@ -1204,6 +1385,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(store),
+            input_control: WebInputControl::default(),
         });
 
         let response = route_request("GET", "/api/live-session-acoustic.json", &state);
@@ -1230,6 +1412,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            input_control: WebInputControl::default(),
         });
 
         let response = route_request("GET", "/api/live-session-audio.wav", &state);
@@ -1240,6 +1423,66 @@ mod tests {
     }
 
     #[test]
+    fn browser_audio_post_appends_to_live_audio_store() {
+        let live_audio = LiveSessionAudioStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+            input_control: WebInputControl::default(),
+        });
+        let headers = vec![
+            ("x-sample-rate-hz".to_string(), "16000".to_string()),
+            ("x-channels".to_string(), "1".to_string()),
+        ];
+        let mut body = Vec::new();
+        for sample in [0.0_f32, 0.5, -0.5] {
+            body.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        let response = route_request_with_range_and_body(
+            "POST",
+            "/api/browser-audio",
+            &state,
+            None,
+            &headers,
+            &body,
+        );
+        assert_eq!(response.status, 202);
+
+        let audio_response = route_request("GET", "/api/live-session-audio.wav", &state);
+        assert_eq!(audio_response.status, 200);
+        assert!(audio_response.body.starts_with(b"RIFF"));
+    }
+
+    #[test]
+    fn native_mic_control_updates_shared_capture_flag() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: None,
+            input_control: WebInputControl::new(Some(Arc::clone(&enabled)), None),
+        });
+
+        let response = route_request_with_range_and_body(
+            "POST",
+            "/api/native-mic",
+            &state,
+            None,
+            &[],
+            br#"{"enabled":false}"#,
+        );
+
+        assert_eq!(response.status, 200);
+        assert!(!enabled.load(Ordering::Relaxed));
+        let body = String::from_utf8(response.body).expect("utf8 input status");
+        assert!(body.contains("\"enabled\":false"));
+    }
+
+    #[test]
     fn marks_empty_live_session_audio_store_as_pending() {
         let live_audio = LiveSessionAudioStore::new();
         let state = Arc::new(ServerState {
@@ -1247,6 +1490,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            input_control: WebInputControl::default(),
         });
 
         let audio_response = route_request("GET", "/api/live-session-audio.wav", &state);
@@ -1273,6 +1517,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            input_control: WebInputControl::default(),
         });
 
         let full = route_request("GET", "/api/live-session-audio.wav", &state);
@@ -1349,6 +1594,7 @@ mod tests {
             trace: Some(session_root.clone()),
             broadcaster: None,
             live_audio: None,
+            input_control: WebInputControl::default(),
         });
 
         let trace_response = route_request("GET", "/api/trace", &state);
@@ -1514,6 +1760,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: None,
+            input_control: WebInputControl::default(),
         })
         .expect_err("second bind should fail");
 

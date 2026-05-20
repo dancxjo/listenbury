@@ -827,6 +827,12 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let live_audio = command
         .web
         .then(listenbury::web::LiveSessionAudioStore::new);
+    let (browser_audio_tx, browser_audio_rx) = if command.web {
+        let (tx, rx) = crossbeam_channel::bounded::<AudioFrame>(128);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let broadcaster = if command.web {
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
@@ -838,6 +844,10 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             trace: None,
             broadcaster: Some(server_bc),
             live_audio: live_audio.clone(),
+            input_control: listenbury::web::WebInputControl::new(
+                Some(Arc::clone(&capture_enabled)),
+                browser_audio_tx,
+            ),
         })
         .context("failed to start embedded web viewer")?;
         let web_port = server.local_addr().port();
@@ -871,6 +881,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         capture_enabled: Arc::clone(&capture_enabled),
         speaker_reference,
         live_audio,
+        browser_audio_rx,
     })?;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -3491,6 +3502,7 @@ struct ContinueEarConfig {
     capture_enabled: Arc<AtomicBool>,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
+    browser_audio_rx: Option<crossbeam_channel::Receiver<AudioFrame>>,
 }
 
 #[cfg(all(
@@ -3734,6 +3746,7 @@ impl ContinueEar {
                     input_channels,
                     Arc::clone(&config.speaker_reference),
                     config.live_audio.clone(),
+                    config.browser_audio_rx,
                 ) {
                     let _ = event_tx.send(ContinueEarEvent::Error {
                         message: error.to_string(),
@@ -3916,6 +3929,7 @@ fn run_continue_ear_processor(
     input_channels: u16,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
+    browser_audio_rx: Option<crossbeam_channel::Receiver<AudioFrame>>,
 ) -> Result<()> {
     boost_current_thread_for_capture("listenbury-dev-continue-ear");
 
@@ -3941,6 +3955,7 @@ fn run_continue_ear_processor(
     };
 
     while !stop.load(Ordering::Relaxed) {
+        drain_browser_audio_frames(&browser_audio_rx, &mut state, &asr_tx, &event_tx)?;
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(sample) => pending.push_back(sample),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -3962,6 +3977,7 @@ fn run_continue_ear_processor(
         )?;
     }
 
+    drain_browser_audio_frames(&browser_audio_rx, &mut state, &asr_tx, &event_tx)?;
     while let Ok(sample) = sample_rx.try_recv() {
         pending.push_back(sample);
     }
@@ -3982,6 +3998,27 @@ fn run_continue_ear_processor(
         }
     }
 
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_browser_audio_frames(
+    browser_audio_rx: &Option<crossbeam_channel::Receiver<AudioFrame>>,
+    state: &mut ContinueEarState,
+    asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
+    event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
+) -> Result<()> {
+    let Some(browser_audio_rx) = browser_audio_rx else {
+        return Ok(());
+    };
+    while let Ok(frame) = browser_audio_rx.try_recv() {
+        process_continue_ear_frame(frame, state, asr_tx, event_tx)?;
+    }
     Ok(())
 }
 

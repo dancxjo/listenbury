@@ -179,6 +179,27 @@ const uiState = {
   diagnosticsExpanded: false,
 };
 
+const inputUiState = {
+  browserAudioAvailable: false,
+  browserRecording: false,
+  browserError: null,
+  nativeMicAvailable: false,
+  nativeMicEnabled: false,
+  nativeMicUpdating: false,
+};
+
+const browserAudioState = {
+  stream: null,
+  audioContext: null,
+  source: null,
+  processor: null,
+  pendingSamples: new Float32Array(0),
+  sendChain: Promise.resolve(),
+};
+
+const BROWSER_AUDIO_SAMPLE_RATE_HZ = 16_000;
+const BROWSER_AUDIO_FRAME_SAMPLES = BROWSER_AUDIO_SAMPLE_RATE_HZ / 100;
+
 const sourceLabels = {
   RecordedAudio: "Recorded audio",
   LiveAsr: "Live ASR",
@@ -313,6 +334,33 @@ function ConnectionChrome({ projection }) {
     ),
     h(
       "section",
+      { className: "toolbar input-toolbar", id: "input-toolbar", "aria-label": "Audio input controls" },
+      h("button", {
+        id: "browser-record",
+        type: "button",
+        className: projection.browserRecording ? "active-toggle record-active" : "",
+        disabled: !projection.browserAudioAvailable || projection.browserRecording,
+        "aria-pressed": projection.browserRecording,
+        onClick: () => startBrowserRecording(),
+      }, "Record"),
+      h("button", {
+        id: "browser-stop",
+        type: "button",
+        disabled: !projection.browserRecording,
+        onClick: () => stopBrowserRecording(),
+      }, "Stop"),
+      h("button", {
+        id: "native-mic-toggle",
+        type: "button",
+        className: projection.nativeMicEnabled ? "active-toggle" : "",
+        disabled: !projection.nativeMicAvailable || projection.nativeMicUpdating,
+        "aria-pressed": projection.nativeMicEnabled,
+        onClick: () => setNativeMicEnabled(!projection.nativeMicEnabled),
+      }, projection.nativeMicEnabled ? "CPAL Mic On" : "CPAL Mic Off"),
+      h("span", { className: "input-status", hidden: !projection.browserError }, projection.browserError),
+    ),
+    h(
+      "section",
       { className: "status-bar" },
       h("strong", { id: "viewer-title" }, projection.viewerTitle),
       h("span", { id: "status-message" }, projection.statusMessage),
@@ -322,12 +370,10 @@ function ConnectionChrome({ projection }) {
 }
 
 function PlaybackToolbar({ projection }) {
-  const playPauseGlyph = projection.playPauseLabel === "Pause" ? "⏸" : "▶";
   return h(
     "section",
     { className: "toolbar playback-toolbar", id: "playback-toolbar", "aria-label": "Playback controls" },
     h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", title: "Previous word", onClick: () => jumpSelectedWord(-1) }, "⏮"),
-    h("button", { id: "play-pause", type: "button", "aria-label": projection.playPauseLabel, title: projection.playPauseLabel, onClick: () => togglePlayback() }, playPauseGlyph),
     h("button", { id: "jump-next", type: "button", "aria-label": "Next word", title: "Next word", onClick: () => jumpSelectedWord(1) }, "⏭"),
     h(
       "button",
@@ -467,6 +513,12 @@ function buildShellProjection() {
     liveEventCountLabel: `${liveEvents.length} event${liveEvents.length === 1 ? "" : "s"}`,
     connectionStatusText: uiState.connectionStatusText,
     connectionStatusClass: uiState.connectionStatusClass,
+    browserAudioAvailable: inputUiState.browserAudioAvailable,
+    browserRecording: inputUiState.browserRecording,
+    browserError: inputUiState.browserError,
+    nativeMicAvailable: inputUiState.nativeMicAvailable,
+    nativeMicEnabled: inputUiState.nativeMicEnabled,
+    nativeMicUpdating: inputUiState.nativeMicUpdating,
     transcriptTokens,
     literalTranscriptText: literalTranscriptTextFromTokens(transcriptTokens),
     selectionBadge: selectionProjection.badge,
@@ -555,7 +607,200 @@ function enterLiveMode() {
   uiState.connectionStatusText = "connecting…";
   renderShell();
 
+  void refreshInputStatus();
   connectLiveEvents();
+}
+
+async function refreshInputStatus() {
+  try {
+    const response = await fetch("/api/input-status", { cache: "no-store" });
+    if (!response.ok) {
+      inputUiState.browserAudioAvailable = false;
+      inputUiState.nativeMicAvailable = false;
+      renderShell();
+      return;
+    }
+    const status = await response.json();
+    inputUiState.browserAudioAvailable = Boolean(status.browserMic?.available);
+    inputUiState.nativeMicAvailable = Boolean(status.nativeMic?.available);
+    inputUiState.nativeMicEnabled = Boolean(status.nativeMic?.enabled);
+    renderShell();
+  } catch (error) {
+    inputUiState.browserAudioAvailable = false;
+    inputUiState.nativeMicAvailable = false;
+    inputUiState.browserError = conciseErrorMessage(error);
+    renderShell();
+  }
+}
+
+async function setNativeMicEnabled(enabled) {
+  if (!inputUiState.nativeMicAvailable || inputUiState.nativeMicUpdating) {
+    return;
+  }
+  inputUiState.nativeMicUpdating = true;
+  renderShell();
+  try {
+    const response = await fetch("/api/native-mic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    const status = await response.json();
+    inputUiState.nativeMicAvailable = Boolean(status.nativeMic?.available);
+    inputUiState.nativeMicEnabled = Boolean(status.nativeMic?.enabled);
+    inputUiState.browserError = null;
+  } catch (error) {
+    inputUiState.browserError = conciseErrorMessage(error);
+  } finally {
+    inputUiState.nativeMicUpdating = false;
+    renderShell();
+  }
+}
+
+async function startBrowserRecording() {
+  if (inputUiState.browserRecording) {
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    inputUiState.browserError = "Browser microphone capture is not available.";
+    renderShell();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    const audioContext = new AudioContextCtor();
+    const source = audioContext.createMediaStreamSource(stream);
+    const processor = audioContext.createScriptProcessor(4096, source.channelCount || 1, 1);
+    processor.onaudioprocess = (event) => {
+      const samples = resampleInputBufferToMono(
+        event.inputBuffer,
+        audioContext.sampleRate,
+        BROWSER_AUDIO_SAMPLE_RATE_HZ,
+      );
+      queueBrowserAudioSamples(samples);
+    };
+    source.connect(processor);
+    processor.connect(audioContext.destination);
+    browserAudioState.stream = stream;
+    browserAudioState.audioContext = audioContext;
+    browserAudioState.source = source;
+    browserAudioState.processor = processor;
+    inputUiState.browserRecording = true;
+    inputUiState.browserError = null;
+    uiState.statusMessage = "Streaming browser microphone audio to WaveDeck.";
+    renderShell();
+  } catch (error) {
+    stopBrowserRecording({ updateStatus: false });
+    inputUiState.browserError = conciseErrorMessage(error);
+    renderShell();
+  }
+}
+
+function stopBrowserRecording(options = {}) {
+  const { updateStatus = true } = options;
+  browserAudioState.processor?.disconnect();
+  browserAudioState.source?.disconnect();
+  for (const track of browserAudioState.stream?.getTracks?.() ?? []) {
+    track.stop();
+  }
+  void browserAudioState.audioContext?.close?.();
+  browserAudioState.stream = null;
+  browserAudioState.audioContext = null;
+  browserAudioState.source = null;
+  browserAudioState.processor = null;
+  flushBrowserAudioSamples();
+  inputUiState.browserRecording = false;
+  if (updateStatus) {
+    uiState.statusMessage = "Browser microphone stream stopped.";
+  }
+  renderShell();
+}
+
+function queueBrowserAudioSamples(samples) {
+  if (!samples.length) {
+    return;
+  }
+  const combined = new Float32Array(browserAudioState.pendingSamples.length + samples.length);
+  combined.set(browserAudioState.pendingSamples, 0);
+  combined.set(samples, browserAudioState.pendingSamples.length);
+
+  let offset = 0;
+  while (combined.length - offset >= BROWSER_AUDIO_FRAME_SAMPLES) {
+    queueBrowserAudioChunk(combined.slice(offset, offset + BROWSER_AUDIO_FRAME_SAMPLES));
+    offset += BROWSER_AUDIO_FRAME_SAMPLES;
+  }
+  browserAudioState.pendingSamples = combined.slice(offset);
+}
+
+function flushBrowserAudioSamples() {
+  if (!browserAudioState.pendingSamples.length) {
+    return;
+  }
+  const padded = new Float32Array(BROWSER_AUDIO_FRAME_SAMPLES);
+  padded.set(browserAudioState.pendingSamples.slice(0, BROWSER_AUDIO_FRAME_SAMPLES));
+  browserAudioState.pendingSamples = new Float32Array(0);
+  queueBrowserAudioChunk(padded);
+}
+
+function queueBrowserAudioChunk(samples) {
+  if (!samples.length) {
+    return;
+  }
+  const body = samples.slice().buffer;
+  browserAudioState.sendChain = browserAudioState.sendChain
+    .catch(() => {})
+    .then(async () => {
+      const response = await fetch("/api/browser-audio", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Sample-Rate-Hz": String(BROWSER_AUDIO_SAMPLE_RATE_HZ),
+          "X-Channels": "1",
+        },
+        body,
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+    })
+    .catch((error) => {
+      inputUiState.browserError = conciseErrorMessage(error);
+      renderShell();
+    });
+}
+
+function resampleInputBufferToMono(inputBuffer, fromSampleRate, toSampleRate) {
+  const channelCount = inputBuffer.numberOfChannels || 1;
+  const inputLength = inputBuffer.length;
+  const ratio = fromSampleRate / toSampleRate;
+  const outputLength = Math.max(1, Math.floor(inputLength / ratio));
+  const output = new Float32Array(outputLength);
+  const channels = Array.from({ length: channelCount }, (_, index) => inputBuffer.getChannelData(index));
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+    const inputIndex = Math.min(inputLength - 1, Math.floor(outputIndex * ratio));
+    let sum = 0;
+    for (const channel of channels) {
+      sum += channel[inputIndex] || 0;
+    }
+    output[outputIndex] = Math.max(-1, Math.min(1, sum / channels.length));
+  }
+  return output;
+}
+
+function conciseErrorMessage(error) {
+  const message = error?.message ?? String(error);
+  return message.trim().replace(/\s+/g, " ").slice(0, 180);
 }
 
 function connectLiveEvents() {

@@ -1,4 +1,4 @@
 mod assets;
 mod server;
 
-pub use server::{BoundServer, LiveSessionAudioStore, ServeConfig, bind, serve};
+pub use server::{BoundServer, LiveSessionAudioStore, ServeConfig, WebInputControl, bind, serve};

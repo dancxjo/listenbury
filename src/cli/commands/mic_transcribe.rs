@@ -494,6 +494,8 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let server_broadcaster = broadcaster.clone();
     let live_audio = listenbury::web::LiveSessionAudioStore::new();
     let server_live_audio = live_audio.clone();
+    let capture_enabled = Arc::new(AtomicBool::new(true));
+    let (browser_audio_tx, browser_audio_rx) = crossbeam_channel::bounded::<AudioFrame>(128);
     let bind_host = command.web_host.clone();
     let server = listenbury::web::bind(listenbury::web::ServeConfig {
         host: bind_host.clone(),
@@ -502,6 +504,10 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         trace: None,
         broadcaster: Some(server_broadcaster),
         live_audio: Some(server_live_audio),
+        input_control: listenbury::web::WebInputControl::new(
+            Some(Arc::clone(&capture_enabled)),
+            Some(browser_audio_tx),
+        ),
     })
     .context("failed to start embedded transcription web viewer")?;
     let web_port = server.local_addr().port();
@@ -567,74 +573,84 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let dropped_in_ring = Arc::new(AtomicUsize::new(0));
     let err_fn = |err| eprintln!("input stream error: {err}");
     let stream = match supported_config.sample_format() {
-        cpal::SampleFormat::F32 => build_input_stream::<f32>(
+        cpal::SampleFormat::F32 => build_input_stream_with_capture_control::<f32>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::F64 => build_input_stream::<f64>(
+        cpal::SampleFormat::F64 => build_input_stream_with_capture_control::<f64>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::I8 => build_input_stream::<i8>(
+        cpal::SampleFormat::I8 => build_input_stream_with_capture_control::<i8>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::I16 => build_input_stream::<i16>(
+        cpal::SampleFormat::I16 => build_input_stream_with_capture_control::<i16>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::I32 => build_input_stream::<i32>(
+        cpal::SampleFormat::I32 => build_input_stream_with_capture_control::<i32>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::I64 => build_input_stream::<i64>(
+        cpal::SampleFormat::I64 => build_input_stream_with_capture_control::<i64>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::U8 => build_input_stream::<u8>(
+        cpal::SampleFormat::U8 => build_input_stream_with_capture_control::<u8>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::U16 => build_input_stream::<u16>(
+        cpal::SampleFormat::U16 => build_input_stream_with_capture_control::<u16>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::U32 => build_input_stream::<u32>(
+        cpal::SampleFormat::U32 => build_input_stream_with_capture_control::<u32>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
-        cpal::SampleFormat::U64 => build_input_stream::<u64>(
+        cpal::SampleFormat::U64 => build_input_stream_with_capture_control::<u64>(
             &device,
             &stream_config,
             sample_tx.clone(),
             Arc::clone(&dropped_in_callback),
+            Some(Arc::clone(&capture_enabled)),
             err_fn,
         )?,
         sample_format => anyhow::bail!("unsupported input sample format: {sample_format:?}"),
@@ -693,6 +709,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
             break;
         }
 
+        drain_browser_audio_into_ring(&browser_audio_rx, &mut ring_tx, &dropped_in_ring);
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(sample) => pending.push_back(sample),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -716,6 +733,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
 
     drop(stream);
 
+    drain_browser_audio_into_ring(&browser_audio_rx, &mut ring_tx, &dropped_in_ring);
     while let Ok(sample) = sample_rx.try_recv() {
         pending.push_back(sample);
     }
@@ -936,6 +954,19 @@ fn process_web_ring_frames(
         process_web_transcribe_frame(frame, state)?;
     }
     Ok(())
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn drain_browser_audio_into_ring(
+    browser_audio_rx: &crossbeam_channel::Receiver<AudioFrame>,
+    ring_tx: &mut listenbury::audio::ring::AudioRingTx,
+    dropped_in_ring: &AtomicUsize,
+) {
+    while let Ok(frame) = browser_audio_rx.try_recv() {
+        if ring_tx.try_push(frame).is_err() {
+            dropped_in_ring.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -1551,10 +1582,39 @@ where
     T: Sample + SizedSample,
     f32: FromSample<T>,
 {
+    build_input_stream_with_capture_control(
+        device,
+        config,
+        sample_tx,
+        dropped_in_callback,
+        None,
+        err_fn,
+    )
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn build_input_stream_with_capture_control<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_tx: crossbeam_channel::Sender<f32>,
+    dropped_in_callback: Arc<AtomicUsize>,
+    capture_enabled: Option<Arc<AtomicBool>>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample,
+    f32: FromSample<T>,
+{
     device
         .build_input_stream(
             config,
             move |data: &[T], _| {
+                if capture_enabled
+                    .as_ref()
+                    .is_some_and(|enabled| !enabled.load(Ordering::Relaxed))
+                {
+                    return;
+                }
                 for sample in data {
                     if sample_tx.try_send(sample.to_sample::<f32>()).is_err() {
                         dropped_in_callback.fetch_add(1, Ordering::Relaxed);

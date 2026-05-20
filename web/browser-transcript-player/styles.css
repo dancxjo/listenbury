@@ -145,6 +145,34 @@ h1 {
   min-width: 6rem;
 }
 
+.input-toolbar {
+  grid-column: 1 / -1;
+}
+
+.input-toolbar button {
+  min-width: 6.5rem;
+}
+
+.input-status {
+  min-height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid rgba(255, 122, 144, 0.45);
+  border-radius: 8px;
+  color: #ff9ead;
+  background: rgba(74, 22, 35, 0.35);
+  font-size: 0.82rem;
+}
+
+.input-status[hidden] {
+  display: none;
+}
+
+.record-active {
+  border-color: rgba(255, 122, 144, 0.72);
+}
+
 .file-picker {
   min-height: 2.35rem;
   display: inline-flex;

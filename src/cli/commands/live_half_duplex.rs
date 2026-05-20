@@ -724,6 +724,10 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             trace: None,
             broadcaster: Some(server_bc),
             live_audio: live_audio.clone(),
+            input_control: listenbury::web::WebInputControl::new(
+                Some(Arc::clone(&capture_enabled)),
+                None,
+            ),
         })
         .context("failed to start embedded web viewer")?;
         let web_port = server.local_addr().port();
