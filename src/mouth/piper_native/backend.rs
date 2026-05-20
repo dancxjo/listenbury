@@ -192,8 +192,7 @@ impl NativePiperBackend {
         if let Some(controls) = controls {
             for pause in &controls.pause_overrides {
                 let silence_samples =
-                    usize::try_from(pause.millis * u64::from(pcm.sample_rate_hz) / 1000)
-                        .unwrap_or(usize::MAX);
+                    compute_silence_samples(pause.millis, pcm.sample_rate_hz)?;
                 pcm.samples
                     .extend(std::iter::repeat(0.0_f32).take(silence_samples));
                 inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
@@ -770,8 +769,31 @@ fn pcm_duration_ms(pcm: &NativePiperPcm) -> u64 {
     if pcm.sample_rate_hz == 0 {
         return 0;
     }
-    let samples = u64::try_from(pcm.samples.len()).unwrap_or(u64::MAX);
+    // usize fits within u64 on all supported platforms; saturate to avoid overflow in
+    // pathological cases rather than silently wrapping.
+    let samples = pcm.samples.len().min(u64::MAX as usize) as u64;
     samples * 1000 / u64::from(pcm.sample_rate_hz)
+}
+
+/// Compute the number of silence samples needed for a pause of `millis` ms at
+/// `sample_rate_hz` Hz.  Returns an error if the resulting count would exceed
+/// `usize::MAX` (which would indicate an unreasonably long pause).
+fn compute_silence_samples(millis: u64, sample_rate_hz: u32) -> Result<usize> {
+    let sample_count = millis
+        .checked_mul(u64::from(sample_rate_hz))
+        .map(|n| n / 1000)
+        .with_context(|| {
+            format!(
+                "pause duration {} ms overflows when computing silence samples at {} Hz",
+                millis, sample_rate_hz
+            )
+        })?;
+    usize::try_from(sample_count).with_context(|| {
+        format!(
+            "pause of {} ms at {} Hz requires {} samples which exceeds usize::MAX",
+            millis, sample_rate_hz, sample_count
+        )
+    })
 }
 
 fn native_pcm_to_audio_frames(pcm: NativePiperPcm, frame_samples: usize) -> Vec<AudioFrame> {
@@ -1231,8 +1253,8 @@ mod tests {
         let mut inserted_pause_ms = 0u64;
         for pause in &controls.pause_overrides {
             let silence_samples =
-                usize::try_from(pause.millis * u64::from(pcm.sample_rate_hz) / 1000)
-                    .unwrap_or(usize::MAX);
+                compute_silence_samples(pause.millis, pcm.sample_rate_hz)
+                    .expect("test pause duration should be reasonable");
             pcm.samples
                 .extend(std::iter::repeat(0.0_f32).take(silence_samples));
             inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
