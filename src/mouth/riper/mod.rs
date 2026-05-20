@@ -27,11 +27,11 @@ pub use prosody_controls::{
     PiperProsodyControls, PiperSynthesisDiagnostics, ProsodyControlStatus,
 };
 pub use prosody_planner::{
-    BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner, PauseOp,
-    PauseStrengthClass, ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy,
-    ProsodyEnergyClass, ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay,
-    ProsodyOverlaySource, ProsodyPitchShape, ProsodyRateClass, ProsodyTarget,
-    RiperProsodyRealization,
+    BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner,
+    FocusAccentDiagnostic, FocusAccentReason, FocusAccentStatus, PauseOp, PauseStrengthClass,
+    ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyEnergyClass,
+    ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay, ProsodyOverlaySource,
+    ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RiperProsodyRealization,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

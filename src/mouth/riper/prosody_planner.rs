@@ -13,8 +13,12 @@ const FUNCTION_WORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "if", "then", "than", "to", "of", "in", "on", "at",
     "for", "from", "with", "by", "as", "is", "are", "was", "were", "be", "been", "am", "it",
     "this", "that", "these", "those", "he", "she", "they", "we", "you", "i", "me", "my", "your",
-    "our", "their",
+    "our", "their", "because",
 ];
+const FOCUS_INTENSIFIERS: &[&str] = &["so", "very", "really", "especially", "extremely"];
+const FOCUS_PRECISION_ADVERBS: &[&str] = &["precisely", "exactly", "specifically", "particularly"];
+const FOCUS_CONTRAST_MARKERS: &[&str] = &["but", "not", "instead", "rather"];
+const FOCUS_CORRECTIVE_PARTICLES: &[&str] = &["actually", "even", "only", "just"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
@@ -181,6 +185,7 @@ pub enum ProsodyOp {
 pub struct ProsodyList {
     pub base: BreathGroupCandidate,
     pub ops: Vec<ProsodyOp>,
+    pub focus_diagnostics: Vec<FocusAccentDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,6 +197,38 @@ pub struct RiperProsodyRealization {
     pub realized_ops: Vec<ProsodyOp>,
     pub advisory_ops: Vec<ProsodyOp>,
     pub diagnostics: Vec<String>,
+    pub focus_diagnostics: Vec<FocusAccentDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusAccentReason {
+    Intensifier,
+    PrecisionAdverb,
+    ContrastMarker,
+    CorrectiveParticle,
+    QuotedWord,
+    FinalContentWord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FocusAccentStatus {
+    Provisional,
+    Prepared,
+    Playable,
+    Committed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FocusAccentDiagnostic {
+    pub word: String,
+    pub word_index: usize,
+    pub reason: FocusAccentReason,
+    pub strength: u8,
+    pub candidate_id: SpeechCandidateId,
+    pub status: FocusAccentStatus,
 }
 
 impl ProsodyList {
@@ -287,6 +324,7 @@ impl ProsodyList {
             realized_ops,
             advisory_ops,
             diagnostics,
+            focus_diagnostics: self.focus_diagnostics.clone(),
         }
     }
 }
@@ -384,9 +422,14 @@ impl BreathGroupProsodyPlanner {
                 commitment: base.commitment,
             }));
         }
-        ops.extend(default_emphasis_ops(candidate, boundary_state));
+        let focus_plan = default_emphasis_ops(candidate, boundary_state);
+        ops.extend(focus_plan.ops);
 
-        let planned = ProsodyList { base, ops };
+        let planned = ProsodyList {
+            base,
+            ops,
+            focus_diagnostics: focus_plan.diagnostics,
+        };
         self.active = Some(planned.clone());
         planned
     }
@@ -447,34 +490,110 @@ fn build_contour(
 fn default_emphasis_ops(
     candidate: &PhonemeProsodyCandidate,
     boundary_state: BoundaryState,
-) -> Vec<ProsodyOp> {
+) -> FocusAccentPlan {
     let mut ops = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut focus_by_word = std::collections::HashMap::<usize, FocusSelection>::new();
     let word_count = candidate.word_targets.len();
     if word_count == 0 {
-        return ops;
+        return FocusAccentPlan { ops, diagnostics };
     }
 
     for target in &candidate.word_targets {
-        let is_content = is_content_word(&target.normalized_text);
-        if is_content {
-            let mut strength = 50;
-            if has_quote_emphasis(candidate, target.text_range.start, target.text_range.end) {
-                strength = 78;
-            }
+        let word = target.normalized_text.as_str();
+        if has_quote_emphasis(candidate, target.text_range.start, target.text_range.end) {
+            promote_focus(
+                &mut focus_by_word,
+                target.word_index,
+                FocusAccentReason::QuotedWord,
+                82,
+            );
+        }
+        if FOCUS_INTENSIFIERS.contains(&word) {
+            promote_focus(
+                &mut focus_by_word,
+                target.word_index,
+                FocusAccentReason::Intensifier,
+                80,
+            );
+        }
+        if FOCUS_PRECISION_ADVERBS.contains(&word) {
+            promote_focus(
+                &mut focus_by_word,
+                target.word_index,
+                FocusAccentReason::PrecisionAdverb,
+                78,
+            );
+        }
+        if FOCUS_CONTRAST_MARKERS.contains(&word) {
+            promote_focus(
+                &mut focus_by_word,
+                target.word_index,
+                FocusAccentReason::ContrastMarker,
+                76,
+            );
+        }
+        if FOCUS_CORRECTIVE_PARTICLES.contains(&word) {
+            promote_focus(
+                &mut focus_by_word,
+                target.word_index,
+                FocusAccentReason::CorrectiveParticle,
+                74,
+            );
+        }
+    }
+
+    if !matches!(boundary_state, BoundaryState::Continuing)
+        && let Some(final_content) = candidate
+            .word_targets
+            .iter()
+            .rev()
+            .find(|target| is_content_word(&target.normalized_text))
+    {
+        promote_focus(
+            &mut focus_by_word,
+            final_content.word_index,
+            FocusAccentReason::FinalContentWord,
+            60,
+        );
+    }
+
+    for target in &candidate.word_targets {
+        let focus = focus_by_word.get(&target.word_index).copied();
+        if let Some(focus) = focus {
             ops.push(ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
                 },
-                kind: ProsodyAccentKind::Focus,
-                strength,
+                kind: if matches!(focus.reason, FocusAccentReason::ContrastMarker) {
+                    ProsodyAccentKind::Contrastive
+                } else {
+                    ProsodyAccentKind::Focus
+                },
+                strength: focus.strength,
             });
-        } else {
+            ops.push(ProsodyOp::ApplyRhetoric {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                op: ProsodyOperation::Emphasize,
+                strength: focus.strength,
+            });
+            diagnostics.push(FocusAccentDiagnostic {
+                word: target.normalized_text.clone(),
+                word_index: target.word_index,
+                reason: focus.reason,
+                strength: focus.strength,
+                candidate_id: candidate.id,
+                status: focus_status_from_commitment(candidate.commitment),
+            });
+        } else if !is_content_word(&target.normalized_text) {
             ops.push(ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
                 },
                 kind: ProsodyAccentKind::GivenInformation,
-                strength: 28,
+                strength: 24,
             });
             ops.push(ProsodyOp::AdjustEnergy {
                 target: ProsodyTarget::WordIndex {
@@ -482,12 +601,24 @@ fn default_emphasis_ops(
                 },
                 energy: ProsodyEnergyClass::Lower,
             });
+            ops.push(ProsodyOp::ApplyRhetoric {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                op: ProsodyOperation::Deemphasize,
+                strength: 42,
+            });
         }
+
+        let should_reduce_vowel = !focus_by_word.contains_key(&target.word_index)
+            && !is_content_word(&target.normalized_text);
         ops.push(ProsodyOp::AdjustRate {
             target: ProsodyTarget::WordIndex {
                 index: target.word_index,
             },
-            rate: if is_parenthetical(candidate, target.text_range.start, target.text_range.end) {
+            rate: if should_reduce_vowel
+                || is_parenthetical(candidate, target.text_range.start, target.text_range.end)
+            {
                 ProsodyRateClass::Faster
             } else {
                 ProsodyRateClass::Neutral
@@ -524,20 +655,49 @@ fn default_emphasis_ops(
             },
             strength: 84,
         });
-        ops.push(ProsodyOp::SetAccent {
-            target: ProsodyTarget::WordIndex {
-                index: final_content.word_index,
-            },
-            kind: ProsodyAccentKind::Contrastive,
-            strength: 86,
-        });
     }
 
-    ops
+    FocusAccentPlan { ops, diagnostics }
 }
 
 fn is_content_word(word: &str) -> bool {
     !FUNCTION_WORDS.contains(&word)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FocusAccentPlan {
+    ops: Vec<ProsodyOp>,
+    diagnostics: Vec<FocusAccentDiagnostic>,
+}
+
+#[derive(Clone, Copy)]
+struct FocusSelection {
+    reason: FocusAccentReason,
+    strength: u8,
+}
+
+fn promote_focus(
+    focus_by_word: &mut std::collections::HashMap<usize, FocusSelection>,
+    word_index: usize,
+    reason: FocusAccentReason,
+    strength: u8,
+) {
+    let entry = focus_by_word
+        .entry(word_index)
+        .or_insert(FocusSelection { reason, strength });
+    if strength > entry.strength {
+        *entry = FocusSelection { reason, strength };
+    }
+}
+
+fn focus_status_from_commitment(commitment: ProsodyCommitment) -> FocusAccentStatus {
+    match commitment {
+        ProsodyCommitment::Provisional => FocusAccentStatus::Provisional,
+        ProsodyCommitment::Prepared => FocusAccentStatus::Prepared,
+        ProsodyCommitment::Playable => FocusAccentStatus::Playable,
+        ProsodyCommitment::Committed => FocusAccentStatus::Committed,
+        ProsodyCommitment::Cancelled => FocusAccentStatus::Cancelled,
+    }
 }
 
 fn has_quote_emphasis(candidate: &PhonemeProsodyCandidate, start: usize, end: usize) -> bool {
@@ -661,6 +821,13 @@ mod tests {
             .expect("updated candidate event")
     }
 
+    fn focus_diag<'a>(
+        diagnostics: &'a [FocusAccentDiagnostic],
+        word: &str,
+    ) -> Option<&'a FocusAccentDiagnostic> {
+        diagnostics.iter().find(|diag| diag.word == word)
+    }
+
     #[test]
     fn stable_extension_without_cadence_reset() {
         let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
@@ -777,10 +944,16 @@ mod tests {
         )));
         assert!(planned.ops.iter().any(|op| matches!(
             op,
-            ProsodyOp::SetAccent {
+            ProsodyOp::AdjustRate {
                 target: ProsodyTarget::WordIndex { index: 1 },
-                kind: ProsodyAccentKind::Focus,
-                ..
+                rate: ProsodyRateClass::Neutral,
+            }
+        )));
+        assert!(planned.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::AdjustRate {
+                target: ProsodyTarget::WordIndex { index: 0 },
+                rate: ProsodyRateClass::Faster,
             }
         )));
         assert!(
@@ -788,6 +961,167 @@ mod tests {
                 .ops
                 .iter()
                 .any(|op| matches!(op, ProsodyOp::PreserveLexicalStress { .. }))
+        );
+    }
+
+    #[test]
+    fn focus_fixture_accents_precisely_so_and_final_small() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let candidate = tracker
+            .ingest_text(
+                "University politics are vicious precisely because the stakes are so small.",
+            )
+            .expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+
+        let precisely =
+            focus_diag(&planned.focus_diagnostics, "precisely").expect("precisely focus");
+        assert_eq!(precisely.reason, FocusAccentReason::PrecisionAdverb);
+        let so = focus_diag(&planned.focus_diagnostics, "so").expect("so focus");
+        assert_eq!(so.reason, FocusAccentReason::Intensifier);
+        let small = focus_diag(&planned.focus_diagnostics, "small").expect("small focus");
+        assert_eq!(small.reason, FocusAccentReason::FinalContentWord);
+        assert!(small.strength < so.strength);
+        assert_eq!(precisely.status, FocusAccentStatus::Provisional);
+    }
+
+    #[test]
+    fn focus_fixture_precision_and_corrective_words() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let exactly = tracker
+            .ingest_text("That is exactly what I meant.")
+            .expect("candidate");
+        let exactly_plan = planner.plan_candidate(latest_candidate(&exactly));
+        assert_eq!(
+            focus_diag(&exactly_plan.focus_diagnostics, "exactly")
+                .expect("exactly focus")
+                .reason,
+            FocusAccentReason::PrecisionAdverb
+        );
+
+        let only = tracker
+            .ingest_text("I only said the first one.")
+            .expect("candidate");
+        let only_plan = planner.plan_candidate(latest_candidate(&only));
+        assert_eq!(
+            focus_diag(&only_plan.focus_diagnostics, "only")
+                .expect("only focus")
+                .reason,
+            FocusAccentReason::CorrectiveParticle
+        );
+        assert!(
+            focus_diag(&only_plan.focus_diagnostics, "the").is_none(),
+            "function words stay de-emphasized unless contrastive"
+        );
+    }
+
+    #[test]
+    fn focus_fixture_contrast_markers_and_intensifiers() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let contrast = tracker
+            .ingest_text("It is not broken, but delayed.")
+            .expect("candidate");
+        let contrast_plan = planner.plan_candidate(latest_candidate(&contrast));
+        assert_eq!(
+            focus_diag(&contrast_plan.focus_diagnostics, "not")
+                .expect("not focus")
+                .reason,
+            FocusAccentReason::ContrastMarker
+        );
+        assert_eq!(
+            focus_diag(&contrast_plan.focus_diagnostics, "but")
+                .expect("but focus")
+                .reason,
+            FocusAccentReason::ContrastMarker
+        );
+
+        let intensifier = tracker
+            .ingest_text("This is really very good.")
+            .expect("candidate");
+        let intensifier_plan = planner.plan_candidate(latest_candidate(&intensifier));
+        assert_eq!(
+            focus_diag(&intensifier_plan.focus_diagnostics, "really")
+                .expect("really focus")
+                .reason,
+            FocusAccentReason::Intensifier
+        );
+        assert_eq!(
+            focus_diag(&intensifier_plan.focus_diagnostics, "very")
+                .expect("very focus")
+                .reason,
+            FocusAccentReason::Intensifier
+        );
+    }
+
+    #[test]
+    fn focus_fixture_not_blue_marks_not_as_contrastive() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let candidate = tracker
+            .ingest_text("I said red, not blue.")
+            .expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+        assert_eq!(
+            focus_diag(&planned.focus_diagnostics, "not")
+                .expect("not focus")
+                .reason,
+            FocusAccentReason::ContrastMarker
+        );
+    }
+
+    #[test]
+    fn focus_planning_is_revision_safe_across_incremental_updates() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let first = tracker
+            .ingest_text("University politics are vicious precisely...")
+            .expect("candidate");
+        let first_plan = planner.plan_candidate(latest_candidate(&first));
+        assert_eq!(
+            focus_diag(&first_plan.focus_diagnostics, "precisely")
+                .expect("precisely focus")
+                .reason,
+            FocusAccentReason::PrecisionAdverb
+        );
+        assert!(focus_diag(&first_plan.focus_diagnostics, "so").is_none());
+
+        let second = tracker
+            .ingest_text("University politics are vicious precisely because...")
+            .expect("candidate");
+        let second_plan = planner.plan_candidate(latest_candidate(&second));
+        assert_eq!(
+            focus_diag(&second_plan.focus_diagnostics, "precisely")
+                .expect("precisely focus")
+                .reason,
+            FocusAccentReason::PrecisionAdverb
+        );
+        assert!(focus_diag(&second_plan.focus_diagnostics, "so").is_none());
+
+        let third = tracker
+            .ingest_text(
+                "University politics are vicious precisely because the stakes are so small.",
+            )
+            .expect("candidate");
+        let third_plan = planner.plan_candidate(latest_candidate(&third));
+        assert_eq!(
+            focus_diag(&third_plan.focus_diagnostics, "precisely")
+                .expect("precisely focus")
+                .reason,
+            FocusAccentReason::PrecisionAdverb
+        );
+        assert_eq!(
+            focus_diag(&third_plan.focus_diagnostics, "so")
+                .expect("so focus")
+                .reason,
+            FocusAccentReason::Intensifier
         );
     }
 
@@ -835,6 +1169,10 @@ mod tests {
         assert!(!realized.realized_ops.is_empty());
         assert!(!realized.advisory_ops.is_empty());
         assert!(!realized.diagnostics.is_empty());
+        assert_eq!(
+            realized.focus_diagnostics, planned.focus_diagnostics,
+            "realization should preserve planner focus diagnostics"
+        );
         assert!(
             realized
                 .diagnostics
