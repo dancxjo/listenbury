@@ -190,6 +190,29 @@ export function waveformBucketToPx(scale, bucket, minWidthPx = 0) {
   });
 }
 
+export function buildWaveformWordDeckRowLayout(options = {}) {
+  const rowCount = Math.max(0, Math.floor(clampFinite(options.rowCount, 0)));
+  const wordRowHeightPx = Math.max(1, clampFinite(options.wordRowHeightPx, 20));
+  const phonemeRowHeightPx = Math.max(1, clampFinite(options.phonemeRowHeightPx, 16));
+  const wordToPhonemeGapPx = Math.max(0, clampFinite(options.wordToPhonemeGapPx, 2));
+  const rowGapPx = Math.max(0, clampFinite(options.rowGapPx, 4));
+  const marginPx = Math.max(0, clampFinite(options.marginPx, 4));
+  const rowStridePx = wordRowHeightPx + wordToPhonemeGapPx + phonemeRowHeightPx + rowGapPx;
+
+  return {
+    heightPx: rowCount === 0
+      ? marginPx * 2
+      : marginPx * 2 + rowCount * rowStridePx - rowGapPx,
+    rows: Array.from({ length: rowCount }, (_, rowIndex) => {
+      const wordTopPx = marginPx + rowIndex * rowStridePx;
+      return {
+        wordTopPx,
+        phonemeTopPx: wordTopPx + wordRowHeightPx + wordToPhonemeGapPx,
+      };
+    }),
+  };
+}
+
 export function formatWaveformBucketDuration(bucketDurationMs) {
   const durationMs = Math.max(MIN_BUCKET_DURATION_MS, clampFinite(bucketDurationMs, MIN_BUCKET_DURATION_MS));
   if (durationMs >= 1000) {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildWaveformWordDeckRowLayout,
   buildWaveformResolutionLevels,
   createTimeScale,
   createTimelineViewport,
@@ -98,6 +99,23 @@ test("waveform bucket time ranges map to timeline pixels with the shared time sc
 
   assert.equal(interval.leftPx, 25);
   assert.equal(interval.widthPx, 25);
+});
+
+test("waveform word deck row layout places phoneme rows beneath word rows", () => {
+  const layout = buildWaveformWordDeckRowLayout({
+    rowCount: 2,
+    wordRowHeightPx: 20,
+    phonemeRowHeightPx: 16,
+    wordToPhonemeGapPx: 2,
+    rowGapPx: 4,
+    marginPx: 4,
+  });
+
+  assert.deepEqual(layout.rows, [
+    { wordTopPx: 4, phonemeTopPx: 26 },
+    { wordTopPx: 46, phonemeTopPx: 68 },
+  ]);
+  assert.equal(layout.heightPx, 88);
 });
 
 test("waveform multi-resolution levels preserve timing, peak, and energy fields", () => {

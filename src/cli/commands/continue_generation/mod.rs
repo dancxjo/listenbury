@@ -822,6 +822,9 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         })
         .transpose()
         .context("failed to create dev continue live trace writer")?;
+    let live_audio = command
+        .web
+        .then(listenbury::web::LiveSessionAudioStore::new);
     let broadcaster = if command.web {
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
@@ -832,7 +835,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             payload: None,
             trace: None,
             broadcaster: Some(server_bc),
-            live_audio: None,
+            live_audio: live_audio.clone(),
         })
         .context("failed to start embedded web viewer")?;
         let web_port = server.local_addr().port();
@@ -865,6 +868,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         vad_backend,
         capture_enabled: Arc::clone(&capture_enabled),
         speaker_reference,
+        live_audio,
     })?;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -3484,6 +3488,7 @@ struct ContinueEarConfig {
     vad_backend: VadBackendKind,
     capture_enabled: Arc<AtomicBool>,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
+    live_audio: Option<listenbury::web::LiveSessionAudioStore>,
 }
 
 #[cfg(all(
@@ -3724,6 +3729,7 @@ impl ContinueEar {
                     input_sample_rate_hz,
                     input_channels,
                     Arc::clone(&config.speaker_reference),
+                    config.live_audio.clone(),
                 ) {
                     let _ = event_tx.send(ContinueEarEvent::Error {
                         message: error.to_string(),
@@ -3774,6 +3780,7 @@ struct ContinueEarState {
     active_groups: HashMap<BreathGroupId, ActiveAsrGroup>,
     environment: EnvironmentalSoundObserver,
     auditory_scene: AuditorySceneAnalyzer,
+    live_audio: Option<listenbury::web::LiveSessionAudioStore>,
     frame_time_ms: u64,
     vad_observation: VadObservationState,
     last_self_hearing_observation_ms: Option<u64>,
@@ -3904,6 +3911,7 @@ fn run_continue_ear_processor(
     input_sample_rate_hz: u32,
     input_channels: u16,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
+    live_audio: Option<listenbury::web::LiveSessionAudioStore>,
 ) -> Result<()> {
     let input_frame_samples =
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
@@ -3916,6 +3924,7 @@ fn run_continue_ear_processor(
         active_groups: HashMap::new(),
         environment: EnvironmentalSoundObserver::default(),
         auditory_scene: AuditorySceneAnalyzer::new(speaker_reference),
+        live_audio,
         frame_time_ms: 0,
         vad_observation: VadObservationState {
             kind: VadObservationKind::Silence,
@@ -4097,6 +4106,9 @@ fn process_continue_ear_frame(
     asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
 ) -> Result<()> {
+    if let Some(live_audio) = &state.live_audio {
+        live_audio.push_frame(frame.clone());
+    }
     let frame_duration_ms = frame_duration_ms(&frame);
     let analysis = state.auditory_scene.analyze(frame)?;
     log_auditory_frame_if_enabled(&analysis);

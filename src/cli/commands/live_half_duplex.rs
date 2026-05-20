@@ -378,6 +378,7 @@ struct LiveHalfDuplexState {
     self_hearing: SelfHearingState,
     controller: ConversationController,
     trace: LiveTrace,
+    live_audio: Option<listenbury::web::LiveSessionAudioStore>,
     session_audio_frames: Vec<AudioFrame>,
     prosody: StreamingProsodyAnalyzer,
     frame_time_ms: u64,
@@ -695,6 +696,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         .play()
         .with_context(|| format!("failed to start capture from {input_name}"))?;
 
+    let live_audio = command
+        .web
+        .then(listenbury::web::LiveSessionAudioStore::new);
     let broadcaster = if command.web {
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
@@ -719,7 +723,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             payload: None,
             trace: None,
             broadcaster: Some(server_bc),
-            live_audio: None,
+            live_audio: live_audio.clone(),
         })
         .context("failed to start embedded web viewer")?;
         let web_port = server.local_addr().port();
@@ -767,6 +771,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         self_hearing: SelfHearingState::default(),
         controller: ConversationController::default(),
         trace,
+        live_audio,
         session_audio_frames: Vec::new(),
         prosody: StreamingProsodyAnalyzer::default(),
         frame_time_ms: 0,
@@ -990,6 +995,9 @@ fn process_live_frame(
     state: &mut LiveHalfDuplexState,
     turn_id: u64,
 ) -> Result<LiveFrameProcessingResult> {
+    if let Some(live_audio) = &state.live_audio {
+        live_audio.push_frame(frame.clone());
+    }
     state.session_audio_frames.push(frame.clone());
     state.trace.maybe_end_suppression(frame.captured_at)?;
     if state

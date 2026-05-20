@@ -1,6 +1,7 @@
 import { Fragment, h, render as preactRender } from "https://esm.sh/preact@10.26.9";
 import cytoscape from "https://esm.sh/cytoscape@3.30.2";
 import {
+  buildWaveformWordDeckRowLayout,
   buildWaveformResolutionLevels,
   createTimeScale,
   createTimelineViewport,
@@ -43,6 +44,7 @@ import {
   spectrogramValueAt,
 } from "/assets/spectrogram.mjs";
 import {
+  defaultPhoneStringAsString,
   isVowel,
   projectPhonemesIntoWordInterval,
   stressPattern,
@@ -96,8 +98,9 @@ const GRAPH_MAX_RENDER_EDGES = 260;
 // Central waveform panel layout constants
 const WAVEFORM_PANEL_MAX_SPAN_ROWS = 4;
 const WAVEFORM_SPAN_ROW_HEIGHT_PX = 20;
-const WAVEFORM_SPAN_ROW_GAP_PX = 2;
-const WAVEFORM_SPAN_ROW_STRIDE_PX = WAVEFORM_SPAN_ROW_HEIGHT_PX + WAVEFORM_SPAN_ROW_GAP_PX;
+const WAVEFORM_PHONEME_ROW_HEIGHT_PX = 16;
+const WAVEFORM_WORD_TO_PHONEME_GAP_PX = 2;
+const WAVEFORM_SPAN_ROW_GAP_PX = 4;
 const WAVEFORM_SPAN_ROW_MARGIN_PX = 4;
 const PROJECTED_PHONE_CONFIDENCE = 0.35;
 const PROJECTED_PHONE_BOUNDARY_UNCERTAINTY_MS = 30;
@@ -2072,26 +2075,34 @@ function configureAudio(audioConfig) {
   }
 
   const audioUrl = new URL(audioConfig.url, window.location.href);
-  if (canonicalAudioUrl(audio.src) !== audioUrl.href) {
+  const isLiveAudio = uiState.liveMode && audioUrl.pathname === "/api/live-session-audio.wav";
+  if (!isLiveAudio && canonicalAudioUrl(audio.src) !== audioUrl.href) {
     audio.src = audioUrl.href;
   }
 
-  const isLiveAudio = uiState.liveMode && audioUrl.pathname === "/api/live-session-audio.wav";
   if (!isLiveAudio) {
     void loadWaveform(audioConfig.url, { acousticAnalysisUrl: audioConfig.acoustic_analysis_url });
     return;
+  }
+  if (state.waveform.status === "ready") {
+    ensureLiveAudioElementSource(audioConfig.url);
   }
 
   const expectedDurationMs = audioConfig.duration_ms ?? 0;
   const now = Date.now();
   const needsInitialLoad = state.waveform.url !== audioConfig.url || state.waveform.status === "idle";
-  const needsErrorRetry = state.waveform.status === "error" && now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
+  const needsPendingRetry =
+    state.waveform.status === "pending" &&
+    now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
+  const needsErrorRetry =
+    state.waveform.status === "error" &&
+    now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
   const needsGrowthRefresh =
     state.waveform.status === "ready" &&
     expectedDurationMs > state.waveform.durationMs + LIVE_WAVEFORM_GROWTH_REFRESH_MS &&
     now - lastLiveWaveformRefreshAt >= LIVE_WAVEFORM_REFRESH_MS;
 
-  if (needsInitialLoad || needsErrorRetry || needsGrowthRefresh) {
+  if (needsInitialLoad || needsPendingRetry || needsErrorRetry || needsGrowthRefresh) {
     lastLiveWaveformRefreshAt = now;
     const fetchUrl = new URL(audioConfig.url, window.location.href);
     fetchUrl.searchParams.set("waveform_rev", String(now));
@@ -2105,8 +2116,18 @@ function configureAudio(audioConfig) {
       acousticAnalysisUrl: audioConfig.acoustic_analysis_url,
       acousticFetchUrl: acousticFetchUrl?.href ?? null,
     });
-  } else if (state.waveform.status === "error") {
+  } else if (state.waveform.status === "pending" || state.waveform.status === "error") {
     scheduleLiveWaveformRetry();
+  }
+}
+
+function ensureLiveAudioElementSource(url) {
+  const audioUrl = new URL(url, window.location.href);
+  if (audioUrl.pathname !== "/api/live-session-audio.wav") {
+    return;
+  }
+  if (canonicalAudioUrl(audio.src) !== audioUrl.href) {
+    audio.src = liveAudioPlaybackUrl();
   }
 }
 
@@ -2309,11 +2330,28 @@ async function loadWaveform(url, options = {}) {
     };
   }
   try {
-    const acousticAnalysisPromise = loadAcousticAnalysis(acousticFetchUrl);
     const response = await fetch(fetchUrl, { cache: "no-store" });
+    if (isPendingLiveWaveformResponse(response, url)) {
+      if (!preserveCurrentWaveform) {
+        state.waveform = {
+          url,
+          levels: null,
+          peaks: null,
+          durationMs: 0,
+          status: "pending",
+          energyEnvelope: null,
+          energyLandmarks: null,
+          spectrogram: null,
+        };
+      }
+      scheduleLiveWaveformRetry();
+      return;
+    }
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
+    ensureLiveAudioElementSource(url);
+    const acousticAnalysisPromise = loadAcousticAnalysis(acousticFetchUrl);
     const buffer = await response.arrayBuffer();
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextCtor) {
@@ -2399,6 +2437,15 @@ async function loadWaveform(url, options = {}) {
       waveformRefreshInFlightUrl = null;
     }
   }
+}
+
+function isPendingLiveWaveformResponse(response, url) {
+  const parsed = new URL(url, window.location.href);
+  return (
+    uiState.liveMode &&
+    parsed.pathname === "/api/live-session-audio.wav" &&
+    (response.status === 202 || response.status === 404)
+  );
 }
 
 async function loadAcousticAnalysis(url) {
@@ -3299,7 +3346,7 @@ function addGraphWord(nodes, edges, nodeIds, edgeIds, item) {
   }
   const phonemes = buildPhonemeSpansForInspector(item.word, { allophoneRulesEnabled: true }) ?? [];
   phonemes.forEach((phoneme, index) => {
-    const defaultIpa = phoneme.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?";
+    const defaultIpa = defaultPhoneLabel(phoneme);
     const phonemeNodeId = `phoneme:${item.laneIndex}:${item.wordIndex}:${index}`;
     pushGraphNode(nodes, nodeIds, {
       id: phonemeNodeId,
@@ -4067,10 +4114,19 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
   // Word chips: one row per word lane, stacked directly beneath the waveform.
   // Up to WAVEFORM_PANEL_MAX_SPAN_ROWS lanes are shown to keep the panel readable.
   const maxRows = Math.min(wordLanes.length, WAVEFORM_PANEL_MAX_SPAN_ROWS);
+  const wordDeckLayout = buildWaveformWordDeckRowLayout({
+    rowCount: maxRows,
+    wordRowHeightPx: WAVEFORM_SPAN_ROW_HEIGHT_PX,
+    phonemeRowHeightPx: WAVEFORM_PHONEME_ROW_HEIGHT_PX,
+    wordToPhonemeGapPx: WAVEFORM_WORD_TO_PHONEME_GAP_PX,
+    rowGapPx: WAVEFORM_SPAN_ROW_GAP_PX,
+    marginPx: WAVEFORM_SPAN_ROW_MARGIN_PX,
+  });
+  wordDeck.style.height = `${wordDeckLayout.heightPx}px`;
   for (let relIdx = 0; relIdx < maxRows; relIdx++) {
     const lane = wordLanes[relIdx];
     const laneIndex = state.lanes.indexOf(lane);
-    const topPx = WAVEFORM_SPAN_ROW_MARGIN_PX + relIdx * WAVEFORM_SPAN_ROW_STRIDE_PX;
+    const rowLayout = wordDeckLayout.rows[relIdx];
 
     lane.words.forEach((word, wordIndex) => {
       const key = itemKey("word", laneIndex, wordIndex);
@@ -4108,12 +4164,16 @@ function appendCentralWaveformPanel(labelsCol, scrollContent, trackContentWidth,
       chip.dataset.itemType = "word";
       chip.style.left = wordCss.left;
       chip.style.width = wordCss.width;
-      chip.style.top = `${topPx}px`;
+      chip.style.top = `${rowLayout.wordTopPx}px`;
       chip.title = `${lane.label}: ${word.text} (${startMs}–${endMs} ms)`;
       chip.setAttribute("aria-label", `${lane.label}: ${word.text}`);
       chip.append(createChipContent(word.text));
       wordDeck.append(chip);
       state.waveformChipElements.set(key, chip);
+
+      for (const phonemeChip of createWaveformPhonemeChips(word, rowLayout.phonemeTopPx)) {
+        wordDeck.append(phonemeChip);
+      }
     });
   }
 
@@ -5309,6 +5369,16 @@ function createChipContent(text) {
   return content;
 }
 
+function defaultPhoneLabel(span) {
+  return (
+    defaultPhoneStringAsString(span?.defaultPhoneString) ||
+    defaultPhoneStringAsString(span?.default_phone_string) ||
+    span?.phone ||
+    span?.realization?.ipa ||
+    "?"
+  );
+}
+
 function eventChipDisplayLabel(lane, event, startMs, endMs) {
   if (
     (lane?.label === "Mic" || lane?.label === "Mic / VAD") &&
@@ -5363,9 +5433,7 @@ function createPhonemeStrip(word) {
   const endMs = spans[spans.length - 1].end_ms;
 
   const duration = endMs - startMs;
-  const defaultIpaSequence = spans
-    .map((span) => span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?")
-    .join(" ");
+  const defaultIpaSequence = spans.map(defaultPhoneLabel).join(" ");
   const realizedIpaSequence = spans.map((span) => span.realization?.ipa ?? "?").join(" ");
 
   const strip = document.createElement("span");
@@ -5380,9 +5448,9 @@ function createPhonemeStrip(word) {
     const tick = document.createElement("span");
     const isVowelTick = isVowel(span.sourceSymbol);
     tick.className = ["phoneme-tick", isVowelTick ? "is-vowel" : ""].filter(Boolean).join(" ");
-    const defaultIpa = span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?";
+    const defaultIpa = defaultPhoneLabel(span);
     const realizedIpa = span.realization?.ipa ?? defaultIpa;
-    tick.textContent = span.sourceSymbol ?? span.symbol ?? realizedIpa;
+    tick.textContent = defaultIpa;
     // Position proportionally within the chip.
     const leftPct = ((span.start_ms - startMs) / duration) * 100;
     const widthPct = ((span.end_ms - span.start_ms) / duration) * 100;
@@ -5419,8 +5487,37 @@ function createPhonemeAlignmentChips(word) {
       .join(" ");
     chip.style.left = css.left;
     chip.style.width = css.width;
-    chip.textContent = span.sourceSymbol ?? span.symbol ?? span.phone ?? "?";
-    const defaultIpa = span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? span.phone ?? "?";
+    const defaultIpa = defaultPhoneLabel(span);
+    chip.textContent = defaultIpa;
+    const realizedIpa = span.realization?.ipa ?? span.phone ?? defaultIpa;
+    chip.title = [
+      `${word.text}: ${span.sourceSymbol ?? span.symbol ?? "?"}`,
+      `default /${defaultIpa}/`,
+      `realized [${realizedIpa}]`,
+      `${startMs}–${endMs} ms`,
+      `method: ${span.method ?? span.timingSource ?? "projected.proportional"}`,
+    ].join(" · ");
+    return chip;
+  });
+}
+
+function createWaveformPhonemeChips(word, topPx) {
+  const spans = buildPhonemeSpansForInspector(word, { allophoneRulesEnabled: true }) ?? [];
+  if (!spans.length) return [];
+  return spans.map((span) => {
+    const startMs = span.start_ms;
+    const endMs = Math.max(span.end_ms, startMs + 1);
+    const css = intervalToCss(startMs, endMs, 1);
+    const chip = document.createElement("span");
+    const isVowelChip = isVowel(span.sourceSymbol);
+    chip.className = ["waveform-phoneme-span", isVowelChip ? "is-vowel" : ""]
+      .filter(Boolean)
+      .join(" ");
+    chip.style.left = css.left;
+    chip.style.width = css.width;
+    chip.style.top = `${topPx}px`;
+    const defaultIpa = defaultPhoneLabel(span);
+    chip.textContent = defaultIpa;
     const realizedIpa = span.realization?.ipa ?? span.phone ?? defaultIpa;
     chip.title = [
       `${word.text}: ${span.sourceSymbol ?? span.symbol ?? "?"}`,
@@ -6196,9 +6293,7 @@ function buildPronunciationSummaryParts(word) {
     const segmentation = buildPhoneSegmentationForWord(word, { allophoneRulesEnabled: true });
     const spans = segmentation?.phoneSpans ?? [];
     const sourceSymbols = spans.map((span) => span.sourceSymbol ?? span.symbol).join(" ");
-    const defaultIpa = spans
-      .map((span) => span.defaultPhoneString?.map((phone) => phone.ipa).join(" ") ?? "?")
-      .join(" ");
+    const defaultIpa = spans.map(defaultPhoneLabel).join(" ");
     const realizedIpa = spans.map((span) => span.realization?.ipa ?? "?").join(" ");
     const appliedRules = [...new Set(spans.map((span) => span.realization?.rule).filter(Boolean))];
     const methods = [...new Set(spans.map((span) => span.method).filter(Boolean))];

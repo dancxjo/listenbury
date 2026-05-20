@@ -1242,6 +1242,25 @@ mod tests {
     }
 
     #[test]
+    fn marks_empty_live_session_audio_store_as_pending() {
+        let live_audio = LiveSessionAudioStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+        });
+
+        let audio_response = route_request("GET", "/api/live-session-audio.wav", &state);
+        assert_eq!(audio_response.status, 202);
+        assert_eq!(audio_response.reason, "Accepted");
+
+        let acoustic_response = route_request("GET", "/api/live-session-acoustic.json", &state);
+        assert_eq!(acoustic_response.status, 202);
+        assert_eq!(acoustic_response.reason, "Accepted");
+    }
+
+    #[test]
     fn serves_live_session_audio_byte_ranges() {
         let live_audio = LiveSessionAudioStore::new();
         live_audio.push_frame(AudioFrame {

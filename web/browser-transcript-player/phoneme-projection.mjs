@@ -105,6 +105,8 @@ const STRESS_DIGITS = new Set(["0", "1", "2"]);
  *
  * @typedef {Object} PhoneString
  * @property {Phone[]} phones
+ * @property {string} [as_string]
+ * @property {string} [asString]
  *
  * @typedef {Object} Realization
  * @property {string} ipa
@@ -212,6 +214,32 @@ export function phonemeFromArpabet(token, source = "cmudict") {
       environment: null,
     },
   };
+}
+
+export function defaultPhoneStringAsString(defaultPhoneString) {
+  if (typeof defaultPhoneString === "string") {
+    return defaultPhoneString;
+  }
+  if (!defaultPhoneString) {
+    return "";
+  }
+  if (typeof defaultPhoneString.as_string === "string") {
+    return defaultPhoneString.as_string;
+  }
+  if (typeof defaultPhoneString.asString === "string") {
+    return defaultPhoneString.asString;
+  }
+
+  const phones = Array.isArray(defaultPhoneString)
+    ? defaultPhoneString
+    : defaultPhoneString.phones;
+  if (!Array.isArray(phones) || phones.length === 0) {
+    return "";
+  }
+
+  return phones
+    .map((phone) => phone?.as_string ?? phone?.asString ?? phone?.ipa ?? phone?.phone ?? "")
+    .join("");
 }
 
 /**

@@ -11,6 +11,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  defaultPhoneStringAsString,
   isVowel,
   phonemeFromArpabet,
   projectPhonemesIntoWordInterval,
@@ -177,6 +178,18 @@ test("projected spans preserve default and realized IPA separately", () => {
   assert.equal(spans[1].sourceSymbol, "T");
   assert.equal(spans[1].defaultPhoneString[0].ipa, "t");
   assert.equal(spans[1].realization.ipa, "ɾ");
+});
+
+test("defaultPhoneStringAsString prefers explicit as_string before phone IPA fallback", () => {
+  assert.equal(
+    defaultPhoneStringAsString({ as_string: "tʃ", phones: [{ ipa: "ignored" }] }),
+    "tʃ",
+  );
+  assert.equal(
+    defaultPhoneStringAsString([{ ipa: "a" }, { ipa: "ɪ" }]),
+    "aɪ",
+  );
+  assert.equal(defaultPhoneStringAsString(null), "");
 });
 
 // ---------------------------------------------------------------------------
