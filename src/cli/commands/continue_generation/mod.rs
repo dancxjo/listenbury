@@ -105,6 +105,15 @@ use listenbury::WhisperSpeechRecognizer;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+use listenbury::audio::capture::{
+    boost_current_thread_for_capture, callback_sample_queue_capacity,
+};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 use listenbury::event::HearingEvent;
 #[cfg(all(
     feature = "audio-cpal",
@@ -456,13 +465,6 @@ const SOURCE_TYPESCRIPT_END: &str = "</ts>";
     )
 ))]
 const SOURCE_PAGE_LINES: usize = 50;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -3540,7 +3542,8 @@ impl ContinueEar {
         );
 
         let stop = Arc::new(AtomicBool::new(false));
-        let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(CALLBACK_SAMPLE_CAPACITY);
+        let sample_capacity = callback_sample_queue_capacity(input_sample_rate_hz, input_channels);
+        let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(sample_capacity);
         let (asr_tx, asr_rx) = crossbeam_channel::bounded::<ContinueAsrWorkItem>(8);
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<ContinueEarEvent>();
         let dropped_in_callback = Arc::new(AtomicUsize::new(0));
@@ -3633,10 +3636,11 @@ impl ContinueEar {
             .with_context(|| format!("failed to start capture from {device_name}"))?;
 
         eprintln!(
-            "dev continue ear listening on {device_name}: {} Hz, {} channel(s), vad={}.",
+            "dev continue ear listening on {device_name}: {} Hz, {} channel(s), vad={}, sample_queue={}.",
             input_sample_rate_hz,
             input_channels,
-            config.vad_backend.as_str()
+            config.vad_backend.as_str(),
+            sample_capacity
         );
         let _ = event_tx.send(ContinueEarEvent::ListeningStarted {
             device: device_name,
@@ -3913,6 +3917,8 @@ fn run_continue_ear_processor(
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
 ) -> Result<()> {
+    boost_current_thread_for_capture("listenbury-dev-continue-ear");
+
     let input_frame_samples =
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (frame_sample_rate_hz, frame_channels) =

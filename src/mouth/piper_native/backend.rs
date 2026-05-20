@@ -691,15 +691,15 @@ mod tests {
             NativePiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
 
         let error = backend
-            .synthesize("xyzzy")
+            .synthesize("xyzzyqux")
             .expect_err("unsupported text should fail before ONNX inference");
         let rendered = format!("{error:#}");
         assert!(
-            rendered.contains("failed to phonemize text `xyzzy` for native Piper"),
+            rendered.contains("failed to realize phonemes for text `xyzzyqux`"),
             "expected phonemize context, got: {rendered}"
         );
         assert!(
-            rendered.contains("unsupported word `xyzzy`"),
+            rendered.contains("unsupported orthographic word `xyzzyqux`"),
             "expected unsupported-word detail, got: {rendered}"
         );
         assert!(

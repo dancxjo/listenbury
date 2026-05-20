@@ -1310,6 +1310,7 @@ dependencies = [
  "hound",
  "indicatif",
  "inquire",
+ "libc",
  "llama-cpp-2",
  "llama-cpp-sys-2",
  "ort",

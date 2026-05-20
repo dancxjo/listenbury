@@ -10,6 +10,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use cpal::{FromSample, Sample, SizedSample};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+use listenbury::audio::capture::{
+    boost_current_thread_for_capture, callback_sample_queue_capacity,
+};
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::audio::ring::make_audio_ring;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::event::HearingEvent;
@@ -44,8 +48,6 @@ use std::sync::{
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use std::time::{Duration, Instant};
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 const AUDIO_RING_CAPACITY: usize = 256;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -271,7 +273,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     })
     .context("failed to register Ctrl-C handler")?;
 
-    let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(CALLBACK_SAMPLE_CAPACITY);
+    let sample_capacity = callback_sample_queue_capacity(input_sample_rate_hz, input_channels);
+    let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(sample_capacity);
     let dropped_in_callback = Arc::new(AtomicUsize::new(0));
     let dropped_in_ring = Arc::new(AtomicUsize::new(0));
     let err_fn = |err| eprintln!("input stream error: {err}");
@@ -355,11 +358,13 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         .with_context(|| format!("failed to start capture from {device_name}"))?;
 
     println!(
-        "mic-transcribe listening on {device_name}: {} Hz, {} channel(s), vad={}. Press Ctrl-C to stop.",
+        "mic-transcribe listening on {device_name}: {} Hz, {} channel(s), vad={}, sample_queue={}. Press Ctrl-C to stop.",
         input_sample_rate_hz,
         input_channels,
-        command.vad.as_backend_kind().as_str()
+        command.vad.as_backend_kind().as_str(),
+        sample_capacity
     );
+    boost_current_thread_for_capture("mic-transcribe");
 
     let stop_deadline = if command.until_ctrl_c {
         None
@@ -556,7 +561,8 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     })
     .context("failed to register Ctrl-C handler")?;
 
-    let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(CALLBACK_SAMPLE_CAPACITY);
+    let sample_capacity = callback_sample_queue_capacity(input_sample_rate_hz, input_channels);
+    let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(sample_capacity);
     let dropped_in_callback = Arc::new(AtomicUsize::new(0));
     let dropped_in_ring = Arc::new(AtomicUsize::new(0));
     let err_fn = |err| eprintln!("input stream error: {err}");
@@ -639,11 +645,13 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
 
     let vad_backend = command.vad.as_backend_kind();
     println!(
-        "transcribe --web listening on {device_name}: {} Hz, {} channel(s), vad={}. Press Ctrl-C to stop.",
+        "transcribe --web listening on {device_name}: {} Hz, {} channel(s), vad={}, sample_queue={}. Press Ctrl-C to stop.",
         input_sample_rate_hz,
         input_channels,
-        vad_backend.as_str()
+        vad_backend.as_str(),
+        sample_capacity
     );
+    boost_current_thread_for_capture("transcribe --web");
     let mut started = live_trace.event(0, "listening_started", ExactTimestamp::now());
     started.text = Some(format!(
         "device={device_name:?} sample_rate_hz={input_sample_rate_hz} channels={input_channels} vad={}",

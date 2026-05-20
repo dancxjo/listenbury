@@ -4,6 +4,7 @@
 
 pub mod acoustic;
 pub mod boundary;
+pub mod capture;
 pub mod dtw;
 pub mod features;
 pub mod frame;

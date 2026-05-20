@@ -133,15 +133,15 @@ impl CmuPhoneme {
 /// let pronouncer = CmudictPronouncer::bundled();
 /// let phones = pronouncer.lookup("okay").expect("in dictionary");
 /// assert_eq!(phones[0].base, "OW");
-/// assert_eq!(phones[0].stress, Some(Stress::Primary));
+/// assert_eq!(phones[0].stress, Some(Stress::Secondary));
 /// ```
 pub struct CmudictPronouncer {
     entries: HashMap<Box<str>, Vec<Vec<CmuPhoneme>>>,
 }
 
 impl CmudictPronouncer {
-    /// Build a [`CmudictPronouncer`] from the representative CMUdict subset
-    /// bundled with this crate.
+    /// Build a [`CmudictPronouncer`] from the CMUdict data bundled with this
+    /// crate.
     pub fn bundled() -> Self {
         Self::from_str(BUNDLED_CMUDICT)
     }
@@ -364,7 +364,7 @@ impl OrthographyToPhonemes for CmudictPronouncer {
     }
 }
 
-/// The representative CMUdict subset shipped with this crate.
+/// The CMUdict data shipped with this crate.
 static BUNDLED_CMUDICT: &str = include_str!("../../data/cmudict.dict");
 
 /// Normalize a raw transcript word for CMUdict lookup.
@@ -475,9 +475,9 @@ mod tests {
     fn lookup_okay_preserves_stress() {
         let p = pronouncer();
         let phones = p.lookup("okay").expect("okay in dictionary");
-        // OKAY  OW1 K EY1
+        // OKAY  OW2 K EY1
         assert_eq!(phones[0].base, "OW");
-        assert_eq!(phones[0].stress, Some(Stress::Primary));
+        assert_eq!(phones[0].stress, Some(Stress::Secondary));
         assert_eq!(phones[1].base, "K");
         assert_eq!(phones[1].stress, None);
         assert_eq!(phones[2].base, "EY");
@@ -497,11 +497,11 @@ mod tests {
     fn lookup_fitzgerald() {
         let p = pronouncer();
         let phones = p.lookup("fitzgerald").expect("fitzgerald in dictionary");
-        // FITZGERALD  F IH0 TS JH EH1 R AH0 L D
+        // FITZGERALD  F IH0 T S JH EH1 R AH0 L D
         let bases: Vec<&str> = phones.iter().map(|ph| ph.base.as_str()).collect();
         assert_eq!(
             bases,
-            vec!["F", "IH", "TS", "JH", "EH", "R", "AH", "L", "D"]
+            vec!["F", "IH", "T", "S", "JH", "EH", "R", "AH", "L", "D"]
         );
     }
 

@@ -490,8 +490,8 @@ mod tests {
         assert_eq!(
             symbols(&unit.phonemes),
             vec![
-                "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "TS", "JH", "EH", "R", "AH",
-                "L", "D"
+                "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH", "R",
+                "AH", "L", "D"
             ]
         );
     }
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(
             symbols(&unit.phonemes),
             vec![
-                "W", "IY", " ", "R", "EH", "P", "R", "AH", "Z", "EH", "N", "T", " ", "DH", "AH",
+                "W", "IY", " ", "R", "EH", "P", "R", "IH", "Z", "EH", "N", "T", " ", "DH", "AH",
                 " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|"
             ]
         );
@@ -708,8 +708,8 @@ mod tests {
             assert_eq!(
                 sym(&seq),
                 vec![
-                    "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "TS", "JH", "EH", "R",
-                    "AH", "L", "D"
+                    "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH",
+                    "R", "AH", "L", "D"
                 ]
             );
         }

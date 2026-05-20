@@ -3,6 +3,8 @@ set positional-arguments
 cuda-library-path := env_var_or_default("CUDA_LIBRARY_PATH", "/usr/lib/x86_64-linux-gnu")
 rustflags := env_var_or_default("RUSTFLAGS", "")
 cuda-rustflags := if rustflags == "" { "-L native=" + cuda-library-path } else { rustflags + " -L native=" + cuda-library-path }
+cmudict-url := "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict"
+cmudict-path := "data/cmudict.dict"
 
 default:
     @just --list
@@ -15,8 +17,13 @@ run *args:
 listen *args:
     cargo run -- listen "$@"
 
+# Download the full CMU Pronouncing Dictionary into data/cmudict.dict.
+fetch:
+    @mkdir -p "$(dirname "{{cmudict-path}}")"
+    @tmp="$(mktemp "{{cmudict-path}}.XXXXXX")" && curl --fail --location --show-error --output "$tmp" "{{cmudict-url}}" && mv "$tmp" "{{cmudict-path}}"
+
 # Download the default model assets into LISTENBURY_HOME.
-fetch *args:
+fetch-models *args:
     cargo run -- models fetch "$@"
 
 # Run the CLI with both local CUDA backend feature flags enabled.
