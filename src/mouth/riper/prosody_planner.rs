@@ -662,7 +662,7 @@ fn is_content_word(word: &str) -> bool {
     !FUNCTION_WORDS.contains(&word)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct FocusAccentPlan {
     ops: Vec<ProsodyOp>,
     diagnostics: Vec<FocusAccentDiagnostic>,
