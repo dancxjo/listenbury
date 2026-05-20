@@ -73,14 +73,14 @@ impl TtsBackend for ProcessPiperBackend {
 
 #[cfg(feature = "tts-riper")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RiperBackendPreference {
+pub enum PiperBackendPreference {
     Process,
     Riper,
     RiperWithProcessFallback,
 }
 
 #[cfg(feature = "tts-riper")]
-impl RiperBackendPreference {
+impl PiperBackendPreference {
     fn from_env() -> Self {
         match std::env::var("LISTENBURY_PIPER_BACKEND")
             .ok()
@@ -178,7 +178,7 @@ impl TtsBackend for RiperTextBackend {
 struct RiperPreferredBackend<P, N> {
     process: P,
     riper: Option<N>,
-    preference: RiperBackendPreference,
+    preference: PiperBackendPreference,
     riper_init_error: Option<String>,
 }
 
@@ -187,7 +187,7 @@ impl<P, N> RiperPreferredBackend<P, N> {
     fn new(
         process: P,
         riper: Option<N>,
-        preference: RiperBackendPreference,
+        preference: PiperBackendPreference,
         riper_init_error: Option<String>,
     ) -> Self {
         Self {
@@ -202,7 +202,7 @@ impl<P, N> RiperPreferredBackend<P, N> {
 #[cfg(feature = "tts-riper")]
 impl<P: TtsBackend, N: TtsBackend> TtsBackend for RiperPreferredBackend<P, N> {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
-        if self.preference == RiperBackendPreference::Process {
+        if self.preference == PiperBackendPreference::Process {
             return self.process.synthesize(text);
         }
 
@@ -213,7 +213,7 @@ impl<P: TtsBackend, N: TtsBackend> TtsBackend for RiperPreferredBackend<P, N> {
                     .riper_init_error
                     .as_deref()
                     .unwrap_or("Riper backend is unavailable for an unknown reason");
-                if self.preference == RiperBackendPreference::RiperWithProcessFallback {
+                if self.preference == PiperBackendPreference::RiperWithProcessFallback {
                     tracing::warn!(
                         error = detail,
                         "Riper unavailable; falling back to process backend"
@@ -227,7 +227,7 @@ impl<P: TtsBackend, N: TtsBackend> TtsBackend for RiperPreferredBackend<P, N> {
         match riper.synthesize(text) {
             Ok(frames) => Ok(frames),
             Err(error) => {
-                if self.preference == RiperBackendPreference::RiperWithProcessFallback {
+                if self.preference == PiperBackendPreference::RiperWithProcessFallback {
                     tracing::warn!(error = %error, "Riper synthesis failed; falling back to process backend");
                     self.process.synthesize(text)
                 } else {
@@ -273,6 +273,14 @@ impl PiperTextToSpeech {
         Self::with_boxed_backend(default_piper_backend(config))
     }
 
+    #[cfg(feature = "tts-riper")]
+    pub fn new_with_backend_preference(
+        config: PiperConfig,
+        preference: PiperBackendPreference,
+    ) -> Self {
+        Self::with_boxed_backend(piper_backend_with_preference(config, preference))
+    }
+
     /// Create a `PiperTextToSpeech` backed by any [`TtsBackend`] implementor.
     ///
     /// Use this constructor to substitute a custom backend (e.g. a persistent
@@ -300,31 +308,38 @@ impl PiperTextToSpeech {
 fn default_piper_backend(config: PiperConfig) -> Box<dyn TtsBackend> {
     #[cfg(feature = "tts-riper")]
     {
-        let preference = RiperBackendPreference::from_env();
-        if preference == RiperBackendPreference::Process {
-            return Box::new(ProcessPiperBackend::new(config));
-        }
-
-        let process = ProcessPiperBackend::new(config.clone());
-        match RiperTextBackend::load(&config) {
-            Ok(riper) => Box::new(RiperPreferredBackend::new(
-                process,
-                Some(riper),
-                preference,
-                None,
-            )),
-            Err(error) => Box::new(RiperPreferredBackend::new(
-                process,
-                None::<RiperTextBackend>,
-                preference,
-                Some(error.to_string()),
-            )),
-        }
+        piper_backend_with_preference(config, PiperBackendPreference::from_env())
     }
 
     #[cfg(not(feature = "tts-riper"))]
     {
         Box::new(ProcessPiperBackend::new(config))
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn piper_backend_with_preference(
+    config: PiperConfig,
+    preference: PiperBackendPreference,
+) -> Box<dyn TtsBackend> {
+    if preference == PiperBackendPreference::Process {
+        return Box::new(ProcessPiperBackend::new(config));
+    }
+
+    let process = ProcessPiperBackend::new(config.clone());
+    match RiperTextBackend::load(&config) {
+        Ok(riper) => Box::new(RiperPreferredBackend::new(
+            process,
+            Some(riper),
+            preference,
+            None,
+        )),
+        Err(error) => Box::new(RiperPreferredBackend::new(
+            process,
+            None::<RiperTextBackend>,
+            preference,
+            Some(error.to_string()),
+        )),
     }
 }
 
@@ -592,7 +607,7 @@ mod tests {
         let process = MockTtsBackend::new();
         let riper = MockTtsBackend::new();
         let mut backend =
-            RiperPreferredBackend::new(process, Some(riper), RiperBackendPreference::Riper, None);
+            RiperPreferredBackend::new(process, Some(riper), PiperBackendPreference::Riper, None);
 
         let frames = backend.synthesize("hello").expect("riper synthesize");
         assert!(!frames.is_empty(), "expected frames from Riper backend");
@@ -616,7 +631,7 @@ mod tests {
         let mut backend = RiperPreferredBackend::new(
             process,
             Some(riper),
-            RiperBackendPreference::RiperWithProcessFallback,
+            PiperBackendPreference::RiperWithProcessFallback,
             None,
         );
 
@@ -633,7 +648,7 @@ mod tests {
         let mut backend = RiperPreferredBackend::<MockTtsBackend, AlwaysFailBackend>::new(
             process,
             None,
-            RiperBackendPreference::Riper,
+            PiperBackendPreference::Riper,
             Some("missing Riper config".to_string()),
         );
 

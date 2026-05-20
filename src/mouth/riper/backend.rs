@@ -17,6 +17,7 @@ use super::{
 const RIPER_FRAME_SAMPLES: usize = 1024;
 // Piper ONNX vits output is a single waveform tensor for one speaker stream.
 const RIPER_CHANNELS: u16 = 1;
+const RIPER_DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 = 1.08;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperModelContract {
@@ -451,12 +452,14 @@ impl TtsBackend for RiperBackend {
             .phonemize_unit(text)
             .with_context(|| format!("failed to realize Riper phonemes for text `{text}`"))?
             .phonemes;
-        let ids = phonemes.to_piper_ids(&self.config).with_context(|| {
-            format!(
-                "failed to map phonemes to IDs for Riper model {}",
-                self.model_path.display()
-            )
-        })?;
+        let ids = phonemes
+            .to_piper_ids_compatible(&self.config)
+            .with_context(|| {
+                format!(
+                    "failed to map phonemes to IDs for Riper model {}",
+                    self.model_path.display()
+                )
+            })?;
         self.synthesize_id_frames(&ids).with_context(|| {
             format!(
                 "Riper ONNX synthesis failed for model {}",
@@ -704,7 +707,7 @@ fn resolve_tensor_by_alias<'a>(
 fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
     [
         config.noise_scale.unwrap_or(0.667),
-        config.length_scale.unwrap_or(1.0),
+        config.length_scale.unwrap_or(1.0) * RIPER_DEFAULT_LENGTH_SCALE_MULTIPLIER,
         config.noise_w.unwrap_or(0.8),
     ]
 }
@@ -950,6 +953,12 @@ mod tests {
             .synthesize_id_frames(&PiperIdSequence { ids: vec![1, 2, 3] })
             .expect_err("unloaded session should fail");
         assert_eq!(error.to_string(), "Piper ONNX session has not been loaded");
+    }
+
+    #[test]
+    fn inference_scales_slow_default_rate_slightly() {
+        let scales = inference_scales(&voice_config());
+        assert!((scales[1] - 1.08).abs() < f32::EPSILON);
     }
 
     #[test]

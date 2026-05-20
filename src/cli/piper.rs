@@ -8,7 +8,7 @@ use listenbury::audio::write_wav;
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-riper")]
-use listenbury::mouth::piper::ProcessPiperBackend;
+use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::riper::{
@@ -22,9 +22,13 @@ use std::time::{Duration, Instant};
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
-    let piper_bin = resolve_piper_bin(piper_args.piper_bin)?;
-    let piper_voice = resolve_piper_voice(piper_args.piper_voice)?;
-    let mut tts = PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?);
+    #[cfg(not(feature = "tts-riper"))]
+    if piper_args.riper {
+        anyhow::bail!("listenbury say --riper requires the `tts-riper` feature");
+    }
+
+    let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
+    let mut tts = say_tts_for_args(&piper_args, piper_voice)?;
     tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
     let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
@@ -35,6 +39,31 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
+    if args.riper {
+        return say_riper_tts_for_voice(piper_voice);
+    }
+
+    let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
+    Ok(PiperTextToSpeech::new(piper_config_for_voice(
+        piper_bin,
+        piper_voice,
+    )?))
+}
+
+#[cfg(feature = "tts-riper")]
+fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
+    Ok(PiperTextToSpeech::new_with_backend_preference(
+        piper_config_for_riper_voice(piper_voice)?,
+        PiperBackendPreference::Riper,
+    ))
+}
+
+#[cfg(not(feature = "tts-riper"))]
+fn say_riper_tts_for_voice(_piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
+    anyhow::bail!("listenbury say --riper requires the `tts-riper` feature")
 }
 
 pub(crate) fn run_riper_compare(command: RiperCompareCommand) -> Result<()> {
@@ -276,113 +305,12 @@ fn resolve_riper_ids(
     };
 
     phoneme_sequence
-        .to_piper_ids(config)
-        .or_else(|_| espeak_compatible_ids(&phoneme_sequence, config))
+        .to_piper_ids_compatible(config)
         .with_context(|| {
             format!(
                 "Riper voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
                 args.text
             )
-        })
-}
-
-#[cfg(feature = "tts-riper")]
-fn espeak_compatible_ids(
-    phoneme_sequence: &PiperPhonemeSequence,
-    config: &PiperVoiceConfig,
-) -> std::result::Result<PiperIdSequence, listenbury::mouth::riper::PiperPhonemeIdConversionError> {
-    let sequence = espeak_compatible_sequence(phoneme_sequence, config)?;
-    sequence.to_piper_ids(config)
-}
-
-#[cfg(feature = "tts-riper")]
-fn espeak_compatible_sequence(
-    phoneme_sequence: &PiperPhonemeSequence,
-    config: &PiperVoiceConfig,
-) -> std::result::Result<
-    PiperPhonemeSequence,
-    listenbury::mouth::riper::PiperPhonemeIdConversionError,
-> {
-    let mut symbols = vec![PiperPhoneme("^".to_string())];
-    for phoneme in &phoneme_sequence.phonemes {
-        let expanded = expand_espeak_phoneme(&phoneme.0, config).ok_or_else(|| {
-            listenbury::mouth::riper::PiperPhonemeIdConversionError::UnknownPhoneme {
-                symbol: phoneme.0.clone(),
-            }
-        })?;
-        symbols.extend(expanded.into_iter().map(PiperPhoneme));
-    }
-    symbols.push(PiperPhoneme("$".to_string()));
-
-    let mut interspersed = Vec::with_capacity(symbols.len().saturating_mul(2).saturating_sub(1));
-    for (index, symbol) in symbols.into_iter().enumerate() {
-        if index > 0 {
-            interspersed.push(PiperPhoneme("_".to_string()));
-        }
-        interspersed.push(symbol);
-    }
-
-    Ok(PiperPhonemeSequence {
-        phonemes: interspersed,
-    })
-}
-
-#[cfg(feature = "tts-riper")]
-fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
-    let expanded = match symbol {
-        "AA" => &["ɑ"][..],
-        "AH" => &["ə"],
-        "AY" => &["a", "ɪ"],
-        "AE" => &["æ"],
-        "AO" => &["ɔ"],
-        "AW" => &["a", "ʊ"],
-        "B" => &["b"],
-        "CH" => &["t", "ʃ"],
-        "D" => &["d"],
-        "DH" => &["ð"],
-        "EH" => &["ɛ"],
-        "ER" => &["ɚ"],
-        "EY" => &["ˈ", "e", "ɪ"],
-        "F" => &["f"],
-        "G" => &["ɡ"],
-        "HH" => &["h"],
-        "IH" => &["ɪ"],
-        "IY" => &["i"],
-        "JH" => &["d", "ʒ"],
-        "K" => &["k"],
-        "L" => &["l"],
-        "M" => &["m"],
-        "N" => &["n"],
-        "NG" => &["ŋ"],
-        "OW" => &["o", "ʊ"],
-        "OY" => &["ɔ", "ɪ"],
-        "P" => &["p"],
-        "R" => &["ɹ"],
-        "S" => &["s"],
-        "SH" => &["ʃ"],
-        "T" => &["t"],
-        "TH" => &["θ"],
-        "TS" => &["t", "s"],
-        "UH" => &["ʊ"],
-        "UW" => &["u"],
-        "V" => &["v"],
-        "W" => &["w"],
-        "Y" => &["j"],
-        "Z" => &["z"],
-        "ZH" => &["ʒ"],
-        "|" => &["."],
-        _ if config.phoneme_id_map.contains_key(symbol) => return Some(vec![symbol.to_string()]),
-        _ => return None,
-    };
-
-    expanded
-        .iter()
-        .all(|symbol| config.phoneme_id_map.contains_key(*symbol))
-        .then(|| {
-            expanded
-                .iter()
-                .map(|symbol| (*symbol).to_string())
-                .collect()
         })
 }
 
@@ -421,12 +349,25 @@ struct SayArgs {
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
     output_wav: Option<PathBuf>,
+    riper: bool,
     text: String,
 }
 
 impl SayArgs {
     fn from_command(command: SayCommand) -> Result<Self> {
-        let mut words = command.words;
+        let mut riper = command.riper;
+        let mut words = command
+            .words
+            .into_iter()
+            .filter_map(|word| {
+                if word == "--riper" {
+                    riper = true;
+                    None
+                } else {
+                    Some(word)
+                }
+            })
+            .collect::<Vec<_>>();
         let mut piper_bin = command.piper_bin;
         let mut piper_voice = command.piper_voice;
 
@@ -444,6 +385,7 @@ impl SayArgs {
             piper_bin,
             piper_voice,
             output_wav: command.output_wav,
+            riper,
             text: words.join(" "),
         })
     }
@@ -514,6 +456,20 @@ pub(crate) fn piper_config_for_voice(
 ) -> Result<PiperConfig> {
     let piper_bin = piper_bin.into();
     let model_path = prepare_piper_model_path(&piper_bin, model_path.into())?;
+    piper_config_for_model_path(piper_bin, model_path)
+}
+
+#[cfg(feature = "tts-riper")]
+fn piper_config_for_riper_voice(model_path: impl Into<PathBuf>) -> Result<PiperConfig> {
+    piper_config_for_model_path("piper", model_path.into())
+}
+
+fn piper_config_for_model_path(
+    piper_bin: impl Into<PathBuf>,
+    model_path: impl Into<PathBuf>,
+) -> Result<PiperConfig> {
+    let piper_bin = piper_bin.into();
+    let model_path = model_path.into();
     let inferred_config_path = model_path.with_extension("onnx.json");
     let mut config = PiperConfig::new(piper_bin, model_path);
     if inferred_config_path.exists() {
@@ -655,6 +611,7 @@ mod tests {
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
+            riper: false,
             words: vec!["hello".to_string()],
         })
         .expect("single word should be text");
@@ -670,6 +627,7 @@ mod tests {
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
+            riper: false,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "hello".to_string(),
@@ -691,6 +649,7 @@ mod tests {
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
+            riper: false,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "voice.onnx".to_string(),
@@ -705,6 +664,25 @@ mod tests {
         );
         assert_eq!(args.piper_voice, Some(PathBuf::from("voice.onnx")));
         assert_eq!(args.text, "hello");
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_riper_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            words: vec![
+                "hello".to_string(),
+                "there".to_string(),
+                "--riper".to_string(),
+            ],
+        })
+        .expect("trailing Riper flag should be accepted");
+
+        assert!(args.riper);
+        assert_eq!(args.text, "hello there");
     }
 
     #[test]
@@ -785,7 +763,8 @@ mod tests {
                 .collect(),
         };
 
-        let ids = espeak_compatible_ids(&sequence, &config)
+        let ids = sequence
+            .to_piper_ids_compatible(&config)
             .expect("ARPAbet symbols should map to eSpeak Piper IDs");
 
         assert_eq!(
@@ -832,7 +811,7 @@ mod tests {
         .expect("voice config should parse");
         let sequence = PiperPhonemeSequence {
             phonemes: [
-                "W", "IY", " ", "R", "EH", "P", "R", "AH", "Z", "EH", "N", "T", " ", "DH", "AH",
+                "W", "IY", " ", "R", "EH", "P", "R", "IH", "Z", "EH", "N", "T", " ", "DH", "AH0",
                 " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|",
             ]
             .into_iter()
@@ -840,7 +819,8 @@ mod tests {
             .collect(),
         };
 
-        espeak_compatible_ids(&sequence, &config)
+        sequence
+            .to_piper_ids_compatible(&config)
             .expect("sentence ARPAbet symbols should map to eSpeak Piper IDs");
     }
 
@@ -866,13 +846,14 @@ mod tests {
         )
         .expect("voice config should parse");
         let sequence = PiperPhonemeSequence {
-            phonemes: ["B", "AA", "ɾ", "AH", "L"]
+            phonemes: ["B", "AA", "ɾ", "AH0", "L"]
                 .into_iter()
                 .map(|symbol| PiperPhoneme(symbol.to_string()))
                 .collect(),
         };
 
-        let ids = espeak_compatible_ids(&sequence, &config)
+        let ids = sequence
+            .to_piper_ids_compatible(&config)
             .expect("flapped Riper sequence should map to eSpeak Piper IDs");
 
         assert_eq!(

@@ -337,6 +337,32 @@ mod tests {
     }
 
     #[test]
+    fn opt_in_flapping_rule_realizes_d_between_stressed_and_unstressed_vowels() {
+        let seq = vec![
+            phoneme_from_arpabet("EH1", "cmudict"),
+            phoneme_from_arpabet("D", "cmudict"),
+            phoneme_from_arpabet("IY0", "cmudict"),
+        ];
+        let realized = realize_sequence(
+            &seq,
+            &RealizationConfig {
+                enable_allophone_rules: true,
+                ..RealizationConfig::default()
+            },
+        );
+        assert_eq!(realized[1].symbol, "D");
+        assert_eq!(realized[1].realization.ipa, "ɾ");
+        assert_eq!(
+            realized[1].realization.method,
+            RealizationMethod::AllophoneRule
+        );
+        assert_eq!(
+            realized[1].realization.rule.as_deref(),
+            Some("american_english_intervocalic_flapping")
+        );
+    }
+
+    #[test]
     fn flapping_rule_requires_following_unstressed_vowel() {
         let seq = vec![
             phoneme_from_arpabet("AH0", "cmudict"),

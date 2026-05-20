@@ -282,6 +282,8 @@ pub(crate) struct SayCommand {
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) riper: bool,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
 }
@@ -676,6 +678,7 @@ mod tests {
         assert!(command.piper_bin.is_none());
         assert!(command.piper_voice.is_none());
         assert!(command.output_wav.is_none());
+        assert!(!command.riper);
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -695,7 +698,32 @@ mod tests {
             panic!("expected say command");
         };
         assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
+        assert!(!command.riper);
         assert_eq!(command.words, ["hello", "there"]);
+    }
+
+    #[test]
+    fn say_accepts_riper_flag_before_text() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "hello", "there"])
+            .expect("say should parse Riper mode before text");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.riper);
+        assert_eq!(command.words, ["hello", "there"]);
+    }
+
+    #[test]
+    fn say_accepts_riper_flag_after_text() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "hello", "there", "--riper"])
+            .expect("say should accept Riper mode after trailing text");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(!command.riper);
+        assert_eq!(command.words, ["hello", "there", "--riper"]);
     }
 
     #[test]

@@ -625,6 +625,8 @@ fn cmu_phones_to_riper_symbols(phones: &[CmuPhoneme]) -> WordPhoneRealization {
             ) && realized.realization.ipa == "ɾ"
             {
                 "ɾ".to_string()
+            } else if source.base == "AH" {
+                cmu_phone_source_symbol(source)
             } else {
                 source.base.clone()
             }
@@ -780,7 +782,7 @@ mod tests {
             symbols(&unit.phonemes),
             vec![
                 "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH", "R",
-                "AH", "L", "D"
+                "AH0", "L", "D"
             ]
         );
     }
@@ -791,7 +793,17 @@ mod tests {
         let unit = g2p.phonemize_unit("xylophone").expect("phonemize");
         assert_eq!(
             symbols(&unit.phonemes),
-            vec!["Z", "AY", "L", "AH", "F", "OW", "N"]
+            vec!["Z", "AY", "L", "AH0", "F", "OW", "N"]
+        );
+    }
+
+    #[test]
+    fn preserves_cmudict_ah_stress_for_improbable() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("improbable").expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec!["IH", "M", "P", "R", "AA", "B", "AH0", "B", "AH0", "L"]
         );
     }
 
@@ -799,7 +811,17 @@ mod tests {
     fn applies_intervocalic_flap_for_riper() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");
-        assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "ɾ", "AH", "L"]);
+        assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "ɾ", "AH0", "L"]);
+    }
+
+    #[test]
+    fn applies_intervocalic_d_flap_for_already() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("already").expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec!["AO", "L", "R", "EH", "ɾ", "IY"]
+        );
     }
 
     #[test]
@@ -808,7 +830,7 @@ mod tests {
         let unit = g2p.phonemize_unit("politics").expect("phonemize");
         assert_eq!(
             symbols(&unit.phonemes),
-            vec!["P", "AA", "L", "AH", "T", "IH", "K", "S"]
+            vec!["P", "AA", "L", "AH0", "T", "IH", "K", "S"]
         );
         assert!(unit.lexical_stress.iter().any(|stress| {
             stress.phoneme_index == 3 && stress.stress == LexicalStressLevel::Unstressed
@@ -870,7 +892,7 @@ mod tests {
         assert_eq!(
             symbols(&unit.phonemes),
             vec![
-                "W", "IY", " ", "R", "EH", "P", "R", "IH", "Z", "EH", "N", "T", " ", "DH", "AH",
+                "W", "IY", " ", "R", "EH", "P", "R", "IH", "Z", "EH", "N", "T", " ", "DH", "AH0",
                 " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|"
             ]
         );
@@ -1145,7 +1167,7 @@ mod tests {
                 sym(&seq),
                 vec![
                     "EH", "F", " ", "S", "K", "AA", "T", " ", "F", "IH", "T", "S", "JH", "EH", "R",
-                    "AH", "L", "D"
+                    "AH0", "L", "D"
                 ]
             );
         }
