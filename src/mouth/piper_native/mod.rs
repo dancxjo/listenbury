@@ -4,6 +4,7 @@ pub mod config;
 pub mod encoder;
 pub mod g2p;
 pub mod phoneme;
+pub mod prosody_controls;
 pub mod prosody_planner;
 pub mod text;
 
@@ -20,6 +21,10 @@ pub use g2p::{
 };
 pub use phoneme::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeIdConversionError, PiperPhonemeSequence,
+};
+pub use prosody_controls::{
+    ControlStatusEntry, PiperBoundaryOverride, PiperPauseOverride, PiperPhonemeDurationOverride,
+    PiperProsodyControls, PiperSynthesisDiagnostics, ProsodyControlStatus,
 };
 pub use prosody_planner::{
     BoundaryState, BreathGroupCandidate, BreathGroupId, BreathGroupProsodyPlanner,
