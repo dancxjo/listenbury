@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 /// actually changed the audio and controls that were silently noted or dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ProsodyControlStatus {
+    /// The control was captured as an explicit request before backend handling.
+    Requested,
     /// The control was applied and took effect as a direct ONNX tensor input.
     Realized,
     /// The control was approximated by post-processing (e.g., silence was
@@ -149,6 +151,7 @@ mod tests {
     #[test]
     fn prosody_control_status_variants_are_distinct() {
         let statuses = [
+            ProsodyControlStatus::Requested,
             ProsodyControlStatus::Realized,
             ProsodyControlStatus::Approximated,
             ProsodyControlStatus::AdvisoryOnly,

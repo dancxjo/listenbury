@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedText {
     pub tokens: Vec<NormalizedToken>,
     pub token_spans: Vec<std::ops::Range<usize>>,
     pub boundary: ProsodyBoundaryHint,
+    pub boundary_kind: PhraseBoundaryKind,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
 }
@@ -262,15 +265,53 @@ impl TextNormalizer {
         } else {
             ProsodyBoundaryHint::None
         };
+        let boundary_kind = classify_phrase_boundary_kind(trimmed, saw_phrase_break, boundary);
 
         Ok(NormalizedText {
             tokens,
             token_spans,
             boundary,
+            boundary_kind,
             commitment: ProsodyCommitment::Provisional,
             punctuation_commitment,
         })
     }
+}
+
+fn classify_phrase_boundary_kind(
+    input: &str,
+    saw_phrase_break: bool,
+    boundary: ProsodyBoundaryHint,
+) -> PhraseBoundaryKind {
+    let Some(last) = input
+        .trim_end_matches(|ch: char| ch.is_ascii_whitespace() || is_quote_or_bracket(ch))
+        .chars()
+        .next_back()
+    else {
+        return PhraseBoundaryKind::None;
+    };
+    match last {
+        ',' => PhraseBoundaryKind::MinorPhrase,
+        ';' | ':' => PhraseBoundaryKind::MajorPhrase,
+        '!' => PhraseBoundaryKind::Exclamation,
+        '?' => PhraseBoundaryKind::FinalRising,
+        '.' => match boundary {
+            ProsodyBoundaryHint::PossibleSentenceEnd | ProsodyBoundaryHint::FinalSentenceEnd => {
+                PhraseBoundaryKind::FinalFalling
+            }
+            _ => PhraseBoundaryKind::PossibleFinal,
+        },
+        '-' | '—' | '–' | '(' | ')' | '[' | ']' => PhraseBoundaryKind::Parenthetical,
+        _ if saw_phrase_break => PhraseBoundaryKind::MinorPhrase,
+        _ => PhraseBoundaryKind::None,
+    }
+}
+
+fn is_quote_or_bracket(ch: char) -> bool {
+    matches!(
+        ch,
+        '"' | '\'' | '“' | '”' | '‘' | '’' | ')' | ']' | '}' | '(' | '[' | '{'
+    )
 }
 
 fn finalize_period_token(
@@ -409,6 +450,7 @@ mod tests {
             normalized.boundary,
             ProsodyBoundaryHint::PossibleSentenceEnd
         );
+        assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::FinalFalling);
         assert_eq!(normalized.commitment, ProsodyCommitment::Provisional);
         assert_eq!(
             normalized.punctuation_commitment,
@@ -432,6 +474,7 @@ mod tests {
             ]
         );
         assert_eq!(normalized.boundary, ProsodyBoundaryHint::PhraseBreak);
+        assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::MinorPhrase);
     }
 
     #[test]
@@ -442,10 +485,22 @@ mod tests {
             vec![NormalizedToken::Word("3.14".to_string())]
         );
         assert_eq!(normalized.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::None);
         assert_eq!(
             normalized.punctuation_commitment,
             PunctuationCommitmentState::SafeToPrepare
         );
+    }
+
+    #[test]
+    fn classifies_question_and_exclamation_boundaries() {
+        let question = TextNormalizer
+            .normalize("Is this ready?")
+            .expect("normalize");
+        assert_eq!(question.boundary_kind, PhraseBoundaryKind::FinalRising);
+
+        let exclamation = TextNormalizer.normalize("Listen!").expect("normalize");
+        assert_eq!(exclamation.boundary_kind, PhraseBoundaryKind::Exclamation);
     }
 
     #[test]

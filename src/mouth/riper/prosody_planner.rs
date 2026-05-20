@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId};
+use crate::mouth::riper::prosody_audit::{
+    PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, ProsodyRealizationStatus, Stress,
+};
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment};
 
 const PAUSE_MS_DEFAULT: u64 = 140;
@@ -136,6 +139,7 @@ pub struct PauseOp {
     pub after: ProsodyTarget,
     pub millis: u64,
     pub strength: PauseStrengthClass,
+    pub reason: PauseReason,
     pub commitment: ProsodyCommitment,
 }
 
@@ -329,6 +333,93 @@ impl ProsodyList {
             focus_diagnostics: self.focus_diagnostics.clone(),
         }
     }
+
+    pub fn pho_like_diagnostics(&self, candidate: &PhonemeProsodyCandidate) -> PhoLikeDiagnostics {
+        let pauses = self
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                ProsodyOp::InsertPause(pause) => Some(pause.millis),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let pause_hint = pauses.last().copied();
+
+        let entries = candidate
+            .word_targets
+            .iter()
+            .map(|word_target| {
+                let phoneme = candidate.phonemes.phonemes[word_target.phoneme_range.clone()]
+                    .iter()
+                    .map(|symbol| symbol.0.clone())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let duration_hint = candidate
+                    .word_hints
+                    .iter()
+                    .find(|hint| hint.word_index == word_target.word_index)
+                    .and_then(|hint| hint.approximate_duration_ms);
+                let stress = candidate
+                    .lexical_stress
+                    .iter()
+                    .filter(|stress| {
+                        stress.phoneme_index >= word_target.phoneme_range.start
+                            && stress.phoneme_index < word_target.phoneme_range.end
+                    })
+                    .map(|stress| match stress.stress {
+                        LexicalStressLevel::Primary => Stress::Primary,
+                        LexicalStressLevel::Secondary => Stress::Secondary,
+                        LexicalStressLevel::Unstressed => Stress::Reduced,
+                    })
+                    .collect::<Vec<_>>();
+                let accent = self.ops.iter().find_map(|op| match op {
+                    ProsodyOp::SetAccent {
+                        target: ProsodyTarget::WordIndex { index },
+                        kind,
+                        ..
+                    } if *index == word_target.word_index => Some(format!("{kind:?}")),
+                    _ => None,
+                });
+                let pitch_hint = self.ops.iter().find_map(|op| match op {
+                    ProsodyOp::SetPitchShape {
+                        target: ProsodyTarget::WordIndex { index },
+                        shape,
+                        ..
+                    } if *index == word_target.word_index => Some(format!("{shape:?}")),
+                    ProsodyOp::SetPitchShape {
+                        target: ProsodyTarget::WholeCandidate,
+                        shape,
+                        ..
+                    } => Some(format!("{shape:?}")),
+                    _ => None,
+                });
+                PhoLikeDiagnosticEntry {
+                    word: word_target.normalized_text.clone(),
+                    phoneme,
+                    duration_hint,
+                    stress,
+                    accent,
+                    boundary: if word_target.word_index + 1 == candidate.word_targets.len() {
+                        Some(candidate.boundary_kind)
+                    } else {
+                        None
+                    },
+                    pause: if word_target.word_index + 1 == candidate.word_targets.len() {
+                        pause_hint
+                    } else {
+                        None
+                    },
+                    pitch_hint,
+                    realization_status: ProsodyRealizationStatus::Requested,
+                }
+            })
+            .collect();
+
+        PhoLikeDiagnostics {
+            candidate_id: candidate.id.0,
+            entries,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -420,6 +511,11 @@ impl BreathGroupProsodyPlanner {
                     PauseStrengthClass::Strong
                 } else {
                     PauseStrengthClass::Medium
+                },
+                reason: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
+                    PauseReason::SentenceBoundary
+                } else {
+                    PauseReason::PhraseBoundary
                 },
                 commitment: base.commitment,
             }));
@@ -1163,6 +1259,36 @@ mod tests {
     }
 
     #[test]
+    fn pause_planning_assigns_explicit_pause_reason() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        let first = tracker.ingest_text("I see.").expect("candidate");
+        let provisional = planner.plan_candidate(latest_candidate(&first));
+        let pause = provisional.ops.iter().find_map(|op| match op {
+            ProsodyOp::InsertPause(pause) => Some(pause),
+            _ => None,
+        });
+        assert_eq!(
+            pause.map(|p| p.reason),
+            Some(PauseReason::PhraseBoundary),
+            "provisional sentence endings stay phrase-like until committed"
+        );
+
+        let mut committed_candidate = latest_candidate(&first).clone();
+        committed_candidate.mark_committed();
+        let committed = planner.plan_candidate(&committed_candidate);
+        let committed_pause = committed.ops.iter().find_map(|op| match op {
+            ProsodyOp::InsertPause(pause) => Some(pause),
+            _ => None,
+        });
+        assert_eq!(
+            committed_pause.map(|p| p.reason),
+            Some(PauseReason::SentenceBoundary)
+        );
+    }
+
+    #[test]
     fn riper_realization_reports_realized_vs_advisory_hints() {
         let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
         let mut planner = BreathGroupProsodyPlanner::new();
@@ -1184,6 +1310,38 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|line| line.contains("advisory"))
+        );
+    }
+
+    #[test]
+    fn emits_pho_like_diagnostics_for_seed_sentence() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker
+            .ingest_text(
+                "University politics are vicious precisely because the stakes are so small.",
+            )
+            .expect("candidate");
+        let latest = latest_candidate(&candidate);
+        let planned = planner.plan_candidate(latest);
+        let diagnostics = planned.pho_like_diagnostics(latest);
+
+        assert_eq!(diagnostics.candidate_id, latest.id.0);
+        assert!(!diagnostics.entries.is_empty());
+        let precisely = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "precisely")
+            .expect("precisely diagnostic");
+        assert!(
+            precisely.accent.is_some(),
+            "focus diagnostics should emit accent hints for precision adverbs"
+        );
+        let final_entry = diagnostics.entries.last().expect("final entry");
+        assert!(final_entry.boundary.is_some());
+        assert_eq!(
+            final_entry.realization_status,
+            ProsodyRealizationStatus::Requested
         );
     }
 }

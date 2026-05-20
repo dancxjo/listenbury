@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::linguistic::cmudict;
-use crate::linguistic::cmudict::{CmuPhoneme, Stress};
+use crate::linguistic::cmudict::{CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
@@ -15,6 +15,9 @@ use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
 use crate::linguistic::variety::{LinguisticVariety, Phonology};
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
+use crate::mouth::riper::prosody_audit::{
+    PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
+};
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
@@ -36,6 +39,7 @@ pub struct PhonemizedUnit {
     pub phoneme_to_word: Vec<Option<usize>>,
     pub lexical_stress: Vec<LexicalStressTarget>,
     pub boundary: ProsodyBoundaryHint,
+    pub boundary_kind: PhraseBoundaryKind,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
 }
@@ -115,6 +119,7 @@ pub struct PhonemeProsodyCandidate {
     pub phoneme_to_word: Vec<Option<usize>>,
     pub lexical_stress: Vec<LexicalStressTarget>,
     pub boundary_hint: ProsodyBoundaryHint,
+    pub boundary_kind: PhraseBoundaryKind,
     pub commitment: ProsodyCommitment,
     pub punctuation_commitment: PunctuationCommitmentState,
     pub stable_prefix_len: usize,
@@ -145,6 +150,34 @@ impl PhonemeProsodyCandidate {
 
     pub fn cancel(&mut self) {
         self.commitment = ProsodyCommitment::Cancelled;
+    }
+
+    pub fn word_prosody_info(&self) -> Vec<WordProsodyInfo> {
+        self.word_targets
+            .iter()
+            .map(|target| {
+                let lexical_stress = self
+                    .lexical_stress
+                    .iter()
+                    .filter(|stress| {
+                        stress.phoneme_index >= target.phoneme_range.start
+                            && stress.phoneme_index < target.phoneme_range.end
+                    })
+                    .map(|stress| map_lexical_stress(stress.stress))
+                    .collect::<Vec<_>>();
+                WordProsodyInfo {
+                    word_index: target.word_index,
+                    text_range: target.text_range.clone(),
+                    phoneme_range: target.phoneme_range.clone(),
+                    lexical_stress,
+                    prominence_class: if is_default_function_word(&target.normalized_text) {
+                        ProminenceClass::Weak
+                    } else {
+                        ProminenceClass::Content
+                    },
+                }
+            })
+            .collect()
     }
 }
 
@@ -292,6 +325,7 @@ impl SimpleEnglishG2p {
             phoneme_to_word,
             lexical_stress,
             boundary: normalized.boundary,
+            boundary_kind: normalized.boundary_kind,
             commitment: normalized.commitment,
             punctuation_commitment: normalized.punctuation_commitment,
         })
@@ -519,6 +553,7 @@ fn build_candidate(
         phoneme_to_word: phonemized.phoneme_to_word,
         lexical_stress: phonemized.lexical_stress,
         boundary_hint: phonemized.boundary,
+        boundary_kind: phonemized.boundary_kind,
         commitment: ProsodyCommitment::Provisional,
         punctuation_commitment: phonemized.punctuation_commitment,
         stable_prefix_len,
@@ -621,13 +656,70 @@ fn cmu_stress_digit(stress: crate::linguistic::cmudict::Stress) -> char {
     }
 }
 
-fn cmu_stress_level(stress: Option<Stress>) -> Option<LexicalStressLevel> {
+fn cmu_stress_level(stress: Option<CmuStress>) -> Option<LexicalStressLevel> {
     match stress {
-        Some(Stress::Primary) => Some(LexicalStressLevel::Primary),
-        Some(Stress::Secondary) => Some(LexicalStressLevel::Secondary),
-        Some(Stress::Unstressed) => Some(LexicalStressLevel::Unstressed),
+        Some(CmuStress::Primary) => Some(LexicalStressLevel::Primary),
+        Some(CmuStress::Secondary) => Some(LexicalStressLevel::Secondary),
+        Some(CmuStress::Unstressed) => Some(LexicalStressLevel::Unstressed),
         None => None,
     }
+}
+
+fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
+    match stress {
+        LexicalStressLevel::Primary => Stress::Primary,
+        LexicalStressLevel::Secondary => Stress::Secondary,
+        LexicalStressLevel::Unstressed => Stress::Reduced,
+    }
+}
+
+fn is_default_function_word(word: &str) -> bool {
+    matches!(
+        word,
+        "the"
+            | "a"
+            | "an"
+            | "if"
+            | "then"
+            | "than"
+            | "of"
+            | "to"
+            | "for"
+            | "from"
+            | "with"
+            | "by"
+            | "as"
+            | "in"
+            | "on"
+            | "at"
+            | "are"
+            | "is"
+            | "was"
+            | "were"
+            | "be"
+            | "been"
+            | "am"
+            | "it"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "he"
+            | "she"
+            | "they"
+            | "we"
+            | "you"
+            | "i"
+            | "me"
+            | "my"
+            | "your"
+            | "our"
+            | "their"
+            | "because"
+            | "and"
+            | "or"
+            | "but"
+    )
 }
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
@@ -724,6 +816,7 @@ mod tests {
         assert!(unit.lexical_stress.iter().any(|stress| {
             stress.phoneme_index == 5 && stress.stress == LexicalStressLevel::Secondary
         }));
+        assert_eq!(unit.boundary_kind, PhraseBoundaryKind::None);
     }
 
     #[test]
@@ -802,6 +895,7 @@ mod tests {
         assert_eq!(candidate.word_hints.len(), 1);
         assert_eq!(candidate.word_targets.len(), 1);
         assert_eq!(candidate.word_targets[0].text_range, 0..5);
+        assert_eq!(candidate.boundary_kind, PhraseBoundaryKind::FinalFalling);
         assert!(!candidate.lexical_stress.is_empty());
         assert_eq!(candidate.phoneme_to_word[0], Some(0));
         assert_eq!(
@@ -822,6 +916,32 @@ mod tests {
         assert_eq!(
             committed.punctuation_commitment,
             PunctuationCommitmentState::FinalCadence
+        );
+    }
+
+    #[test]
+    fn exposes_word_prosody_mapping_metadata() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let events = tracker
+            .ingest_text(
+                "University politics are vicious precisely because the stakes are so small.",
+            )
+            .expect("candidate");
+        let candidate = match events.last().expect("events") {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => candidate,
+            other => panic!("unexpected event: {other:?}"),
+        };
+        let infos = candidate.word_prosody_info();
+        let because = infos
+            .iter()
+            .find(|info| info.word_index == 5)
+            .expect("because info");
+        assert_eq!(because.prominence_class, ProminenceClass::Weak);
+        assert!(
+            infos
+                .iter()
+                .any(|info| info.lexical_stress.contains(&Stress::Primary)),
+            "at least one word should carry lexical stress metadata"
         );
     }
 
