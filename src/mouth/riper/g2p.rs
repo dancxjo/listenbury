@@ -260,9 +260,23 @@ impl SimpleEnglishG2p {
                                 None
                             }
                         });
-                    let emitted_symbols = reduced_symbols
-                        .clone()
-                        .unwrap_or_else(|| word_realization.symbols.clone());
+                    let emitted_symbols =
+                        reduced_symbols.unwrap_or_else(|| word_realization.symbols.clone());
+                    let emitted_stress_by_phone = if analyzed_token.is_some_and(|analysis| {
+                        analysis
+                            .reduction_diagnostic
+                            .as_ref()
+                            .is_some_and(|diagnostic| {
+                                matches!(diagnostic.status, ReductionStatus::Applied)
+                            })
+                    }) {
+                        emitted_symbols
+                            .iter()
+                            .map(|symbol| stress_level_from_symbol(symbol))
+                            .collect::<Vec<_>>()
+                    } else {
+                        word_realization.stress_by_phone.clone()
+                    };
                     let start = symbols.len();
                     symbols.extend(emitted_symbols.iter().cloned());
                     let end = symbols.len();
@@ -273,23 +287,16 @@ impl SimpleEnglishG2p {
                         phoneme_range: start..end,
                         normalized_text: word.clone(),
                     });
-                    lexical_stress.extend(
-                        word_realization
-                            .stress_by_phone
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(offset, stress)| {
-                                if offset >= emitted_symbols.len() {
-                                    return None;
-                                }
-                                stress.map(|stress| LexicalStressTarget {
-                                    word_index,
-                                    phoneme_index: start + offset,
-                                    stress,
-                                    source: word_realization.stress_source,
-                                })
-                            }),
-                    );
+                    lexical_stress.extend(emitted_stress_by_phone.iter().enumerate().filter_map(
+                        |(offset, stress)| {
+                            stress.map(|stress| LexicalStressTarget {
+                                word_index,
+                                phoneme_index: start + offset,
+                                stress,
+                                source: word_realization.stress_source,
+                            })
+                        },
+                    ));
                     emitted_pronounceable += 1;
                     word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
@@ -708,6 +715,15 @@ fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
     }
 }
 
+fn stress_level_from_symbol(symbol: &str) -> Option<LexicalStressLevel> {
+    match symbol.chars().next_back() {
+        Some('1') => Some(LexicalStressLevel::Primary),
+        Some('2') => Some(LexicalStressLevel::Secondary),
+        Some('0') => Some(LexicalStressLevel::Unstressed),
+        _ => None,
+    }
+}
+
 fn is_default_function_word(word: &str) -> bool {
     matches!(
         word,
@@ -774,7 +790,7 @@ mod tests {
         sequence.phonemes.iter().map(|p| p.0.clone()).collect()
     }
 
-    fn to_analyses(unit: &PhonemizedUnit) -> Vec<&crate::mouth::riper::TokenAnalysis> {
+    fn to_token_analyses(unit: &PhonemizedUnit) -> Vec<&crate::mouth::riper::TokenAnalysis> {
         unit.sentence_analysis
             .tokens
             .iter()
@@ -944,7 +960,7 @@ mod tests {
         let g2p = SimpleEnglishG2p::default();
         for text in ["I want to go.", "We need to leave.", "Try to remember."] {
             let unit = g2p.phonemize_unit(text).expect("phonemize");
-            let analyses = to_analyses(&unit);
+            let analyses = to_token_analyses(&unit);
             let analysis = analyses.first().expect("to analysis");
             assert_eq!(analysis.pos, crate::mouth::riper::PartOfSpeech::Particle);
             assert_eq!(
@@ -984,7 +1000,7 @@ mod tests {
         let unit = g2p
             .phonemize_unit("I said to go, not to stay.")
             .expect("phonemize");
-        let analyses = to_analyses(&unit);
+        let analyses = to_token_analyses(&unit);
         assert_eq!(analyses.len(), 2);
         for analysis in analyses {
             let diagnostic = analysis
@@ -1013,7 +1029,10 @@ mod tests {
         let unit = g2p
             .phonemize_unit("I said TO, not FROM.")
             .expect("phonemize");
-        let analysis = to_analyses(&unit).into_iter().next().expect("to analysis");
+        let analysis = to_token_analyses(&unit)
+            .into_iter()
+            .next()
+            .expect("to analysis");
         assert_eq!(analysis.pos, crate::mouth::riper::PartOfSpeech::Preposition);
         assert_eq!(
             analysis.prosodic_role,
@@ -1035,7 +1054,7 @@ mod tests {
         assert!(
             symbols(&unit.phonemes)
                 .windows(2)
-                .any(|phones| phones[0] == "T" && phones[1] == "UW"),
+                .any(|phones| phones[0] == "T" && phones[1].starts_with("UW")),
             "contrastive TO should remain unreduced"
         );
     }
@@ -1046,7 +1065,7 @@ mod tests {
         let to_be = g2p
             .phonemize_unit("To be, or not to be.")
             .expect("phonemize");
-        let to_be_analyses = to_analyses(&to_be);
+        let to_be_analyses = to_token_analyses(&to_be);
         assert_eq!(to_be_analyses.len(), 2);
         assert_eq!(
             to_be_analyses[0]
@@ -1074,7 +1093,7 @@ mod tests {
         let addressed = g2p
             .phonemize_unit("This is addressed to you.")
             .expect("phonemize");
-        let addressed_to = to_analyses(&addressed)
+        let addressed_to = to_token_analyses(&addressed)
             .into_iter()
             .next()
             .expect("to analysis");
@@ -1101,7 +1120,7 @@ mod tests {
     fn keeps_phrase_final_to_provisional_for_incremental_revision() {
         let g2p = SimpleEnglishG2p::default();
         let provisional = g2p.phonemize_unit("I want to").expect("phonemize");
-        let analysis = to_analyses(&provisional)
+        let analysis = to_token_analyses(&provisional)
             .into_iter()
             .next()
             .expect("to analysis");
@@ -1116,7 +1135,7 @@ mod tests {
         );
 
         let confirmed = g2p.phonemize_unit("I want to go").expect("phonemize");
-        let confirmed_diag = to_analyses(&confirmed)[0]
+        let confirmed_diag = to_token_analyses(&confirmed)[0]
             .reduction_diagnostic
             .as_ref()
             .expect("reduction diagnostic");

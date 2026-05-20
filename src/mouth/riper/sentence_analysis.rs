@@ -351,14 +351,55 @@ fn is_conjunction(word: &str) -> bool {
 fn is_auxiliary(word: &str) -> bool {
     matches!(
         word,
-        "be" | "am" | "is" | "are" | "was" | "were" | "been" | "do" | "does" | "did" | "have"
+        "be" | "am"
+            | "is"
+            | "are"
+            | "was"
+            | "were"
+            | "been"
+            | "do"
+            | "does"
+            | "did"
+            | "have"
+            | "has"
+            | "had"
+            | "will"
+            | "would"
+            | "should"
+            | "could"
+            | "may"
+            | "might"
+            | "must"
+            | "can"
     )
 }
 
 fn is_likely_verb(word: &str) -> bool {
     matches!(
         word,
-        "go" | "leave" | "remember" | "see" | "stay" | "be" | "try" | "need" | "want" | "addressed"
-    ) || word.ends_with("ing")
-        || word.ends_with("ed")
+        "go" | "leave"
+            | "remember"
+            | "see"
+            | "stay"
+            | "be"
+            | "try"
+            | "need"
+            | "want"
+            | "make"
+            | "take"
+            | "get"
+            | "keep"
+            | "let"
+            | "tell"
+            | "call"
+            | "put"
+            | "ask"
+    ) || has_likely_verb_suffix(word)
+}
+
+fn has_likely_verb_suffix(word: &str) -> bool {
+    const COMMON_NON_VERB_ING: &[&str] = &["thing", "king", "morning", "ceiling"];
+    const COMMON_NON_VERB_ED: &[&str] = &["red", "bed", "sled"];
+    (word.len() >= 5 && word.ends_with("ing") && !COMMON_NON_VERB_ING.contains(&word))
+        || (word.len() >= 4 && word.ends_with("ed") && !COMMON_NON_VERB_ED.contains(&word))
 }
