@@ -185,6 +185,17 @@ impl HttpResponse {
         }
     }
 
+    fn accepted(message: impl Into<String>) -> Self {
+        Self {
+            status: 202,
+            reason: "Accepted",
+            content_type: "text/plain; charset=utf-8",
+            cache_control: "no-store",
+            body: message.into().into_bytes(),
+            headers: Vec::new(),
+        }
+    }
+
     fn method_not_allowed(message: impl Into<String>) -> Self {
         Self {
             status: 405,
@@ -523,11 +534,17 @@ fn route_request_with_range(
         },
         "/api/live-session-audio.wav" => match load_live_session_audio(state) {
             Ok(Some(audio)) => audio_response(audio, range_header),
+            Ok(None) if state.live_audio.is_some() => {
+                HttpResponse::accepted("live session audio is not available yet\n")
+            }
             Ok(None) => HttpResponse::not_found("live session audio is not available yet\n"),
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
         "/api/live-session-acoustic.json" => match load_live_session_acoustic(state) {
             Ok(Some(analysis)) => HttpResponse::ok("application/json; charset=utf-8", analysis),
+            Ok(None) if state.live_audio.is_some() => {
+                HttpResponse::accepted("live session acoustic analysis is not available yet\n")
+            }
             Ok(None) => {
                 HttpResponse::not_found("live session acoustic analysis is not available yet\n")
             }
