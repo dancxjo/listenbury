@@ -711,6 +711,22 @@ mod tests {
     }
 
     #[test]
+    fn does_not_flap_t_in_politics() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("politics").expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec!["P", "AA", "L", "AH", "T", "IH", "K", "S"]
+        );
+        assert!(unit.lexical_stress.iter().any(|stress| {
+            stress.phoneme_index == 3 && stress.stress == LexicalStressLevel::Unstressed
+        }));
+        assert!(unit.lexical_stress.iter().any(|stress| {
+            stress.phoneme_index == 5 && stress.stress == LexicalStressLevel::Secondary
+        }));
+    }
+
+    #[test]
     fn does_not_flap_without_stress_context() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("represent").expect("phonemize");

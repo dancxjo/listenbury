@@ -337,6 +337,24 @@ mod tests {
     }
 
     #[test]
+    fn flapping_rule_requires_following_unstressed_vowel() {
+        let seq = vec![
+            phoneme_from_arpabet("AH0", "cmudict"),
+            phoneme_from_arpabet("T", "cmudict"),
+            phoneme_from_arpabet("IH2", "cmudict"),
+        ];
+        let realized = realize_sequence(
+            &seq,
+            &RealizationConfig {
+                enable_allophone_rules: true,
+                ..RealizationConfig::default()
+            },
+        );
+        assert_eq!(realized[1].realization.ipa, "t");
+        assert_eq!(realized[1].realization.method, RealizationMethod::Default);
+    }
+
+    #[test]
     fn allophone_rules_are_opt_in() {
         let seq = vec![
             phoneme_from_arpabet("AE1", "cmudict"),

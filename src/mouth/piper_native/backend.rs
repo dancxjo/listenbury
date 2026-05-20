@@ -5,7 +5,6 @@ use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;
-use crate::linguistic::{PronunciationService, service::default_english_variety};
 use crate::mouth::backend::TtsBackend;
 
 use super::{
@@ -450,12 +449,10 @@ fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
 
 impl TtsBackend for NativePiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
-        let pronunciation =
-            PronunciationService::new(SimpleEnglishG2p::default(), default_english_variety());
-        let phoneme_text = pronunciation
-            .realize_text(text)
-            .with_context(|| format!("failed to realize phonemes for text `{text}`"))?;
-        let phonemes = PiperEncoder.encode(&phoneme_text);
+        let phonemes = SimpleEnglishG2p::default()
+            .phonemize_unit(text)
+            .with_context(|| format!("failed to realize native Piper phonemes for text `{text}`"))?
+            .phonemes;
         let ids = phonemes.to_piper_ids(&self.config).with_context(|| {
             format!(
                 "failed to map phonemes to IDs for native Piper model {}",
@@ -886,22 +883,22 @@ mod tests {
     }
 
     #[test]
-    fn synthesize_surfaces_clear_g2p_error_for_unsupported_words() {
+    fn synthesize_surfaces_clear_g2p_error_for_unsupported_text() {
         let model_path = unique_path("unimplemented");
         let mut backend =
             NativePiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
 
         let error = backend
-            .synthesize("xyzzyqux")
+            .synthesize("Q.")
             .expect_err("unsupported text should fail before ONNX inference");
         let rendered = format!("{error:#}");
         assert!(
-            rendered.contains("failed to realize phonemes for text `xyzzyqux`"),
+            rendered.contains("failed to realize native Piper phonemes for text `Q.`"),
             "expected phonemize context, got: {rendered}"
         );
         assert!(
-            rendered.contains("unsupported orthographic word `xyzzyqux`"),
-            "expected unsupported-word detail, got: {rendered}"
+            rendered.contains("unsupported initial `q`"),
+            "expected unsupported-text detail, got: {rendered}"
         );
         assert!(
             !rendered.contains(model_path.to_string_lossy().as_ref()),
