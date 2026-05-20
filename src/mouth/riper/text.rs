@@ -4,6 +4,23 @@ use thiserror::Error;
 use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 
 const MAX_VOCATIVE_WORDS: usize = 3;
+const COMMON_VOCATIVE_NOUNS: &[&str] = &[
+    "professor",
+    "interlocutor",
+    "sir",
+    "madam",
+    "friend",
+    "friends",
+    "team",
+    "folks",
+    "everyone",
+    "everybody",
+    "doctor",
+    "captain",
+    "mom",
+    "dad",
+    "buddy",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedText {
@@ -468,19 +485,7 @@ fn has_discourse_cue(prefix: &str) -> bool {
 }
 
 fn is_likely_vocative_noun(word: &str) -> bool {
-    matches!(
-        word,
-        "professor"
-            | "interlocutor"
-            | "sir"
-            | "madam"
-            | "friend"
-            | "friends"
-            | "team"
-            | "folks"
-            | "everyone"
-            | "everybody"
-    )
+    COMMON_VOCATIVE_NOUNS.contains(&word)
 }
 
 fn is_quote_or_bracket(ch: char) -> bool {

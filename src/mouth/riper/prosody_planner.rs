@@ -9,10 +9,14 @@ use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_v
 
 const PAUSE_MS_DEFAULT: u64 = 140;
 const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
+const PAUSE_MS_VOCATIVE_REDUCTION: u64 = 60;
 const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
 const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
 const CONTOUR_FINAL_CLOSURE: (f32, f32, f32) = (0.08_f32, 0.92_f32, 0.86_f32);
+const VOCATIVE_CONTINUATION_BIAS_FLOOR: f32 = 0.85;
+const VOCATIVE_PAUSE_LIKELIHOOD_CEILING: f32 = 0.4;
+const VOCATIVE_RATE_HINT_FLOOR: f32 = 1.04;
 const FUNCTION_WORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "if", "then", "than", "to", "of", "in", "on", "at",
     "for", "from", "with", "by", "as", "is", "are", "was", "were", "be", "been", "am", "it",
@@ -542,7 +546,7 @@ impl BreathGroupProsodyPlanner {
                 millis: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
                     PAUSE_MS_FINAL_CLOSURE
                 } else if matches!(candidate.boundary_kind, PhraseBoundaryKind::Vocative) {
-                    PAUSE_MS_DEFAULT.saturating_sub(60)
+                    PAUSE_MS_DEFAULT.saturating_sub(PAUSE_MS_VOCATIVE_REDUCTION)
                 } else {
                     PAUSE_MS_DEFAULT
                 },
@@ -612,9 +616,9 @@ fn build_contour(
             ProsodyBoundaryHint::FinalSentenceEnd
         )
     {
-        base_continuation = base_continuation.max(0.85);
-        pause_likelihood = pause_likelihood.min(0.4);
-        speaking_rate_hint = speaking_rate_hint.max(1.04);
+        base_continuation = base_continuation.max(VOCATIVE_CONTINUATION_BIAS_FLOOR);
+        pause_likelihood = pause_likelihood.min(VOCATIVE_PAUSE_LIKELIHOOD_CEILING);
+        speaking_rate_hint = speaking_rate_hint.max(VOCATIVE_RATE_HINT_FLOOR);
     }
 
     let continuation_bias = if candidate.stable_prefix_len > 0 {
