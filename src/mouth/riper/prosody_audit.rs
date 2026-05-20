@@ -35,6 +35,7 @@ pub enum PhraseBoundaryKind {
     FinalRising,
     Exclamation,
     Parenthetical,
+    Vocative,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,12 +148,15 @@ pub enum ProsodyRealizationStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhoLikeDiagnosticEntry {
     pub word: String,
+    pub span: Option<String>,
     pub phoneme: String,
     pub duration_hint: Option<u64>,
     pub stress: Vec<Stress>,
     pub accent: Option<String>,
     pub boundary: Option<PhraseBoundaryKind>,
     pub pause: Option<u64>,
+    pub classification: Option<String>,
+    pub pause_behavior: Option<String>,
     pub pitch_hint: Option<String>,
     pub realization_status: ProsodyRealizationStatus,
 }

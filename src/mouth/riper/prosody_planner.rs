@@ -2,16 +2,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId};
 use crate::mouth::riper::prosody_audit::{
-    PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, ProsodyRealizationStatus, Stress,
+    PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind,
+    ProsodyRealizationStatus, Stress,
 };
-use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment};
+use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
 
 const PAUSE_MS_DEFAULT: u64 = 140;
 const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
+const PAUSE_MS_VOCATIVE_REDUCTION: u64 = 60;
 const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
 const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
 const CONTOUR_FINAL_CLOSURE: (f32, f32, f32) = (0.08_f32, 0.92_f32, 0.86_f32);
+const VOCATIVE_CONTINUATION_BIAS_FLOOR: f32 = 0.85;
+const VOCATIVE_PAUSE_LIKELIHOOD_CEILING: f32 = 0.4;
+const VOCATIVE_RATE_HINT_FLOOR: f32 = 1.04;
 const FUNCTION_WORDS: &[&str] = &[
     "a", "an", "the", "and", "or", "but", "if", "then", "than", "to", "of", "in", "on", "at",
     "for", "from", "with", "by", "as", "is", "are", "was", "were", "be", "been", "am", "it",
@@ -344,6 +349,15 @@ impl ProsodyList {
             })
             .collect::<Vec<_>>();
         let pause_hint = pauses.last().copied();
+        let direct_address_pause_op = self.ops.iter().find_map(|op| match op {
+            ProsodyOp::InsertPause(pause)
+                if matches!(pause.reason, PauseReason::DirectAddressBoundary) =>
+            {
+                Some(pause)
+            }
+            _ => None,
+        });
+        let vocative_spans = detect_vocative_spans(&candidate.text);
 
         let entries = candidate
             .word_targets
@@ -393,8 +407,21 @@ impl ProsodyList {
                     } => Some(format!("{shape:?}")),
                     _ => None,
                 });
+                let is_vocative_span = vocative_spans.iter().any(|span| {
+                    span.start < word_target.text_range.end
+                        && span.end > word_target.text_range.start
+                });
                 PhoLikeDiagnosticEntry {
                     word: word_target.normalized_text.clone(),
+                    span: if is_vocative_span {
+                        Some(
+                            candidate.text[word_target.text_range.clone()]
+                                .trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                                .to_string(),
+                        )
+                    } else {
+                        None
+                    },
                     phoneme,
                     duration_hint,
                     stress,
@@ -406,6 +433,20 @@ impl ProsodyList {
                     },
                     pause: if word_target.word_index + 1 == candidate.word_targets.len() {
                         pause_hint
+                    } else {
+                        None
+                    },
+                    classification: if is_vocative_span {
+                        Some("vocative".to_string())
+                    } else {
+                        None
+                    },
+                    pause_behavior: if is_vocative_span {
+                        Some(if direct_address_pause_op.is_some() {
+                            "reduced".to_string()
+                        } else {
+                            "suppressed".to_string()
+                        })
                     } else {
                         None
                     },
@@ -504,15 +545,23 @@ impl BreathGroupProsodyPlanner {
                 after: ProsodyTarget::WholeCandidate,
                 millis: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
                     PAUSE_MS_FINAL_CLOSURE
+                } else if matches!(candidate.boundary_kind, PhraseBoundaryKind::Vocative) {
+                    PAUSE_MS_DEFAULT.saturating_sub(PAUSE_MS_VOCATIVE_REDUCTION)
                 } else {
                     PAUSE_MS_DEFAULT
                 },
                 strength: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
                     PauseStrengthClass::Strong
+                } else if matches!(candidate.boundary_kind, PhraseBoundaryKind::Vocative) {
+                    PauseStrengthClass::Light
                 } else {
                     PauseStrengthClass::Medium
                 },
-                reason: if matches!(base.boundary_state, BoundaryState::FinalClosure) {
+                reason: if matches!(candidate.boundary_kind, PhraseBoundaryKind::Vocative)
+                    && !matches!(base.boundary_state, BoundaryState::FinalClosure)
+                {
+                    PauseReason::DirectAddressBoundary
+                } else if matches!(base.boundary_state, BoundaryState::FinalClosure) {
                     PauseReason::SentenceBoundary
                 } else {
                     PauseReason::PhraseBoundary
@@ -554,12 +603,23 @@ fn build_contour(
     candidate: &PhonemeProsodyCandidate,
     previous: Option<&ProsodyContour>,
 ) -> ProsodyContour {
-    let (base_continuation, pause_likelihood, speaking_rate_hint) = match candidate.boundary_hint {
-        ProsodyBoundaryHint::None => CONTOUR_CONTINUING,
-        ProsodyBoundaryHint::PhraseBreak => CONTOUR_PHRASE_BREAK,
-        ProsodyBoundaryHint::PossibleSentenceEnd => CONTOUR_POSSIBLE_CLOSURE,
-        ProsodyBoundaryHint::FinalSentenceEnd => CONTOUR_FINAL_CLOSURE,
-    };
+    let (mut base_continuation, mut pause_likelihood, mut speaking_rate_hint) =
+        match candidate.boundary_hint {
+            ProsodyBoundaryHint::None => CONTOUR_CONTINUING,
+            ProsodyBoundaryHint::PhraseBreak => CONTOUR_PHRASE_BREAK,
+            ProsodyBoundaryHint::PossibleSentenceEnd => CONTOUR_POSSIBLE_CLOSURE,
+            ProsodyBoundaryHint::FinalSentenceEnd => CONTOUR_FINAL_CLOSURE,
+        };
+    if matches!(candidate.boundary_kind, PhraseBoundaryKind::Vocative)
+        && !matches!(
+            candidate.boundary_hint,
+            ProsodyBoundaryHint::FinalSentenceEnd
+        )
+    {
+        base_continuation = base_continuation.max(VOCATIVE_CONTINUATION_BIAS_FLOOR);
+        pause_likelihood = pause_likelihood.min(VOCATIVE_PAUSE_LIKELIHOOD_CEILING);
+        speaking_rate_hint = speaking_rate_hint.max(VOCATIVE_RATE_HINT_FLOOR);
+    }
 
     let continuation_bias = if candidate.stable_prefix_len > 0 {
         if let Some(previous) = previous {
@@ -930,6 +990,13 @@ mod tests {
         diagnostics.iter().find(|diag| diag.word == word)
     }
 
+    fn first_pause(planned: &ProsodyList) -> Option<&PauseOp> {
+        planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::InsertPause(pause) => Some(pause),
+            _ => None,
+        })
+    }
+
     #[test]
     fn stable_extension_without_cadence_reset() {
         let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
@@ -1026,6 +1093,47 @@ mod tests {
         assert_eq!(planned.base.boundary_state, BoundaryState::Continuing);
         assert!(planned.base.contour.pause_likelihood >= 0.5);
         assert!(planned.base.contour.continuation_bias > 0.7);
+    }
+
+    #[test]
+    fn vocative_fixtures_suppress_hard_comma_pause() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        for fixture in [
+            "Thank you, Dave.",
+            "Listen, professor, this matters.",
+            "You see, interlocutor, the system has revealed itself.",
+        ] {
+            let candidate = tracker.ingest_text(fixture).expect("candidate");
+            let latest = latest_candidate(&candidate);
+            assert_eq!(latest.boundary_kind, PhraseBoundaryKind::Vocative);
+            let planned = planner.plan_candidate(latest);
+            assert!(
+                first_pause(&planned).is_none(),
+                "vocative fixture should suppress hard comma pauses: {fixture}"
+            );
+        }
+    }
+
+    #[test]
+    fn parenthetical_and_apposition_keep_phrase_separation() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+
+        for fixture in [
+            "The machine, unfortunately, exploded.",
+            "My brother, who lives in Tacoma, arrived.",
+        ] {
+            let candidate = tracker.ingest_text(fixture).expect("candidate");
+            let latest = latest_candidate(&candidate);
+            assert_ne!(latest.boundary_kind, PhraseBoundaryKind::Vocative);
+            let planned = planner.plan_candidate(latest);
+            assert!(
+                first_pause(&planned).is_some(),
+                "contrast fixture should preserve phrase separation: {fixture}"
+            );
+        }
     }
 
     #[test]
@@ -1343,5 +1451,23 @@ mod tests {
             final_entry.realization_status,
             ProsodyRealizationStatus::Requested
         );
+    }
+
+    #[test]
+    fn diagnostics_expose_vocative_classification_and_pause_behavior() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker.ingest_text("Thank you, Dave.").expect("candidate");
+        let latest = latest_candidate(&candidate);
+        let planned = planner.plan_candidate(latest);
+        let diagnostics = planned.pho_like_diagnostics(latest);
+        let dave = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "dave")
+            .expect("dave diagnostic");
+        assert_eq!(dave.span.as_deref(), Some("Dave"));
+        assert_eq!(dave.classification.as_deref(), Some("vocative"));
+        assert_eq!(dave.pause_behavior.as_deref(), Some("suppressed"));
     }
 }
