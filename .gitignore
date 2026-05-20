@@ -6,6 +6,8 @@ target
 # Where we keep our models
 out
 
+/data/cmudict.dict
+
 # Optional cold-memory Docker volumes
 qdrant_data
 neo4j_data
