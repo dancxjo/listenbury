@@ -576,6 +576,16 @@ h1 {
   line-height: 1;
 }
 
+.playback-toolbar .mic-source-select {
+  min-width: 8.2rem;
+  height: 2.35rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(17, 20, 24, 0.88);
+  color: var(--text);
+}
+
 .timeline-audio-slot {
   min-width: 16rem;
 }

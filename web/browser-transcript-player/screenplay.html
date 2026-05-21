@@ -11,8 +11,18 @@
       <a href="/" class="back-link">WaveDeck</a>
       <span id="connection-dot" class="connection-dot is-connecting" aria-hidden="true"></span>
       <span id="connection-status">connecting</span>
+      <div class="screenplay-input-chrome" role="group" aria-label="Playback and recording controls">
+        <select id="mic-source" aria-label="Select recording source">
+          <option value="browser">Web mic</option>
+          <option value="native">Local mic</option>
+        </select>
+        <button id="screenplay-play" type="button" aria-label="Play or pause session audio" title="Play or pause session audio">▶︎</button>
+        <button id="screenplay-record" type="button" aria-label="Start recording" title="Start recording" aria-pressed="false">●</button>
+      </div>
+      <span id="screenplay-mic-error" class="screenplay-mic-error" hidden></span>
       <span id="event-count">0 events</span>
     </header>
+    <audio id="screenplay-audio" preload="none"></audio>
 
     <main class="script-page" aria-live="polite">
       <section class="title-page" aria-label="Screenplay title page">

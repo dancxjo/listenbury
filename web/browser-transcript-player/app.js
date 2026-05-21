@@ -189,6 +189,9 @@ const inputUiState = {
   nativeMicAvailable: false,
   nativeMicEnabled: false,
   nativeMicUpdating: false,
+  selectedMicSource: "browser",
+  micRecording: false,
+  micControlUpdating: false,
 };
 
 const browserAudioState = {
@@ -217,6 +220,8 @@ const BROWSER_AUDIO_FRAME_SAMPLES = BROWSER_AUDIO_SAMPLE_RATE_HZ / 100;
 const BROWSER_VIDEO_TRANSPORT_WIDTH = 160;
 const BROWSER_VIDEO_TRANSPORT_HEIGHT = 120;
 const BROWSER_VIDEO_FRAME_INTERVAL_MS = 67;
+const MIC_SOURCE_BROWSER = "browser";
+const MIC_SOURCE_NATIVE = "native";
 
 const sourceLabels = {
   RecordedAudio: "Recorded audio",
@@ -352,21 +357,7 @@ function ConnectionChrome({ projection }) {
     ),
     h(
       "section",
-      { className: "toolbar input-toolbar", id: "input-toolbar", "aria-label": "Audio input controls" },
-      h("button", {
-        id: "browser-record",
-        type: "button",
-        className: projection.browserRecording ? "active-toggle record-active" : "",
-        disabled: !projection.browserAudioAvailable || projection.browserRecording,
-        "aria-pressed": projection.browserRecording,
-        onClick: () => startBrowserRecording(),
-      }, "Record"),
-      h("button", {
-        id: "browser-stop",
-        type: "button",
-        disabled: !projection.browserRecording,
-        onClick: () => stopBrowserRecording(),
-      }, "Stop"),
+      { className: "toolbar input-toolbar", id: "input-toolbar", "aria-label": "Input controls" },
       h("button", {
         id: "browser-video-start",
         type: "button",
@@ -381,14 +372,6 @@ function ConnectionChrome({ projection }) {
         disabled: !projection.browserVideoStarting && !projection.browserVideoRecording,
         onClick: () => stopBrowserVideoCapture(),
       }, "Camera Off"),
-      h("button", {
-        id: "native-mic-toggle",
-        type: "button",
-        className: projection.nativeMicEnabled ? "active-toggle" : "",
-        disabled: !projection.nativeMicAvailable || projection.nativeMicUpdating,
-        "aria-pressed": projection.nativeMicEnabled,
-        onClick: () => setNativeMicEnabled(!projection.nativeMicEnabled),
-      }, projection.nativeMicEnabled ? "CPAL Mic On" : "CPAL Mic Off"),
       h("span", { className: "input-status", hidden: !projection.browserError }, projection.browserError),
     ),
     h(
@@ -408,6 +391,18 @@ function PlaybackToolbar({ projection }) {
     h("button", { id: "jump-prev", type: "button", "aria-label": "Previous word", title: "Previous word", onClick: () => jumpSelectedWord(-1) }, "⏮"),
     h("button", { id: "jump-next", type: "button", "aria-label": "Next word", title: "Next word", onClick: () => jumpSelectedWord(1) }, "⏭"),
     h(
+      "select",
+      {
+        id: "mic-source-select",
+        className: "mic-source-select",
+        "aria-label": "Select recording source",
+        value: projection.selectedMicSource,
+        disabled: projection.micControlUpdating || !projection.hasAvailableMicSources,
+        onChange: (event) => setSelectedMicSource(event.currentTarget.value),
+      },
+      projection.micSourceOptions.map((option) => h("option", { key: option.value, value: option.value, disabled: !option.available }, option.label)),
+    ),
+    h(
       "button",
       {
         id: "play-selection-clip",
@@ -418,6 +413,20 @@ function PlaybackToolbar({ projection }) {
         onClick: () => playSelectedClip(),
       },
       "▶︎",
+    ),
+    h(
+      "button",
+      {
+        id: "toggle-selected-mic-record",
+        type: "button",
+        className: projection.micRecording ? "active-toggle record-active" : "",
+        "aria-label": projection.micRecordLabel,
+        title: projection.micRecordLabel,
+        disabled: !projection.canRecord || projection.micControlUpdating,
+        "aria-pressed": projection.micRecording,
+        onClick: () => toggleSelectedMicRecording(),
+      },
+      "●",
     ),
   );
 }
@@ -554,6 +563,18 @@ function buildShellProjection() {
     nativeMicAvailable: inputUiState.nativeMicAvailable,
     nativeMicEnabled: inputUiState.nativeMicEnabled,
     nativeMicUpdating: inputUiState.nativeMicUpdating,
+    selectedMicSource: inputUiState.selectedMicSource,
+    micSourceOptions: [
+      { value: MIC_SOURCE_BROWSER, label: "Web mic", available: inputUiState.browserAudioAvailable },
+      { value: MIC_SOURCE_NATIVE, label: "Local mic", available: inputUiState.nativeMicAvailable },
+    ],
+    hasAvailableMicSources: inputUiState.browserAudioAvailable || inputUiState.nativeMicAvailable,
+    micRecording: inputUiState.micRecording,
+    micControlUpdating: inputUiState.micControlUpdating,
+    canRecord:
+      (inputUiState.selectedMicSource === MIC_SOURCE_BROWSER && inputUiState.browserAudioAvailable)
+      || (inputUiState.selectedMicSource === MIC_SOURCE_NATIVE && inputUiState.nativeMicAvailable),
+    micRecordLabel: inputUiState.micRecording ? "Pause recording" : "Start recording",
     transcriptTokens,
     literalTranscriptText: literalTranscriptTextFromTokens(transcriptTokens),
     selectionBadge: selectionProjection.badge,
@@ -653,6 +674,8 @@ async function refreshInputStatus() {
       inputUiState.browserAudioAvailable = false;
       inputUiState.browserCameraAvailable = false;
       inputUiState.nativeMicAvailable = false;
+      ensureSelectedMicSource();
+      syncMicRecordingState();
       renderShell();
       return;
     }
@@ -661,22 +684,30 @@ async function refreshInputStatus() {
     inputUiState.browserCameraAvailable = Boolean(status.browserCamera?.available);
     inputUiState.nativeMicAvailable = Boolean(status.nativeMic?.available);
     inputUiState.nativeMicEnabled = Boolean(status.nativeMic?.enabled);
+    ensureSelectedMicSource();
+    syncMicRecordingState();
     renderShell();
   } catch (error) {
     inputUiState.browserAudioAvailable = false;
     inputUiState.browserCameraAvailable = false;
     inputUiState.nativeMicAvailable = false;
     inputUiState.browserError = conciseErrorMessage(error);
+    ensureSelectedMicSource();
+    syncMicRecordingState();
     renderShell();
   }
 }
 
-async function setNativeMicEnabled(enabled) {
+async function setNativeMicEnabled(enabled, options = {}) {
+  const { render = true } = options;
   if (!inputUiState.nativeMicAvailable || inputUiState.nativeMicUpdating) {
     return;
   }
   inputUiState.nativeMicUpdating = true;
-  renderShell();
+  if (render) {
+    renderShell();
+  }
+  let requestError = null;
   try {
     const response = await fetch("/api/native-mic", {
       method: "POST",
@@ -691,20 +722,49 @@ async function setNativeMicEnabled(enabled) {
     inputUiState.nativeMicEnabled = Boolean(status.nativeMic?.enabled);
     inputUiState.browserError = null;
   } catch (error) {
+    requestError = error;
     inputUiState.browserError = conciseErrorMessage(error);
   } finally {
     inputUiState.nativeMicUpdating = false;
-    renderShell();
+    ensureSelectedMicSource();
+    syncMicRecordingState();
+    if (render) {
+      renderShell();
+    }
+  }
+  if (requestError) {
+    throw requestError;
   }
 }
 
-async function startBrowserRecording() {
+async function setBrowserMicEnabled(enabled) {
+  if (!inputUiState.browserAudioAvailable) {
+    return;
+  }
+  const response = await fetch("/api/browser-mic", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const status = await response.json();
+  inputUiState.browserAudioAvailable = Boolean(status.browserMic?.available);
+  inputUiState.nativeMicAvailable = Boolean(status.nativeMic?.available);
+  inputUiState.nativeMicEnabled = Boolean(status.nativeMic?.enabled);
+}
+
+async function startBrowserRecording(options = {}) {
+  const { render = true } = options;
   if (inputUiState.browserRecording) {
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
     inputUiState.browserError = "Browser microphone capture is not available.";
-    renderShell();
+    if (render) {
+      renderShell();
+    }
     return;
   }
   try {
@@ -737,16 +797,22 @@ async function startBrowserRecording() {
     inputUiState.browserRecording = true;
     inputUiState.browserError = null;
     uiState.statusMessage = "Streaming browser microphone audio to WaveDeck.";
-    renderShell();
+    syncMicRecordingState();
+    if (render) {
+      renderShell();
+    }
   } catch (error) {
-    stopBrowserRecording({ updateStatus: false });
+    stopBrowserRecording({ updateStatus: false, render: false });
     inputUiState.browserError = conciseErrorMessage(error);
-    renderShell();
+    syncMicRecordingState();
+    if (render) {
+      renderShell();
+    }
   }
 }
 
 function stopBrowserRecording(options = {}) {
-  const { updateStatus = true } = options;
+  const { updateStatus = true, render = true } = options;
   browserAudioState.processor?.disconnect();
   browserAudioState.source?.disconnect();
   for (const track of browserAudioState.stream?.getTracks?.() ?? []) {
@@ -762,7 +828,102 @@ function stopBrowserRecording(options = {}) {
   if (updateStatus) {
     uiState.statusMessage = "Browser microphone stream stopped.";
   }
+  syncMicRecordingState();
+  if (render) {
+    renderShell();
+  }
+}
+
+function ensureSelectedMicSource() {
+  if (inputUiState.selectedMicSource === MIC_SOURCE_NATIVE && inputUiState.nativeMicAvailable) {
+    return;
+  }
+  if (inputUiState.selectedMicSource === MIC_SOURCE_BROWSER && inputUiState.browserAudioAvailable) {
+    return;
+  }
+  if (inputUiState.nativeMicEnabled && inputUiState.nativeMicAvailable) {
+    inputUiState.selectedMicSource = MIC_SOURCE_NATIVE;
+    return;
+  }
+  if (inputUiState.browserAudioAvailable) {
+    inputUiState.selectedMicSource = MIC_SOURCE_BROWSER;
+    return;
+  }
+  if (inputUiState.nativeMicAvailable) {
+    inputUiState.selectedMicSource = MIC_SOURCE_NATIVE;
+  }
+}
+
+function syncMicRecordingState() {
+  inputUiState.micRecording = inputUiState.selectedMicSource === MIC_SOURCE_NATIVE
+    ? inputUiState.nativeMicEnabled
+    : inputUiState.browserRecording;
+}
+
+async function setSelectedMicSource(source) {
+  if (source !== MIC_SOURCE_BROWSER && source !== MIC_SOURCE_NATIVE) {
+    return;
+  }
+  if (source === MIC_SOURCE_BROWSER && !inputUiState.browserAudioAvailable) {
+    return;
+  }
+  if (source === MIC_SOURCE_NATIVE && !inputUiState.nativeMicAvailable) {
+    return;
+  }
+  inputUiState.selectedMicSource = source;
   renderShell();
+  if (inputUiState.micRecording) {
+    await applyMicRecordingState(true);
+  }
+}
+
+async function toggleSelectedMicRecording() {
+  await applyMicRecordingState(!inputUiState.micRecording);
+}
+
+async function applyMicRecordingState(enableRecording) {
+  ensureSelectedMicSource();
+  if (inputUiState.micControlUpdating) {
+    return;
+  }
+  const source = inputUiState.selectedMicSource;
+  const sourceAvailable = source === MIC_SOURCE_NATIVE
+    ? inputUiState.nativeMicAvailable
+    : inputUiState.browserAudioAvailable;
+  if (enableRecording && !sourceAvailable) {
+    return;
+  }
+  inputUiState.micControlUpdating = true;
+  renderShell();
+  try {
+    if (source === MIC_SOURCE_NATIVE) {
+      stopBrowserRecording({ updateStatus: false, render: false });
+      await setBrowserMicEnabled(false);
+      await setNativeMicEnabled(enableRecording, { render: false });
+      uiState.statusMessage = enableRecording
+        ? "Recording from local microphone."
+        : "Local microphone paused.";
+    } else {
+      await setNativeMicEnabled(false, { render: false });
+      await setBrowserMicEnabled(enableRecording);
+      if (enableRecording) {
+        await startBrowserRecording({ render: false });
+        uiState.statusMessage = "Streaming web microphone audio to WaveDeck.";
+      } else {
+        stopBrowserRecording({ updateStatus: false, render: false });
+        uiState.statusMessage = "Web microphone paused.";
+      }
+    }
+    inputUiState.browserError = null;
+  } catch (error) {
+    stopBrowserRecording({ updateStatus: false, render: false });
+    inputUiState.browserError = conciseErrorMessage(error);
+  } finally {
+    inputUiState.micControlUpdating = false;
+    ensureSelectedMicSource();
+    syncMicRecordingState();
+    renderShell();
+  }
 }
 
 function queueBrowserAudioSamples(samples) {
