@@ -8,6 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::runtime_event::RuntimeEvent;
 use crate::soundscape::{SoundscapeId, VoiceAttribution, VoiceId, VoiceLabel};
 pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
@@ -71,6 +72,8 @@ pub struct LiveTraceEvent {
     pub expected_until_unix_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_event: Option<RuntimeEvent>,
 }
 
 impl LiveTraceEvent {
@@ -84,7 +87,7 @@ impl LiveTraceEvent {
         let clock = SessionClock::with_session_start(session_started_at);
         let normalized = clock.normalize(at);
         let t_unix_ns = normalized.unix_ns;
-        Self {
+        let mut event = Self {
             turn,
             soundscape_id: None,
             voice_id: None,
@@ -111,7 +114,18 @@ impl LiveTraceEvent {
             unit_kind: None,
             expected_until_unix_ns: None,
             artifact: None,
-        }
+            runtime_event: None,
+        };
+        event.refresh_runtime_event();
+        event
+    }
+
+    pub fn canonical_runtime_event(&self) -> RuntimeEvent {
+        RuntimeEvent::from_live_trace_event(self)
+    }
+
+    pub fn refresh_runtime_event(&mut self) {
+        self.runtime_event = Some(self.canonical_runtime_event());
     }
 }
 
@@ -189,7 +203,8 @@ pub trait LiveTraceSink {
 }
 
 impl LiveTraceSink for Vec<LiveTraceEvent> {
-    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+    fn emit(&mut self, mut event: LiveTraceEvent) -> anyhow::Result<()> {
+        event.refresh_runtime_event();
         self.push(event);
         Ok(())
     }
@@ -245,7 +260,8 @@ impl JsonlTraceWriter {
 }
 
 impl LiveTraceSink for JsonlTraceWriter {
-    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+    fn emit(&mut self, mut event: LiveTraceEvent) -> anyhow::Result<()> {
+        event.refresh_runtime_event();
         self.write(&event)
     }
 }
@@ -574,7 +590,8 @@ impl Default for SseBroadcaster {
 }
 
 impl LiveTraceSink for SseBroadcaster {
-    fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
+    fn emit(&mut self, mut event: LiveTraceEvent) -> anyhow::Result<()> {
+        event.refresh_runtime_event();
         match self.history.lock() {
             Ok(mut history) => {
                 history.push(event.clone());
@@ -978,5 +995,15 @@ mod tests {
         assert_eq!(event.normalized_elapsed_ms, Some(250));
         assert_eq!(event.t_unix_ns, 1_250_000_000);
         assert_eq!(event.normalized_unix_ns, Some(event.t_unix_ns));
+        let runtime = event.runtime_event.expect("runtime envelope");
+        assert_eq!(runtime.monotonic_ms, 250);
+        assert!(matches!(
+            runtime.source,
+            crate::runtime_event::EventSource::RuntimeTrace
+        ));
+        assert!(
+            runtime.causality.iter().any(|entry| entry == "turn:1"),
+            "turn correlation should be represented in causality"
+        );
     }
 }
