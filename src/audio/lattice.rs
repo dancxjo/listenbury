@@ -565,6 +565,9 @@ impl SpeechHypothesisEngine {
 }
 
 fn merge_signal(existing: Option<f32>, incoming: Option<f32>) -> Option<f32> {
+    // Equal-weight averaging keeps merged confidence stable when multiple
+    // sources publish the same signal type without introducing source-order
+    // dependence.
     match (existing, incoming) {
         (Some(a), Some(b)) => Some(((a + b) * 0.5).clamp(0.0, 1.0)),
         (None, Some(b)) => Some(b.clamp(0.0, 1.0)),
@@ -1021,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn fusion_result_serialises_to_json() {
+    fn fusion_result_serializes_to_json() {
         let mut lattice = HypothesisLattice::new();
         lattice.add(make_word_candidate("testing", 1000, 1300, 0.72));
         let result = fuse_hypotheses(&lattice, &[]).unwrap();
@@ -1128,7 +1131,7 @@ mod tests {
     }
 
     #[test]
-    fn speech_hypothesis_fusion_output_serialises_for_debugging() {
+    fn speech_hypothesis_fusion_output_serializes_for_debugging() {
         let mut lattice = HypothesisLattice::new();
         lattice.add(make_word_candidate_with_provenance(
             "testing",
@@ -1150,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn lattice_serialises_and_deserialises_round_trip() {
+    fn lattice_serializes_and_deserializes_round_trip() {
         let mut lattice = HypothesisLattice::new();
         let h1 = make_word_candidate("testing", 1000, 1300, 0.72);
         let h2 = make_word_candidate("texting", 1000, 1300, 0.19);
