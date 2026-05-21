@@ -18,6 +18,7 @@ use crate::word::{
 
 const DEFAULT_WORD_SLOT_MS: u64 = 240;
 const DEFAULT_LANE_TAIL_BUFFER_MS: u64 = 200;
+const RUNTIME_TRACE_TEXT_ID: TextId = TextId(1);
 const USER_TRANSCRIPT_LANE: &str = "User transcript";
 const PETE_INTENDED_SPEECH_LANE: &str = "Pete intended speech";
 
@@ -185,7 +186,7 @@ fn enrich_payload_pronunciations(payload: &mut ViewerPayload) {
 }
 
 fn build_runtime_span_graph(payload: &ViewerPayload) -> Option<ViewerSpanGraph> {
-    let text_id = TextId(1);
+    let text_id = RUNTIME_TRACE_TEXT_ID;
     let mut next_span_id = 1u64;
     let mut spans = Vec::<RuntimeSpan<String>>::new();
     let mut timed_word_spans = Vec::<(RuntimeSpanId, String, u64, u64)>::new();
@@ -327,6 +328,9 @@ fn event_modality(kind: &str) -> Modality {
     }
 }
 
+/// Returns true when two inclusive millisecond ranges overlap.
+///
+/// Boundary-touching ranges are treated as overlapping (`a_end == b_start`).
 fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
     a_start <= b_end && a_end >= b_start
 }
