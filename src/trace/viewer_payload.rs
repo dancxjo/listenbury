@@ -1262,10 +1262,7 @@ mod tests {
             .find(|event| event.kind == "self_hearing_suppression")
             .expect("self_hearing_suppression span should be present");
 
-        assert_eq!(
-            suppression_event.start_ms, 1_000,
-            "start_ms must be elapsed_ms"
-        );
+        assert_eq!(suppression_event.start_ms, 1_000, "start_ms must be elapsed_ms");
         assert_eq!(
             suppression_event.end_ms,
             Some(3_500),
