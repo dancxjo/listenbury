@@ -437,31 +437,40 @@ fn initialize_ort_runtime_from(path: &Path) -> Result<()> {
 }
 
 fn find_onnxruntime_dylib() -> Option<PathBuf> {
-    find_local_onnxruntime_dylib().or_else(find_linker_onnxruntime_dylib)
+    find_home_onnxruntime_dylib().or_else(find_linker_onnxruntime_dylib)
 }
 
-fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
+fn find_home_onnxruntime_dylib() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let local_lib = home.join(".local/lib");
-    let entries = std::fs::read_dir(local_lib).ok()?;
-    let mut candidates = Vec::new();
+    find_onnxruntime_dylib_in_dirs(home_onnxruntime_search_dirs(&home))
+}
 
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        if !file_name.to_string_lossy().starts_with("python") {
-            continue;
-        }
-        let capi_dir = entry.path().join("site-packages/onnxruntime/capi");
-        if let Ok(capi_entries) = std::fs::read_dir(capi_dir) {
-            candidates.extend(capi_entries.flatten().filter_map(|candidate| {
-                let name = candidate.file_name();
-                is_onnxruntime_dylib_name(&name.to_string_lossy()).then(|| candidate.path())
+fn home_onnxruntime_search_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let local_lib = home.join(".local/lib");
+    if let Ok(entries) = std::fs::read_dir(local_lib) {
+        dirs.extend(entries.flatten().filter_map(|entry| {
+            let file_name = entry.file_name();
+            file_name
+                .to_string_lossy()
+                .starts_with("python")
+                .then(|| entry.path().join("site-packages/onnxruntime/capi"))
+        }));
+    }
+
+    for extensions_dir in [home.join(".vscode/extensions"), home.join(".vscode-server/extensions")]
+    {
+        if let Ok(entries) = std::fs::read_dir(extensions_dir) {
+            dirs.extend(entries.flatten().filter_map(|entry| {
+                let file_name = entry.file_name();
+                file_name
+                    .to_string_lossy()
+                    .contains("windows-ai-studio")
+                    .then(|| entry.path().join("bin"))
             }));
         }
     }
-
-    candidates.sort();
-    candidates.pop()
+    dirs
 }
 
 fn find_linker_onnxruntime_dylib() -> Option<PathBuf> {
@@ -926,6 +935,37 @@ mod tests {
         assert_eq!(found, Some(dir.join("libonnxruntime.so.1")));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn home_onnxruntime_search_dirs_include_python_and_vscode_locations() {
+        let home = std::env::temp_dir().join(format!(
+            "listenbury-riper-ort-home-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".local/lib/python3.12")).expect("create python lib dir");
+        fs::create_dir_all(
+            home.join(".vscode/extensions")
+                .join("ms-windows-ai-studio.windows-ai-studio-1.2.1-linux-x64"),
+        )
+        .expect("create vscode extension dir");
+
+        let dirs = home_onnxruntime_search_dirs(&home);
+
+        assert!(dirs.contains(
+            &home
+                .join(".local/lib/python3.12")
+                .join("site-packages/onnxruntime/capi")
+        ));
+        assert!(dirs.contains(
+            &home
+                .join(".vscode/extensions")
+                .join("ms-windows-ai-studio.windows-ai-studio-1.2.1-linux-x64")
+                .join("bin")
+        ));
+
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
