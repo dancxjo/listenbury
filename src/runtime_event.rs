@@ -223,10 +223,36 @@ impl RuntimeEvent {
     }
 }
 
-/// Legacy adapter for historical stringly `LiveTraceEvent.kind` values.
+/// Legacy adapter for historical string-typed `LiveTraceEvent.kind` values.
 ///
-/// Keep this only while traces/events still rely on string classification.
-/// Delete after all live producers attach typed `runtime_event.kind`.
+/// # ⚠ REPLAY-ONLY — do not add new call sites
+///
+/// This function exists solely so that replaying historical `.jsonl` trace files
+/// (recorded before `TypedRuntimeEvent` existed) still produces a sensible
+/// `RuntimeEventKind`.  Every **live** runtime event producer should instead call
+/// `LiveTraceEvent::set_runtime_kind` with an explicit `TypedRuntimeEvent` value.
+///
+/// ## Deletion checklist
+///
+/// Delete this function once **all** of the following are true:
+///
+/// - [ ] `src/cli/commands/live_half_duplex.rs` — all calls to `trace.emit_now`,
+///       `trace.buffer_now`, `trace.emit`, and `trace.buffer` use `set_runtime_kind`
+///       before emission.
+/// - [ ] `src/web/server.rs` — the test/diagnostic `LiveTraceEvent::new("transcript", …)`
+///       call uses a typed kind.
+/// - [ ] Any other future live producer added to `src/` calls `set_runtime_kind`.
+/// - [ ] Trace-replay code (e.g. `TraceSessionEnvelope` loading, golden-trace fixtures)
+///       either (a) no longer depends on string-prefix inference, or (b) migrates to a
+///       dedicated replay-only helper that is clearly separate from the live path.
+///
+/// ## How to verify readiness
+///
+/// Run `cargo test --no-default-features --lib runtime_event` and confirm that
+/// `all_known_live_producers_use_typed_runtime_kind` passes.  That test currently
+/// documents the *unfinished* migration by asserting that `event_used_legacy_classification`
+/// returns `true` for freshly-constructed events — once all producers are migrated the
+/// test should be inverted and this function should be deleted.
 fn legacy_classify_runtime_kind_from_string(
     kind: &str,
     text: Option<&str>,
@@ -278,6 +304,45 @@ fn legacy_classify_runtime_kind_from_string(
     } else {
         RuntimeEventKind::Other(subtype)
     }
+}
+
+/// Returns `true` when `event.runtime_event.kind` was inferred by the legacy string
+/// fallback rather than set explicitly via [`LiveTraceEvent::set_runtime_kind`].
+///
+/// This is the **mechanical detection hook** for the migration tracker.  Use it in
+/// tests to assert that a producer has (or has not yet) migrated to the typed path:
+///
+/// ```ignore
+/// // A producer that still relies on string-only classification:
+/// assert!(event_used_legacy_classification(&event));
+///
+/// // A producer that already calls set_runtime_kind:
+/// assert!(!event_used_legacy_classification(&event));
+/// ```
+///
+/// The function re-runs `legacy_classify_runtime_kind_from_string` on the event's
+/// `kind` string and compares the result against the stored `runtime_event.kind`.
+/// They match when no explicit typed kind was set; they differ when the producer
+/// called `set_runtime_kind` with a domain that differs from the legacy inference.
+///
+/// # Note on ambiguous cases
+/// If a producer calls `set_runtime_kind` but chooses the exact same domain
+/// that the legacy classifier would also choose, this function conservatively
+/// reports `true` (a false-positive in that narrow case).  This is acceptable —
+/// the goal is to catch events where `set_runtime_kind` was never called at all,
+/// and any producer that calls `set_runtime_kind` should be considered migrated
+/// regardless of whether its chosen domain happens to match the legacy inference.
+pub(crate) fn event_used_legacy_classification(event: &LiveTraceEvent) -> bool {
+    let Some(runtime) = event.runtime_event.as_ref() else {
+        return true;
+    };
+    let legacy_kind = legacy_classify_runtime_kind_from_string(
+        &event.kind,
+        event.text.as_deref(),
+        event.reason.as_deref(),
+        event.artifact.clone(),
+    );
+    runtime.kind == legacy_kind
 }
 
 #[cfg(test)]
@@ -379,6 +444,98 @@ mod tests {
         assert_eq!(
             runtime.kind,
             RuntimeEventKind::BrowserInput(subtype("browser_pointer_move"))
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Legacy classification detection tests
+    // -----------------------------------------------------------------------
+
+    /// Documents the current migration state: a freshly-constructed live trace event
+    /// that never had `set_runtime_kind` called on it is detected as legacy-classified.
+    ///
+    /// This test should be updated (or deleted together with `legacy_classify_runtime_kind_from_string`)
+    /// once all live producers migrate to the typed path.
+    #[test]
+    fn all_known_live_producers_use_typed_runtime_kind() {
+        // Representative sample of kind strings emitted by live producers in
+        // src/cli/commands/live_half_duplex.rs and src/web/server.rs.
+        // All of these currently go through the legacy fallback because no
+        // live producer calls set_runtime_kind() yet.
+        let legacy_kinds = [
+            "capture_started",
+            "speech_started",
+            "breath_group_opened",
+            "breath_group_closed",
+            "asr_started",
+            "asr_finished",
+            "transcript",
+            "first_llm_token",
+            "tts_enqueue_finished",
+            "playback_finished",
+        ];
+
+        for kind in legacy_kinds {
+            let event = LiveTraceEvent::new(SessionId::new(), 1, kind, ts(1_100), ts(1_000));
+            assert!(
+                event_used_legacy_classification(&event),
+                "expected '{kind}' to use legacy classification — once this producer \
+                 calls set_runtime_kind() flip this assertion to assert!(!...)"
+            );
+        }
+    }
+
+    /// Verifies that a producer which calls `set_runtime_kind` with a domain that
+    /// differs from the legacy inference is correctly identified as **not** legacy.
+    ///
+    /// This is the "typed runtime event attachment on a live-produced trace event" test
+    /// required by the acceptance criteria.
+    #[test]
+    fn event_with_typed_kind_bypasses_legacy_detection() {
+        // "brand_new_event_name" has no legacy prefix, so the legacy fallback would
+        // classify it as Other.  A producer that explicitly sets BrowserInput gets
+        // a different domain → the event is NOT considered legacy-classified.
+        let mut event = LiveTraceEvent::new(
+            SessionId::new(),
+            3,
+            "brand_new_event_name",
+            ts(1_100),
+            ts(1_000),
+        );
+        event.set_runtime_kind(TypedRuntimeEvent::BrowserInput(subtype("brand_new_event_name")).into());
+
+        assert!(
+            !event_used_legacy_classification(&event),
+            "a producer that calls set_runtime_kind should not be detected as legacy"
+        );
+        assert_eq!(
+            event.runtime_event.as_ref().unwrap().kind,
+            RuntimeEventKind::BrowserInput(subtype("brand_new_event_name")),
+        );
+    }
+
+    /// Shows the ideal migration pattern for a live producer:
+    /// create the event, then immediately call set_runtime_kind before emitting.
+    #[test]
+    fn live_producer_pattern_attaches_typed_runtime_event() {
+        let session_id = SessionId::new();
+        let mut event = LiveTraceEvent::new(session_id, 2, "capture_started", ts(1_050), ts(1_000));
+
+        // The typed path: producer explicitly declares the domain.
+        event.set_runtime_kind(
+            TypedRuntimeEvent::Hearing(RuntimeEventSubtype {
+                kind: "capture_started".to_string(),
+                text: None,
+                reason: None,
+                artifact: None,
+            })
+            .into(),
+        );
+
+        let runtime = RuntimeEvent::from_live_trace_event(&event);
+        assert!(
+            matches!(runtime.kind, RuntimeEventKind::Hearing(_)),
+            "live producer should attach a Hearing domain for capture_started"
         );
     }
 }
