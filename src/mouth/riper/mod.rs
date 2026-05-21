@@ -3,6 +3,7 @@ pub mod backend;
 pub mod config;
 pub mod encoder;
 pub mod espeak_ng_rules;
+pub mod evidence;
 pub mod g2p;
 pub mod morphophonology;
 pub mod phoneme;
@@ -21,6 +22,11 @@ pub use espeak_ng_rules::{
     PronunciationOverrideRule, PunctuationProsodyRule, RuleContextConstraint, RuleProvenance,
     StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule, export_rule_table_to_json,
     import_rule_table_from_str, load_seed_rule_table,
+};
+pub use evidence::{
+    AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimId, ClaimKind, ClaimValue,
+    ConflictEntry, ResolvedAnalysis, SpanState, claim_from_environment_match, next_claim_id,
+    resolve_claims, source_default_priority,
 };
 pub use g2p::{
     G2pError, GraphemeToPhoneme, LexicalStressLevel, LexicalStressSource, LexicalStressTarget,
@@ -54,10 +60,10 @@ pub use prosody_planner::{
     ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RiperProsodyRealization,
 };
 pub use sentence_analysis::{
-    AnalysisClaim, AnalysisClaimKind, AnalysisSource, ContextPredicate, EnvironmentPattern,
-    HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole, ReductionClass, ReductionDiagnostic,
-    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind,
-    SyntacticLinkParse, SyntacticRole, TokenAnalysis, WordIndex,
+    ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
+    ReductionClass, ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+    SyntacticLink, SyntacticLinkKind, SyntacticLinkParse, SyntacticLinkSource, SyntacticRole,
+    TokenAnalysis, WordIndex,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

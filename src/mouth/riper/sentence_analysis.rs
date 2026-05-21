@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
+use crate::mouth::riper::evidence::{
+    AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
+};
 use crate::mouth::riper::text::{NormalizedText, NormalizedToken, detect_vocative_spans};
 
 pub type WordIndex = usize;
@@ -45,7 +48,7 @@ pub struct SyntacticLink {
     pub right: WordIndex,
     pub kind: SyntacticLinkKind,
     pub confidence: f32,
-    pub source: AnalysisSource,
+    pub source: SyntacticLinkSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -65,27 +68,11 @@ pub enum SyntacticLinkKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AnalysisSource {
+pub enum SyntacticLinkSource {
+    /// Produced by the primary heuristic grammar-island analyser.
     HeuristicGrammarIsland,
+    /// Produced as an alternative parse for an attachment ambiguity.
     AmbiguityVariant,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AnalysisClaimKind {
-    InfinitivalMarker,
-    WeakFunctionCandidate,
-    ContrastPair,
-    VocativeBoundary,
-    ParentheticalBoundary,
-    AppositionBoundary,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AnalysisClaim {
-    pub word_indices: Vec<WordIndex>,
-    pub kind: AnalysisClaimKind,
-    pub confidence: f32,
-    pub source: AnalysisSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -363,21 +350,25 @@ fn build_link_parses(
                     right: idx + 1,
                     kind: SyntacticLinkKind::InfinitivalMarker,
                     confidence: INFINITIVAL_MARKER_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
-            claims.push(AnalysisClaim {
-                word_indices: vec![idx],
-                kind: AnalysisClaimKind::InfinitivalMarker,
-                confidence: INFINITIVAL_MARKER_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
-            });
-            claims.push(AnalysisClaim {
-                word_indices: vec![idx],
-                kind: AnalysisClaimKind::WeakFunctionCandidate,
-                confidence: WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
-            });
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(idx),
+                ClaimKind::InfinitivalMarker,
+                ClaimValue::Syntactic,
+                AnalysisSourceKind::SyntaxRule,
+                INFINITIVAL_MARKER_CONFIDENCE,
+                "to before likely verb is an infinitival marker",
+            ));
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(idx),
+                ClaimKind::WeakFunctionCandidate,
+                ClaimValue::Syntactic,
+                AnalysisSourceKind::SyntaxRule,
+                WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
+                "infinitival to is a weak function word candidate",
+            ));
         }
 
         if is_determiner(left) && is_likely_nominal(right) {
@@ -388,7 +379,7 @@ fn build_link_parses(
                     right: idx + 1,
                     kind: SyntacticLinkKind::Determiner,
                     confidence: DETERMINER_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
         }
@@ -401,7 +392,7 @@ fn build_link_parses(
                     right: idx + 1,
                     kind: SyntacticLinkKind::Auxiliary,
                     confidence: AUXILIARY_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
         }
@@ -414,7 +405,7 @@ fn build_link_parses(
                     right: idx + 1,
                     kind: SyntacticLinkKind::Modifier,
                     confidence: MODIFIER_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
         }
@@ -428,15 +419,17 @@ fn build_link_parses(
                 right,
                 kind: SyntacticLinkKind::ContrastPair,
                 confidence: CONTRAST_PAIR_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
             },
         );
-        claims.push(AnalysisClaim {
-            word_indices: vec![left, right],
-            kind: AnalysisClaimKind::ContrastPair,
-            confidence: CONTRAST_PAIR_CONFIDENCE,
-            source: AnalysisSource::HeuristicGrammarIsland,
-        });
+        claims.push(AnalysisClaim::new(
+            AnalysisTarget::WordRange(vec![left, right]),
+            ClaimKind::ContrastPair,
+            ClaimValue::Syntactic,
+            AnalysisSourceKind::SyntaxRule,
+            CONTRAST_PAIR_CONFIDENCE,
+            "contrastive negation pattern detected",
+        ));
     }
 
     let vocative_spans = detect_vocative_spans(source_text);
@@ -457,15 +450,17 @@ fn build_link_parses(
                     right: first_target,
                     kind: SyntacticLinkKind::Vocative,
                     confidence: VOCATIVE_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
-            claims.push(AnalysisClaim {
-                word_indices: vec![first_target],
-                kind: AnalysisClaimKind::VocativeBoundary,
-                confidence: VOCATIVE_LINK_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
-            });
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(first_target),
+                ClaimKind::VocativeBoundary,
+                ClaimValue::Syntactic,
+                AnalysisSourceKind::SyntaxRule,
+                VOCATIVE_LINK_CONFIDENCE,
+                "comma-delimited proper name after verb is a vocative boundary",
+            ));
         }
     }
 
@@ -521,15 +516,17 @@ fn build_link_parses(
                     right: target,
                     kind: SyntacticLinkKind::Apposition,
                     confidence: APPOSITION_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
-            claims.push(AnalysisClaim {
-                word_indices: between.clone(),
-                kind: AnalysisClaimKind::AppositionBoundary,
-                confidence: APPOSITION_LINK_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
-            });
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordRange(between.clone()),
+                ClaimKind::AppositionBoundary,
+                ClaimValue::Syntactic,
+                AnalysisSourceKind::SyntaxRule,
+                APPOSITION_LINK_CONFIDENCE,
+                "relative clause introduced by who/which/that/whom",
+            ));
             continue;
         }
         if let Some(right_anchor) = right_break.2 {
@@ -540,15 +537,17 @@ fn build_link_parses(
                     right: right_anchor,
                     kind: SyntacticLinkKind::Parenthetical,
                     confidence: PARENTHETICAL_LINK_CONFIDENCE,
-                    source: AnalysisSource::HeuristicGrammarIsland,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
-            claims.push(AnalysisClaim {
-                word_indices: between.clone(),
-                kind: AnalysisClaimKind::ParentheticalBoundary,
-                confidence: PARENTHETICAL_LINK_CONFIDENCE,
-                source: AnalysisSource::HeuristicGrammarIsland,
-            });
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordRange(between.clone()),
+                ClaimKind::ParentheticalBoundary,
+                ClaimValue::Syntactic,
+                AnalysisSourceKind::SyntaxRule,
+                PARENTHETICAL_LINK_CONFIDENCE,
+                "parenthetical phrase between commas",
+            ));
         }
     }
 
@@ -568,7 +567,7 @@ fn build_link_parses(
                 right: object_index,
                 kind: SyntacticLinkKind::Modifier,
                 confidence: AMBIGUOUS_NOUN_ATTACHMENT_CONFIDENCE,
-                source: AnalysisSource::AmbiguityVariant,
+                source: SyntacticLinkSource::AmbiguityVariant,
             },
         );
         let mut verb_parse = primary_parse;
@@ -580,7 +579,7 @@ fn build_link_parses(
                 right: object_index,
                 kind: SyntacticLinkKind::Complement,
                 confidence: AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE,
-                source: AnalysisSource::AmbiguityVariant,
+                source: SyntacticLinkSource::AmbiguityVariant,
             },
         );
         return vec![noun_parse, verb_parse];
@@ -938,6 +937,7 @@ fn is_likely_verb(word: &str) -> bool {
         "go" | "leave"
             | "remember"
             | "see"
+            | "saw"
             | "stay"
             | "be"
             | "try"
@@ -1011,12 +1011,12 @@ mod tests {
             parse
                 .claims
                 .iter()
-                .any(|claim| claim.kind == AnalysisClaimKind::InfinitivalMarker
-                    && claim.word_indices == vec![to])
+                .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
+                    && claim.target == AnalysisTarget::WordIndex(to))
         );
         assert!(parse.claims.iter().any(|claim| claim.kind
-            == AnalysisClaimKind::WeakFunctionCandidate
-            && claim.word_indices == vec![to]));
+            == ClaimKind::WeakFunctionCandidate
+            && claim.target == AnalysisTarget::WordIndex(to)));
         assert!(
             analysis
                 .environment_patterns()
@@ -1037,7 +1037,8 @@ mod tests {
         let from = word_index(&analysis, "from");
         assert!(has_link(parse, to, from, SyntacticLinkKind::ContrastPair));
         assert!(parse.claims.iter().any(|claim| {
-            claim.kind == AnalysisClaimKind::ContrastPair && claim.word_indices == vec![to, from]
+            claim.kind == ClaimKind::ContrastPair
+                && claim.target == AnalysisTarget::WordRange(vec![to, from])
         }));
     }
 
@@ -1052,8 +1053,8 @@ mod tests {
             parse
                 .claims
                 .iter()
-                .any(|claim| claim.kind == AnalysisClaimKind::VocativeBoundary
-                    && claim.word_indices == vec![dave])
+                .any(|claim| claim.kind == ClaimKind::VocativeBoundary
+                    && claim.target == AnalysisTarget::WordIndex(dave))
         );
     }
 
@@ -1080,7 +1081,7 @@ mod tests {
             parse
                 .claims
                 .iter()
-                .any(|claim| claim.kind == AnalysisClaimKind::ParentheticalBoundary)
+                .any(|claim| claim.kind == ClaimKind::ParentheticalBoundary)
         );
 
         let apposition = analyze("My brother, who lives in Tacoma, arrived.");
@@ -1097,7 +1098,7 @@ mod tests {
             apposition_parse
                 .claims
                 .iter()
-                .any(|claim| claim.kind == AnalysisClaimKind::AppositionBoundary)
+                .any(|claim| claim.kind == ClaimKind::AppositionBoundary)
         );
     }
 
@@ -1112,7 +1113,7 @@ mod tests {
             has_link(parse, man, telescope, SyntacticLinkKind::Modifier)
                 && parse.rank >= 0.5
                 && parse.links.iter().any(|link| {
-                    link.source == AnalysisSource::AmbiguityVariant
+                    link.source == SyntacticLinkSource::AmbiguityVariant
                         || link.kind == SyntacticLinkKind::Determiner
                 })
         }));
@@ -1122,7 +1123,7 @@ mod tests {
                 && parse
                     .links
                     .iter()
-                    .any(|link| link.source == AnalysisSource::AmbiguityVariant)
+                    .any(|link| link.source == SyntacticLinkSource::AmbiguityVariant)
         }));
     }
 
