@@ -427,7 +427,10 @@ fn fusion_profile_default_matches_original_weights() {
 /// FusionWeights::default() must produce the same values as FusionProfile::Default.
 #[test]
 fn fusion_weights_default_impl_matches_profile_default() {
-    assert_eq!(FusionWeights::default(), FusionWeights::from(FusionProfile::Default));
+    assert_eq!(
+        FusionWeights::default(),
+        FusionWeights::from(FusionProfile::Default)
+    );
 }
 
 /// When a hypothesis has high ASR confidence but low acoustic signals and a
@@ -469,18 +472,24 @@ fn fusion_profile_acoustic_heavy_overrides_default_winner() {
     ];
 
     // Default profile: ASR weight dominates → "whisper-word" wins.
-    let default_result =
-        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Default))
-            .unwrap();
+    let default_result = fuse_hypotheses(
+        &lattice,
+        &evidence,
+        &FusionWeights::from(FusionProfile::Default),
+    )
+    .unwrap();
     assert_eq!(
         default_result.resolved.label, "whisper-word",
         "Default profile should favour the high-ASR hypothesis"
     );
 
     // AcousticHeavy profile: energy/acoustic weight dominates → "acoustic-word" wins.
-    let acoustic_result =
-        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::AcousticHeavy))
-            .unwrap();
+    let acoustic_result = fuse_hypotheses(
+        &lattice,
+        &evidence,
+        &FusionWeights::from(FusionProfile::AcousticHeavy),
+    )
+    .unwrap();
     assert_eq!(
         acoustic_result.resolved.label, "acoustic-word",
         "AcousticHeavy profile should favour the high-energy hypothesis"
@@ -522,15 +531,21 @@ fn fusion_profile_realtime_favours_energy_over_asr() {
     ];
 
     // Default profile: ASR weight (3.0) beats energy (1.5) + timing (1.25) → asr-word wins.
-    let default_result =
-        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Default))
-            .unwrap();
+    let default_result = fuse_hypotheses(
+        &lattice,
+        &evidence,
+        &FusionWeights::from(FusionProfile::Default),
+    )
+    .unwrap();
     assert_eq!(default_result.resolved.label, "asr-word");
 
     // Realtime profile: energy (2.5) + timing (2.0) beats ASR (1.5) → energy-word wins.
-    let realtime_result =
-        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Realtime))
-            .unwrap();
+    let realtime_result = fuse_hypotheses(
+        &lattice,
+        &evidence,
+        &FusionWeights::from(FusionProfile::Realtime),
+    )
+    .unwrap();
     assert_eq!(realtime_result.resolved.label, "energy-word");
 }
 
@@ -559,7 +574,10 @@ fn speech_hypothesis_engine_with_profile_stores_weights() {
 fn speech_hypothesis_engine_set_weights_changes_profile() {
     let mut engine = SpeechHypothesisEngine::with_default_sources();
     engine.set_weights(FusionWeights::from(FusionProfile::VisualAssist));
-    assert_eq!(engine.weights(), &FusionWeights::from(FusionProfile::VisualAssist));
+    assert_eq!(
+        engine.weights(),
+        &FusionWeights::from(FusionProfile::VisualAssist)
+    );
 }
 
 /// All five named profiles must each produce a valid (non-None) fusion result

@@ -78,7 +78,10 @@ impl FusionInput {
         };
 
         push(self.asr_confidence, weights.asr_confidence);
-        push(self.energy_alignment_quality, weights.energy_alignment_quality);
+        push(
+            self.energy_alignment_quality,
+            weights.energy_alignment_quality,
+        );
         push(
             self.phone_segmentation_agreement,
             weights.phone_segmentation_agreement,
@@ -172,8 +175,7 @@ pub fn fuse_hypotheses(
         .map(|hyp| {
             let extra = evidence_map.get(hyp.id.0.as_str()).copied().unwrap_or(0.0);
             let fused = if extra > 0.0 {
-                (hyp.confidence + extra * external_evidence_blend)
-                    / (1.0 + external_evidence_blend)
+                (hyp.confidence + extra * external_evidence_blend) / (1.0 + external_evidence_blend)
             } else {
                 hyp.confidence
             };
@@ -202,8 +204,8 @@ pub fn fuse_hypotheses(
             .edges
             .iter()
             .find(|e| {
-                (&e.from == &best.hyp.id && &e.to == &other.hyp.id)
-                    || (&e.from == &other.hyp.id && &e.to == &best.hyp.id)
+                (e.from == best.hyp.id && e.to == other.hyp.id)
+                    || (e.from == other.hyp.id && e.to == best.hyp.id)
             })
             .map(|e| &e.kind);
 

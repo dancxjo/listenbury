@@ -14,13 +14,15 @@ impl SpeechEvidenceSource for AcousticEvidenceSource {
             .active_hypotheses()
             .into_iter()
             .map(|hypothesis| {
-                let mut input = FusionInput::default();
-                input.spectral_evidence = Some(hypothesis.score.clamp(0.0, 1.0));
-                input.energy_alignment_quality = match hypothesis.source {
-                    HypothesisSource::EndpointDetector => {
-                        Some(hypothesis.confidence.clamp(0.0, 1.0))
-                    }
-                    _ => provenance_f32(hypothesis, "energy_alignment_quality"),
+                let input = FusionInput {
+                    spectral_evidence: Some(hypothesis.score.clamp(0.0, 1.0)),
+                    energy_alignment_quality: match hypothesis.source {
+                        HypothesisSource::EndpointDetector => {
+                            Some(hypothesis.confidence.clamp(0.0, 1.0))
+                        }
+                        _ => provenance_f32(hypothesis, "energy_alignment_quality"),
+                    },
+                    ..FusionInput::default()
                 };
                 (hypothesis.id.clone(), input)
             })
@@ -79,8 +81,10 @@ impl SpeechEvidenceSource for TranscriptStabilityEvidenceSource {
             .active_hypotheses()
             .into_iter()
             .filter_map(|hypothesis| {
-                let mut input = FusionInput::default();
-                input.asr_confidence = provenance_f32(hypothesis, "asr_confidence");
+                let mut input = FusionInput {
+                    asr_confidence: provenance_f32(hypothesis, "asr_confidence"),
+                    ..FusionInput::default()
+                };
 
                 let stability = provenance_f32(hypothesis, "transcript_stability")
                     .or_else(|| provenance_f32(hypothesis, "stable_prefix_ratio"));
@@ -111,7 +115,7 @@ impl SpeechEvidenceSource for VisualSpeechEvidenceSource {
             .active_hypotheses()
             .into_iter()
             .filter_map(|hypothesis| {
-                let visual = provenance_f32(hypothesis, "visual_speech_evidence").or_else(|| {
+                let visual = provenance_f32(hypothesis, "visual_speech_evidence").or({
                     if matches!(hypothesis.source, HypothesisSource::VisualSpeech) {
                         Some(hypothesis.confidence)
                     } else {

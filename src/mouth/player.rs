@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use anyhow::Result;
 
 use crate::audio::frame::AudioFrame;
 use crate::mouth::planner::{ExpressiveUnit, FaceCommand, MouthCommand};
 use crate::mouth::tts::TextToSpeech;
-use crate::time::ExactTimestamp;
+use crate::time::{Clock, ExactTimestamp, SystemClock};
 
 /// A unique identifier for a speech playback unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -97,6 +98,7 @@ struct PendingSynthesis {
 ///   the limitation is logged.
 pub struct SequentialPlayer<T: TextToSpeech> {
     tts: T,
+    clock: Arc<dyn Clock>,
     queue: VecDeque<ExpressiveUnit>,
     pending_faces: Vec<FaceCommand>,
     synthesis: Option<PendingSynthesis>,
@@ -109,8 +111,14 @@ pub struct SequentialPlayer<T: TextToSpeech> {
 impl<T: TextToSpeech> SequentialPlayer<T> {
     /// Create a new player backed by the given [`TextToSpeech`] implementation.
     pub fn new(tts: T) -> Self {
+        Self::with_clock(tts, Arc::new(SystemClock))
+    }
+
+    /// Create a new player with an injectable clock for deterministic tests.
+    pub fn with_clock(tts: T, clock: Arc<dyn Clock>) -> Self {
         Self {
             tts,
+            clock,
             queue: VecDeque::new(),
             pending_faces: Vec::new(),
             synthesis: None,
@@ -118,6 +126,10 @@ impl<T: TextToSpeech> SequentialPlayer<T> {
             command_events: Vec::new(),
             next_id: 0,
         }
+    }
+
+    fn now(&self) -> ExactTimestamp {
+        self.clock.now()
     }
 
     fn alloc_id(&mut self) -> PlaybackUnitId {
@@ -152,9 +164,8 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
                 self.synthesis = None;
                 self.audio_buffer.clear();
                 self.tts.stop()?;
-                self.command_events.push(PlaybackEvent::PlaybackStopped {
-                    at: ExactTimestamp::now(),
-                });
+                self.command_events
+                    .push(PlaybackEvent::PlaybackStopped { at: self.now() });
             }
             MouthCommand::FadeOut { millis } => {
                 // First-pass fallback: the CPAL backend does not support gradual
@@ -170,7 +181,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
                 self.tts.stop()?;
                 self.command_events.push(PlaybackEvent::PlaybackFaded {
                     millis,
-                    at: ExactTimestamp::now(),
+                    at: self.now(),
                 });
             }
         }
@@ -187,7 +198,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
             if !new_frames.is_empty() {
                 // All frames for this unit arrived; synthesis is complete.
                 let synth = self.synthesis.take().unwrap();
-                let at = ExactTimestamp::now();
+                let at = self.now();
                 events.push(PlaybackEvent::SpeechStarted {
                     id: synth.id,
                     text: synth.text,
@@ -215,7 +226,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
                 ExpressiveUnit::Speech(plan) => {
                     // Emit all buffered face commands right before this speech
                     // unit starts, aligning them with actual playback time.
-                    let at = ExactTimestamp::now();
+                    let at = self.now();
                     for face_cmd in self.pending_faces.drain(..) {
                         events.push(Self::emit_face(face_cmd, at));
                     }
@@ -238,7 +249,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
         // If the queue is empty and there are still pending face commands with
         // no speech to follow, emit them immediately.
         if self.synthesis.is_none() && self.queue.is_empty() && !self.pending_faces.is_empty() {
-            let at = ExactTimestamp::now();
+            let at = self.now();
             for face_cmd in self.pending_faces.drain(..) {
                 events.push(Self::emit_face(face_cmd, at));
             }
@@ -256,6 +267,8 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
 mod tests {
     use super::*;
     use crate::mouth::planner::{SpeechPlan, SpeechUnit};
+    use crate::time::FakeClock;
+    use std::time::Duration;
 
     // ---------------------------------------------------------------------------
     // Test helpers
@@ -363,6 +376,34 @@ mod tests {
             ev2.iter().any(is_speech_finished),
             "expected SpeechFinished; got {ev2:?}"
         );
+    }
+
+    #[test]
+    fn playback_events_use_injected_clock() {
+        let clock = FakeClock::from_unix_nanos(100_000_000);
+        let mut player = SequentialPlayer::with_clock(MockTts::new(), Arc::new(clock.clone()));
+        player.enqueue(sentence("Hello.")).unwrap();
+
+        let ev1 = player.poll().unwrap();
+        assert!(ev1.iter().any(|e| is_speech_queued(e, "Hello.")));
+
+        clock.advance(Duration::from_millis(75));
+        let ev2 = player.poll().unwrap();
+
+        assert!(ev2.iter().any(|e| {
+            matches!(
+                e,
+                PlaybackEvent::SpeechStarted { at, .. }
+                    if *at == ExactTimestamp::from_unix_nanos(175_000_000)
+            )
+        }));
+        assert!(ev2.iter().any(|e| {
+            matches!(
+                e,
+                PlaybackEvent::SpeechFinished { at, .. }
+                    if *at == ExactTimestamp::from_unix_nanos(175_000_000)
+            )
+        }));
     }
 
     /// Audio frames are exposed through poll_audio after synthesis completes.

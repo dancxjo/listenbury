@@ -320,7 +320,9 @@ const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = Some(16);
     not(all(feature = "asr-whisper-cuda", feature = "llm-llama-cpp-cuda"))
 ))]
 const DEFAULT_LIVE_LLAMA_GPU_LAYERS: Option<u32> = None;
+#[allow(dead_code)]
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
+#[allow(dead_code)]
 const MONO_CHANNELS: u16 = 1;
 
 #[cfg(all(
@@ -2526,6 +2528,7 @@ fn drain_pending_into_ring(
     }
 }
 
+#[allow(dead_code)]
 fn vad_frame_format(
     vad_backend: VadBackendKind,
     input_sample_rate_hz: u32,
@@ -2537,6 +2540,7 @@ fn vad_frame_format(
     }
 }
 
+#[allow(dead_code)]
 fn convert_frame_samples(
     samples: &[f32],
     input_sample_rate_hz: u32,
@@ -2561,6 +2565,7 @@ fn convert_frame_samples(
     converted
 }
 
+#[allow(dead_code)]
 fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
     let channel_count = usize::from(channels).max(1);
     if channel_count == 1 {
@@ -2572,6 +2577,7 @@ fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
     if samples.is_empty() || source_rate_hz == target_rate_hz {
         return samples.to_vec();

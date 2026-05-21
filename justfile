@@ -34,6 +34,10 @@ cuda *args:
 build:
     cargo build
 
+# Install local build and scan tooling.
+setup:
+    @cargo audit --version >/dev/null 2>&1 || cargo install --locked cargo-audit
+
 # Build with both local CUDA backend feature flags enabled.
 build-cuda:
     CUDA_LIBRARY_PATH="{{cuda-library-path}}" RUSTFLAGS="{{cuda-rustflags}}" cargo build --features "asr-whisper-cuda llm-llama-cpp-cuda"
@@ -49,6 +53,25 @@ check-cuda:
 # Run the test suite.
 test:
     cargo test
+
+# Run the fast CI mirror: formatting, lints, short smoke tests, and audit.
+rescan:
+    cargo fmt -- --check
+    cargo clippy --all-targets -- -D warnings
+    LISTENBURY_SHORT=1 cargo test --no-default-features --test pipeline_smoke --release -- --nocapture
+    just audit
+
+# Run the full local release integration suite.
+rescan-full:
+    cargo fmt -- --check
+    cargo clippy --all-targets -- -D warnings
+    cargo test --all --tests --release -- --nocapture
+    just audit
+
+# Run the security audit, installing cargo-audit if needed.
+audit:
+    @cargo audit --version >/dev/null 2>&1 || cargo install --locked cargo-audit
+    cargo audit
 
 # Remove Cargo build artifacts.
 clean:

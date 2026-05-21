@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -39,12 +40,68 @@ impl<'de> Deserialize<'de> for ExactTimestamp {
 }
 
 impl ExactTimestamp {
+    pub fn from_unix_nanos(unix_nanos: u128) -> Self {
+        Self { unix_nanos }
+    }
+
     pub fn now() -> Self {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock is set before Unix epoch")
             .as_nanos();
         Self { unix_nanos: nanos }
+    }
+
+    pub fn saturating_add(self, duration: Duration) -> Self {
+        Self {
+            unix_nanos: self.unix_nanos.saturating_add(duration.as_nanos()),
+        }
+    }
+}
+
+pub trait Clock: Send + Sync {
+    fn now(&self) -> ExactTimestamp;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> ExactTimestamp {
+        ExactTimestamp::now()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FakeClock {
+    now: Arc<Mutex<ExactTimestamp>>,
+}
+
+impl FakeClock {
+    pub fn new(now: ExactTimestamp) -> Self {
+        Self {
+            now: Arc::new(Mutex::new(now)),
+        }
+    }
+
+    pub fn from_unix_nanos(unix_nanos: u128) -> Self {
+        Self::new(ExactTimestamp::from_unix_nanos(unix_nanos))
+    }
+
+    pub fn set(&self, now: ExactTimestamp) {
+        *self.now.lock().expect("fake clock mutex poisoned") = now;
+    }
+
+    pub fn advance(&self, duration: Duration) -> ExactTimestamp {
+        let mut now = self.now.lock().expect("fake clock mutex poisoned");
+        *now = now.saturating_add(duration);
+        *now
+    }
+}
+
+impl Clock for FakeClock {
+    fn now(&self) -> ExactTimestamp {
+        *self.now.lock().expect("fake clock mutex poisoned")
     }
 }
 
@@ -140,5 +197,17 @@ mod tests {
         let normalized = clock.normalize(at);
         assert_eq!(normalized.unix_ns, 10_225_000_000);
         assert_eq!(normalized.elapsed_ms, 225);
+    }
+
+    #[test]
+    fn fake_clock_returns_controlled_timestamps_without_sleeping() {
+        let clock = FakeClock::from_unix_nanos(1_000);
+        assert_eq!(clock.now(), ExactTimestamp::from_unix_nanos(1_000));
+
+        clock.advance(Duration::from_millis(25));
+        assert_eq!(clock.now(), ExactTimestamp::from_unix_nanos(25_001_000));
+
+        clock.set(ExactTimestamp::from_unix_nanos(42));
+        assert_eq!(clock.now(), ExactTimestamp::from_unix_nanos(42));
     }
 }

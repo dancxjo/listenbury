@@ -237,14 +237,14 @@ impl RuntimeEvent {
 /// Delete this function once **all** of the following are true:
 ///
 /// - [ ] `src/cli/commands/live_half_duplex.rs` — all calls to `trace.emit_now`,
-///       `trace.buffer_now`, `trace.emit`, and `trace.buffer` use `set_runtime_kind`
-///       before emission.
+///   `trace.buffer_now`, `trace.emit`, and `trace.buffer` use `set_runtime_kind`
+///   before emission.
 /// - [ ] `src/web/server.rs` — the test/diagnostic `LiveTraceEvent::new("transcript", …)`
-///       call uses a typed kind.
+///   call uses a typed kind.
 /// - [ ] Any other future live producer added to `src/` calls `set_runtime_kind`.
 /// - [ ] Trace-replay code (e.g. `TraceSessionEnvelope` loading, golden-trace fixtures)
-///       either (a) no longer depends on string-prefix inference, or (b) migrates to a
-///       dedicated replay-only helper that is clearly separate from the live path.
+///   either (a) no longer depends on string-prefix inference, or (b) migrates to a
+///   dedicated replay-only helper that is clearly separate from the live path.
 ///
 /// ## How to verify readiness
 ///
@@ -332,6 +332,7 @@ fn legacy_classify_runtime_kind_from_string(
 /// the goal is to catch events where `set_runtime_kind` was never called at all,
 /// and any producer that calls `set_runtime_kind` should be considered migrated
 /// regardless of whether its chosen domain happens to match the legacy inference.
+#[cfg(test)]
 pub(crate) fn event_used_legacy_classification(event: &LiveTraceEvent) -> bool {
     let Some(runtime) = event.runtime_event.as_ref() else {
         return true;
@@ -502,7 +503,9 @@ mod tests {
             ts(1_100),
             ts(1_000),
         );
-        event.set_runtime_kind(TypedRuntimeEvent::BrowserInput(subtype("brand_new_event_name")).into());
+        event.set_runtime_kind(
+            TypedRuntimeEvent::BrowserInput(subtype("brand_new_event_name")).into(),
+        );
 
         assert!(
             !event_used_legacy_classification(&event),
