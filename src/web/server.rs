@@ -825,6 +825,7 @@ fn receive_browser_audio(
     headers: &[(String, String)],
     body: &[u8],
 ) -> HttpResponse {
+    let routed_at = state.input_control.now();
     if !state.input_control.browser_audio_enabled() {
         return HttpResponse::accepted(
             "browser audio ignored because browser microphone is disabled\n",
@@ -859,7 +860,7 @@ fn receive_browser_audio(
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).clamp(-1.0, 1.0))
         .collect::<Vec<_>>();
     let frame = AudioFrame {
-        captured_at: state.input_control.now(),
+        captured_at: routed_at,
         sample_rate_hz,
         channels,
         samples,
@@ -889,6 +890,7 @@ fn receive_browser_video_frame(
     headers: &[(String, String)],
     body: &[u8],
 ) -> HttpResponse {
+    let routed_at = state.input_control.now();
     if body.is_empty() {
         return HttpResponse::bad_request("video frame body must not be empty\n");
     }
@@ -936,7 +938,7 @@ fn receive_browser_video_frame(
         .unwrap_or(0);
 
     let vision_frame = VisionFrame {
-        captured_at: state.input_control.now(),
+        captured_at: routed_at,
         width,
         height,
         bytes: body.to_vec(),
@@ -1131,8 +1133,8 @@ fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechF
         source: Some("browser.camera".to_string()),
         t_unix_ns: now.unix_nanos.min(u128::from(u64::MAX)) as u64,
         elapsed_ms: frame.time_range_ms.start,
-        normalized_elapsed_ms,
-        normalized_unix_ns: now.unix_nanos.min(u128::from(u64::MAX)) as u64,
+        normalized_elapsed_ms: Some(normalized_elapsed_ms),
+        normalized_unix_ns: Some(now.unix_nanos.min(u128::from(u64::MAX)) as u64),
         text: Some("derived_mouth_motion_features".to_string()),
         confidence: Some(frame.visibility.weighted()),
         group_id: None,

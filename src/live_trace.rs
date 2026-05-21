@@ -51,10 +51,10 @@ pub struct LiveTraceEvent {
     pub source: Option<String>,
     pub t_unix_ns: u64,
     pub elapsed_ms: u64,
-    #[serde(default)]
-    pub normalized_elapsed_ms: u64,
-    #[serde(default)]
-    pub normalized_unix_ns: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_unix_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,8 +101,8 @@ impl LiveTraceEvent {
             source: Some("runtime.trace".to_string()),
             t_unix_ns,
             elapsed_ms: normalized.elapsed_ms,
-            normalized_elapsed_ms: normalized.elapsed_ms,
-            normalized_unix_ns: normalized.unix_ns,
+            normalized_elapsed_ms: Some(normalized.elapsed_ms),
+            normalized_unix_ns: Some(normalized.unix_ns),
             text: None,
             confidence: None,
             group_id: None,
@@ -975,8 +975,8 @@ mod tests {
             LiveTraceEvent::new(SessionId::new(), 1, "capture_started", ts(1_250), ts(1_000));
         assert_eq!(event.source.as_deref(), Some("runtime.trace"));
         assert_eq!(event.elapsed_ms, 250);
-        assert_eq!(event.normalized_elapsed_ms, 250);
+        assert_eq!(event.normalized_elapsed_ms, Some(250));
         assert_eq!(event.t_unix_ns, 1_250_000_000);
-        assert_eq!(event.normalized_unix_ns, event.t_unix_ns);
+        assert_eq!(event.normalized_unix_ns, Some(event.t_unix_ns));
     }
 }
