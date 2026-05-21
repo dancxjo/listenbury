@@ -1,6 +1,7 @@
 mod commands;
 #[cfg(feature = "model-download")]
 mod download_progress;
+mod live_session;
 #[cfg(any(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -13,6 +14,7 @@ mod piper;
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use listenbury::VadBackendKind;
+use live_session::{LiveSession, LiveSessionConfig};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -528,13 +530,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Say(cmd) => commands::run_say(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
         Command::Echo(cmd) => commands::run_echo(cmd),
-        Command::Listen(cmd) => {
-            if cmd.duplex {
-                commands::run_continue(continue_command_from_listen_command(cmd))
-            } else {
-                commands::run_live_half_duplex(cmd)
-            }
-        }
+        Command::Listen(cmd) => run_live_session(LiveSessionConfig::from_listen_command(cmd)),
         Command::Ask(cmd) => commands::run_llama_turn(cmd),
         Command::Complete(mut cmd) => {
             cmd.mode = PromptMode::Raw;
@@ -544,29 +540,6 @@ pub(crate) fn run() -> Result<()> {
         Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::Dev { command } => run_dev(command),
-    }
-}
-
-fn continue_command_from_listen_command(command: LiveHalfDuplexCommand) -> ContinueCommand {
-    ContinueCommand {
-        llm_model: command.llm_model,
-        llm_gpu_layers: command.llm_gpu_layers,
-        piper_bin: command.piper_bin,
-        piper_voice: command.piper_voice,
-        whisper_model: command.whisper_model,
-        vad: command.vad,
-        mode: PromptMode::Raw,
-        max_tokens: None,
-        context_size: 8192,
-        verbatim_turns: 8,
-        tts_vad_pause_ms: 250,
-        tts_vad_listen_ms: 700,
-        web: command.web,
-        web_host: command.web_host,
-        web_port: command.web_port,
-        duplex_trace_scenario: None,
-        jsonl: command.jsonl,
-        prompt: Vec::new(),
     }
 }
 
@@ -580,19 +553,24 @@ fn run_dev(command: DevCommand) -> Result<()> {
         DevCommand::RecordWav(cmd) => commands::run_record_wav(cmd),
         DevCommand::PlayWav(cmd) => commands::run_play_wav(cmd),
         DevCommand::LlamaTurn(cmd) => commands::run_llama_turn(cmd),
-        DevCommand::Continue(cmd) => commands::run_continue(cmd),
+        DevCommand::Continue(cmd) => {
+            run_live_session(LiveSessionConfig::from_continue_command(cmd))
+        }
         DevCommand::TraceViewerExport(cmd) => commands::run_trace_viewer_export(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         DevCommand::LiveHalfDuplex(cmd) => {
-            if cmd.duplex {
-                commands::run_continue(continue_command_from_listen_command(cmd))
-            } else {
-                commands::run_live_half_duplex(cmd)
-            }
+            run_live_session(LiveSessionConfig::from_listen_command(cmd))
         }
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
     }
+}
+
+fn run_live_session(config: LiveSessionConfig) -> Result<()> {
+    let mut session = LiveSession::new(config)?;
+    let run_result = session.run();
+    let shutdown_result = session.shutdown();
+    run_result.and(shutdown_result)
 }
 
 #[cfg(test)]
@@ -1063,7 +1041,7 @@ mod tests {
         let Some(Command::Listen(command)) = cli.command else {
             panic!("expected listen command");
         };
-        let command = continue_command_from_listen_command(command);
+        let command = live_session::continue_command_from_listen_command(command);
         assert!(command.web);
         assert_eq!(command.web_host, "0.0.0.0");
         assert_eq!(command.web_port, 9000);
@@ -1075,6 +1053,50 @@ mod tests {
         assert_eq!(command.piper_voice, Some(PathBuf::from("voices/pete.onnx")));
         assert_eq!(command.vad, VadBackendOption::Energy);
         assert!(command.duplex_trace_scenario.is_none());
+    }
+
+    #[test]
+    fn listen_duplex_maps_to_live_session_config() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--duplex",
+            "--web",
+            "--web-host",
+            "0.0.0.0",
+            "--web-port",
+            "9000",
+            "--jsonl",
+            "out/duplex-live.jsonl",
+            "--whisper-model",
+            "models/ggml-base.en.bin",
+            "--piper-voice",
+            "voices/pete.onnx",
+            "--vad",
+            "energy",
+        ])
+        .expect("listen should parse duplex live session options");
+
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
+        };
+        let config = live_session::LiveSessionConfig::from_listen_command(command);
+        assert_eq!(config.mode, live_session::LiveSessionMode::Duplex);
+        assert_eq!(config.input.vad, VadBackendOption::Energy);
+        assert_eq!(
+            config.asr.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
+        assert_eq!(
+            config.mouth_playback.piper_voice,
+            Some(PathBuf::from("voices/pete.onnx"))
+        );
+        assert_eq!(config.web_bridge.host, "0.0.0.0");
+        assert_eq!(config.web_bridge.port, 9000);
+        assert_eq!(
+            config.tracing.jsonl,
+            Some(PathBuf::from("out/duplex-live.jsonl"))
+        );
     }
 
     #[test]
