@@ -20,8 +20,14 @@ use crate::mouth::riper::{
 };
 use crate::word::TranscriptWord;
 
+/// Allow small ASR/prosody timing disagreement when matching a pause back to
+/// the preceding word boundary in offline echo mode.
 const PAUSE_MATCH_TOLERANCE_MS: u64 = 80;
+/// Treat quarter-second pauses as strong enough to resemble a sentence-level
+/// break instead of an intra-phrase hesitation.
 const STRONG_PAUSE_MS: u64 = 250;
+/// Stretch accented phonemes toward a clearly noticeable but still speech-like
+/// advisory duration hint when exporting to current Riper controls.
 const ACCENT_DURATION_HINT_MS: u64 = 120;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

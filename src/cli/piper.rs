@@ -605,6 +605,7 @@ fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     }
     let channel_count = u64::from(frame.channels);
     let sample_count = frame.samples.len() as u64;
+    // (samples / channels / sample_rate) * 1000, reordered to preserve integer precision.
     sample_count.saturating_mul(1_000) / channel_count.saturating_mul(u64::from(frame.sample_rate_hz))
 }
 
