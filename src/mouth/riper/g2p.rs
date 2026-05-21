@@ -29,7 +29,7 @@ pub trait GraphemeToPhoneme {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence>;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhonemizedUnit {
     pub phonemes: PiperPhonemeSequence,
     pub length_hints: Vec<PhoneLengthHint>,
@@ -108,7 +108,7 @@ pub struct WordProsodyTarget {
     pub normalized_text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PhonemeProsodyCandidate {
     pub id: SpeechCandidateId,
     pub text: String,
@@ -182,7 +182,7 @@ impl PhonemeProsodyCandidate {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PhonemeProsodyCandidateEvent {
     CandidateStarted {
         id: SpeechCandidateId,
