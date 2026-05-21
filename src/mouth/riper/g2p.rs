@@ -18,6 +18,9 @@ use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
+use crate::mouth::riper::sentence_analysis::{
+    HeuristicSentenceAnalyzer, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+};
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
@@ -40,6 +43,7 @@ pub struct PhonemizedUnit {
     pub word_targets: Vec<WordProsodyTarget>,
     pub phoneme_to_word: Vec<Option<usize>>,
     pub lexical_stress: Vec<LexicalStressTarget>,
+    pub sentence_analysis: SentenceAnalysis,
     pub boundary: ProsodyBoundaryHint,
     pub boundary_kind: PhraseBoundaryKind,
     pub commitment: ProsodyCommitment,
@@ -121,6 +125,7 @@ pub struct PhonemeProsodyCandidate {
     pub word_targets: Vec<WordProsodyTarget>,
     pub phoneme_to_word: Vec<Option<usize>>,
     pub lexical_stress: Vec<LexicalStressTarget>,
+    pub sentence_analysis: SentenceAnalysis,
     pub boundary_hint: ProsodyBoundaryHint,
     pub boundary_kind: PhraseBoundaryKind,
     pub commitment: ProsodyCommitment,
@@ -220,6 +225,7 @@ pub struct SimpleEnglishG2p {
 impl SimpleEnglishG2p {
     pub fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError> {
         let normalized = self.normalizer.normalize(text)?;
+        let sentence_analysis = HeuristicSentenceAnalyzer.analyze(text, &normalized);
         let mut symbols = Vec::new();
         let mut word_targets = Vec::new();
         let mut phoneme_to_word = Vec::new();
@@ -243,8 +249,44 @@ impl SimpleEnglishG2p {
                 NormalizedToken::Word(word) => {
                     let word_realization = word_to_phones_with_metadata(word)
                         .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
+                    let analyzed_token = sentence_analysis
+                        .tokens
+                        .iter()
+                        .find(|analysis| analysis.word_index == Some(word_index));
+                    let reduced_symbols = analyzed_token
+                        .and_then(|analysis| analysis.reduction_diagnostic.as_ref())
+                        .and_then(|diagnostic| {
+                            if matches!(diagnostic.status, ReductionStatus::Applied) {
+                                Some(
+                                    diagnostic
+                                        .realized
+                                        .split_ascii_whitespace()
+                                        .map(str::to_string)
+                                        .collect::<Vec<_>>(),
+                                )
+                            } else {
+                                None
+                            }
+                        });
+                    let emitted_symbols =
+                        reduced_symbols.unwrap_or_else(|| word_realization.symbols.clone());
+                    let emitted_stress_by_phone = if analyzed_token.is_some_and(|analysis| {
+                        analysis
+                            .reduction_diagnostic
+                            .as_ref()
+                            .is_some_and(|diagnostic| {
+                                matches!(diagnostic.status, ReductionStatus::Applied)
+                            })
+                    }) {
+                        emitted_symbols
+                            .iter()
+                            .map(|symbol| stress_level_from_symbol(symbol))
+                            .collect::<Vec<_>>()
+                    } else {
+                        word_realization.stress_by_phone.clone()
+                    };
                     let start = symbols.len();
-                    symbols.extend(word_realization.symbols.iter().cloned());
+                    symbols.extend(emitted_symbols.iter().cloned());
                     let end = symbols.len();
                     phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
                     word_targets.push(WordProsodyTarget {
@@ -253,20 +295,16 @@ impl SimpleEnglishG2p {
                         phoneme_range: start..end,
                         normalized_text: word.clone(),
                     });
-                    lexical_stress.extend(
-                        word_realization
-                            .stress_by_phone
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(offset, stress)| {
-                                stress.map(|stress| LexicalStressTarget {
-                                    word_index,
-                                    phoneme_index: start + offset,
-                                    stress,
-                                    source: word_realization.stress_source,
-                                })
-                            }),
-                    );
+                    lexical_stress.extend(emitted_stress_by_phone.iter().enumerate().filter_map(
+                        |(offset, stress)| {
+                            stress.map(|stress| LexicalStressTarget {
+                                word_index,
+                                phoneme_index: start + offset,
+                                stress,
+                                source: word_realization.stress_source,
+                            })
+                        },
+                    ));
                     emitted_pronounceable += 1;
                     word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
@@ -342,6 +380,7 @@ impl SimpleEnglishG2p {
             word_targets,
             phoneme_to_word,
             lexical_stress,
+            sentence_analysis,
             boundary: normalized.boundary,
             boundary_kind: normalized.boundary_kind,
             commitment: normalized.commitment,
@@ -571,6 +610,7 @@ fn build_candidate(
         word_targets: phonemized.word_targets,
         phoneme_to_word: phonemized.phoneme_to_word,
         lexical_stress: phonemized.lexical_stress,
+        sentence_analysis: phonemized.sentence_analysis,
         boundary_hint: phonemized.boundary,
         boundary_kind: phonemized.boundary_kind,
         commitment: ProsodyCommitment::Provisional,
@@ -753,6 +793,15 @@ fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
     }
 }
 
+fn stress_level_from_symbol(symbol: &str) -> Option<LexicalStressLevel> {
+    match symbol.chars().next_back() {
+        Some('1') => Some(LexicalStressLevel::Primary),
+        Some('2') => Some(LexicalStressLevel::Secondary),
+        Some('0') => Some(LexicalStressLevel::Unstressed),
+        _ => None,
+    }
+}
+
 fn is_default_function_word(word: &str) -> bool {
     matches!(
         word,
@@ -817,6 +866,14 @@ mod tests {
 
     fn symbols(sequence: &PiperPhonemeSequence) -> Vec<String> {
         sequence.phonemes.iter().map(|p| p.0.clone()).collect()
+    }
+
+    fn to_token_analyses(unit: &PhonemizedUnit) -> Vec<&crate::mouth::riper::TokenAnalysis> {
+        unit.sentence_analysis
+            .tokens
+            .iter()
+            .filter(|token| token.text == "to")
+            .collect()
     }
 
     #[test]
@@ -1028,6 +1085,196 @@ mod tests {
                 "W", "IY", " ", "R", "EH", "P", "R", "IH", "Z", "EH", "N", "T", " ", "DH", "AH0",
                 " ", "L", "AA", "L", "IY", "P", "AA", "P", " ", "G", "IH", "L", "D", "|"
             ]
+        );
+    }
+
+    #[test]
+    fn reduces_to_before_infinitive_verbs() {
+        let g2p = SimpleEnglishG2p::default();
+        for text in ["I want to go.", "We need to leave.", "Try to remember."] {
+            let unit = g2p.phonemize_unit(text).expect("phonemize");
+            let analyses = to_token_analyses(&unit);
+            let analysis = analyses.first().expect("to analysis");
+            assert_eq!(analysis.pos, crate::mouth::riper::PartOfSpeech::Particle);
+            assert_eq!(
+                analysis.prosodic_role,
+                crate::mouth::riper::ProsodicRole::FunctionWeak
+            );
+            assert_eq!(
+                analysis.reduction,
+                crate::mouth::riper::ReductionClass::WeakFunctionWord
+            );
+            let diagnostic = analysis
+                .reduction_diagnostic
+                .as_ref()
+                .expect("reduction diagnostic");
+            assert_eq!(
+                diagnostic.reason,
+                "unstressed_function_word_before_verb".to_string()
+            );
+            assert_eq!(
+                diagnostic.status,
+                crate::mouth::riper::ReductionStatus::Applied
+            );
+            assert_eq!(diagnostic.citation, "T UW1");
+            assert_eq!(diagnostic.realized, "T AH0");
+            assert!(
+                symbols(&unit.phonemes)
+                    .windows(2)
+                    .any(|phones| phones[0] == "T" && phones[1] == "AH0"),
+                "expected reduced /tə/ phones in `{text}`"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_contrast_sentence_keeps_to_reduction_in_non_contrast_positions() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("I said to go, not to stay.")
+            .expect("phonemize");
+        let analyses = to_token_analyses(&unit);
+        assert_eq!(analyses.len(), 2);
+        for analysis in analyses {
+            let diagnostic = analysis
+                .reduction_diagnostic
+                .as_ref()
+                .expect("reduction diagnostic");
+            assert_eq!(
+                diagnostic.reason,
+                "unstressed_function_word_before_verb".to_string()
+            );
+            assert_eq!(
+                diagnostic.status,
+                crate::mouth::riper::ReductionStatus::Applied
+            );
+        }
+        let reduced_count = symbols(&unit.phonemes)
+            .windows(2)
+            .filter(|phones| phones[0] == "T" && phones[1] == "AH0")
+            .count();
+        assert!(reduced_count >= 2, "expected both `to` tokens to reduce");
+    }
+
+    #[test]
+    fn keeps_contrastive_to_strong() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("I said TO, not FROM.")
+            .expect("phonemize");
+        let analysis = to_token_analyses(&unit)
+            .into_iter()
+            .next()
+            .expect("to analysis");
+        assert_eq!(analysis.pos, crate::mouth::riper::PartOfSpeech::Preposition);
+        assert_eq!(
+            analysis.prosodic_role,
+            crate::mouth::riper::ProsodicRole::Contrastive
+        );
+        assert_eq!(
+            analysis.reduction,
+            crate::mouth::riper::ReductionClass::None
+        );
+        let diagnostic = analysis
+            .reduction_diagnostic
+            .as_ref()
+            .expect("reduction diagnostic");
+        assert_eq!(diagnostic.reason, "contrastive_emphasis".to_string());
+        assert_eq!(
+            diagnostic.status,
+            crate::mouth::riper::ReductionStatus::Blocked
+        );
+        assert!(
+            symbols(&unit.phonemes)
+                .windows(2)
+                .any(|phones| phones[0] == "T" && phones[1].starts_with("UW")),
+            "contrastive TO should remain unreduced"
+        );
+    }
+
+    #[test]
+    fn keeps_citation_or_prepositional_to_strong() {
+        let g2p = SimpleEnglishG2p::default();
+        let to_be = g2p
+            .phonemize_unit("To be, or not to be.")
+            .expect("phonemize");
+        let to_be_analyses = to_token_analyses(&to_be);
+        assert_eq!(to_be_analyses.len(), 2);
+        assert_eq!(
+            to_be_analyses[0]
+                .reduction_diagnostic
+                .as_ref()
+                .expect("diagnostic")
+                .reason,
+            "citation_form_phrase_initial".to_string()
+        );
+        assert_eq!(
+            to_be_analyses[1]
+                .reduction_diagnostic
+                .as_ref()
+                .expect("diagnostic")
+                .reason,
+            "quotation_or_citation_form".to_string()
+        );
+        assert!(
+            !symbols(&to_be.phonemes)
+                .windows(2)
+                .any(|phones| phones[0] == "T" && phones[1] == "AH0"),
+            "citation-form example should avoid weak reduction"
+        );
+
+        let addressed = g2p
+            .phonemize_unit("This is addressed to you.")
+            .expect("phonemize");
+        let addressed_to = to_token_analyses(&addressed)
+            .into_iter()
+            .next()
+            .expect("to analysis");
+        assert_eq!(
+            addressed_to.pos,
+            crate::mouth::riper::PartOfSpeech::Preposition
+        );
+        assert_eq!(
+            addressed_to.prosodic_role,
+            crate::mouth::riper::ProsodicRole::FunctionStrong
+        );
+        let diagnostic = addressed_to
+            .reduction_diagnostic
+            .as_ref()
+            .expect("reduction diagnostic");
+        assert_eq!(diagnostic.reason, "prepositional_to".to_string());
+        assert_eq!(
+            diagnostic.status,
+            crate::mouth::riper::ReductionStatus::Blocked
+        );
+    }
+
+    #[test]
+    fn keeps_phrase_final_to_provisional_for_incremental_revision() {
+        let g2p = SimpleEnglishG2p::default();
+        let provisional = g2p.phonemize_unit("I want to").expect("phonemize");
+        let analysis = to_token_analyses(&provisional)
+            .into_iter()
+            .next()
+            .expect("to analysis");
+        let diagnostic = analysis
+            .reduction_diagnostic
+            .as_ref()
+            .expect("reduction diagnostic");
+        assert_eq!(diagnostic.reason, "phrase_final_uncertainty".to_string());
+        assert_eq!(
+            diagnostic.status,
+            crate::mouth::riper::ReductionStatus::Provisional
+        );
+
+        let confirmed = g2p.phonemize_unit("I want to go").expect("phonemize");
+        let confirmed_diag = to_token_analyses(&confirmed)[0]
+            .reduction_diagnostic
+            .as_ref()
+            .expect("reduction diagnostic");
+        assert_eq!(
+            confirmed_diag.status,
+            crate::mouth::riper::ReductionStatus::Applied
         );
     }
 
