@@ -23,6 +23,26 @@ pub const TRACE_SESSION_AUDIO_DIR: &str = "audio";
 pub const TRACE_SESSION_AUDIO_FILE: &str = "session.wav";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceClockSync {
+    pub local_mono: u64,
+    pub canon_elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canon_unix_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_ppm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceCause {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_span_id: Option<TimelineSpanId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveTraceEvent {
     pub turn: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,12 +70,28 @@ pub struct LiveTraceEvent {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emitter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_id: Option<u64>,
     pub t_unix_ns: u64,
     pub elapsed_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalized_elapsed_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normalized_unix_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_unix_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_local_monotonic: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_wall_approx_unix_ns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync: Option<TraceClockSync>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<TraceCause>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,10 +138,18 @@ impl LiveTraceEvent {
             audio_clip_id: None,
             kind: kind.into(),
             source: Some("runtime.trace".to_string()),
+            emitter_id: Some("runtime.trace".to_string()),
+            seq_id: None,
             t_unix_ns,
             elapsed_ms: normalized.elapsed_ms,
             normalized_elapsed_ms: Some(normalized.elapsed_ms),
             normalized_unix_ns: Some(normalized.unix_ns),
+            observed_elapsed_ms: None,
+            observed_unix_ns: None,
+            ts_local_monotonic: Some(normalized.elapsed_ms),
+            ts_wall_approx_unix_ns: Some(normalized.unix_ns),
+            clock_sync: None,
+            cause: None,
             text: None,
             confidence: None,
             group_id: None,

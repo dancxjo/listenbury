@@ -11,6 +11,7 @@ use crate::span::{
     Alignment, AlignmentGraph, AlignmentKind, Cursor, Modality, Span as RuntimeSpan,
     SpanId as RuntimeSpanId, SpanRevision, SpanState, TextId,
 };
+use crate::trace::timestamp_sanity::normalize_live_trace_events;
 use crate::word::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
     WordStreamSource, WordTiming, attach_cmudict_pronunciations,
@@ -139,8 +140,7 @@ pub fn live_trace_jsonl_reader_to_viewer_payload<R: BufRead>(reader: R) -> Resul
 }
 
 pub fn live_trace_events_to_viewer_payload(events: &[LiveTraceEvent]) -> ViewerPayload {
-    let mut sorted = events.to_vec();
-    sorted.sort_by_key(|event| (event.elapsed_ms, event.t_unix_ns, event.turn));
+    let sorted = normalize_live_trace_events(events);
 
     let text_lanes = collect_text_lanes(&sorted);
     let (viewer_events, viewer_markers) = collect_event_lanes(&sorted);
@@ -623,9 +623,56 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         });
     }
 
+    apply_causal_clamps(&mut spans);
     spans.sort_by_key(|event| (event.start_ms, event.end_ms.unwrap_or(event.start_ms)));
     markers.sort_by_key(|marker| marker.at_ms);
     (spans, markers)
+}
+
+fn apply_causal_clamps(spans: &mut [ViewerEvent]) {
+    let mut parent_end_by_span_id = HashMap::<String, u64>::new();
+    for span in spans.iter() {
+        let Some(span_id) = metadata_string(&span.metadata, "span_id") else {
+            continue;
+        };
+        let end_ms = span.end_ms.unwrap_or(span.start_ms).max(span.start_ms);
+        parent_end_by_span_id.insert(span_id, end_ms);
+    }
+
+    for span in spans {
+        let Some(parent_span_id) = metadata_parent_span_id(&span.metadata) else {
+            continue;
+        };
+        let Some(parent_end_ms) = parent_end_by_span_id.get(&parent_span_id).copied() else {
+            continue;
+        };
+        if span.start_ms < parent_end_ms {
+            span.start_ms = parent_end_ms;
+            if let Some(end_ms) = span.end_ms.as_mut() {
+                *end_ms = (*end_ms).max(parent_end_ms);
+            }
+        }
+    }
+}
+
+fn metadata_string(metadata: &Option<Value>, key: &str) -> Option<String> {
+    metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|map| map.get(key))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+}
+
+fn metadata_parent_span_id(metadata: &Option<Value>) -> Option<String> {
+    metadata
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|map| map.get("cause"))
+        .and_then(Value::as_object)
+        .and_then(|map| map.get("parent_span_id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
 }
 
 fn merge_metadata(first: Option<Value>, second: Option<Value>) -> Option<Value> {
@@ -711,6 +758,41 @@ fn metadata_from_event(event: &LiveTraceEvent) -> Value {
     metadata.insert("turn".to_string(), Value::from(event.turn));
     metadata.insert("elapsed_ms".to_string(), Value::from(event.elapsed_ms));
     metadata.insert("t_unix_ns".to_string(), Value::from(event.t_unix_ns));
+    if let Some(emitter_id) = event.emitter_id.as_ref() {
+        metadata.insert("emitter_id".to_string(), Value::from(emitter_id.clone()));
+    }
+    if let Some(seq_id) = event.seq_id {
+        metadata.insert("seq_id".to_string(), Value::from(seq_id));
+    }
+    if let Some(observed_elapsed_ms) = event.observed_elapsed_ms {
+        metadata.insert(
+            "observed_elapsed_ms".to_string(),
+            Value::from(observed_elapsed_ms),
+        );
+    }
+    if let Some(observed_unix_ns) = event.observed_unix_ns {
+        metadata.insert(
+            "observed_unix_ns".to_string(),
+            Value::from(observed_unix_ns),
+        );
+    }
+    if let Some(ts_local_monotonic) = event.ts_local_monotonic {
+        metadata.insert(
+            "ts_local_monotonic".to_string(),
+            Value::from(ts_local_monotonic),
+        );
+    }
+    if let Some(ts_wall_approx_unix_ns) = event.ts_wall_approx_unix_ns {
+        metadata.insert(
+            "ts_wall_approx_unix_ns".to_string(),
+            Value::from(ts_wall_approx_unix_ns),
+        );
+    }
+    if let Some(cause) = event.cause.as_ref()
+        && let Ok(value) = serde_json::to_value(cause)
+    {
+        metadata.insert("cause".to_string(), value);
+    }
     if let Some(text) = event.text.as_ref() {
         metadata.insert("text".to_string(), Value::from(text.clone()));
     }
@@ -875,10 +957,18 @@ mod tests {
             audio_clip_id: None,
             kind: kind.to_string(),
             source: Some("test".to_string()),
+            emitter_id: Some("test".to_string()),
+            seq_id: None,
             t_unix_ns: elapsed_ms * 1_000_000,
             elapsed_ms,
             normalized_elapsed_ms: Some(elapsed_ms),
             normalized_unix_ns: Some(elapsed_ms * 1_000_000),
+            observed_elapsed_ms: None,
+            observed_unix_ns: None,
+            ts_local_monotonic: Some(elapsed_ms),
+            ts_wall_approx_unix_ns: Some(elapsed_ms * 1_000_000),
+            clock_sync: None,
+            cause: None,
             text: None,
             confidence: None,
             group_id: None,
@@ -1264,6 +1354,67 @@ mod tests {
             Some(3_500),
             "end_ms must be session-relative elapsed ms, not absolute Unix ms"
         );
+    }
+
+    #[test]
+    fn viewer_uses_normalized_elapsed_ms_and_keeps_observed_metadata() {
+        let mut marker = event(1, "first_llm_token", 200);
+        marker.normalized_elapsed_ms = Some(120);
+        marker.normalized_unix_ns = Some(120_000_000);
+
+        let payload = live_trace_events_to_viewer_payload(&[marker]);
+        let marker = payload
+            .markers
+            .iter()
+            .find(|marker| marker.kind == "first_llm_token")
+            .expect("marker should be present");
+
+        assert_eq!(marker.at_ms, 120);
+        assert_eq!(
+            marker
+                .metadata
+                .as_ref()
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get("observed_elapsed_ms"))
+                .and_then(Value::as_u64),
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn causal_child_span_start_is_clamped_to_parent_end() {
+        let parent_id = crate::speech_timeline::SpanId::new();
+        let child_id = crate::speech_timeline::SpanId::new();
+
+        let mut parent_started = event(1, "playback_started", 100);
+        parent_started.span_id = Some(parent_id);
+        let mut parent_ended = event(1, "playback_ended", 150);
+        parent_ended.span_id = Some(parent_id);
+
+        let mut child_started = event(1, "overlap_started", 120);
+        child_started.span_id = Some(child_id);
+        child_started.cause = Some(crate::live_trace::TraceCause {
+            parent_span_id: Some(parent_id),
+            msg_id: None,
+            edge_kind: Some("recv".to_string()),
+        });
+        let mut child_ended = event(1, "overlap_ended", 180);
+        child_ended.span_id = Some(child_id);
+
+        let payload = live_trace_events_to_viewer_payload(&[
+            child_started,
+            parent_started,
+            child_ended,
+            parent_ended,
+        ]);
+        let child = payload
+            .events
+            .iter()
+            .find(|event| event.kind == "overlap")
+            .expect("child span should be present");
+
+        assert_eq!(child.start_ms, 150);
+        assert_eq!(child.end_ms, Some(180));
     }
 
     #[test]
