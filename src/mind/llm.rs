@@ -5,7 +5,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenerationId(pub Uuid);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GenerationRequest {
     pub prompt: String,
     /// Maximum generated tokens, or no explicit generation cap.
@@ -93,16 +93,6 @@ impl LlmEngine for MockLlmEngine {
             Ok(())
         } else {
             anyhow::bail!("generation not found")
-        }
-    }
-}
-
-impl Default for GenerationRequest {
-    fn default() -> Self {
-        Self {
-            prompt: String::new(),
-            max_tokens: None,
-            stop: Vec::new(),
         }
     }
 }

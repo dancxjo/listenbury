@@ -189,6 +189,7 @@ impl PhonemeProsodyCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PhonemeProsodyCandidateEvent {
     CandidateStarted {
         id: SpeechCandidateId,
@@ -287,7 +288,7 @@ impl SimpleEnglishG2p {
                     let start = symbols.len();
                     symbols.extend(surface_symbols.iter().cloned());
                     let end = symbols.len();
-                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
+                    phoneme_to_word.extend(std::iter::repeat_n(Some(word_index), end - start));
                     word_targets.push(WordProsodyTarget {
                         word_index,
                         text_range: token_span.clone(),
@@ -322,7 +323,7 @@ impl SimpleEnglishG2p {
                     let start = symbols.len();
                     symbols.extend(initial_symbols.iter().copied().map(String::from));
                     let end = symbols.len();
-                    phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
+                    phoneme_to_word.extend(std::iter::repeat_n(Some(word_index), end - start));
                     word_targets.push(WordProsodyTarget {
                         word_index,
                         text_range: token_span.clone(),
@@ -444,7 +445,7 @@ impl OrthographyToPhonemes for SimpleEnglishG2p {
                         initial_to_phones(*initial).ok_or_else(|| PhonologyError::Message {
                             message: format!("unsupported initial '{initial}'"),
                         })?;
-                    let ortho = OrthographicWord::new(&initial.to_string());
+                    let ortho = OrthographicWord::new(initial.to_string());
                     let seq =
                         PhonemeSeq::new(initial_phones.iter().copied().map(Phoneme::new).collect());
                     if pending_word_boundary {

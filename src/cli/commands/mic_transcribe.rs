@@ -394,14 +394,14 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
             println!("received Ctrl-C, stopping capture...");
             break;
         }
-        if let Some(deadline) = stop_deadline {
-            if Instant::now() >= deadline {
-                println!(
-                    "capture timeout reached ({}s), stopping...",
-                    command.seconds
-                );
-                break;
-            }
+        if let Some(deadline) = stop_deadline
+            && Instant::now() >= deadline
+        {
+            println!(
+                "capture timeout reached ({}s), stopping...",
+                command.seconds
+            );
+            break;
         }
 
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
@@ -896,6 +896,7 @@ pub(super) fn transcribe_group_with_finality(
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[allow(clippy::too_many_arguments)]
 fn drain_pending_into_ring(
     pending: &mut VecDeque<f32>,
     input_frame_samples: usize,
@@ -1177,13 +1178,14 @@ fn emit_web_confirmed_transcript(
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 fn web_transcribe_breath_group_config() -> BreathGroupConfig {
-    let mut config = BreathGroupConfig::default();
-    config.close_after_silence_frames = WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
-        .div_ceil(DEFAULT_VAD_FRAME_MS)
-        .try_into()
-        .unwrap_or(usize::MAX);
-    config.max_group_frames = None;
-    config
+    BreathGroupConfig {
+        close_after_silence_frames: WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
+            .div_ceil(DEFAULT_VAD_FRAME_MS)
+            .try_into()
+            .unwrap_or(usize::MAX),
+        max_group_frames: None,
+        ..Default::default()
+    }
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]

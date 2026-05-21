@@ -13,7 +13,7 @@ fn subsystem_module_surfaces_are_public() {
 
     let _ = NoopMemorySink;
     let _ = MemoryTrace::ConversationTurnFinalized {
-        speaker: SpeakerRole::User,
+        speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
         text: "hello".to_string(),
         occurred_at: ExactTimestamp::now(),
     };

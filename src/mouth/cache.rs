@@ -346,7 +346,7 @@ mod tests {
             voice_signatures: Vec::new(),
         };
         cache
-            .put(&unit, &[warmed_frame.clone()])
+            .put(&unit, std::slice::from_ref(&warmed_frame))
             .expect("cache put");
 
         let inner = FakeTts::default();

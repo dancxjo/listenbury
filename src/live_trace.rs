@@ -347,6 +347,7 @@ impl LiveTraceSink for TraceSessionWriter {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum DiskTraceWriter {
     Jsonl(JsonlTraceWriter),
     Session(TraceSessionWriter),

@@ -167,7 +167,10 @@ impl VoiceActivityDetector for WebRtcVad {
             "audio frame channel count must be non-zero"
         );
         anyhow::ensure!(
-            frame.samples.len() % usize::from(frame.channels) == 0,
+            frame
+                .samples
+                .len()
+                .is_multiple_of(usize::from(frame.channels)),
             "audio frame sample count ({}) is not divisible by channel count ({})",
             frame.samples.len(),
             frame.channels

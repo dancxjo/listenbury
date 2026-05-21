@@ -575,7 +575,7 @@ fn accented_phoneme_index(word_index: usize, phonemized: Option<&PhonemizedUnit>
                 )
         })
         .map(|stress| stress.phoneme_index)
-        .or_else(|| Some(word_target.phoneme_range.start))
+        .or(Some(word_target.phoneme_range.start))
 }
 
 #[cfg(test)]
@@ -587,6 +587,7 @@ mod tests {
     };
     use crate::mouth::riper::SimpleEnglishG2p;
 
+    #[allow(clippy::too_many_arguments)]
     fn update(
         frame_start_ms: u64,
         frame_end_ms: u64,

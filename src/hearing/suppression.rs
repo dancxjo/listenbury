@@ -142,18 +142,17 @@ impl SelfHearingState {
     /// suppression window should still be dropped even if it is processed after
     /// the wall-clock window has elapsed.
     pub fn suppression_decision_at(&self, timestamp: ExactTimestamp) -> SuppressionDecision {
-        if self.pete_speaking {
-            if self
+        if self.pete_speaking
+            && self
                 .output_started_at
                 .is_none_or(|started_at| timestamp.unix_nanos >= started_at.unix_nanos)
-            {
-                return SuppressionDecision::Suppress;
-            }
+        {
+            return SuppressionDecision::Suppress;
         }
-        if let Some(until) = self.output_expected_until {
-            if timestamp.unix_nanos <= until.unix_nanos {
-                return SuppressionDecision::Suppress;
-            }
+        if let Some(until) = self.output_expected_until
+            && timestamp.unix_nanos <= until.unix_nanos
+        {
+            return SuppressionDecision::Suppress;
         }
         SuppressionDecision::Allow
     }
@@ -283,10 +282,10 @@ impl SpeakerReferenceMask {
         for delay_ms in
             (0..=SPEAKER_REFERENCE_MAX_DELAY_MS).step_by(SPEAKER_REFERENCE_DELAY_STEP_MS as usize)
         {
-            if let Some(candidate) = compare_with_reference(reference, frame, &mic, delay_ms) {
-                if candidate.correlation > best.correlation {
-                    best = candidate;
-                }
+            if let Some(candidate) = compare_with_reference(reference, frame, &mic, delay_ms)
+                && candidate.correlation > best.correlation
+            {
+                best = candidate;
             }
         }
 

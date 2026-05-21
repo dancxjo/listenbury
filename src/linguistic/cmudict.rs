@@ -151,6 +151,7 @@ impl CmudictPronouncer {
     /// Lines beginning with `;;;` are comments and are ignored.  Blank lines
     /// are also ignored.  Alternate-pronunciation entries such as `WORD(2)` are
     /// stored alongside the primary pronunciation.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(data: &str) -> Self {
         let mut entries: HashMap<Box<str>, Vec<Vec<CmuPhoneme>>> = HashMap::new();
 
@@ -243,16 +244,16 @@ impl CmudictPronouncer {
         // 2. Normalized lookup: strip leading/trailing non-alphabetic chars,
         //    collapse apostrophes in common contractions.
         let normalized = normalize_for_lookup(word);
-        if normalized != exact_key {
-            if let Some(variants) = self.entries.get(normalized.as_str()) {
-                return PronunciationEntry {
-                    original: word.to_string(),
-                    lookup: normalized,
-                    source: "cmudict",
-                    candidates: variants.clone(),
-                    status: PronunciationStatus::Normalized,
-                };
-            }
+        if normalized != exact_key
+            && let Some(variants) = self.entries.get(normalized.as_str())
+        {
+            return PronunciationEntry {
+                original: word.to_string(),
+                lookup: normalized,
+                source: "cmudict",
+                candidates: variants.clone(),
+                status: PronunciationStatus::Normalized,
+            };
         }
 
         // 3. Not found.

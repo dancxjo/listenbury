@@ -179,12 +179,11 @@ impl LlmEngine for LlamaCppEngine {
         };
 
         let events = active.events.try_iter().collect::<Vec<_>>();
-        if events.iter().any(is_terminal_event) {
-            if let Some(mut active) = self.active.remove(&id) {
-                if let Some(handle) = active.handle.take() {
-                    let _ = handle.join();
-                }
-            }
+        if events.iter().any(is_terminal_event)
+            && let Some(mut active) = self.active.remove(&id)
+            && let Some(handle) = active.handle.take()
+        {
+            let _ = handle.join();
         }
 
         Ok(events)
@@ -429,6 +428,7 @@ fn drain_generation_controls(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn wait_while_paused(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,

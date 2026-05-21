@@ -474,7 +474,7 @@ fn select_output_config(
         selected.max_sample_rate()
     };
     Ok(output_config_from_supported(
-        selected.clone().with_sample_rate(selected_rate),
+        (*selected).with_sample_rate(selected_rate),
     ))
 }
 

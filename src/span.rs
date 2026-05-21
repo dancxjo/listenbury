@@ -243,6 +243,7 @@ impl AlignmentGraph {
 }
 
 impl<T: Clone> Span<T> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_provisional(
         id: SpanId,
         text_id: TextId,
@@ -258,6 +259,7 @@ impl<T: Clone> Span<T> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_hypothesis(
         id: SpanId,
         text_id: TextId,

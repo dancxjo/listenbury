@@ -414,13 +414,13 @@ fn detect_energy_landmarks(envelope: &EnergyEnvelope) -> EnergyLandmarks {
             landmarks.offsets.push(frames[index].frame_start_ms);
         }
     }
-    if let Some(start_ms) = silence_start {
-        if let Some(last) = frames.last() {
-            landmarks.silences.push(EnergySilence {
-                start_ms,
-                end_ms: last.frame_end_ms,
-            });
-        }
+    if let Some(start_ms) = silence_start
+        && let Some(last) = frames.last()
+    {
+        landmarks.silences.push(EnergySilence {
+            start_ms,
+            end_ms: last.frame_end_ms,
+        });
     }
     landmarks
 }
@@ -946,13 +946,12 @@ fn acoustic_method_and_confidence(
         confidence += STOP_RELEASE_CONFIDENCE_BONUS;
         features.push("energy.release_or_closure".to_string());
     }
-    if class == "fricative" {
-        if let Some((low, high)) = spectral_band_mean(level, start_ms as f32, end_ms as f32) {
-            if high > low + 4.0 {
-                confidence += FRICATIVE_NOISE_CONFIDENCE_BONUS;
-                features.push("spectrogram.high_frequency_noise".to_string());
-            }
-        }
+    if class == "fricative"
+        && let Some((low, high)) = spectral_band_mean(level, start_ms as f32, end_ms as f32)
+        && high > low + 4.0
+    {
+        confidence += FRICATIVE_NOISE_CONFIDENCE_BONUS;
+        features.push("spectrogram.high_frequency_noise".to_string());
     }
     confidence = confidence.clamp(MIN_PHONE_CONFIDENCE, MAX_PHONE_CONFIDENCE);
     let method = if features.len() > 1 {
@@ -988,13 +987,13 @@ fn spectral_band_mean(
             ((3000.0 / level.bin_hz).floor() as usize).min(frame.len().saturating_sub(1));
         let high_max =
             ((7000.0 / level.bin_hz).floor() as usize).min(frame.len().saturating_sub(1));
-        for bin in 1..=low_max {
-            low_sum += frame[bin];
+        for value in frame.iter().take(low_max + 1).skip(1) {
+            low_sum += value;
             low_count += 1;
         }
         if high_min <= high_max {
-            for bin in high_min..=high_max {
-                high_sum += frame[bin];
+            for value in frame.iter().take(high_max + 1).skip(high_min) {
+                high_sum += value;
                 high_count += 1;
             }
         }

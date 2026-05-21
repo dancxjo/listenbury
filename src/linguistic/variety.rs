@@ -31,16 +31,11 @@ impl Lexicon {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinguisticRuntimeProfile {
+    #[default]
     Realtime,
     Batch,
-}
-
-impl Default for LinguisticRuntimeProfile {
-    fn default() -> Self {
-        Self::Realtime
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

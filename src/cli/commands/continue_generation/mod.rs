@@ -1015,10 +1015,9 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                     for speech_event in speech_events.ingest(text) {
                         if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
                             &speech_event
+                            && clean_spoken_content(content).is_some()
                         {
-                            if clean_spoken_content(content).is_some() {
-                                llm_session.remember_spoken(content);
-                            }
+                            llm_session.remember_spoken(content);
                         }
                         if let ContinueRuntimeEvent::SourceCommand { command } = &speech_event {
                             let source_result = execute_source_command(command);
@@ -1033,13 +1032,11 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                                 )?;
                             }
                             for runtime_event in source_result.runtime_events {
-                                if let ContinueRuntimeEvent::UtteranceCompleted {
-                                    content, ..
-                                } = &runtime_event
+                                if let ContinueRuntimeEvent::UtteranceCompleted { content, .. } =
+                                    &runtime_event
+                                    && clean_spoken_content(content).is_some()
                                 {
-                                    if clean_spoken_content(content).is_some() {
-                                        llm_session.remember_spoken(content);
-                                    }
+                                    llm_session.remember_spoken(content);
                                 }
                                 prepare_tts_runtime_event(
                                     &runtime_event,
@@ -2457,6 +2454,7 @@ fn ts_grep_source(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn append_pending_live_events(
     llm_session: &mut ContinueLlmSession,
     stdin_rx: &crossbeam_channel::Receiver<std::result::Result<String, String>>,
@@ -2662,6 +2660,7 @@ fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::large_enum_variant)]
 enum EitherTraceScenarioWriter {
     Jsonl(JsonlTraceWriter),
     Session(listenbury::live_trace::TraceSessionWriter),
@@ -3196,14 +3195,15 @@ impl DuplexTurnController {
             }
         }
 
-        if self.external_speech_active && !self.paused_for_external_speech {
-            if let Some(started_at) = self.external_speech_started_at {
-                let elapsed = now.checked_duration_since(started_at).unwrap_or_default();
-                if elapsed >= self.config.pause_after {
-                    self.paused_for_external_speech = true;
-                    self.listen_deadline = Some(now + self.config.listen_for);
-                    return Some(DuplexTurnAction::Pause);
-                }
+        if self.external_speech_active
+            && !self.paused_for_external_speech
+            && let Some(started_at) = self.external_speech_started_at
+        {
+            let elapsed = now.checked_duration_since(started_at).unwrap_or_default();
+            if elapsed >= self.config.pause_after {
+                self.paused_for_external_speech = true;
+                self.listen_deadline = Some(now + self.config.listen_for);
+                return Some(DuplexTurnAction::Pause);
             }
         }
 
@@ -3920,6 +3920,7 @@ const PROSPECTIVE_ASR_INTERVAL_MS: u64 = 250;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn run_continue_ear_processor(
     sample_rx: crossbeam_channel::Receiver<f32>,
     asr_tx: crossbeam_channel::Sender<ContinueAsrWorkItem>,
@@ -4029,6 +4030,7 @@ fn drain_browser_audio_frames(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn drain_pending_continue_ear_frames(
     pending: &mut VecDeque<f32>,
     input_frame_samples: usize,
@@ -4190,10 +4192,9 @@ fn process_continue_ear_frame(
             if let Some(clip) = state
                 .environment
                 .observe_frame_with_audio(&analysis.frame, false)
+                && clip.sound.label.as_deref() != Some("silence")
             {
-                if clip.sound.label.as_deref() != Some("silence") {
-                    send_environmental_sound_clip(clip, asr_tx, event_tx);
-                }
+                send_environmental_sound_clip(clip, asr_tx, event_tx);
             }
             process_continue_segmenter_silence_frame(
                 analysis.frame.clone(),
@@ -4378,12 +4379,11 @@ fn process_continue_segmenter_events(
         group.frames.push(frame.clone());
     }
     for event in events {
-        if let HearingEvent::BreathGroupClosed { id, .. } = event {
-            if let Some(group) = state.active_groups.remove(&id) {
-                if !queue_final_asr_work(asr_tx, group.frames) {
-                    return Ok(());
-                }
-            }
+        if let HearingEvent::BreathGroupClosed { id, .. } = event
+            && let Some(group) = state.active_groups.remove(&id)
+            && !queue_final_asr_work(asr_tx, group.frames)
+        {
+            return Ok(());
         }
     }
     let frame_end_ms = state
@@ -5171,6 +5171,7 @@ fn send_cleared_mouth_queue_event(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn run_continue_mouth_speech(
     id: u64,
     text: String,
@@ -5301,6 +5302,7 @@ fn collect_continue_mouth_audio(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn play_continue_audio_frames_interruptible(
     frames: &[AudioFrame],
     source: &str,

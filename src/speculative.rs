@@ -27,6 +27,7 @@ impl CandidateIdGenerator {
         Self::default()
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> CandidateId {
         // IDs intentionally start at 1 to align with existing transcript candidate IDs.
         self.next_id = self

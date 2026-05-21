@@ -465,7 +465,7 @@ fn detect_addressee_span(
     let has_vocative_noun = lower_words
         .iter()
         .any(|word| is_likely_vocative_noun(word.as_str()));
-    if (!has_capitalized && !has_vocative_noun) || (require_vocative_noun && !has_vocative_noun) {
+    if (require_vocative_noun || !has_capitalized) && !has_vocative_noun {
         return None;
     }
 

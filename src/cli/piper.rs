@@ -919,10 +919,10 @@ pub(crate) fn collect_tts_audio(
     while Instant::now() < deadline {
         let new_frames = tts.poll_audio()?;
         if new_frames.is_empty() {
-            if let Some(last_audio_at) = last_audio_at {
-                if Instant::now().duration_since(last_audio_at) >= quiet_after_audio {
-                    break;
-                }
+            if let Some(last_audio_at) = last_audio_at
+                && Instant::now().duration_since(last_audio_at) >= quiet_after_audio
+            {
+                break;
             }
         } else {
             frames.extend(new_frames);

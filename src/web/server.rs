@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -119,10 +119,8 @@ impl InputRouter {
             .lock()
             .expect("input router mutex poisoned");
         self.browser_audio_enabled.store(enabled, Ordering::Relaxed);
-        if enabled {
-            if let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() {
-                native_capture_enabled.store(false, Ordering::Relaxed);
-            }
+        if enabled && let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() {
+            native_capture_enabled.store(false, Ordering::Relaxed);
         }
     }
 
@@ -515,16 +513,10 @@ fn handle_sse(stream: &mut TcpStream, method: &str, state: &Arc<ServerState>) ->
     write!(stream, ": connected\n\n").context("write SSE connected comment")?;
     stream.flush().context("flush SSE headers")?;
 
-    loop {
-        match rx.recv() {
-            Ok(event) => {
-                let json =
-                    serde_json::to_string(&event).context("serialize SSE live trace event")?;
-                write!(stream, "data: {json}\n\n").context("write SSE data frame")?;
-                stream.flush().context("flush SSE data frame")?;
-            }
-            Err(_) => break, // broadcaster dropped (listen session ended)
-        }
+    while let Ok(event) = rx.recv() {
+        let json = serde_json::to_string(&event).context("serialize SSE live trace event")?;
+        write!(stream, "data: {json}\n\n").context("write SSE data frame")?;
+        stream.flush().context("flush SSE data frame")?;
     }
 
     Ok(())
@@ -855,7 +847,7 @@ fn receive_browser_audio(
     if body.is_empty() {
         return HttpResponse::bad_request("audio body must not be empty\n");
     }
-    if body.len() % std::mem::size_of::<f32>() != 0 {
+    if !body.len().is_multiple_of(std::mem::size_of::<f32>()) {
         return HttpResponse::bad_request("audio body must contain little-endian f32 samples\n");
     }
     if body.len() > 512 * 1024 {
@@ -928,10 +920,9 @@ fn receive_browser_video_frame(
             Some(height) if (16..=1080).contains(&height) => height,
             _ => return HttpResponse::bad_request("invalid X-Height header\n"),
         };
-    if request_header(headers, "x-pixel-format")
+    if !request_header(headers, "x-pixel-format")
         .unwrap_or("rgba8")
-        .to_ascii_lowercase()
-        != "rgba8"
+        .eq_ignore_ascii_case("rgba8")
     {
         return HttpResponse::bad_request("only X-Pixel-Format: rgba8 is supported\n");
     }
@@ -982,17 +973,17 @@ fn receive_browser_video_frame(
         return HttpResponse::bad_request("unable to extract visual speech features from frame\n");
     };
 
-    if let Some(tx) = &state.input_control.browser_visual_speech_tx {
-        if let Err(error) = tx.try_send(feature_frame.clone()) {
-            return match error {
-                crossbeam_channel::TrySendError::Full(_) => {
-                    HttpResponse::service_unavailable("visual speech queue is full\n")
-                }
-                crossbeam_channel::TrySendError::Disconnected(_) => {
-                    HttpResponse::service_unavailable("visual speech processor is disconnected\n")
-                }
-            };
-        }
+    if let Some(tx) = &state.input_control.browser_visual_speech_tx
+        && let Err(error) = tx.try_send(feature_frame.clone())
+    {
+        return match error {
+            crossbeam_channel::TrySendError::Full(_) => {
+                HttpResponse::service_unavailable("visual speech queue is full\n")
+            }
+            crossbeam_channel::TrySendError::Disconnected(_) => {
+                HttpResponse::service_unavailable("visual speech processor is disconnected\n")
+            }
+        };
     }
     if let Some(store) = &state.live_visual_speech {
         store.push_frame(feature_frame.clone());
@@ -1063,7 +1054,7 @@ fn enrich_payload_phone_segmentations(payload: &mut ViewerPayload, analysis: &Ac
 }
 
 fn load_primary_trace_session_acoustic_analysis(
-    trace_path: &PathBuf,
+    trace_path: &Path,
     session: &crate::live_trace::TraceSessionEnvelope,
 ) -> Result<Option<AcousticAnalysis>> {
     let Some(artifact) = session.metadata.audio_artifacts.first() else {
@@ -1079,7 +1070,7 @@ fn load_primary_trace_session_acoustic_analysis(
                 .file_name()
                 .is_some_and(|name| name == "metadata.json")
         })
-        .unwrap_or(trace_path.as_path());
+        .unwrap_or(trace_path);
     let analysis_path = base_dir.join(acoustic_path);
     let bytes = std::fs::read(&analysis_path).with_context(|| {
         format!(

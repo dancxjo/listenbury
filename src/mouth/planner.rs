@@ -82,15 +82,13 @@ fn find_first_emoji_sequence(text: &str, completed: bool) -> Option<(usize, usiz
             } else {
                 break;
             }
+        } else if is_mod {
+            end = i + ch.len_utf8();
+        } else if is_zwj {
+            end = i + ch.len_utf8();
+            expect_zwj_target = true;
         } else {
-            if is_mod {
-                end = i + ch.len_utf8();
-            } else if is_zwj {
-                end = i + ch.len_utf8();
-                expect_zwj_target = true;
-            } else {
-                break;
-            }
+            break;
         }
     }
 
@@ -669,17 +667,17 @@ fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> 
     if text.trim_end().ends_with('.') && is_common_abbreviation(text.trim_end(), config) {
         return None;
     }
-    if let Some(detector) = sentence_detector() {
-        if let Ok(sentences) = detector.detect_sentences_borrowed(text) {
-            let mut search_from = 0;
-            for sentence in sentences {
-                if let Some(rel) = text[search_from..].find(sentence.raw_content) {
-                    let start = search_from + rel;
-                    let end = start + sentence.raw_content.len();
-                    search_from = end;
-                    if sentence.raw_content.trim().ends_with(['.', '?', '!']) {
-                        return Some(end);
-                    }
+    if let Some(detector) = sentence_detector()
+        && let Ok(sentences) = detector.detect_sentences_borrowed(text)
+    {
+        let mut search_from = 0;
+        for sentence in sentences {
+            if let Some(rel) = text[search_from..].find(sentence.raw_content) {
+                let start = search_from + rel;
+                let end = start + sentence.raw_content.len();
+                search_from = end;
+                if sentence.raw_content.trim().ends_with(['.', '?', '!']) {
+                    return Some(end);
                 }
             }
         }

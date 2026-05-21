@@ -149,7 +149,7 @@ pub fn viterbi_align_pronunciation(
 
     // ---- Build hypotheses --------------------------------------------------
     let mut hypotheses = Vec::with_capacity(n_phones);
-    for phone_idx in 0..n_phones {
+    for (phone_idx, _) in phones.iter().enumerate().take(n_phones) {
         let assigned_frames: Vec<usize> = phone_assignment
             .iter()
             .enumerate()
@@ -556,7 +556,7 @@ mod tests {
         let hyps = viterbi_align_pronunciation(&phones, 0, 20, &stream);
         let prov = &hyps[0].provenance;
         let path_score = prov["path_score"].as_f64().expect("path_score is a number");
-        assert!(path_score >= 0.0 && path_score <= 1.0);
+        assert!((0.0..=1.0).contains(&path_score));
     }
 
     #[test]

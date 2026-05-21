@@ -232,7 +232,7 @@ pub fn extract_visual_speech_frame_from_rgba(
 
     let visibility_value = if contrast < 0.04 {
         0.25
-    } else if mean < 0.08 || mean > 0.92 {
+    } else if !(0.08..=0.92).contains(&mean) {
         0.35
     } else {
         (0.55 + contrast * 1.4).clamp(0.0, 1.0)
@@ -706,8 +706,10 @@ mod tests {
 
     #[test]
     fn desync_downweights_visual_evidence_to_unusable() {
-        let mut sync = AvSyncConfig::default();
-        sync.manual_video_offset_ms = 250;
+        let sync = AvSyncConfig {
+            manual_video_offset_ms: 250,
+            ..Default::default()
+        };
         let claims = visual_speech_claims_for_phone_hypotheses(
             &[visual_frame(800, 0.05, 0.95)],
             &[phone("P", 820, 860)],

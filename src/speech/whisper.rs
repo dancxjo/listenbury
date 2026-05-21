@@ -229,33 +229,6 @@ fn whisper_time_to_ms(value: i64) -> u64 {
     u64::try_from(value).unwrap_or_default().saturating_mul(10)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::pad_samples_with_silence;
-
-    #[test]
-    fn pads_samples_with_silence_on_both_ends() {
-        let padded = pad_samples_with_silence(vec![0.5, -0.5], 1_000, 2);
-
-        assert_eq!(padded, vec![0.0, 0.0, 0.5, -0.5, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn silence_padding_uses_ceiling_sample_count() {
-        let padded = pad_samples_with_silence(vec![1.0], 16_000, 1);
-
-        assert_eq!(padded.len(), 33);
-        assert_eq!(padded[16], 1.0);
-    }
-
-    #[test]
-    fn zero_padding_leaves_samples_unchanged() {
-        let padded = pad_samples_with_silence(vec![0.25], 16_000, 0);
-
-        assert_eq!(padded, vec![0.25]);
-    }
-}
-
 unsafe extern "C" fn drop_whisper_log(
     _level: whisper_ffi::ggml_log_level,
     _text: *const std::ffi::c_char,
@@ -284,5 +257,32 @@ impl SpeechRecognizer for WhisperSpeechRecognizer {
             text: transcript.text,
             is_final: true,
         }])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pad_samples_with_silence;
+
+    #[test]
+    fn pads_samples_with_silence_on_both_ends() {
+        let padded = pad_samples_with_silence(vec![0.5, -0.5], 1_000, 2);
+
+        assert_eq!(padded, vec![0.0, 0.0, 0.5, -0.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn silence_padding_uses_ceiling_sample_count() {
+        let padded = pad_samples_with_silence(vec![1.0], 16_000, 1);
+
+        assert_eq!(padded.len(), 33);
+        assert_eq!(padded[16], 1.0);
+    }
+
+    #[test]
+    fn zero_padding_leaves_samples_unchanged() {
+        let padded = pad_samples_with_silence(vec![0.25], 16_000, 0);
+
+        assert_eq!(padded, vec![0.25]);
     }
 }

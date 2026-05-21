@@ -66,29 +66,17 @@ pub struct KeySpanAssertions {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KeySpanAssertion {
     /// The payload must contain a word lane with the given label.
-    HasLane {
-        label: String,
-    },
+    HasLane { label: String },
     /// The payload must contain at least one viewer event with the given kind
     /// inside the named lane.
-    HasEvent {
-        lane: String,
-        event_kind: String,
-    },
+    HasEvent { lane: String, event_kind: String },
     /// The payload must contain at least one viewer marker with the given kind
     /// inside the named lane.
-    HasMarker {
-        lane: String,
-        marker_kind: String,
-    },
+    HasMarker { lane: String, marker_kind: String },
     /// The payload must **not** contain any viewer event with the given kind.
-    NoEvent {
-        event_kind: String,
-    },
+    NoEvent { event_kind: String },
     /// The payload must **not** contain any viewer marker with the given kind.
-    NoMarker {
-        marker_kind: String,
-    },
+    NoMarker { marker_kind: String },
     /// The first marker must appear at or before the second marker on the
     /// timeline (`at_ms` ordering).  Both markers must be present.
     MarkerOrdering {
@@ -103,10 +91,7 @@ pub enum KeySpanAssertion {
     },
     /// The marker must appear no later than `max_ms` milliseconds into the
     /// session (useful for latency-budget regression tests).
-    LatencyBudget {
-        marker_kind: String,
-        max_ms: u64,
-    },
+    LatencyBudget { marker_kind: String, max_ms: u64 },
 }
 
 /// The outcome of a single [`KeySpanAssertion`] check.
@@ -257,19 +242,17 @@ impl KeySpanAssertion {
             Self::LatencyBudget {
                 marker_kind,
                 max_ms,
-            } => {
-                match payload.markers.iter().find(|m| &m.kind == marker_kind) {
-                    Some(marker) if marker.at_ms <= *max_ms => AssertionOutcome::Pass,
-                    Some(marker) => AssertionOutcome::Fail(format!(
-                        "latency budget exceeded: {marker_kind:?} appeared at {}ms \
+            } => match payload.markers.iter().find(|m| &m.kind == marker_kind) {
+                Some(marker) if marker.at_ms <= *max_ms => AssertionOutcome::Pass,
+                Some(marker) => AssertionOutcome::Fail(format!(
+                    "latency budget exceeded: {marker_kind:?} appeared at {}ms \
                          but expected ≤ {max_ms}ms",
-                        marker.at_ms
-                    )),
-                    None => AssertionOutcome::Fail(format!(
-                        "marker {marker_kind:?} not found (required for latency budget check)"
-                    )),
-                }
-            }
+                    marker.at_ms
+                )),
+                None => AssertionOutcome::Fail(format!(
+                    "marker {marker_kind:?} not found (required for latency budget check)"
+                )),
+            },
         }
     }
 }

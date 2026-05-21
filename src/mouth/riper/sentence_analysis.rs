@@ -695,54 +695,52 @@ fn push_core_clause_links(
         let word = words[predicate_index];
         let predicate_can_take_subject =
             is_likely_verb(word) || is_auxiliary_predicate_head(words, predicate_index);
-        if predicate_can_take_subject {
-            if let Some(subject_index) =
+        if predicate_can_take_subject
+            && let Some(subject_index) =
                 find_subject_before_predicate(normalized, word_slots, words, predicate_index)
-            {
-                push_link(
-                    links,
-                    SyntacticLink {
-                        left: subject_index,
-                        right: predicate_index,
-                        kind: SyntacticLinkKind::Subject,
-                        confidence: SUBJECT_LINK_CONFIDENCE,
-                        source: SyntacticLinkSource::HeuristicGrammarIsland,
-                    },
-                );
-                claims.push(AnalysisClaim::new(
-                    AnalysisTarget::WordIndex(subject_index),
-                    ClaimKind::ProsodicRole,
-                    ClaimValue::ProsodicRole("Content".to_string()),
-                    AnalysisSourceKind::SyntaxRule,
-                    CORE_CLAUSE_CLAIM_CONFIDENCE,
-                    "nominal before predicate linked as clause subject",
-                ));
-            }
+        {
+            push_link(
+                links,
+                SyntacticLink {
+                    left: subject_index,
+                    right: predicate_index,
+                    kind: SyntacticLinkKind::Subject,
+                    confidence: SUBJECT_LINK_CONFIDENCE,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
+                },
+            );
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(subject_index),
+                ClaimKind::ProsodicRole,
+                ClaimValue::ProsodicRole("Content".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                CORE_CLAUSE_CLAIM_CONFIDENCE,
+                "nominal before predicate linked as clause subject",
+            ));
         }
 
-        if is_likely_verb(word) {
-            if let Some(object_index) =
+        if is_likely_verb(word)
+            && let Some(object_index) =
                 find_object_after_verb(normalized, word_slots, words, predicate_index)
-            {
-                push_link(
-                    links,
-                    SyntacticLink {
-                        left: predicate_index,
-                        right: object_index,
-                        kind: SyntacticLinkKind::Object,
-                        confidence: OBJECT_LINK_CONFIDENCE,
-                        source: SyntacticLinkSource::HeuristicGrammarIsland,
-                    },
-                );
-                claims.push(AnalysisClaim::new(
-                    AnalysisTarget::WordIndex(object_index),
-                    ClaimKind::ProsodicRole,
-                    ClaimValue::ProsodicRole("Focus".to_string()),
-                    AnalysisSourceKind::SyntaxRule,
-                    CORE_CLAUSE_CLAIM_CONFIDENCE,
-                    "nominal after verb linked as likely object/focus",
-                ));
-            }
+        {
+            push_link(
+                links,
+                SyntacticLink {
+                    left: predicate_index,
+                    right: object_index,
+                    kind: SyntacticLinkKind::Object,
+                    confidence: OBJECT_LINK_CONFIDENCE,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
+                },
+            );
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(object_index),
+                ClaimKind::ProsodicRole,
+                ClaimValue::ProsodicRole("Focus".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                CORE_CLAUSE_CLAIM_CONFIDENCE,
+                "nominal after verb linked as likely object/focus",
+            ));
         }
 
         if let Some(complement_index) =
@@ -1034,11 +1032,10 @@ fn find_nominal_head_after_determiner(
     determiner_index: usize,
 ) -> Option<usize> {
     let mut head = None;
-    for index in (determiner_index + 1)..words.len() {
+    for (index, &word) in words.iter().enumerate().skip(determiner_index + 1) {
         if !word_indices_are_in_same_phrase(normalized, word_slots, determiner_index, index) {
             break;
         }
-        let word = words[index];
         if is_adjective(word) {
             continue;
         }
@@ -1057,11 +1054,10 @@ fn find_verb_head_after_auxiliary(
     words: &[&str],
     auxiliary_index: usize,
 ) -> Option<usize> {
-    for index in (auxiliary_index + 1)..words.len() {
+    for (index, &word) in words.iter().enumerate().skip(auxiliary_index + 1) {
         if !word_indices_are_in_same_phrase(normalized, word_slots, auxiliary_index, index) {
             break;
         }
-        let word = words[index];
         if word == "not" || is_adverb(word) {
             continue;
         }
@@ -1080,11 +1076,10 @@ fn find_prepositional_object(
     preposition_index: usize,
 ) -> Option<usize> {
     let mut object_head = None;
-    for index in (preposition_index + 1)..words.len() {
+    for (index, &word) in words.iter().enumerate().skip(preposition_index + 1) {
         if !word_indices_are_in_same_phrase(normalized, word_slots, preposition_index, index) {
             break;
         }
-        let word = words[index];
         if is_determiner(word) || is_adjective(word) {
             continue;
         }
@@ -1180,11 +1175,10 @@ fn find_object_after_verb(
 ) -> Option<usize> {
     let mut object_head = None;
     let mut saw_noun_phrase_material = false;
-    for index in (verb_index + 1)..words.len() {
+    for (index, &word) in words.iter().enumerate().skip(verb_index + 1) {
         if !word_indices_are_in_same_phrase(normalized, word_slots, verb_index, index) {
             break;
         }
-        let word = words[index];
         if word == "to" || is_preposition(word) || is_conjunction(word) {
             break;
         }
@@ -1252,11 +1246,10 @@ fn find_predicate_complement_head(
     predicate_index: usize,
 ) -> Option<usize> {
     let mut complement_head = None;
-    for index in (predicate_index + 1)..words.len() {
+    for (index, &word) in words.iter().enumerate().skip(predicate_index + 1) {
         if !word_indices_are_in_same_phrase(normalized, word_slots, predicate_index, index) {
             break;
         }
-        let word = words[index];
         if is_preposition(word) || is_conjunction(word) || word == "to" {
             break;
         }

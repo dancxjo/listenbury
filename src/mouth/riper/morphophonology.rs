@@ -635,7 +635,9 @@ fn lexicon_pronunciation(surface: &str) -> Option<WordPronunciation> {
 }
 
 fn lexical_override(surface: &str) -> Option<WordPronunciation> {
-    let entries: &[(&str, &[(&str, Option<PhonologicalStress>)])] = &[
+    type LexicalOverrideEntry<'a> = (&'a str, &'a [(&'a str, Option<PhonologicalStress>)]);
+
+    let entries: &[LexicalOverrideEntry<'_>] = &[
         (
             "model",
             &[

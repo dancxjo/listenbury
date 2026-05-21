@@ -541,12 +541,12 @@ fn split_words_with_spans(text: &str) -> Vec<(String, TextSpan)> {
 }
 
 fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<ViewerMarker>) {
+    type PendingStartKey = (u64, String);
+    type PendingStartValue = (u64, Option<Value>, Option<ViewerClipAudioRef>);
+
     let mut spans = Vec::new();
     let mut markers = Vec::new();
-    let mut pending_starts: HashMap<
-        (u64, String),
-        (u64, Option<Value>, Option<ViewerClipAudioRef>),
-    > = HashMap::new();
+    let mut pending_starts: HashMap<PendingStartKey, PendingStartValue> = HashMap::new();
 
     for event in events {
         if event.kind == "asr_timed_word_stream" || event.kind == "tts_timed_word_stream_revision" {
@@ -557,29 +557,29 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         let audio_ref = event_audio_ref(event);
 
         if let Some((base_kind, _end_kind)) = start_to_end_kind(&event.kind) {
-            if event.kind == "self_hearing_suppression_started" {
-                if let Some(until_unix_ns) = event.expected_until_unix_ns {
-                    // `expected_until_unix_ns` is an absolute Unix timestamp in
-                    // nanoseconds.  Convert to session-relative elapsed_ms by
-                    // subtracting the session start time inferred from this
-                    // event's own (t_unix_ns, elapsed_ms) pair.
-                    let session_start_ns = event
-                        .t_unix_ns
-                        .saturating_sub(event.elapsed_ms.saturating_mul(1_000_000));
-                    let until_relative_ns = until_unix_ns.saturating_sub(session_start_ns);
-                    let until_ms = until_relative_ns / 1_000_000;
-                    let end_ms = until_ms.max(event.elapsed_ms);
-                    spans.push(ViewerEvent {
-                        lane,
-                        kind: "self_hearing_suppression".to_string(),
-                        start_ms: event.elapsed_ms,
-                        end_ms: Some(end_ms),
-                        label: Some(humanize_kind("self_hearing_suppression")),
-                        metadata,
-                        audio_ref: audio_ref.clone(),
-                    });
-                    continue;
-                }
+            if event.kind == "self_hearing_suppression_started"
+                && let Some(until_unix_ns) = event.expected_until_unix_ns
+            {
+                // `expected_until_unix_ns` is an absolute Unix timestamp in
+                // nanoseconds.  Convert to session-relative elapsed_ms by
+                // subtracting the session start time inferred from this
+                // event's own (t_unix_ns, elapsed_ms) pair.
+                let session_start_ns = event
+                    .t_unix_ns
+                    .saturating_sub(event.elapsed_ms.saturating_mul(1_000_000));
+                let until_relative_ns = until_unix_ns.saturating_sub(session_start_ns);
+                let until_ms = until_relative_ns / 1_000_000;
+                let end_ms = until_ms.max(event.elapsed_ms);
+                spans.push(ViewerEvent {
+                    lane,
+                    kind: "self_hearing_suppression".to_string(),
+                    start_ms: event.elapsed_ms,
+                    end_ms: Some(end_ms),
+                    label: Some(humanize_kind("self_hearing_suppression")),
+                    metadata,
+                    audio_ref: audio_ref.clone(),
+                });
+                continue;
             }
 
             pending_starts.insert(
@@ -597,26 +597,20 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
             continue;
         }
 
-        if let Some(base_kind) = end_kind_to_base_kind(&event.kind) {
-            if let Some((start_ms, start_metadata, start_audio_ref)) =
+        if let Some(base_kind) = end_kind_to_base_kind(&event.kind)
+            && let Some((start_ms, start_metadata, start_audio_ref)) =
                 pending_starts.remove(&(event.turn, base_kind.to_string()))
-            {
-                spans.push(ViewerEvent {
-                    lane,
-                    kind: base_kind.to_string(),
-                    start_ms,
-                    end_ms: Some(event.elapsed_ms.max(start_ms)),
-                    label: Some(humanize_kind(base_kind)),
-                    metadata: merge_span_metadata(
-                        start_metadata,
-                        metadata,
-                        start_ms,
-                        event.elapsed_ms,
-                    ),
-                    audio_ref: start_audio_ref.or(audio_ref.clone()),
-                });
-                continue;
-            }
+        {
+            spans.push(ViewerEvent {
+                lane,
+                kind: base_kind.to_string(),
+                start_ms,
+                end_ms: Some(event.elapsed_ms.max(start_ms)),
+                label: Some(humanize_kind(base_kind)),
+                metadata: merge_span_metadata(start_metadata, metadata, start_ms, event.elapsed_ms),
+                audio_ref: start_audio_ref.or(audio_ref.clone()),
+            });
+            continue;
         }
 
         markers.push(ViewerMarker {
@@ -808,10 +802,9 @@ fn clip_audio_ref_from_value(value: &Value) -> Option<ViewerClipAudioRef> {
         .get("audio_ref")
         .or_else(|| map.get("audio"))
         .or_else(|| map.get("clip"))
+        && let Some(audio_ref) = clip_audio_ref_from_value(nested)
     {
-        if let Some(audio_ref) = clip_audio_ref_from_value(nested) {
-            return Some(audio_ref);
-        }
+        return Some(audio_ref);
     }
     let url = map
         .get("url")
@@ -1262,7 +1255,10 @@ mod tests {
             .find(|event| event.kind == "self_hearing_suppression")
             .expect("self_hearing_suppression span should be present");
 
-        assert_eq!(suppression_event.start_ms, 1_000, "start_ms must be elapsed_ms");
+        assert_eq!(
+            suppression_event.start_ms, 1_000,
+            "start_ms must be elapsed_ms"
+        );
         assert_eq!(
             suppression_event.end_ms,
             Some(3_500),

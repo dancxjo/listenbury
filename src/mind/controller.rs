@@ -313,24 +313,14 @@ impl Default for InterruptionPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct InterruptionDecision {
     pub mouth_command: Option<MouthCommand>,
     pub cancel_generation: bool,
     pub clear_tts_queue: bool,
 }
 
-impl Default for InterruptionDecision {
-    fn default() -> Self {
-        Self {
-            mouth_command: None,
-            cancel_generation: false,
-            clear_tts_queue: false,
-        }
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ConversationController {
     pub turn_tracker: TurnTracker,
     pub filler_planner: FillerPlanner,
@@ -342,23 +332,6 @@ pub struct ConversationController {
     interruption_started_at_ms: Option<u64>,
     interruption_faded: bool,
     interruption_recorded: bool,
-}
-
-impl Default for ConversationController {
-    fn default() -> Self {
-        Self {
-            turn_tracker: TurnTracker::default(),
-            filler_planner: FillerPlanner::default(),
-            speech_planner: SpeechPlanner::default(),
-            interruption_policy: InterruptionPolicy::default(),
-            conversation_history: VecDeque::new(),
-            pending_runtime_packets: Vec::new(),
-            runtime_context: Vec::new(),
-            interruption_started_at_ms: None,
-            interruption_faded: false,
-            interruption_recorded: false,
-        }
-    }
 }
 
 impl ConversationController {
@@ -540,9 +513,10 @@ mod tests {
     }
 
     fn controller_with_fillers_enabled() -> ConversationController {
-        let mut controller = ConversationController::default();
-        controller.filler_planner = enabled_filler_planner();
-        controller
+        ConversationController {
+            filler_planner: enabled_filler_planner(),
+            ..Default::default()
+        }
     }
 
     #[test]

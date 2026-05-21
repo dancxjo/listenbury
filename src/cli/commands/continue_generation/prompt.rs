@@ -174,19 +174,18 @@ impl PromptGate for ContinuePromptGate {
         if !matches!(
             event,
             ContinueEarEvent::OverlapDetected { .. } | ContinueEarEvent::SelfVoiceHeard { .. }
-        ) {
-            if let Some(packet) = self.flush_overlap_summary(now) {
-                packets.push(packet);
-            }
+        ) && let Some(packet) = self.flush_overlap_summary(now)
+        {
+            packets.push(packet);
         }
 
         match event {
             ContinueEarEvent::OverlapDetected { .. } => {
                 self.pending_overlap_count += 1;
-                if self.pending_overlap_count >= self.config.overlap_summary_threshold {
-                    if let Some(packet) = self.flush_overlap_summary(now) {
-                        packets.push(packet);
-                    }
+                if self.pending_overlap_count >= self.config.overlap_summary_threshold
+                    && let Some(packet) = self.flush_overlap_summary(now)
+                {
+                    packets.push(packet);
                 }
             }
             ContinueEarEvent::SelfVoiceHeard { .. } => {

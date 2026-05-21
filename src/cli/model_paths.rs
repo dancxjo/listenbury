@@ -75,37 +75,11 @@ fn llm_model_needs_cpu_runtime(model_path: &Path) -> bool {
 
 #[cfg(feature = "llm-llama-cpp")]
 fn llm_model_filename(model_path: &Path) -> String {
-    let filename = model_path
+    model_path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()
-        .to_ascii_lowercase();
-    filename
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(feature = "llm-llama-cpp")]
-    #[test]
-    fn gpt_oss_defaults_to_cpu_without_gpu_default() {
-        let placement =
-            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, None).unwrap();
-
-        assert_eq!(placement.gpu_layers, Some(0));
-        assert!(placement.cpu_only);
-    }
-
-    #[cfg(feature = "llm-llama-cpp")]
-    #[test]
-    fn gpt_oss_uses_cuda_default_when_provided() {
-        let placement =
-            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, Some(999)).unwrap();
-
-        assert_eq!(placement.gpu_layers, Some(999));
-        assert!(!placement.cpu_only);
-    }
+        .to_ascii_lowercase()
 }
 
 #[cfg(feature = "asr-whisper")]
@@ -145,7 +119,7 @@ pub(crate) fn resolve_refine_whisper_model(explicit: Option<PathBuf>) -> Result<
         let bundle = find_bundle(ModelKind::Whisper, "whisper-large-v3-turbo")
             .context("Whisper large v3 turbo bundle is not registered")?;
         ensure_bundle_available(bundle)?;
-        return bundle_primary_path(bundle);
+        bundle_primary_path(bundle)
     }
 
     #[cfg(not(feature = "model-download"))]
@@ -325,4 +299,29 @@ fn discover_model_file(matches: &impl Fn(&Path) -> bool) -> Result<Option<PathBu
 
     found.sort();
     Ok(found.into_iter().next())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(feature = "llm-llama-cpp")]
+    #[test]
+    fn gpt_oss_defaults_to_cpu_without_gpu_default() {
+        let placement =
+            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, None).unwrap();
+
+        assert_eq!(placement.gpu_layers, Some(0));
+        assert!(placement.cpu_only);
+    }
+
+    #[cfg(feature = "llm-llama-cpp")]
+    #[test]
+    fn gpt_oss_uses_cuda_default_when_provided() {
+        let placement =
+            llm_runtime_placement(Path::new("gpt-oss-20b-mxfp4.gguf"), None, Some(999)).unwrap();
+
+        assert_eq!(placement.gpu_layers, Some(999));
+        assert!(!placement.cpu_only);
+    }
 }

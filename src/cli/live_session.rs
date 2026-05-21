@@ -17,6 +17,7 @@ pub(crate) enum LiveSessionMode {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub(crate) struct LiveSessionConfig {
     pub(crate) mode: LiveSessionMode,
     pub(crate) input: LiveInputConfig,

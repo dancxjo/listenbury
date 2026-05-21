@@ -23,7 +23,7 @@ impl Serialize for ExactTimestamp {
 impl<'de> Deserialize<'de> for ExactTimestamp {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        let dt = DateTime::parse_from_rfc3339(&s).map_err(|e| serde::de::Error::custom(e))?;
+        let dt = DateTime::parse_from_rfc3339(&s).map_err(serde::de::Error::custom)?;
         let utc: DateTime<Utc> = dt.into();
         let nanos =
             (utc.timestamp() as i128) * 1_000_000_000 + utc.timestamp_subsec_nanos() as i128;

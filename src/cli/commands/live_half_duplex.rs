@@ -1099,10 +1099,10 @@ fn process_live_frame(
     }
 
     for event in events {
-        if let HearingEvent::BreathGroupClosed { id, .. } = event {
-            if let Some(group_frames) = state.active_groups.remove(&id) {
-                result.closed_groups.push(group_frames);
-            }
+        if let HearingEvent::BreathGroupClosed { id, .. } = event
+            && let Some(group_frames) = state.active_groups.remove(&id)
+        {
+            result.closed_groups.push(group_frames);
         }
     }
     state.frame_time_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
@@ -1135,6 +1135,7 @@ fn process_ring_frames(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn stream_speech_to_tts(
     llm: &mut LlamaCppEngine,
     tts: &mut impl TextToSpeech,
@@ -1850,6 +1851,7 @@ fn is_thinking_leak(text: &str) -> bool {
         feature = "tts-piper"
     )
 ))]
+#[allow(clippy::too_many_arguments)]
 fn maybe_plan_cached_backchannel(
     controller: &mut ConversationController,
     transcript: &str,
@@ -1958,14 +1960,14 @@ fn emit_echo_planning_trace(
     has_phoneme_projection: bool,
 ) -> Result<()> {
     let observed_latency_ms = stable_evidence_at.map(|start| saturating_elapsed_ms(start, at));
-    if let Some(observed_latency_ms) = observed_latency_ms {
-        if observed_latency_ms > ECHO_PLANNING_LATENCY_TARGET_MS {
-            tracing::warn!(
-                observed_latency_ms,
-                latency_target_ms = ECHO_PLANNING_LATENCY_TARGET_MS,
-                "echo planning latency exceeded target"
-            );
-        }
+    if let Some(observed_latency_ms) = observed_latency_ms
+        && observed_latency_ms > ECHO_PLANNING_LATENCY_TARGET_MS
+    {
+        tracing::warn!(
+            observed_latency_ms,
+            latency_target_ms = ECHO_PLANNING_LATENCY_TARGET_MS,
+            "echo planning latency exceeded target"
+        );
     }
     let mode = if transcript.is_some_and(|text| !text.trim().is_empty()) {
         "partial_asr_words"
@@ -2209,6 +2211,7 @@ fn play_tts_audio_frames(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn flush_tts_audio(
     tts: &mut impl TextToSpeech,
     spoken_text: &str,
@@ -2481,6 +2484,7 @@ fn is_terminal_llm_event(event: &LlmEvent) -> bool {
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+#[allow(clippy::too_many_arguments)]
 fn drain_pending_into_ring(
     pending: &mut VecDeque<f32>,
     input_frame_samples: usize,

@@ -26,26 +26,26 @@ pub fn fetch_asset_with_progress(
 
     let existing_bytes = file_len(&target_path)?;
     let remote_bytes = remote_content_length(asset).or(asset.expected_size_hint);
-    if let Some(existing_bytes) = existing_bytes {
-        if existing_bytes > 0 {
-            match remote_bytes {
-                Some(total_bytes) if existing_bytes == total_bytes => {
-                    cleanup_partial_files(parent, asset, None)?;
-                    return Ok(false);
-                }
-                Some(total_bytes) if existing_bytes < total_bytes => {
-                    return resume_download(
-                        asset,
-                        &target_path,
-                        &target_path,
-                        existing_bytes,
-                        Some(total_bytes),
-                        &mut progress,
-                    );
-                }
-                Some(_) => {}
-                None => return Ok(false),
+    if let Some(existing_bytes) = existing_bytes
+        && existing_bytes > 0
+    {
+        match remote_bytes {
+            Some(total_bytes) if existing_bytes == total_bytes => {
+                cleanup_partial_files(parent, asset, None)?;
+                return Ok(false);
             }
+            Some(total_bytes) if existing_bytes < total_bytes => {
+                return resume_download(
+                    asset,
+                    &target_path,
+                    &target_path,
+                    existing_bytes,
+                    Some(total_bytes),
+                    &mut progress,
+                );
+            }
+            Some(_) => {}
+            None => return Ok(false),
         }
     }
 
@@ -97,7 +97,7 @@ fn download_fresh(
         .with_context(|| format!("failed to flush {}", temp_path.display()))?;
     drop(file);
 
-    fs::rename(&temp_path, &target_path).with_context(|| {
+    fs::rename(&temp_path, target_path).with_context(|| {
         format!(
             "failed to move completed download {} to {}",
             temp_path.display(),

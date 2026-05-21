@@ -192,7 +192,7 @@ impl RiperBackend {
             for pause in &controls.pause_overrides {
                 let silence_samples = compute_silence_samples(pause.millis, pcm.sample_rate_hz)?;
                 pcm.samples
-                    .extend(std::iter::repeat(0.0_f32).take(silence_samples));
+                    .extend(std::iter::repeat_n(0.0_f32, silence_samples));
                 inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
                 control_statuses.push(ControlStatusEntry {
                     name: format!("pause_override[{}]", pause.label),
@@ -1276,7 +1276,7 @@ mod tests {
             let silence_samples = compute_silence_samples(pause.millis, pcm.sample_rate_hz)
                 .expect("test pause duration should be reasonable");
             pcm.samples
-                .extend(std::iter::repeat(0.0_f32).take(silence_samples));
+                .extend(std::iter::repeat_n(0.0_f32, silence_samples));
             inserted_pause_ms = inserted_pause_ms.saturating_add(pause.millis);
             statuses.push(ControlStatusEntry {
                 name: format!("pause_override[{}]", pause.label),
