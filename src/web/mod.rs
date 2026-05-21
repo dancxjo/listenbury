@@ -2,6 +2,6 @@ mod assets;
 mod server;
 
 pub use server::{
-    BoundServer, LiveSessionAudioStore, LiveSessionVisualSpeechStore, ServeConfig, WebInputControl,
-    bind, serve,
+    BoundServer, InputRouter, LiveSessionAudioStore, LiveSessionVisualSpeechStore, ServeConfig,
+    WebInputControl, bind, serve,
 };
