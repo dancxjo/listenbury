@@ -21,6 +21,23 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rescan-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Cache cargo-audit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-0.22.1
+
+      - name: Cache RustSec advisory database
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/advisory-db
+          key: rustsec-advisory-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            rustsec-advisory-db-${{ runner.os }}-
 
       - name: Build setup
         run: just setup
