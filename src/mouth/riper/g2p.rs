@@ -1152,7 +1152,6 @@ mod tests {
                 "I’m going to make the timing model distinguish vowel nuclei from other phones, then add a periodic breath break for long unpunctuated runs.",
             )
             .expect("phonemize");
-        let output = symbols(&unit.phonemes);
         assert_eq!(
             symbols_for_word(&unit, "model"),
             vec!["M", "AA1", "D", "AH0", "L"],
@@ -1169,16 +1168,16 @@ mod tests {
             "periodic should preserve -ic stress and lexical /d/"
         );
         assert_eq!(
+            symbols_for_word(&unit, "unpunctuated"),
+            vec![
+                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "T", "IH0", "D"
+            ],
+            "expected unpunctuated to include un- + punctuate + -ed realization"
+        );
+        assert_eq!(
             symbols_for_word(&unit, "for"),
             vec!["F", "ER0"],
             "weak prepositional for should reduce to /fɚ/"
-        );
-        assert!(
-            output.windows(12).any(|chunk| chunk
-                == [
-                    "AH0", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY", "T", "IH0", "D"
-                ]),
-            "expected unpunctuated to include un- + punctuate + -ed realization"
         );
         assert!(
             unit.lexical_stress

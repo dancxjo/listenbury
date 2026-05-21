@@ -2,6 +2,11 @@ use thiserror::Error;
 
 use crate::mouth::riper::config::PiperVoiceConfig;
 
+const PIPER_PAD: &str = "_";
+const PIPER_BOS: &str = "^";
+const PIPER_EOS: &str = "$";
+const PIPER_WORD_SEPARATOR: &str = " ";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperPhoneme(pub String);
 
@@ -42,10 +47,35 @@ impl PiperPhonemeSequence {
         &self,
         config: &PiperVoiceConfig,
     ) -> Result<PiperIdSequence, PiperPhonemeIdConversionError> {
+        if config_has_piper_framing(config) {
+            return self.to_piper_framed_ids(config).or_else(|_| {
+                espeak_compatible_sequence(self, config)
+                    .and_then(|sequence| sequence.to_piper_framed_ids(config))
+            });
+        }
+
         self.to_piper_ids(config).or_else(|_| {
             espeak_compatible_sequence(self, config)
                 .and_then(|sequence| sequence.to_piper_ids(config))
         })
+    }
+
+    fn to_piper_framed_ids(
+        &self,
+        config: &PiperVoiceConfig,
+    ) -> Result<PiperIdSequence, PiperPhonemeIdConversionError> {
+        let mut ids = Vec::new();
+        extend_symbol_ids(&mut ids, PIPER_BOS, config)?;
+        extend_symbol_ids(&mut ids, PIPER_PAD, config)?;
+        for phoneme in &self.phonemes {
+            if phoneme.0 == PIPER_WORD_SEPARATOR {
+                continue;
+            }
+            extend_symbol_ids(&mut ids, &phoneme.0, config)?;
+            extend_symbol_ids(&mut ids, PIPER_PAD, config)?;
+        }
+        extend_symbol_ids(&mut ids, PIPER_EOS, config)?;
+        Ok(PiperIdSequence { ids })
     }
 }
 
@@ -53,7 +83,7 @@ pub fn espeak_compatible_sequence(
     sequence: &PiperPhonemeSequence,
     config: &PiperVoiceConfig,
 ) -> Result<PiperPhonemeSequence, PiperPhonemeIdConversionError> {
-    let mut symbols = vec![PiperPhoneme("^".to_string())];
+    let mut symbols = Vec::new();
     for phoneme in &sequence.phonemes {
         let expanded = expand_espeak_phoneme(&phoneme.0, config).ok_or_else(|| {
             PiperPhonemeIdConversionError::UnknownPhoneme {
@@ -62,19 +92,27 @@ pub fn espeak_compatible_sequence(
         })?;
         symbols.extend(expanded.into_iter().map(PiperPhoneme));
     }
-    symbols.push(PiperPhoneme("$".to_string()));
+    Ok(PiperPhonemeSequence { phonemes: symbols })
+}
 
-    let mut interspersed = Vec::with_capacity(symbols.len().saturating_mul(2).saturating_sub(1));
-    for (index, symbol) in symbols.into_iter().enumerate() {
-        if index > 0 {
-            interspersed.push(PiperPhoneme("_".to_string()));
+fn config_has_piper_framing(config: &PiperVoiceConfig) -> bool {
+    [PIPER_BOS, PIPER_PAD, PIPER_EOS]
+        .iter()
+        .all(|symbol| config.phoneme_id_map.contains_key(*symbol))
+}
+
+fn extend_symbol_ids(
+    ids: &mut Vec<i64>,
+    symbol: &str,
+    config: &PiperVoiceConfig,
+) -> Result<(), PiperPhonemeIdConversionError> {
+    let mapped = config.phoneme_id_map.get(symbol).ok_or_else(|| {
+        PiperPhonemeIdConversionError::UnknownPhoneme {
+            symbol: symbol.to_string(),
         }
-        interspersed.push(symbol);
-    }
-
-    Ok(PiperPhonemeSequence {
-        phonemes: interspersed,
-    })
+    })?;
+    ids.extend(mapped);
+    Ok(())
 }
 
 fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
@@ -89,6 +127,7 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         .unwrap_or(symbol);
 
     let expanded = match (symbol, base_symbol) {
+        (PIPER_WORD_SEPARATOR, _) => &[][..],
         ("AH0", _) => &["ə"][..],
         ("AH1" | "AH2", _) => &["ʌ"],
         (_, "AA") => &["ɑ"],
@@ -291,6 +330,34 @@ mod tests {
     }
 
     #[test]
+    fn compatible_sequence_expands_without_piper_padding_or_word_separator_tokens() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                " ": [4],
+                ".": [5],
+                "a": [6],
+                "ɪ": [7],
+                "s": [8],
+                "i": [9]
+              }
+            }
+            "#,
+        );
+
+        let compatible =
+            espeak_compatible_sequence(&sequence(&["AY", " ", "S", "IY", "|"]), &config)
+                .expect("ARPAbet symbols should expand to Piper codepoints");
+
+        assert_eq!(sequence_symbols(&compatible), vec!["a", "ɪ", "s", "i", "."]);
+    }
+
+    #[test]
     fn compatible_conversion_expands_ah_stress_for_espeak_voice_maps() {
         let config = config_from_json(
             r#"
@@ -313,6 +380,38 @@ mod tests {
             ids,
             PiperIdSequence {
                 ids: vec![1, 2, 4, 2, 5, 2, 5, 2, 3]
+            }
+        );
+    }
+
+    #[test]
+    fn compatible_conversion_frames_already_compatible_espeak_symbols() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                " ": [4],
+                ".": [5],
+                "ð": [6],
+                "ɪ": [7],
+                "s": [8]
+              }
+            }
+            "#,
+        );
+
+        let ids = sequence(&["ð", "ɪ", "s", " "])
+            .to_piper_ids_compatible(&config)
+            .expect("already compatible eSpeak symbols should still get Piper framing");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 2, 6, 2, 7, 2, 8, 2, 3]
             }
         );
     }
@@ -346,5 +445,13 @@ mod tests {
                 ids: vec![1, 2, 4, 2, 5, 2, 8, 2, 6, 2, 9, 2, 7, 2, 5, 2, 3]
             }
         );
+    }
+
+    fn sequence_symbols(sequence: &PiperPhonemeSequence) -> Vec<&str> {
+        sequence
+            .phonemes
+            .iter()
+            .map(|phoneme| phoneme.0.as_str())
+            .collect()
     }
 }

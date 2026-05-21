@@ -12,12 +12,18 @@ const INFINITIVAL_MARKER_CONFIDENCE: f32 = 0.92;
 const WEAK_FUNCTION_CANDIDATE_CONFIDENCE: f32 = 0.88;
 const DETERMINER_LINK_CONFIDENCE: f32 = 0.83;
 const AUXILIARY_LINK_CONFIDENCE: f32 = 0.82;
+const SUBJECT_LINK_CONFIDENCE: f32 = 0.8;
+const OBJECT_LINK_CONFIDENCE: f32 = 0.78;
+const COMPLEMENT_LINK_CONFIDENCE: f32 = 0.76;
+const COORDINATION_LINK_CONFIDENCE: f32 = 0.74;
 const MODIFIER_LINK_CONFIDENCE: f32 = 0.72;
 const NOUN_COMPOUND_LINK_CONFIDENCE: f32 = 0.78;
 const CONTRAST_PAIR_CONFIDENCE: f32 = 0.91;
 const VOCATIVE_LINK_CONFIDENCE: f32 = 0.86;
 const APPOSITION_LINK_CONFIDENCE: f32 = 0.8;
 const PARENTHETICAL_LINK_CONFIDENCE: f32 = 0.79;
+const CORE_CLAUSE_CLAIM_CONFIDENCE: f32 = 0.76;
+const COORDINATION_CLAIM_CONFIDENCE: f32 = 0.72;
 const CONTRASTIVE_FOCUS_CLAIM_CONFIDENCE: f32 = 0.89;
 const COMMA_BEHAVIOR_CLAIM_CONFIDENCE: f32 = 0.84;
 const ARTICLE_HOOK_CLAIM_CONFIDENCE: f32 = 0.85;
@@ -482,6 +488,9 @@ fn build_link_parses(
         }
     }
 
+    push_core_clause_links(normalized, word_slots, &words, &mut links, &mut claims);
+    push_coordination_links(normalized, word_slots, &words, &mut links, &mut claims);
+
     for (left, right) in detect_contrast_pairs(&words, source_words) {
         push_link(
             &mut links,
@@ -696,6 +705,152 @@ fn build_link_parses(
     vec![primary_parse]
 }
 
+fn push_core_clause_links(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    links: &mut Vec<SyntacticLink>,
+    claims: &mut Vec<AnalysisClaim>,
+) {
+    for predicate_index in 0..words.len() {
+        let word = words[predicate_index];
+        let predicate_can_take_subject =
+            is_likely_verb(word) || is_auxiliary_predicate_head(words, predicate_index);
+        if predicate_can_take_subject {
+            if let Some(subject_index) =
+                find_subject_before_predicate(normalized, word_slots, words, predicate_index)
+            {
+                push_link(
+                    links,
+                    SyntacticLink {
+                        left: subject_index,
+                        right: predicate_index,
+                        kind: SyntacticLinkKind::Subject,
+                        confidence: SUBJECT_LINK_CONFIDENCE,
+                        source: SyntacticLinkSource::HeuristicGrammarIsland,
+                    },
+                );
+                claims.push(AnalysisClaim::new(
+                    AnalysisTarget::WordIndex(subject_index),
+                    ClaimKind::ProsodicRole,
+                    ClaimValue::ProsodicRole("Content".to_string()),
+                    AnalysisSourceKind::SyntaxRule,
+                    CORE_CLAUSE_CLAIM_CONFIDENCE,
+                    "nominal before predicate linked as clause subject",
+                ));
+            }
+        }
+
+        if is_likely_verb(word) {
+            if let Some(object_index) =
+                find_object_after_verb(normalized, word_slots, words, predicate_index)
+            {
+                push_link(
+                    links,
+                    SyntacticLink {
+                        left: predicate_index,
+                        right: object_index,
+                        kind: SyntacticLinkKind::Object,
+                        confidence: OBJECT_LINK_CONFIDENCE,
+                        source: SyntacticLinkSource::HeuristicGrammarIsland,
+                    },
+                );
+                claims.push(AnalysisClaim::new(
+                    AnalysisTarget::WordIndex(object_index),
+                    ClaimKind::ProsodicRole,
+                    ClaimValue::ProsodicRole("Focus".to_string()),
+                    AnalysisSourceKind::SyntaxRule,
+                    CORE_CLAUSE_CLAIM_CONFIDENCE,
+                    "nominal after verb linked as likely object/focus",
+                ));
+            }
+        }
+
+        if let Some(complement_index) =
+            find_complement_after_predicate(normalized, word_slots, words, predicate_index)
+        {
+            push_link(
+                links,
+                SyntacticLink {
+                    left: predicate_index,
+                    right: complement_index,
+                    kind: SyntacticLinkKind::Complement,
+                    confidence: COMPLEMENT_LINK_CONFIDENCE,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
+                },
+            );
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(complement_index),
+                ClaimKind::ProsodicRole,
+                ClaimValue::ProsodicRole("Focus".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                CORE_CLAUSE_CLAIM_CONFIDENCE,
+                "predicate complement linked for focus planning",
+            ));
+        }
+    }
+}
+
+fn push_coordination_links(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    links: &mut Vec<SyntacticLink>,
+    claims: &mut Vec<AnalysisClaim>,
+) {
+    for conjunction_index in 1..words.len().saturating_sub(1) {
+        if !is_coordination_conjunction(words[conjunction_index]) {
+            continue;
+        }
+        if !word_indices_are_phrase_adjacent(
+            normalized,
+            word_slots,
+            conjunction_index - 1,
+            conjunction_index,
+        ) || !word_indices_are_phrase_adjacent(
+            normalized,
+            word_slots,
+            conjunction_index,
+            conjunction_index + 1,
+        ) {
+            continue;
+        }
+        let Some(left) = find_coordination_item_left(words, conjunction_index) else {
+            continue;
+        };
+        let Some(right) = find_coordination_item_right(words, conjunction_index) else {
+            continue;
+        };
+        if base_pos(words[left]) != base_pos(words[right])
+            && !(is_likely_nominal(words[left]) && is_likely_nominal(words[right]))
+            && !(is_likely_verb(words[left]) && is_likely_verb(words[right]))
+        {
+            continue;
+        }
+        push_link(
+            links,
+            SyntacticLink {
+                left,
+                right,
+                kind: SyntacticLinkKind::Coordination,
+                confidence: COORDINATION_LINK_CONFIDENCE,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
+            },
+        );
+        claims.push(AnalysisClaim::new(
+            AnalysisTarget::Boundary {
+                left_word: Some(left),
+                right_word: Some(right),
+            },
+            ClaimKind::BoundaryKind,
+            ClaimValue::BoundaryKind("Coordination".to_string()),
+            AnalysisSourceKind::SyntaxRule,
+            COORDINATION_CLAIM_CONFIDENCE,
+            "coordinated word pair linked across conjunction",
+        ));
+    }
+}
+
 fn push_link(links: &mut Vec<SyntacticLink>, candidate: SyntacticLink) {
     if links.iter().any(|existing| {
         existing.left == candidate.left
@@ -707,6 +862,34 @@ fn push_link(links: &mut Vec<SyntacticLink>, candidate: SyntacticLink) {
     links.push(candidate);
 }
 
+fn word_indices_are_phrase_adjacent(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    left_word_index: usize,
+    right_word_index: usize,
+) -> bool {
+    word_slots
+        .get(left_word_index)
+        .zip(word_slots.get(right_word_index))
+        .is_some_and(|((left_token_index, _), (right_token_index, _))| {
+            word_slots_are_phrase_adjacent(normalized, *left_token_index, *right_token_index)
+        })
+}
+
+fn word_indices_are_in_same_phrase(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    left_word_index: usize,
+    right_word_index: usize,
+) -> bool {
+    let (left, right) = if left_word_index <= right_word_index {
+        (left_word_index, right_word_index)
+    } else {
+        (right_word_index, left_word_index)
+    };
+    word_indices_are_phrase_adjacent(normalized, word_slots, left, right)
+}
+
 fn word_slots_are_phrase_adjacent(
     normalized: &NormalizedText,
     left_token_index: usize,
@@ -715,6 +898,158 @@ fn word_slots_are_phrase_adjacent(
     normalized.tokens[left_token_index + 1..right_token_index]
         .iter()
         .all(|token| !matches!(token, NormalizedToken::PhraseBreak))
+}
+
+fn find_subject_before_predicate(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    predicate_index: usize,
+) -> Option<usize> {
+    if predicate_index > 0
+        && is_likely_verb(words[predicate_index])
+        && is_auxiliary(words[predicate_index - 1])
+        && word_indices_are_phrase_adjacent(
+            normalized,
+            word_slots,
+            predicate_index - 1,
+            predicate_index,
+        )
+    {
+        return None;
+    }
+
+    for index in (0..predicate_index).rev() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, index, predicate_index) {
+            break;
+        }
+        let word = words[index];
+        if word == "to" || is_preposition(word) || is_coordination_conjunction(word) {
+            break;
+        }
+        if is_likely_nominal(word) {
+            return Some(index);
+        }
+        if is_likely_verb(word) || is_auxiliary(word) {
+            break;
+        }
+    }
+    None
+}
+
+fn find_object_after_verb(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    verb_index: usize,
+) -> Option<usize> {
+    let mut object_head = None;
+    let mut saw_noun_phrase_material = false;
+    for index in (verb_index + 1)..words.len() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, verb_index, index) {
+            break;
+        }
+        let word = words[index];
+        if word == "to" || is_preposition(word) || is_conjunction(word) {
+            break;
+        }
+        if is_determiner(word) || is_adjective(word) {
+            saw_noun_phrase_material = true;
+            continue;
+        }
+        if is_likely_nominal(word) {
+            object_head = Some(index);
+            saw_noun_phrase_material = true;
+            continue;
+        }
+        if saw_noun_phrase_material {
+            break;
+        }
+    }
+    object_head
+}
+
+fn find_complement_after_predicate(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    predicate_index: usize,
+) -> Option<usize> {
+    if is_copular_auxiliary(words[predicate_index]) {
+        let next_index = predicate_index + 1;
+        if words
+            .get(next_index)
+            .is_some_and(|word| is_likely_verb(word))
+            && word_indices_are_phrase_adjacent(normalized, word_slots, predicate_index, next_index)
+        {
+            return None;
+        }
+        return find_predicate_complement_head(normalized, word_slots, words, predicate_index);
+    }
+
+    if is_likely_verb(words[predicate_index])
+        && predicate_index + 2 < words.len()
+        && words[predicate_index + 1] == "to"
+        && is_likely_verb(words[predicate_index + 2])
+        && word_indices_are_phrase_adjacent(
+            normalized,
+            word_slots,
+            predicate_index,
+            predicate_index + 1,
+        )
+        && word_indices_are_phrase_adjacent(
+            normalized,
+            word_slots,
+            predicate_index + 1,
+            predicate_index + 2,
+        )
+    {
+        return Some(predicate_index + 2);
+    }
+
+    None
+}
+
+fn find_predicate_complement_head(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    predicate_index: usize,
+) -> Option<usize> {
+    let mut complement_head = None;
+    for index in (predicate_index + 1)..words.len() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, predicate_index, index) {
+            break;
+        }
+        let word = words[index];
+        if is_preposition(word) || is_conjunction(word) || word == "to" {
+            break;
+        }
+        if is_determiner(word) {
+            continue;
+        }
+        if is_adjective(word) {
+            return Some(index);
+        }
+        if is_likely_nominal(word) {
+            complement_head = Some(index);
+            continue;
+        }
+        if complement_head.is_some() {
+            break;
+        }
+    }
+    complement_head
+}
+
+fn find_coordination_item_left(words: &[&str], conjunction_index: usize) -> Option<usize> {
+    (0..conjunction_index)
+        .rev()
+        .find(|index| is_coordination_item(words[*index]))
+}
+
+fn find_coordination_item_right(words: &[&str], conjunction_index: usize) -> Option<usize> {
+    ((conjunction_index + 1)..words.len()).find(|index| is_coordination_item(words[*index]))
 }
 
 fn detect_contrast_pairs(words: &[&str], source_words: &[String]) -> Vec<(usize, usize)> {
@@ -1047,6 +1382,10 @@ fn is_conjunction(word: &str) -> bool {
     matches!(word, "and" | "or" | "but" | "not")
 }
 
+fn is_coordination_conjunction(word: &str) -> bool {
+    matches!(word, "and" | "or" | "but")
+}
+
 fn is_preposition(word: &str) -> bool {
     matches!(
         word,
@@ -1092,6 +1431,24 @@ fn is_auxiliary(word: &str) -> bool {
             | "must"
             | "can"
     )
+}
+
+fn is_auxiliary_predicate_head(words: &[&str], index: usize) -> bool {
+    is_auxiliary(words[index])
+        && words.get(index + 1).is_some_and(|next| {
+            is_likely_verb(next) || is_adjective(next) || is_likely_nominal(next)
+        })
+}
+
+fn is_copular_auxiliary(word: &str) -> bool {
+    matches!(word, "be" | "am" | "is" | "are" | "was" | "were" | "been")
+}
+
+fn is_coordination_item(word: &str) -> bool {
+    !is_determiner(word)
+        && !is_preposition(word)
+        && !is_conjunction(word)
+        && (is_likely_nominal(word) || is_likely_verb(word) || is_adjective(word))
 }
 
 fn is_likely_verb(word: &str) -> bool {
@@ -1472,6 +1829,113 @@ mod tests {
             quickly,
             leave,
             SyntacticLinkKind::Modifier
+        ));
+    }
+
+    #[test]
+    fn links_subjects_to_predicates() {
+        let analysis = analyze("The bright machine exploded.");
+        let parse = analysis.link_parses.first().expect("link parse");
+        let machine = word_index(&analysis, "machine");
+        let exploded = word_index(&analysis, "exploded");
+        assert!(has_link(
+            parse,
+            machine,
+            exploded,
+            SyntacticLinkKind::Subject
+        ));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(machine)
+                && claim.value == ClaimValue::ProsodicRole("Content".to_string())
+        }));
+
+        let auxiliary = analyze("They will leave.");
+        let auxiliary_parse = auxiliary.link_parses.first().expect("link parse");
+        let they = word_index(&auxiliary, "they");
+        let will = word_index(&auxiliary, "will");
+        let leave = word_index(&auxiliary, "leave");
+        assert!(has_link(
+            auxiliary_parse,
+            they,
+            will,
+            SyntacticLinkKind::Subject
+        ));
+        assert!(!has_link(
+            auxiliary_parse,
+            they,
+            leave,
+            SyntacticLinkKind::Subject
+        ));
+    }
+
+    #[test]
+    fn links_objects_and_complements() {
+        let object = analyze("I saw the bright machine.");
+        let object_parse = object.link_parses.first().expect("link parse");
+        let saw = word_index(&object, "saw");
+        let machine = word_index(&object, "machine");
+        assert!(has_link(
+            object_parse,
+            saw,
+            machine,
+            SyntacticLinkKind::Object
+        ));
+        assert!(object_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(machine)
+                && claim.value == ClaimValue::ProsodicRole("Focus".to_string())
+        }));
+
+        let copular = analyze("The machine is bright.");
+        let copular_parse = copular.link_parses.first().expect("link parse");
+        let is = word_index(&copular, "is");
+        let bright = word_index(&copular, "bright");
+        assert!(has_link(
+            copular_parse,
+            is,
+            bright,
+            SyntacticLinkKind::Complement
+        ));
+
+        let infinitival = analyze("I want to go.");
+        let infinitival_parse = infinitival.link_parses.first().expect("link parse");
+        let want = word_index(&infinitival, "want");
+        let go = word_index(&infinitival, "go");
+        assert!(has_link(
+            infinitival_parse,
+            want,
+            go,
+            SyntacticLinkKind::Complement
+        ));
+    }
+
+    #[test]
+    fn links_coordinated_items() {
+        let analysis = analyze("I saw dogs and cats.");
+        let parse = analysis.link_parses.first().expect("link parse");
+        let dogs = word_index(&analysis, "dogs");
+        let cats = word_index(&analysis, "cats");
+        assert!(has_link(parse, dogs, cats, SyntacticLinkKind::Coordination));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::BoundaryKind
+                && claim.target
+                    == AnalysisTarget::Boundary {
+                        left_word: Some(dogs),
+                        right_word: Some(cats),
+                    }
+                && claim.value == ClaimValue::BoundaryKind("Coordination".to_string())
+        }));
+
+        let verbs = analyze("Try to ask and remember.");
+        let verbs_parse = verbs.link_parses.first().expect("link parse");
+        let ask = word_index(&verbs, "ask");
+        let remember = word_index(&verbs, "remember");
+        assert!(has_link(
+            verbs_parse,
+            ask,
+            remember,
+            SyntacticLinkKind::Coordination
         ));
     }
 

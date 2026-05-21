@@ -184,8 +184,8 @@ fn known_derived(surface: &str) -> Option<MorphophonologyResult> {
         return None;
     }
     let stem = lexicon_pronunciation("punctuate")?;
-    let prefix_symbols = vec!["AH0".to_string(), "N".to_string()];
-    let prefix_stress = vec![Some(PhonologicalStress::Unstressed), None];
+    let prefix_symbols = vec!["AH1".to_string(), "N".to_string()];
+    let prefix_stress = vec![Some(PhonologicalStress::Primary), None];
     let ed = ed_suffix_from_stem(&stem.symbols)?;
 
     let mut realized = prefix_symbols.clone();
@@ -673,6 +673,19 @@ fn lexical_override(surface: &str) -> Option<WordPronunciation> {
                 ("K", None),
             ],
         ),
+        (
+            "punctuate",
+            &[
+                ("P", None),
+                ("AH1", Some(PhonologicalStress::Primary)),
+                ("NG", None),
+                ("K", None),
+                ("CH", None),
+                ("UW", Some(PhonologicalStress::Unstressed)),
+                ("EY2", Some(PhonologicalStress::Secondary)),
+                ("T", None),
+            ],
+        ),
     ];
 
     let lower = surface.to_ascii_lowercase();
@@ -1011,6 +1024,10 @@ mod tests {
         assert_eq!(
             symbols_of("periodic"),
             vec!["P", "IH2", "R", "IY0", "AA1", "D", "IH0", "K"]
+        );
+        assert_eq!(
+            symbols_of("punctuate"),
+            vec!["P", "AH1", "NG", "K", "CH", "UW", "EY2", "T"]
         );
     }
 
