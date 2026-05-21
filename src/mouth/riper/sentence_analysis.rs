@@ -478,9 +478,9 @@ fn build_link_parses(
             CONTRAST_PAIR_CONFIDENCE,
             "contrastive negation pattern detected",
         ));
-        for pole in [left, right] {
+        for contrast_word in [left, right] {
             claims.push(AnalysisClaim::new(
-                AnalysisTarget::WordIndex(pole),
+                AnalysisTarget::WordIndex(contrast_word),
                 ClaimKind::ProsodicRole,
                 ClaimValue::ProsodicRole("Contrastive".to_string()),
                 AnalysisSourceKind::SyntaxRule,
@@ -488,7 +488,7 @@ fn build_link_parses(
                 "contrast pair marks focused item",
             ));
             claims.push(AnalysisClaim::new(
-                AnalysisTarget::WordIndex(pole),
+                AnalysisTarget::WordIndex(contrast_word),
                 ClaimKind::Reduction,
                 ClaimValue::Reduction("WeakFormSuppressed".to_string()),
                 AnalysisSourceKind::SyntaxRule,
