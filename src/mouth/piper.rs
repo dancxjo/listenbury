@@ -358,7 +358,7 @@ fn piper_backend_with_preference(
             process,
             None::<RiperTextBackend>,
             preference,
-            Some(error.to_string()),
+            Some(format!("{error:#}")),
         )),
     }
 }

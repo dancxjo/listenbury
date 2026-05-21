@@ -59,7 +59,6 @@ pub struct RiperBackend {
 impl RiperBackend {
     pub fn load(model_path: impl AsRef<Path>, config: PiperVoiceConfig) -> Result<Self> {
         validate_config(&config)?;
-        initialize_ort_runtime()?;
 
         let model_path = model_path.as_ref().to_path_buf();
         if !model_path.is_file() {
@@ -68,6 +67,8 @@ impl RiperBackend {
                 model_path.display()
             );
         }
+
+        initialize_ort_runtime()?;
 
         let session = Session::builder()
             .context("failed to create Piper ONNX session builder")?
@@ -399,25 +400,44 @@ impl RiperBackend {
 }
 
 fn initialize_ort_runtime() -> Result<()> {
-    if std::env::var_os("ORT_DYLIB_PATH").is_some() {
-        ort::init().commit();
+    if let Some(path) = std::env::var_os("ORT_DYLIB_PATH").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        ensure!(
+            path.is_file(),
+            "ORT_DYLIB_PATH points to {}, but that file does not exist",
+            path.display()
+        );
+        initialize_ort_runtime_from(&path)?;
         return Ok(());
     }
 
-    if let Some(path) = find_local_onnxruntime_dylib() {
-        ort::init_from(&path)
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to load ONNX Runtime dynamic library from {}: {error}",
-                    path.display()
-                )
-            })?
-            .commit();
+    if let Some(path) = find_onnxruntime_dylib() {
+        initialize_ort_runtime_from(&path)?;
     } else {
-        ort::init().commit();
+        bail!(
+            "Riper requires an ONNX Runtime shared library, but none was found. \
+             Install ONNX Runtime or set ORT_DYLIB_PATH to libonnxruntime.so \
+             (for example, a Python onnxruntime package copy under site-packages/onnxruntime/capi)."
+        );
     }
 
     Ok(())
+}
+
+fn initialize_ort_runtime_from(path: &Path) -> Result<()> {
+    ort::init_from(path)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "failed to load ONNX Runtime dynamic library from {}: {error}",
+                path.display()
+            )
+        })?
+        .commit();
+    Ok(())
+}
+
+fn find_onnxruntime_dylib() -> Option<PathBuf> {
+    find_local_onnxruntime_dylib().or_else(find_linker_onnxruntime_dylib)
 }
 
 fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
@@ -435,15 +455,48 @@ fn find_local_onnxruntime_dylib() -> Option<PathBuf> {
         if let Ok(capi_entries) = std::fs::read_dir(capi_dir) {
             candidates.extend(capi_entries.flatten().filter_map(|candidate| {
                 let name = candidate.file_name();
-                name.to_string_lossy()
-                    .starts_with("libonnxruntime.so")
-                    .then(|| candidate.path())
+                is_onnxruntime_dylib_name(&name.to_string_lossy()).then(|| candidate.path())
             }));
         }
     }
 
     candidates.sort();
     candidates.pop()
+}
+
+fn find_linker_onnxruntime_dylib() -> Option<PathBuf> {
+    let mut search_dirs = Vec::new();
+    if let Some(paths) = std::env::var_os("LD_LIBRARY_PATH") {
+        search_dirs.extend(std::env::split_paths(&paths));
+    }
+    search_dirs.extend([
+        PathBuf::from("/usr/local/lib"),
+        PathBuf::from("/usr/local/lib64"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/lib64"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
+        PathBuf::from("/lib/x86_64-linux-gnu"),
+    ]);
+    find_onnxruntime_dylib_in_dirs(search_dirs)
+}
+
+fn find_onnxruntime_dylib_in_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        candidates.extend(entries.flatten().filter_map(|entry| {
+            let name = entry.file_name();
+            is_onnxruntime_dylib_name(&name.to_string_lossy()).then(|| entry.path())
+        }));
+    }
+    candidates.sort();
+    candidates.pop()
+}
+
+fn is_onnxruntime_dylib_name(name: &str) -> bool {
+    name == "libonnxruntime.so" || name.starts_with("libonnxruntime.so.")
 }
 
 impl TtsBackend for RiperBackend {
@@ -847,6 +900,32 @@ mod tests {
             "listenbury-riper-{label}-{}-{ts}.onnx",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn onnxruntime_dylib_name_matches_unversioned_and_versioned_library() {
+        assert!(is_onnxruntime_dylib_name("libonnxruntime.so"));
+        assert!(is_onnxruntime_dylib_name("libonnxruntime.so.1.23.0"));
+        assert!(!is_onnxruntime_dylib_name(
+            "libonnxruntime_providers_cuda.so"
+        ));
+        assert!(!is_onnxruntime_dylib_name("onnxruntime.dll"));
+    }
+
+    #[test]
+    fn find_onnxruntime_dylib_in_dirs_prefers_matching_library_files() {
+        let dir =
+            std::env::temp_dir().join(format!("listenbury-riper-ort-find-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp dir");
+        fs::write(dir.join("libonnxruntime_providers_cuda.so"), b"provider")
+            .expect("write provider");
+        fs::write(dir.join("libonnxruntime.so.1"), b"runtime").expect("write runtime");
+
+        let found = find_onnxruntime_dylib_in_dirs([dir.clone()]);
+        assert_eq!(found, Some(dir.join("libonnxruntime.so.1")));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
