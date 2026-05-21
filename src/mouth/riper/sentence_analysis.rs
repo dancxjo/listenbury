@@ -5,12 +5,27 @@ use crate::mouth::riper::text::{NormalizedText, NormalizedToken, detect_vocative
 
 pub type WordIndex = usize;
 
+const INFINITIVAL_MARKER_CONFIDENCE: f32 = 0.92;
+const WEAK_FUNCTION_CANDIDATE_CONFIDENCE: f32 = 0.88;
+const DETERMINER_LINK_CONFIDENCE: f32 = 0.83;
+const AUXILIARY_LINK_CONFIDENCE: f32 = 0.82;
+const MODIFIER_LINK_CONFIDENCE: f32 = 0.72;
+const CONTRAST_PAIR_CONFIDENCE: f32 = 0.91;
+const VOCATIVE_LINK_CONFIDENCE: f32 = 0.86;
+const APPOSITION_LINK_CONFIDENCE: f32 = 0.8;
+const PARENTHETICAL_LINK_CONFIDENCE: f32 = 0.79;
+const AMBIGUOUS_NOUN_ATTACHMENT_CONFIDENCE: f32 = 0.46;
+const AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE: f32 = 0.44;
+
+const COMMON_LINK_ADJECTIVES: &[&str] = &[
+    "small", "big", "good", "bad", "bright", "dark", "quick", "slow", "new", "old", "young",
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentenceAnalysis {
     pub tokens: Vec<TokenAnalysis>,
     pub link_parses: Vec<SyntacticLinkParse>,
 }
-impl Eq for SentenceAnalysis {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenAnalysis {
@@ -32,7 +47,6 @@ pub struct SyntacticLink {
     pub confidence: f32,
     pub source: AnalysisSource,
 }
-impl Eq for SyntacticLink {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum SyntacticLinkKind {
@@ -73,7 +87,6 @@ pub struct AnalysisClaim {
     pub confidence: f32,
     pub source: AnalysisSource,
 }
-impl Eq for AnalysisClaim {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyntacticLinkParse {
@@ -81,7 +94,6 @@ pub struct SyntacticLinkParse {
     pub claims: Vec<AnalysisClaim>,
     pub rank: f32,
 }
-impl Eq for SyntacticLinkParse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnvironmentPattern {
@@ -350,20 +362,20 @@ fn build_link_parses(
                     left: idx,
                     right: idx + 1,
                     kind: SyntacticLinkKind::InfinitivalMarker,
-                    confidence: 0.92,
+                    confidence: INFINITIVAL_MARKER_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
             claims.push(AnalysisClaim {
                 word_indices: vec![idx],
                 kind: AnalysisClaimKind::InfinitivalMarker,
-                confidence: 0.92,
+                confidence: INFINITIVAL_MARKER_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             });
             claims.push(AnalysisClaim {
                 word_indices: vec![idx],
                 kind: AnalysisClaimKind::WeakFunctionCandidate,
-                confidence: 0.88,
+                confidence: WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             });
         }
@@ -375,7 +387,7 @@ fn build_link_parses(
                     left: idx,
                     right: idx + 1,
                     kind: SyntacticLinkKind::Determiner,
-                    confidence: 0.83,
+                    confidence: DETERMINER_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
@@ -388,7 +400,7 @@ fn build_link_parses(
                     left: idx,
                     right: idx + 1,
                     kind: SyntacticLinkKind::Auxiliary,
-                    confidence: 0.82,
+                    confidence: AUXILIARY_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
@@ -401,7 +413,7 @@ fn build_link_parses(
                     left: idx,
                     right: idx + 1,
                     kind: SyntacticLinkKind::Modifier,
-                    confidence: 0.72,
+                    confidence: MODIFIER_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
@@ -415,14 +427,14 @@ fn build_link_parses(
                 left,
                 right,
                 kind: SyntacticLinkKind::ContrastPair,
-                confidence: 0.91,
+                confidence: CONTRAST_PAIR_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             },
         );
         claims.push(AnalysisClaim {
             word_indices: vec![left, right],
             kind: AnalysisClaimKind::ContrastPair,
-            confidence: 0.91,
+            confidence: CONTRAST_PAIR_CONFIDENCE,
             source: AnalysisSource::HeuristicGrammarIsland,
         });
     }
@@ -444,14 +456,14 @@ fn build_link_parses(
                     left: anchor,
                     right: first_target,
                     kind: SyntacticLinkKind::Vocative,
-                    confidence: 0.86,
+                    confidence: VOCATIVE_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
             claims.push(AnalysisClaim {
                 word_indices: vec![first_target],
                 kind: AnalysisClaimKind::VocativeBoundary,
-                confidence: 0.86,
+                confidence: VOCATIVE_LINK_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             });
         }
@@ -508,14 +520,14 @@ fn build_link_parses(
                     left: left_anchor,
                     right: target,
                     kind: SyntacticLinkKind::Apposition,
-                    confidence: 0.8,
+                    confidence: APPOSITION_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
             claims.push(AnalysisClaim {
                 word_indices: between.clone(),
                 kind: AnalysisClaimKind::AppositionBoundary,
-                confidence: 0.8,
+                confidence: APPOSITION_LINK_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             });
             continue;
@@ -527,14 +539,14 @@ fn build_link_parses(
                     left: left_anchor,
                     right: right_anchor,
                     kind: SyntacticLinkKind::Parenthetical,
-                    confidence: 0.79,
+                    confidence: PARENTHETICAL_LINK_CONFIDENCE,
                     source: AnalysisSource::HeuristicGrammarIsland,
                 },
             );
             claims.push(AnalysisClaim {
                 word_indices: between.clone(),
                 kind: AnalysisClaimKind::ParentheticalBoundary,
-                confidence: 0.79,
+                confidence: PARENTHETICAL_LINK_CONFIDENCE,
                 source: AnalysisSource::HeuristicGrammarIsland,
             });
         }
@@ -555,7 +567,7 @@ fn build_link_parses(
                 left: noun_anchor,
                 right: object_index,
                 kind: SyntacticLinkKind::Modifier,
-                confidence: 0.46,
+                confidence: AMBIGUOUS_NOUN_ATTACHMENT_CONFIDENCE,
                 source: AnalysisSource::AmbiguityVariant,
             },
         );
@@ -567,7 +579,7 @@ fn build_link_parses(
                 left: verb_anchor,
                 right: object_index,
                 kind: SyntacticLinkKind::Complement,
-                confidence: 0.44,
+                confidence: AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE,
                 source: AnalysisSource::AmbiguityVariant,
             },
         );
@@ -603,10 +615,10 @@ fn detect_contrast_pairs(words: &[&str], source_words: &[String]) -> Vec<(usize,
             && words[index + 1] == "not"
             && source_words
                 .get(index)
-                .is_some_and(|word| word.chars().all(|ch| !ch.is_ascii_lowercase()))
+                .is_some_and(|word| is_all_caps_token(word))
             && source_words
                 .get(index + 2)
-                .is_some_and(|word| word.chars().all(|ch| !ch.is_ascii_lowercase()))
+                .is_some_and(|word| is_all_caps_token(word))
         {
             pairs.push((index, index + 2));
         }
@@ -614,6 +626,19 @@ fn detect_contrast_pairs(words: &[&str], source_words: &[String]) -> Vec<(usize,
     pairs.sort_unstable();
     pairs.dedup();
     pairs
+}
+
+fn is_all_caps_token(word: &str) -> bool {
+    let mut has_alpha = false;
+    for ch in word.chars() {
+        if ch.is_ascii_alphabetic() {
+            has_alpha = true;
+            if !ch.is_ascii_uppercase() {
+                return false;
+            }
+        }
+    }
+    has_alpha
 }
 
 fn detect_with_attachment_ambiguity(words: &[&str]) -> Option<(usize, usize, usize)> {
@@ -645,20 +670,8 @@ fn is_likely_nominal(word: &str) -> bool {
 
 fn is_modifier_pair(left: &str, right: &str) -> bool {
     let adverb = left.ends_with("ly");
-    let adjective = matches!(
-        left,
-        "small"
-            | "big"
-            | "good"
-            | "bad"
-            | "bright"
-            | "dark"
-            | "quick"
-            | "slow"
-            | "new"
-            | "old"
-            | "young"
-    ) || left.ends_with("ous")
+    let adjective = COMMON_LINK_ADJECTIVES.contains(&left)
+        || left.ends_with("ous")
         || left.ends_with("ive")
         || left.ends_with("al");
     (adverb && is_likely_verb(right)) || (adjective && is_likely_nominal(right))
@@ -1045,6 +1058,13 @@ mod tests {
     }
 
     #[test]
+    fn detects_vocative_span_boundaries() {
+        let spans = detect_vocative_spans("Thank you, Dave.");
+        assert_eq!(spans.len(), 1);
+        assert_eq!("Dave", &"Thank you, Dave."[spans[0].clone()]);
+    }
+
+    #[test]
     fn fixture_links_parenthetical_and_apposition() {
         let parenthetical = analyze("The machine, unfortunately, exploded.");
         let parse = parenthetical.link_parses.first().expect("link parse");
@@ -1104,5 +1124,61 @@ mod tests {
                     .iter()
                     .any(|link| link.source == AnalysisSource::AmbiguityVariant)
         }));
+    }
+
+    #[test]
+    fn keeps_single_parse_for_non_ambiguous_sentence() {
+        let analysis = analyze("I saw the man.");
+        assert_eq!(analysis.link_parses.len(), 1);
+    }
+
+    #[test]
+    fn detects_additional_contrast_patterns() {
+        let adjacent = analyze("TO not FROM");
+        let adjacent_parse = adjacent.link_parses.first().expect("link parse");
+        let to = word_index(&adjacent, "to");
+        let from = word_index(&adjacent, "from");
+        assert!(has_link(
+            adjacent_parse,
+            to,
+            from,
+            SyntacticLinkKind::ContrastPair
+        ));
+
+        let but_pattern = analyze("not red but blue");
+        let but_parse = but_pattern.link_parses.first().expect("link parse");
+        let red = word_index(&but_pattern, "red");
+        let blue = word_index(&but_pattern, "blue");
+        assert!(has_link(
+            but_parse,
+            red,
+            blue,
+            SyntacticLinkKind::ContrastPair
+        ));
+    }
+
+    #[test]
+    fn creates_modifier_links_for_adjective_and_adverb_pairs() {
+        let adjective = analyze("The bright machine exploded.");
+        let adjective_parse = adjective.link_parses.first().expect("link parse");
+        let bright = word_index(&adjective, "bright");
+        let machine = word_index(&adjective, "machine");
+        assert!(has_link(
+            adjective_parse,
+            bright,
+            machine,
+            SyntacticLinkKind::Modifier
+        ));
+
+        let adverb = analyze("They quickly leave.");
+        let adverb_parse = adverb.link_parses.first().expect("link parse");
+        let quickly = word_index(&adverb, "quickly");
+        let leave = word_index(&adverb, "leave");
+        assert!(has_link(
+            adverb_parse,
+            quickly,
+            leave,
+            SyntacticLinkKind::Modifier
+        ));
     }
 }
