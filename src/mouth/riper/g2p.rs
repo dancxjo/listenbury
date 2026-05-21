@@ -825,6 +825,7 @@ fn crosses_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAna
                     SyntacticLinkKind::InfinitivalMarker
                         | SyntacticLinkKind::Determiner
                         | SyntacticLinkKind::Auxiliary
+                        | SyntacticLinkKind::Preposition
                         | SyntacticLinkKind::Modifier
                         | SyntacticLinkKind::NounCompound
                 )

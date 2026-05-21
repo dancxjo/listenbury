@@ -29,6 +29,7 @@ From Link Grammar English examples and docs (`README.md`, `data/en/tiny.dict`, `
 - subject ↔ verb links (`S*` family, e.g. `Ss`) for clause head/focus
 - object/complement links (`O*`, complement-like copular patterns)
 - determiner ↔ noun links (`D*`, e.g. `Ds`)
+- preposition ↔ object links (English prepositional phrase attachment)
 - modifier links (`A`, `M*`, `MV`-family usage)
 - auxiliary ↔ verb links (`I`, `SI*`, `PP`, `Pg` families)
 - coordination/connector links (`C`, `CO`, conjunction behavior)
@@ -47,6 +48,7 @@ From Link Grammar English examples and docs (`README.md`, `data/en/tiny.dict`, `
 | `O*` verb↔object | `Object` | `ClaimKind::ProsodicRole` (content/focus) | phrase grouping, object focus in broad/narrow focus alternation | P1 |
 | complement/copular dependency patterns | `Complement` | `ClaimKind::ProsodicRole` | copular complement prominence and phrase planning | P2 |
 | `D*` determiner↔noun (e.g. `Ds`) | `Determiner` | `ClaimKind::WeakFunctionCandidate`, `ClaimKind::ProsodicRole` | function-word de-emphasis, article+noun chunking | P0 |
+| preposition↔object dependency patterns | `Preposition` | `ClaimKind::WeakFunctionCandidate`, `ClaimKind::BoundaryKind` | prepositional phrase grouping and weak-function de-emphasis | P1 |
 | adjectival/adverbial modifier families (`A`, `M*`, `MV`) | `Modifier` | `ClaimKind::ProsodicRole` | content emphasis/de-emphasis and local focus contrast | P1 |
 | infinitival `to` marker (`I`/`TO` behavior) | `InfinitivalMarker` | `ClaimKind::InfinitivalMarker`, `ClaimKind::WeakFunctionCandidate` | weak `to` and reduction gating | P0 |
 | auxiliary support (`SI*`, `PP`, `Pg`, modal/aux patterns) | `Auxiliary` | `ClaimKind::ProsodicRole`, optional `ClaimKind::WeakFunctionCandidate` | auxiliary de-emphasis unless contrastive | P0 |

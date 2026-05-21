@@ -12,6 +12,7 @@ const INFINITIVAL_MARKER_CONFIDENCE: f32 = 0.92;
 const WEAK_FUNCTION_CANDIDATE_CONFIDENCE: f32 = 0.88;
 const DETERMINER_LINK_CONFIDENCE: f32 = 0.83;
 const AUXILIARY_LINK_CONFIDENCE: f32 = 0.82;
+const PREPOSITION_LINK_CONFIDENCE: f32 = 0.8;
 const SUBJECT_LINK_CONFIDENCE: f32 = 0.8;
 const OBJECT_LINK_CONFIDENCE: f32 = 0.78;
 const COMPLEMENT_LINK_CONFIDENCE: f32 = 0.76;
@@ -70,6 +71,7 @@ pub enum SyntacticLinkKind {
     Modifier,
     Determiner,
     Auxiliary,
+    Preposition,
     Coordination,
     ContrastPair,
     NounCompound,
@@ -420,32 +422,6 @@ fn build_link_parses(
                     source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
-            if matches!(left, "a" | "an" | "the") {
-                let article_noun_range = vec![idx, idx + 1];
-                let onset = if has_graphemic_vowel_onset(right) {
-                    "vowel"
-                } else {
-                    "consonant"
-                };
-                claims.push(AnalysisClaim::new(
-                    AnalysisTarget::WordRange(article_noun_range),
-                    ClaimKind::MorphologicalForm,
-                    ClaimValue::MorphologicalForm(format!(
-                        "article_phonetic_agreement:{left}_before_{onset}"
-                    )),
-                    AnalysisSourceKind::SyntaxRule,
-                    ARTICLE_HOOK_CLAIM_CONFIDENCE,
-                    "article+noun pair emitted for phonetic agreement/allomorph selection hooks",
-                ));
-                claims.push(AnalysisClaim::new(
-                    AnalysisTarget::WordIndex(idx),
-                    ClaimKind::WeakFunctionCandidate,
-                    ClaimValue::Syntactic,
-                    AnalysisSourceKind::SyntaxRule,
-                    WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
-                    "article is a weak-form candidate unless contrastively focused",
-                ));
-            }
         }
 
         if is_auxiliary(left) && is_likely_verb(right) {
@@ -488,6 +464,9 @@ fn build_link_parses(
         }
     }
 
+    push_determiner_phrase_links(normalized, word_slots, &words, &mut links, &mut claims);
+    push_auxiliary_phrase_links(normalized, word_slots, &words, &mut links, &mut claims);
+    push_prepositional_links(normalized, word_slots, &words, &mut links, &mut claims);
     push_core_clause_links(normalized, word_slots, &words, &mut links, &mut claims);
     push_coordination_links(normalized, word_slots, &words, &mut links, &mut claims);
 
@@ -860,6 +839,262 @@ fn push_link(links: &mut Vec<SyntacticLink>, candidate: SyntacticLink) {
         return;
     }
     links.push(candidate);
+}
+
+fn push_determiner_phrase_links(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    links: &mut Vec<SyntacticLink>,
+    claims: &mut Vec<AnalysisClaim>,
+) {
+    for determiner_index in 0..words.len() {
+        let determiner = words[determiner_index];
+        if !is_determiner(determiner) {
+            continue;
+        }
+        let Some(head_index) =
+            find_nominal_head_after_determiner(normalized, word_slots, words, determiner_index)
+        else {
+            continue;
+        };
+        push_link(
+            links,
+            SyntacticLink {
+                left: determiner_index,
+                right: head_index,
+                kind: SyntacticLinkKind::Determiner,
+                confidence: DETERMINER_LINK_CONFIDENCE,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
+            },
+        );
+        push_determiner_claims(
+            claims,
+            determiner,
+            determiner_index,
+            head_index,
+            words[head_index],
+        );
+    }
+}
+
+fn push_determiner_claims(
+    claims: &mut Vec<AnalysisClaim>,
+    determiner: &str,
+    determiner_index: usize,
+    head_index: usize,
+    head: &str,
+) {
+    if !matches!(determiner, "a" | "an" | "the") {
+        return;
+    }
+    let article_noun_range = vec![determiner_index, head_index];
+    let onset = if has_graphemic_vowel_onset(head) {
+        "vowel"
+    } else {
+        "consonant"
+    };
+    claims.push(AnalysisClaim::new(
+        AnalysisTarget::WordRange(article_noun_range.clone()),
+        ClaimKind::MorphologicalForm,
+        ClaimValue::MorphologicalForm(format!(
+            "article_phonetic_agreement:{determiner}_before_{onset}"
+        )),
+        AnalysisSourceKind::SyntaxRule,
+        ARTICLE_HOOK_CLAIM_CONFIDENCE,
+        "article+noun pair emitted for phonetic agreement/allomorph selection hooks",
+    ));
+    if determiner == "the" {
+        let realization = if onset == "vowel" {
+            "the_before_vowel:DH_IY0"
+        } else {
+            "the_before_consonant:DH_AH0"
+        };
+        claims.push(AnalysisClaim::new(
+            AnalysisTarget::WordRange(article_noun_range),
+            ClaimKind::PhonemeRealization,
+            ClaimValue::PhonemeRealization(realization.to_string()),
+            AnalysisSourceKind::SyntaxRule,
+            ARTICLE_HOOK_CLAIM_CONFIDENCE,
+            "the+noun pair emitted for weak/strong allomorph selection hooks",
+        ));
+    }
+    claims.push(AnalysisClaim::new(
+        AnalysisTarget::WordIndex(determiner_index),
+        ClaimKind::WeakFunctionCandidate,
+        ClaimValue::Syntactic,
+        AnalysisSourceKind::SyntaxRule,
+        WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
+        "article is a weak-form candidate unless contrastively focused",
+    ));
+}
+
+fn push_auxiliary_phrase_links(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    links: &mut Vec<SyntacticLink>,
+    claims: &mut Vec<AnalysisClaim>,
+) {
+    for auxiliary_index in 0..words.len() {
+        if !is_auxiliary(words[auxiliary_index]) {
+            continue;
+        }
+        let Some(verb_index) =
+            find_verb_head_after_auxiliary(normalized, word_slots, words, auxiliary_index)
+        else {
+            continue;
+        };
+        push_link(
+            links,
+            SyntacticLink {
+                left: auxiliary_index,
+                right: verb_index,
+                kind: SyntacticLinkKind::Auxiliary,
+                confidence: AUXILIARY_LINK_CONFIDENCE,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
+            },
+        );
+        push_auxiliary_claims(claims, auxiliary_index);
+    }
+}
+
+fn push_auxiliary_claims(claims: &mut Vec<AnalysisClaim>, auxiliary_index: usize) {
+    claims.push(AnalysisClaim::new(
+        AnalysisTarget::WordIndex(auxiliary_index),
+        ClaimKind::ProsodicRole,
+        ClaimValue::ProsodicRole("FunctionWeak".to_string()),
+        AnalysisSourceKind::SyntaxRule,
+        AUXILIARY_LINK_CONFIDENCE,
+        "auxiliary linked to predicate head for de-emphasis planning",
+    ));
+    claims.push(AnalysisClaim::new(
+        AnalysisTarget::WordIndex(auxiliary_index),
+        ClaimKind::WeakFunctionCandidate,
+        ClaimValue::Syntactic,
+        AnalysisSourceKind::SyntaxRule,
+        WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
+        "auxiliary is a weak-form candidate unless contrastively focused",
+    ));
+}
+
+fn push_prepositional_links(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    links: &mut Vec<SyntacticLink>,
+    claims: &mut Vec<AnalysisClaim>,
+) {
+    for preposition_index in 0..words.len() {
+        let preposition = words[preposition_index];
+        if !is_preposition(preposition) {
+            continue;
+        }
+        let Some(object_index) =
+            find_prepositional_object(normalized, word_slots, words, preposition_index)
+        else {
+            continue;
+        };
+        push_link(
+            links,
+            SyntacticLink {
+                left: preposition_index,
+                right: object_index,
+                kind: SyntacticLinkKind::Preposition,
+                confidence: PREPOSITION_LINK_CONFIDENCE,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
+            },
+        );
+        claims.push(AnalysisClaim::new(
+            AnalysisTarget::WordIndex(preposition_index),
+            ClaimKind::WeakFunctionCandidate,
+            ClaimValue::Syntactic,
+            AnalysisSourceKind::SyntaxRule,
+            WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
+            "preposition is a weak-function candidate before its object",
+        ));
+        claims.push(AnalysisClaim::new(
+            AnalysisTarget::Boundary {
+                left_word: Some(preposition_index),
+                right_word: Some(object_index),
+            },
+            ClaimKind::BoundaryKind,
+            ClaimValue::BoundaryKind("PrepositionalPhrase".to_string()),
+            AnalysisSourceKind::SyntaxRule,
+            PREPOSITION_LINK_CONFIDENCE,
+            "preposition linked to object for phrase grouping",
+        ));
+    }
+}
+
+fn find_nominal_head_after_determiner(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    determiner_index: usize,
+) -> Option<usize> {
+    let mut head = None;
+    for index in (determiner_index + 1)..words.len() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, determiner_index, index) {
+            break;
+        }
+        let word = words[index];
+        if is_adjective(word) {
+            continue;
+        }
+        if is_likely_nominal(word) {
+            head = Some(index);
+            continue;
+        }
+        break;
+    }
+    head
+}
+
+fn find_verb_head_after_auxiliary(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    auxiliary_index: usize,
+) -> Option<usize> {
+    for index in (auxiliary_index + 1)..words.len() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, auxiliary_index, index) {
+            break;
+        }
+        let word = words[index];
+        if word == "not" || is_adverb(word) {
+            continue;
+        }
+        if is_likely_verb(word) {
+            return Some(index);
+        }
+        break;
+    }
+    None
+}
+
+fn find_prepositional_object(
+    normalized: &NormalizedText,
+    word_slots: &[(usize, String)],
+    words: &[&str],
+    preposition_index: usize,
+) -> Option<usize> {
+    let mut object_head = None;
+    for index in (preposition_index + 1)..words.len() {
+        if !word_indices_are_in_same_phrase(normalized, word_slots, preposition_index, index) {
+            break;
+        }
+        let word = words[index];
+        if is_determiner(word) || is_adjective(word) {
+            continue;
+        }
+        if is_likely_nominal(word) {
+            object_head = Some(index);
+            continue;
+        }
+        break;
+    }
+    object_head
 }
 
 fn word_indices_are_phrase_adjacent(
@@ -1374,7 +1609,22 @@ fn is_pronoun(word: &str) -> bool {
 fn is_determiner(word: &str) -> bool {
     matches!(
         word,
-        "a" | "an" | "the" | "this" | "that" | "these" | "those"
+        "a" | "an"
+            | "the"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "my"
+            | "your"
+            | "his"
+            | "her"
+            | "its"
+            | "our"
+            | "their"
+            | "whose"
+            | "which"
+            | "what"
     )
 }
 
@@ -1389,7 +1639,29 @@ fn is_coordination_conjunction(word: &str) -> bool {
 fn is_preposition(word: &str) -> bool {
     matches!(
         word,
-        "to" | "for" | "from" | "of" | "with" | "by" | "as" | "in" | "on" | "at"
+        "to" | "for"
+            | "from"
+            | "of"
+            | "with"
+            | "by"
+            | "as"
+            | "in"
+            | "on"
+            | "at"
+            | "about"
+            | "before"
+            | "after"
+            | "through"
+            | "over"
+            | "under"
+            | "into"
+            | "onto"
+            | "around"
+            | "near"
+            | "between"
+            | "during"
+            | "without"
+            | "within"
     )
 }
 
@@ -1467,6 +1739,11 @@ fn is_likely_verb(word: &str) -> bool {
             | "take"
             | "distinguish"
             | "add"
+            | "adjust"
+            | "change"
+            | "follow"
+            | "know"
+            | "say"
             | "get"
             | "keep"
             | "let"
@@ -1936,6 +2213,81 @@ mod tests {
             ask,
             remember,
             SyntacticLinkKind::Coordination
+        ));
+    }
+
+    #[test]
+    fn links_extended_english_function_word_patterns() {
+        let determiner_stack = analyze("The bright timing model exploded.");
+        let determiner_parse = determiner_stack.link_parses.first().expect("link parse");
+        let the = word_index(&determiner_stack, "the");
+        let model = word_index(&determiner_stack, "model");
+        assert!(has_link(
+            determiner_parse,
+            the,
+            model,
+            SyntacticLinkKind::Determiner
+        ));
+        assert!(determiner_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::PhonemeRealization
+                && claim.target == AnalysisTarget::WordRange(vec![the, model])
+                && claim.value
+                    == ClaimValue::PhonemeRealization("the_before_consonant:DH_AH0".to_string())
+        }));
+
+        let possessive = analyze("I follow your instructions.");
+        let possessive_parse = possessive.link_parses.first().expect("link parse");
+        let your = word_index(&possessive, "your");
+        let instructions = word_index(&possessive, "instructions");
+        assert!(has_link(
+            possessive_parse,
+            your,
+            instructions,
+            SyntacticLinkKind::Determiner
+        ));
+
+        let auxiliary = analyze("They will quickly leave.");
+        let auxiliary_parse = auxiliary.link_parses.first().expect("link parse");
+        let will = word_index(&auxiliary, "will");
+        let leave = word_index(&auxiliary, "leave");
+        assert!(has_link(
+            auxiliary_parse,
+            will,
+            leave,
+            SyntacticLinkKind::Auxiliary
+        ));
+        assert!(auxiliary_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::WeakFunctionCandidate
+                && claim.target == AnalysisTarget::WordIndex(will)
+        }));
+
+        let prepositional = analyze("The screenplay is about my life.");
+        let prepositional_parse = prepositional.link_parses.first().expect("link parse");
+        let about = word_index(&prepositional, "about");
+        let life = word_index(&prepositional, "life");
+        assert!(has_link(
+            prepositional_parse,
+            about,
+            life,
+            SyntacticLinkKind::Preposition
+        ));
+        assert!(prepositional.environment_patterns().iter().any(|pattern| {
+            pattern
+                .predicates
+                .contains(&ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::Preposition,
+                ))
+        }));
+
+        let prepositional_to = analyze("This is addressed to you.");
+        let prepositional_to_parse = prepositional_to.link_parses.first().expect("link parse");
+        let to = word_index(&prepositional_to, "to");
+        let you = word_index(&prepositional_to, "you");
+        assert!(has_link(
+            prepositional_to_parse,
+            to,
+            you,
+            SyntacticLinkKind::Preposition
         ));
     }
 
