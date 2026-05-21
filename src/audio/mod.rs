@@ -29,7 +29,8 @@ pub use hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
 };
 pub use lattice::{
-    FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind, HypothesisLattice,
+    EvidenceTraceEntry, FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind,
+    HypothesisLattice, SpeechEvidenceSource, SpeechHypothesisEngine, SpeechHypothesisFusion,
     fuse_hypotheses,
 };
 pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};

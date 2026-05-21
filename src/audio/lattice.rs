@@ -6,6 +6,11 @@
 //! combines the evidence into a [`FusionResult`] with a resolved candidate,
 //! confidence, and provenance.
 //!
+//! [`SpeechHypothesisEngine`] is the first-class top-level fusion pipeline. It
+//! composes multiple evidence sources (acoustic, phonetic/pronunciation, ASR
+//! stability, visual speech), standardises confidence handling, and produces
+//! stable/revisable span partitions with inspectable debug traces.
+//!
 //! ## Design
 //!
 //! The lattice is append-only for hypotheses.  Existing hypotheses can have
@@ -20,6 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::audio::hypothesis::{HypothesisStatus, SpanHypothesis, SpanHypothesisId};
 
@@ -193,6 +199,33 @@ pub struct FusionInput {
 }
 
 impl FusionInput {
+    fn has_signal(&self) -> bool {
+        self.asr_confidence.is_some()
+            || self.energy_alignment_quality.is_some()
+            || self.phone_segmentation_agreement.is_some()
+            || self.pronunciation_fit.is_some()
+            || self.spectral_evidence.is_some()
+            || self.prosody_consistency.is_some()
+            || self.timing_coherence.is_some()
+            || self.mechanical_recognizer_score.is_some()
+            || self.visual_speech_evidence.is_some()
+    }
+
+    fn normalized(mut self) -> Self {
+        self.asr_confidence = self.asr_confidence.map(|v| v.clamp(0.0, 1.0));
+        self.energy_alignment_quality = self.energy_alignment_quality.map(|v| v.clamp(0.0, 1.0));
+        self.phone_segmentation_agreement =
+            self.phone_segmentation_agreement.map(|v| v.clamp(0.0, 1.0));
+        self.pronunciation_fit = self.pronunciation_fit.map(|v| v.clamp(0.0, 1.0));
+        self.spectral_evidence = self.spectral_evidence.map(|v| v.clamp(0.0, 1.0));
+        self.prosody_consistency = self.prosody_consistency.map(|v| v.clamp(0.0, 1.0));
+        self.timing_coherence = self.timing_coherence.map(|v| v.clamp(0.0, 1.0));
+        self.mechanical_recognizer_score =
+            self.mechanical_recognizer_score.map(|v| v.clamp(0.0, 1.0));
+        self.visual_speech_evidence = self.visual_speech_evidence.map(|v| v.clamp(0.0, 1.0));
+        self
+    }
+
     /// Compute a weighted average of the available evidence signals.
     ///
     /// Weights are heuristic and can be tuned in a follow-up.
@@ -395,6 +428,319 @@ pub fn fuse_hypotheses(
 }
 
 // ---------------------------------------------------------------------------
+// Top-level fusion engine
+// ---------------------------------------------------------------------------
+
+/// Composable source of fusion evidence for [`SpeechHypothesisEngine`].
+pub trait SpeechEvidenceSource: Send + Sync {
+    /// Stable source name used in debug traces.
+    fn name(&self) -> &'static str;
+    /// Produce evidence for hypotheses currently in `lattice`.
+    fn collect(&self, lattice: &HypothesisLattice) -> Vec<(SpanHypothesisId, FusionInput)>;
+}
+
+/// Debug record showing which source produced which fusion signal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceTraceEntry {
+    pub source: String,
+    pub hypothesis_id: SpanHypothesisId,
+    pub input: FusionInput,
+}
+
+/// Result of the top-level speech-hypothesis fusion pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeechHypothesisFusion {
+    /// Copy of the lattice after stability classification.
+    pub lattice: HypothesisLattice,
+    /// Best-scoring fused hypothesis result.
+    pub fusion: FusionResult,
+    /// IDs considered stable enough to commit.
+    pub stable_span_ids: Vec<SpanHypothesisId>,
+    /// IDs that should remain revisable.
+    pub revisable_span_ids: Vec<SpanHypothesisId>,
+    /// Per-source evidence records for debugging/inspection.
+    pub evidence_trace: Vec<EvidenceTraceEntry>,
+}
+
+/// First-class speech hypothesis fusion pipeline.
+///
+/// The default engine wires acoustic, phonetic/pronunciation, transcript
+/// stability/ASR, and visual speech evidence sources.
+pub struct SpeechHypothesisEngine {
+    sources: Vec<Box<dyn SpeechEvidenceSource>>,
+    stable_confidence_threshold: f32,
+}
+
+impl Default for SpeechHypothesisEngine {
+    fn default() -> Self {
+        Self::with_default_sources()
+    }
+}
+
+impl SpeechHypothesisEngine {
+    /// Create an empty engine with no evidence sources.
+    pub fn new() -> Self {
+        Self {
+            sources: Vec::new(),
+            stable_confidence_threshold: 0.75,
+        }
+    }
+
+    /// Create an engine with built-in evidence sources.
+    pub fn with_default_sources() -> Self {
+        let mut engine = Self::new();
+        engine.add_source(AcousticEvidenceSource);
+        engine.add_source(PhoneticEvidenceSource);
+        engine.add_source(TranscriptStabilityEvidenceSource);
+        engine.add_source(VisualSpeechEvidenceSource);
+        engine
+    }
+
+    /// Add a new composable evidence source.
+    pub fn add_source<S: SpeechEvidenceSource + 'static>(&mut self, source: S) {
+        self.sources.push(Box::new(source));
+    }
+
+    /// Fuse all active hypotheses and classify them as stable/revisable.
+    pub fn fuse(&self, lattice: &HypothesisLattice) -> Option<SpeechHypothesisFusion> {
+        let mut merged: HashMap<String, FusionInput> = HashMap::new();
+        let mut trace = Vec::new();
+
+        for source in &self.sources {
+            for (id, raw_input) in source.collect(lattice) {
+                let input = raw_input.normalized();
+                if !input.has_signal() {
+                    continue;
+                }
+                let key = id.0.clone();
+                merged
+                    .entry(key)
+                    .and_modify(|existing| merge_fusion_input(existing, &input))
+                    .or_insert_with(|| input.clone());
+                trace.push(EvidenceTraceEntry {
+                    source: source.name().to_string(),
+                    hypothesis_id: id,
+                    input,
+                });
+            }
+        }
+
+        let mut evidence_pairs = Vec::with_capacity(merged.len());
+        for (id, input) in &merged {
+            evidence_pairs.push((SpanHypothesisId(id.clone()), input.clone()));
+        }
+
+        let fusion = fuse_hypotheses(lattice, &evidence_pairs)?;
+
+        let mut stable_span_ids = Vec::new();
+        let mut revisable_span_ids = Vec::new();
+        for hypothesis in lattice.active_hypotheses() {
+            let conf = merged
+                .get(&hypothesis.id.0)
+                .map(FusionInput::weighted_confidence)
+                .unwrap_or(hypothesis.confidence)
+                .clamp(0.0, 1.0);
+            if conf >= self.stable_confidence_threshold {
+                stable_span_ids.push(hypothesis.id.clone());
+            } else {
+                revisable_span_ids.push(hypothesis.id.clone());
+            }
+        }
+
+        let mut classified_lattice = lattice.clone();
+        for hypothesis in &mut classified_lattice.hypotheses {
+            if stable_span_ids.contains(&hypothesis.id) {
+                hypothesis.status = HypothesisStatus::Confirmed;
+            }
+        }
+
+        Some(SpeechHypothesisFusion {
+            lattice: classified_lattice,
+            fusion,
+            stable_span_ids,
+            revisable_span_ids,
+            evidence_trace: trace,
+        })
+    }
+}
+
+fn merge_signal(existing: Option<f32>, incoming: Option<f32>) -> Option<f32> {
+    match (existing, incoming) {
+        (Some(a), Some(b)) => Some(((a + b) * 0.5).clamp(0.0, 1.0)),
+        (None, Some(b)) => Some(b.clamp(0.0, 1.0)),
+        (Some(a), None) => Some(a.clamp(0.0, 1.0)),
+        (None, None) => None,
+    }
+}
+
+fn merge_fusion_input(target: &mut FusionInput, incoming: &FusionInput) {
+    target.asr_confidence = merge_signal(target.asr_confidence, incoming.asr_confidence);
+    target.energy_alignment_quality = merge_signal(
+        target.energy_alignment_quality,
+        incoming.energy_alignment_quality,
+    );
+    target.phone_segmentation_agreement = merge_signal(
+        target.phone_segmentation_agreement,
+        incoming.phone_segmentation_agreement,
+    );
+    target.pronunciation_fit = merge_signal(target.pronunciation_fit, incoming.pronunciation_fit);
+    target.spectral_evidence = merge_signal(target.spectral_evidence, incoming.spectral_evidence);
+    target.prosody_consistency =
+        merge_signal(target.prosody_consistency, incoming.prosody_consistency);
+    target.timing_coherence = merge_signal(target.timing_coherence, incoming.timing_coherence);
+    target.mechanical_recognizer_score = merge_signal(
+        target.mechanical_recognizer_score,
+        incoming.mechanical_recognizer_score,
+    );
+    target.visual_speech_evidence = merge_signal(
+        target.visual_speech_evidence,
+        incoming.visual_speech_evidence,
+    );
+}
+
+fn provenance_f32(hypothesis: &SpanHypothesis, key: &str) -> Option<f32> {
+    hypothesis
+        .provenance
+        .get(key)
+        .and_then(|value| value.as_f64())
+        .map(|value| value as f32)
+        .map(|value| value.clamp(0.0, 1.0))
+}
+
+struct AcousticEvidenceSource;
+
+impl SpeechEvidenceSource for AcousticEvidenceSource {
+    fn name(&self) -> &'static str {
+        "acoustic"
+    }
+
+    fn collect(&self, lattice: &HypothesisLattice) -> Vec<(SpanHypothesisId, FusionInput)> {
+        lattice
+            .active_hypotheses()
+            .into_iter()
+            .map(|hypothesis| {
+                let mut input = FusionInput::default();
+                input.spectral_evidence = Some(hypothesis.score.clamp(0.0, 1.0));
+                input.energy_alignment_quality = match hypothesis.source {
+                    crate::audio::hypothesis::HypothesisSource::EndpointDetector => {
+                        Some(hypothesis.confidence.clamp(0.0, 1.0))
+                    }
+                    _ => provenance_f32(hypothesis, "energy_alignment_quality"),
+                };
+                (hypothesis.id.clone(), input)
+            })
+            .collect()
+    }
+}
+
+struct PhoneticEvidenceSource;
+
+impl SpeechEvidenceSource for PhoneticEvidenceSource {
+    fn name(&self) -> &'static str {
+        "phonetic"
+    }
+
+    fn collect(&self, lattice: &HypothesisLattice) -> Vec<(SpanHypothesisId, FusionInput)> {
+        lattice
+            .active_hypotheses()
+            .into_iter()
+            .filter_map(|hypothesis| {
+                let mut input = FusionInput::default();
+                match hypothesis.source {
+                    crate::audio::hypothesis::HypothesisSource::PhoneClassifier
+                    | crate::audio::hypothesis::HypothesisSource::DtwTemplateMatcher
+                    | crate::audio::hypothesis::HypothesisSource::ViterbiAlignment => {
+                        input.mechanical_recognizer_score = Some(hypothesis.confidence);
+                        input.phone_segmentation_agreement =
+                            Some((hypothesis.score + hypothesis.confidence) * 0.5);
+                        input.pronunciation_fit = provenance_f32(hypothesis, "pronunciation_fit")
+                            .or(Some(
+                                (hypothesis.score * 0.7 + hypothesis.confidence * 0.3)
+                                    .clamp(0.0, 1.0),
+                            ));
+                    }
+                    _ => {}
+                }
+
+                if input.has_signal() {
+                    Some((hypothesis.id.clone(), input))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+struct TranscriptStabilityEvidenceSource;
+
+impl SpeechEvidenceSource for TranscriptStabilityEvidenceSource {
+    fn name(&self) -> &'static str {
+        "transcript_stability"
+    }
+
+    fn collect(&self, lattice: &HypothesisLattice) -> Vec<(SpanHypothesisId, FusionInput)> {
+        lattice
+            .active_hypotheses()
+            .into_iter()
+            .filter_map(|hypothesis| {
+                let mut input = FusionInput::default();
+                input.asr_confidence = provenance_f32(hypothesis, "asr_confidence");
+
+                let stability = provenance_f32(hypothesis, "transcript_stability")
+                    .or_else(|| provenance_f32(hypothesis, "stable_prefix_ratio"));
+                if let Some(stability) = stability {
+                    input.timing_coherence = Some(stability);
+                    input.prosody_consistency = Some((stability * 0.85).clamp(0.0, 1.0));
+                }
+
+                if input.has_signal() {
+                    Some((hypothesis.id.clone(), input))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+struct VisualSpeechEvidenceSource;
+
+impl SpeechEvidenceSource for VisualSpeechEvidenceSource {
+    fn name(&self) -> &'static str {
+        "visual_speech"
+    }
+
+    fn collect(&self, lattice: &HypothesisLattice) -> Vec<(SpanHypothesisId, FusionInput)> {
+        lattice
+            .active_hypotheses()
+            .into_iter()
+            .filter_map(|hypothesis| {
+                let visual = provenance_f32(hypothesis, "visual_speech_evidence").or_else(|| {
+                    if matches!(
+                        hypothesis.source,
+                        crate::audio::hypothesis::HypothesisSource::VisualSpeech
+                    ) {
+                        Some(hypothesis.confidence)
+                    } else {
+                        None
+                    }
+                });
+                visual.map(|visual_speech_evidence| {
+                    (
+                        hypothesis.id.clone(),
+                        FusionInput {
+                            visual_speech_evidence: Some(visual_speech_evidence),
+                            ..FusionInput::default()
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -421,6 +767,18 @@ mod tests {
             vec![],
             json!(null),
         )
+    }
+
+    fn make_word_candidate_with_provenance(
+        label: &str,
+        start_ms: u64,
+        end_ms: u64,
+        confidence: f32,
+        provenance: serde_json::Value,
+    ) -> SpanHypothesis {
+        let mut hypothesis = make_word_candidate(label, start_ms, end_ms, confidence);
+        hypothesis.provenance = provenance;
+        hypothesis
     }
 
     fn make_boundary(
@@ -671,6 +1029,124 @@ mod tests {
         assert!(json.contains("resolved"));
         assert!(json.contains("confidence"));
         assert!(json.contains("provenance"));
+    }
+
+    #[test]
+    fn speech_hypothesis_engine_uses_multiple_default_evidence_sources() {
+        let mut lattice = HypothesisLattice::new();
+        lattice.add(make_word_candidate_with_provenance(
+            "testing",
+            1000,
+            1300,
+            0.40,
+            json!({
+                "asr_confidence": 0.91,
+                "transcript_stability": 0.88,
+                "visual_speech_evidence": 0.82,
+            }),
+        ));
+        lattice.add(make_boundary(
+            "speech_start",
+            1000,
+            0.72,
+            HypothesisSource::EndpointDetector,
+            vec!["energy.onset".to_string()],
+        ));
+        lattice.add(SpanHypothesis::new(
+            SpanHypothesisKind::PhoneClassCandidate,
+            "fricative",
+            1020,
+            1060,
+            0.68,
+            0.66,
+            HypothesisSource::PhoneClassifier,
+            vec!["spectral_flux".to_string()],
+            json!(null),
+        ));
+
+        let engine = SpeechHypothesisEngine::with_default_sources();
+        let output = engine.fuse(&lattice).expect("fused");
+
+        let unique_sources: std::collections::HashSet<&str> = output
+            .evidence_trace
+            .iter()
+            .map(|entry| entry.source.as_str())
+            .collect();
+        assert!(unique_sources.len() >= 3);
+    }
+
+    #[test]
+    fn speech_hypothesis_engine_applies_stability_and_rescoring() {
+        let mut lattice = HypothesisLattice::new();
+        let low_acoustic_high_stability = make_word_candidate_with_provenance(
+            "texting",
+            1000,
+            1300,
+            0.25,
+            json!({
+                "asr_confidence": 0.94,
+                "transcript_stability": 0.90,
+                "stable_prefix_ratio": 0.89,
+                "visual_speech_evidence": 0.87,
+            }),
+        );
+        let high_acoustic_low_stability = make_word_candidate_with_provenance(
+            "testing",
+            1000,
+            1300,
+            0.78,
+            json!({
+                "asr_confidence": 0.25,
+                "transcript_stability": 0.20,
+            }),
+        );
+        let low_id = low_acoustic_high_stability.id.clone();
+        let high_id = high_acoustic_low_stability.id.clone();
+        lattice.add(low_acoustic_high_stability);
+        lattice.add(high_acoustic_low_stability);
+        lattice.connect(
+            low_id.clone(),
+            high_id.clone(),
+            HypothesisEdgeKind::Contradicts,
+            1.0,
+        );
+
+        let engine = SpeechHypothesisEngine::with_default_sources();
+        let output = engine.fuse(&lattice).expect("fused");
+
+        assert_eq!(output.fusion.resolved.label, "texting");
+        assert!(output.stable_span_ids.contains(&low_id));
+        assert!(output.revisable_span_ids.contains(&high_id));
+
+        let stable = output
+            .lattice
+            .all_hypotheses()
+            .iter()
+            .find(|h| h.id == low_id)
+            .expect("stable span");
+        assert_eq!(stable.status, HypothesisStatus::Confirmed);
+    }
+
+    #[test]
+    fn speech_hypothesis_fusion_output_serialises_for_debugging() {
+        let mut lattice = HypothesisLattice::new();
+        lattice.add(make_word_candidate_with_provenance(
+            "testing",
+            1000,
+            1300,
+            0.55,
+            json!({
+                "asr_confidence": 0.85,
+                "transcript_stability": 0.83,
+            }),
+        ));
+
+        let engine = SpeechHypothesisEngine::with_default_sources();
+        let output = engine.fuse(&lattice).expect("fused");
+        let encoded = serde_json::to_string(&output).expect("serialise");
+        assert!(encoded.contains("stable_span_ids"));
+        assert!(encoded.contains("evidence_trace"));
+        assert!(encoded.contains("fusion"));
     }
 
     #[test]
