@@ -8,7 +8,7 @@
 //!
 //! [`SpeechHypothesisEngine`] is the first-class top-level fusion pipeline. It
 //! composes multiple evidence sources (acoustic, phonetic/pronunciation, ASR
-//! stability, visual speech), standardises confidence handling, and produces
+//! stability, visual speech), standardizes confidence handling, and produces
 //! stable/revisable span partitions with inspectable debug traces.
 //!
 //! ## Design
