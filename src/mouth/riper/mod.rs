@@ -64,10 +64,6 @@ pub use sentence_analysis::{
     ReductionClass, ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
     SyntacticLink, SyntacticLinkKind, SyntacticLinkParse, SyntacticLinkSource, SyntacticRole,
     TokenAnalysis, WordIndex,
-    AnalysisClaim, AnalysisClaimKind, AnalysisSource as SentenceAnalysisSource, ContextPredicate,
-    EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole, ReductionClass,
-    ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink,
-    SyntacticLinkKind, SyntacticLinkParse, SyntacticRole, TokenAnalysis, WordIndex,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

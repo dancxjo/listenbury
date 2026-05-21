@@ -11,13 +11,19 @@ use listenbury::mouth::backend::TtsBackend;
 use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 #[cfg(feature = "tts-riper")]
+use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
+#[cfg(feature = "tts-riper")]
 use listenbury::mouth::riper::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
-    SimpleEnglishG2p,
+    SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind, SyntacticLinkParse,
 };
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "tts-riper")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "tts-riper")]
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
@@ -89,6 +95,8 @@ fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
     let process_voice = resolve_piper_voice(args.piper_voice.clone())?;
     let process_config = piper_config_for_voice(piper_bin.clone(), process_voice)?;
     let process_stats = synthesize_process_for_compare(&process_config, &args.text)?;
+    let process_phonemes =
+        process_native_phonemes_for_compare(process_config.config_path.as_deref(), &args.text);
 
     let riper_model_path = args
         .riper_voice
@@ -100,14 +108,15 @@ fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
         .or_else(|| process_config.config_path.clone())
         .unwrap_or_else(|| riper_model_path.with_extension("onnx.json"));
     let riper_voice_config = read_riper_voice_config(&riper_config_path)?;
-    let riper_ids = resolve_riper_ids(&args, &riper_voice_config)?;
+    let riper_phonemes = resolve_riper_phoneme_report(&args, &riper_voice_config)?;
     let riper_stats = synthesize_riper_for_compare(
         &riper_model_path,
         &riper_voice_config,
-        &riper_ids,
+        &riper_phonemes.ids,
         &args.text,
     )?;
 
+    report_compare_phonemes(&process_phonemes, &riper_phonemes);
     report_compare_stats(&process_stats, &riper_stats);
 
     if let Some(output) = args.process_output_wav {
@@ -176,6 +185,24 @@ struct AudioStats {
     duration_ms: f64,
     rms: f32,
     peak_abs: f32,
+}
+
+#[cfg(feature = "tts-riper")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessNativePhonemes {
+    voice: String,
+    mnemonic: std::result::Result<String, String>,
+    ipa: std::result::Result<String, String>,
+}
+
+#[cfg(feature = "tts-riper")]
+#[derive(Debug, Clone, PartialEq)]
+struct RiperPhonemeReport {
+    source: &'static str,
+    phonemes: PiperPhonemeSequence,
+    compatible_phonemes: Option<PiperPhonemeSequence>,
+    ids: PiperIdSequence,
+    sentence_analysis: Option<SentenceAnalysis>,
 }
 
 #[cfg(feature = "tts-riper")]
@@ -281,37 +308,56 @@ fn synthesize_riper_for_compare(
 }
 
 #[cfg(feature = "tts-riper")]
-fn resolve_riper_ids(
+fn resolve_riper_phoneme_report(
     args: &RiperCompareArgs,
     config: &PiperVoiceConfig,
-) -> Result<PiperIdSequence> {
-    let phoneme_sequence = if let Some(raw) = args.phonemes.as_ref() {
+) -> Result<RiperPhonemeReport> {
+    let (source, phoneme_sequence, sentence_analysis) = if let Some(raw) = args.phonemes.as_ref() {
         let symbols: Vec<_> = raw.split_whitespace().collect();
         anyhow::ensure!(
             !symbols.is_empty(),
             "Riper phoneme override was empty; pass symbols like --phonemes \"OW K EY |\""
         );
-        PiperPhonemeSequence {
-            phonemes: symbols
-                .into_iter()
-                .map(|symbol| PiperPhoneme(symbol.to_string()))
-                .collect(),
-        }
-    } else {
-        SimpleEnglishG2p::default()
+        let sentence_analysis = SimpleEnglishG2p::default()
             .phonemize_unit(&args.text)
-            .with_context(|| format!("failed to realize Riper phonemes for text `{}`", args.text))?
-            .phonemes
+            .ok()
+            .map(|unit| unit.sentence_analysis);
+        (
+            "override",
+            PiperPhonemeSequence {
+                phonemes: symbols
+                    .into_iter()
+                    .map(|symbol| PiperPhoneme(symbol.to_string()))
+                    .collect(),
+            },
+            sentence_analysis,
+        )
+    } else {
+        let unit = SimpleEnglishG2p::default()
+            .phonemize_unit(&args.text)
+            .with_context(|| {
+                format!("failed to realize Riper phonemes for text `{}`", args.text)
+            })?;
+        ("riper-g2p", unit.phonemes, Some(unit.sentence_analysis))
     };
 
-    phoneme_sequence
+    let ids = phoneme_sequence
         .to_piper_ids_compatible(config)
         .with_context(|| {
             format!(
                 "Riper voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",
                 args.text
             )
-        })
+        })?;
+    let compatible_phonemes = espeak_compatible_sequence(&phoneme_sequence, config).ok();
+
+    Ok(RiperPhonemeReport {
+        source,
+        phonemes: phoneme_sequence,
+        compatible_phonemes,
+        ids,
+        sentence_analysis,
+    })
 }
 
 #[cfg(feature = "tts-riper")]
@@ -320,6 +366,229 @@ fn read_riper_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
         .with_context(|| format!("failed to read Riper config at {}", path.display()))?;
     PiperVoiceConfig::from_json_str(&json)
         .with_context(|| format!("failed to parse Riper config JSON at {}", path.display()))
+}
+
+#[cfg(feature = "tts-riper")]
+fn process_native_phonemes_for_compare(
+    config_path: Option<&Path>,
+    text: &str,
+) -> ProcessNativePhonemes {
+    let voice = config_path
+        .and_then(espeak_voice_from_config)
+        .unwrap_or_else(|| "en-us".to_string());
+
+    ProcessNativePhonemes {
+        voice: voice.clone(),
+        mnemonic: run_espeak_ng_phonemes(&voice, text, EspeakPhonemeNotation::Mnemonic),
+        ipa: run_espeak_ng_phonemes(&voice, text, EspeakPhonemeNotation::Ipa),
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EspeakPhonemeNotation {
+    Mnemonic,
+    Ipa,
+}
+
+#[cfg(feature = "tts-riper")]
+fn espeak_voice_from_config(path: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    value
+        .get("espeak")
+        .and_then(|espeak| espeak.get("voice"))
+        .and_then(|voice| voice.as_str())
+        .filter(|voice| !voice.trim().is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(feature = "tts-riper")]
+fn run_espeak_ng_phonemes(
+    voice: &str,
+    text: &str,
+    notation: EspeakPhonemeNotation,
+) -> std::result::Result<String, String> {
+    let mut command = Command::new("espeak-ng");
+    command.arg("-q").arg("--sep= ").arg("-v").arg(voice);
+    match notation {
+        EspeakPhonemeNotation::Mnemonic => {
+            command.arg("-x");
+        }
+        EspeakPhonemeNotation::Ipa => {
+            command.arg("--ipa");
+        }
+    }
+    command
+        .arg("--stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn espeak-ng: {error}"))?;
+    {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open espeak-ng stdin".to_string())?;
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed to write text to espeak-ng stdin: {error}"))?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|error| format!("failed to finish espeak-ng stdin: {error}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to read espeak-ng output: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "espeak-ng exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+#[cfg(feature = "tts-riper")]
+fn report_compare_phonemes(process: &ProcessNativePhonemes, riper: &RiperPhonemeReport) {
+    println!("process native phonemes (eSpeak {}, -x):", process.voice);
+    println!("  {}", render_phoneme_result(&process.mnemonic));
+    println!("process native IPA (eSpeak {}):", process.voice);
+    println!("  {}", render_phoneme_result(&process.ipa));
+    println!("Riper phonemes ({}):", riper.source);
+    println!("  {}", format_phoneme_sequence(&riper.phonemes));
+    if let Some(compatible) = &riper.compatible_phonemes {
+        println!("Riper Piper-compatible phonemes:");
+        println!("  {}", format_phoneme_sequence(compatible));
+    }
+    println!("Riper phoneme ids:");
+    println!("  {:?}", riper.ids.ids);
+    report_link_grammar(&riper.sentence_analysis);
+}
+
+#[cfg(feature = "tts-riper")]
+fn report_link_grammar(sentence_analysis: &Option<SentenceAnalysis>) {
+    let Some(analysis) = sentence_analysis else {
+        println!("Riper link grammar:");
+        println!("  (unavailable for this phoneme override)");
+        return;
+    };
+
+    println!("Riper link grammar:");
+    println!("  tokens: {}", format_sentence_tokens(analysis));
+    let noun_phrases = format_noun_compounds(analysis);
+    if !noun_phrases.is_empty() {
+        println!("  noun phrases: {}", noun_phrases.join("; "));
+    }
+    for (index, parse) in analysis.link_parses.iter().enumerate() {
+        println!(
+            "  parse #{} rank {:.2}: {}",
+            index + 1,
+            parse.rank,
+            format_syntactic_links(analysis, parse)
+        );
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn format_sentence_tokens(analysis: &SentenceAnalysis) -> String {
+    analysis
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            token
+                .word_index
+                .map(|word_index| format!("{word_index}:{}:{:?}", token.text, token.pos))
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "tts-riper")]
+fn format_noun_compounds(analysis: &SentenceAnalysis) -> Vec<String> {
+    let words = word_texts(analysis);
+    analysis
+        .link_parses
+        .first()
+        .map(|parse| {
+            parse
+                .links
+                .iter()
+                .filter(|link| link.kind == SyntacticLinkKind::NounCompound)
+                .filter_map(|link| {
+                    let left = words.get(link.left)?.as_ref()?;
+                    let right = words.get(link.right)?.as_ref()?;
+                    Some(format!("{left} {right}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "tts-riper")]
+fn format_syntactic_links(analysis: &SentenceAnalysis, parse: &SyntacticLinkParse) -> String {
+    if parse.links.is_empty() {
+        return "(none)".to_string();
+    }
+
+    let words = word_texts(analysis);
+    parse
+        .links
+        .iter()
+        .filter_map(|link| {
+            let left = words.get(link.left)?.as_ref()?;
+            let right = words.get(link.right)?.as_ref()?;
+            Some(format!(
+                "{left} -{:?}/{:.2}-> {right}",
+                link.kind, link.confidence
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[cfg(feature = "tts-riper")]
+fn word_texts(analysis: &SentenceAnalysis) -> Vec<Option<String>> {
+    let mut words = Vec::new();
+    for token in &analysis.tokens {
+        let Some(word_index) = token.word_index else {
+            continue;
+        };
+        if words.len() <= word_index {
+            words.resize(word_index + 1, None);
+        }
+        words[word_index] = Some(token.text.clone());
+    }
+    words
+}
+
+#[cfg(feature = "tts-riper")]
+fn render_phoneme_result(result: &std::result::Result<String, String>) -> String {
+    match result {
+        Ok(value) if value.is_empty() => "(empty)".to_string(),
+        Ok(value) => value.clone(),
+        Err(error) => format!("(unavailable: {error})"),
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn format_phoneme_sequence(sequence: &PiperPhonemeSequence) -> String {
+    sequence
+        .phonemes
+        .iter()
+        .map(|phoneme| phoneme.0.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(feature = "tts-riper")]
