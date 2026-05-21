@@ -22,7 +22,9 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures").join("traces")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("traces")
 }
 
 fn update_golden() -> bool {
