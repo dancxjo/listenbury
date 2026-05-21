@@ -1,11 +1,6 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+//! Compatibility shim for diagnostics flags.
+//!
+//! Diagnostics globals now live in [`crate::diagnostics`]. This module remains
+//! as a migration path for existing `listenbury::runtime::*` imports.
 
-static DEVELOPER_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
-
-pub fn set_developer_diagnostics_enabled(enabled: bool) {
-    DEVELOPER_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
-}
-
-pub fn developer_diagnostics_enabled() -> bool {
-    DEVELOPER_DIAGNOSTICS_ENABLED.load(Ordering::Relaxed)
-}
+pub use crate::diagnostics::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};

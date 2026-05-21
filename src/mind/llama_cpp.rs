@@ -17,8 +17,8 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 use uuid::Uuid;
 
+use crate::diagnostics::developer_diagnostics_enabled;
 use crate::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
-use crate::runtime::developer_diagnostics_enabled;
 
 static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
 
