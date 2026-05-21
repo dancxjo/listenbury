@@ -13,6 +13,7 @@ const WEAK_FUNCTION_CANDIDATE_CONFIDENCE: f32 = 0.88;
 const DETERMINER_LINK_CONFIDENCE: f32 = 0.83;
 const AUXILIARY_LINK_CONFIDENCE: f32 = 0.82;
 const MODIFIER_LINK_CONFIDENCE: f32 = 0.72;
+const NOUN_COMPOUND_LINK_CONFIDENCE: f32 = 0.78;
 const CONTRAST_PAIR_CONFIDENCE: f32 = 0.91;
 const VOCATIVE_LINK_CONFIDENCE: f32 = 0.86;
 const APPOSITION_LINK_CONFIDENCE: f32 = 0.8;
@@ -62,6 +63,7 @@ pub enum SyntacticLinkKind {
     Auxiliary,
     Coordination,
     ContrastPair,
+    NounCompound,
     Vocative,
     Apposition,
     Parenthetical,
@@ -340,6 +342,10 @@ fn build_link_parses(
     let mut claims = Vec::new();
 
     for (idx, window) in words.windows(2).enumerate() {
+        if !word_slots_are_phrase_adjacent(normalized, word_slots[idx].0, word_slots[idx + 1].0) {
+            continue;
+        }
+
         let left = window[0];
         let right = window[1];
         if left == "to" && is_likely_verb(right) {
@@ -405,6 +411,19 @@ fn build_link_parses(
                     right: idx + 1,
                     kind: SyntacticLinkKind::Modifier,
                     confidence: MODIFIER_LINK_CONFIDENCE,
+                    source: SyntacticLinkSource::HeuristicGrammarIsland,
+                },
+            );
+        }
+
+        if is_noun_compound_pair(left, right) {
+            push_link(
+                &mut links,
+                SyntacticLink {
+                    left: idx,
+                    right: idx + 1,
+                    kind: SyntacticLinkKind::NounCompound,
+                    confidence: NOUN_COMPOUND_LINK_CONFIDENCE,
                     source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
@@ -599,6 +618,16 @@ fn push_link(links: &mut Vec<SyntacticLink>, candidate: SyntacticLink) {
     links.push(candidate);
 }
 
+fn word_slots_are_phrase_adjacent(
+    normalized: &NormalizedText,
+    left_token_index: usize,
+    right_token_index: usize,
+) -> bool {
+    normalized.tokens[left_token_index + 1..right_token_index]
+        .iter()
+        .all(|token| !matches!(token, NormalizedToken::PhraseBreak))
+}
+
 fn detect_contrast_pairs(words: &[&str], source_words: &[String]) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
     for index in 0..words.len() {
@@ -667,13 +696,20 @@ fn is_likely_nominal(word: &str) -> bool {
     ) && !is_likely_verb(word)
 }
 
+fn is_noun_compound_pair(left: &str, right: &str) -> bool {
+    matches!(
+        base_pos(left),
+        PartOfSpeech::Noun | PartOfSpeech::ProperName
+    ) && matches!(
+        base_pos(right),
+        PartOfSpeech::Noun | PartOfSpeech::ProperName
+    )
+}
+
 fn is_modifier_pair(left: &str, right: &str) -> bool {
-    let adverb = left.ends_with("ly");
-    let adjective = COMMON_LINK_ADJECTIVES.contains(&left)
-        || left.ends_with("ous")
-        || left.ends_with("ive")
-        || left.ends_with("al");
-    (adverb && is_likely_verb(right)) || (adjective && is_likely_nominal(right))
+    let left_pos = base_pos(left);
+    (matches!(left_pos, PartOfSpeech::Adverb) && is_likely_verb(right))
+        || (matches!(left_pos, PartOfSpeech::Adjective) && is_likely_nominal(right))
 }
 
 fn classify_to_token(
@@ -858,7 +894,7 @@ impl From<crate::mouth::riper::espeak_ng_rules::ToRuleDescriptor> for ToRuleDesc
 }
 
 fn base_pos(word: &str) -> PartOfSpeech {
-    if matches!(word, "to") {
+    if is_preposition(word) {
         return PartOfSpeech::Preposition;
     }
     if is_pronoun(word) {
@@ -873,6 +909,12 @@ fn base_pos(word: &str) -> PartOfSpeech {
     if is_auxiliary(word) {
         return PartOfSpeech::Auxiliary;
     }
+    if is_adverb(word) {
+        return PartOfSpeech::Adverb;
+    }
+    if is_adjective(word) {
+        return PartOfSpeech::Adjective;
+    }
     if is_likely_verb(word) {
         return PartOfSpeech::Verb;
     }
@@ -884,7 +926,7 @@ fn is_function_word(word: &str) -> bool {
         || is_determiner(word)
         || is_conjunction(word)
         || is_auxiliary(word)
-        || matches!(word, "to" | "for" | "of" | "and")
+        || is_preposition(word)
 }
 
 fn is_pronoun(word: &str) -> bool {
@@ -903,6 +945,27 @@ fn is_determiner(word: &str) -> bool {
 
 fn is_conjunction(word: &str) -> bool {
     matches!(word, "and" | "or" | "but" | "not")
+}
+
+fn is_preposition(word: &str) -> bool {
+    matches!(
+        word,
+        "to" | "for" | "from" | "of" | "with" | "by" | "as" | "in" | "on" | "at"
+    )
+}
+
+fn is_adverb(word: &str) -> bool {
+    matches!(word, "then") || word.ends_with("ly")
+}
+
+fn is_adjective(word: &str) -> bool {
+    matches!(word, "long" | "other")
+        || COMMON_LINK_ADJECTIVES.contains(&word)
+        || word.ends_with("ous")
+        || word.ends_with("ive")
+        || word.ends_with("al")
+        || word.ends_with("ic")
+        || word.ends_with("ated")
 }
 
 fn is_auxiliary(word: &str) -> bool {
@@ -945,6 +1008,8 @@ fn is_likely_verb(word: &str) -> bool {
             | "want"
             | "make"
             | "take"
+            | "distinguish"
+            | "add"
             | "get"
             | "keep"
             | "let"
@@ -956,8 +1021,8 @@ fn is_likely_verb(word: &str) -> bool {
 }
 
 fn has_likely_verb_suffix(word: &str) -> bool {
-    const COMMON_NON_VERB_ING: &[&str] = &["thing", "king", "morning", "ceiling"];
-    const COMMON_NON_VERB_ED: &[&str] = &["red", "bed", "sled"];
+    const COMMON_NON_VERB_ING: &[&str] = &["thing", "king", "morning", "ceiling", "timing"];
+    const COMMON_NON_VERB_ED: &[&str] = &["red", "bed", "sled", "unpunctuated"];
     (word.len() >= 5 && word.ends_with("ing") && !COMMON_NON_VERB_ING.contains(&word))
         || (word.len() >= 4 && word.ends_with("ed") && !COMMON_NON_VERB_ED.contains(&word))
 }
@@ -1014,9 +1079,13 @@ mod tests {
                 .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
                     && claim.target == AnalysisTarget::WordIndex(to))
         );
-        assert!(parse.claims.iter().any(|claim| claim.kind
-            == ClaimKind::WeakFunctionCandidate
-            && claim.target == AnalysisTarget::WordIndex(to)));
+        assert!(
+            parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::WeakFunctionCandidate
+                    && claim.target == AnalysisTarget::WordIndex(to))
+        );
         assert!(
             analysis
                 .environment_patterns()
@@ -1181,5 +1250,73 @@ mod tests {
             leave,
             SyntacticLinkKind::Modifier
         ));
+    }
+
+    #[test]
+    fn links_breath_break_as_noun_compound_in_sample_sentence() {
+        let analysis = analyze(
+            "I’m going to make the timing model distinguish vowel nuclei from other phones, then add a periodic breath break for long unpunctuated runs.",
+        );
+        let parse = analysis.link_parses.first().expect("link parse");
+        let breath = word_index(&analysis, "breath");
+        let break_word = word_index(&analysis, "break");
+        let breath_token = analysis
+            .tokens
+            .iter()
+            .find(|token| token.word_index == Some(breath))
+            .expect("breath token");
+        let break_token = analysis
+            .tokens
+            .iter()
+            .find(|token| token.word_index == Some(break_word))
+            .expect("break token");
+
+        assert_eq!(breath_token.pos, PartOfSpeech::Noun);
+        assert_eq!(break_token.pos, PartOfSpeech::Noun);
+        assert!(has_link(
+            parse,
+            breath,
+            break_word,
+            SyntacticLinkKind::NounCompound
+        ));
+        assert!(has_link(
+            parse,
+            word_index(&analysis, "timing"),
+            word_index(&analysis, "model"),
+            SyntacticLinkKind::NounCompound
+        ));
+        assert!(has_link(
+            parse,
+            word_index(&analysis, "periodic"),
+            breath,
+            SyntacticLinkKind::Modifier
+        ));
+        assert!(
+            !has_link(
+                parse,
+                word_index(&analysis, "phones"),
+                word_index(&analysis, "then"),
+                SyntacticLinkKind::NounCompound
+            ),
+            "immediate links should not cross the comma phrase break"
+        );
+        assert!(
+            !has_link(
+                parse,
+                word_index(&analysis, "nuclei"),
+                word_index(&analysis, "from"),
+                SyntacticLinkKind::NounCompound
+            ),
+            "prepositional phrase starts should not be noun compounds"
+        );
+        assert!(
+            !has_link(
+                parse,
+                break_word,
+                word_index(&analysis, "for"),
+                SyntacticLinkKind::NounCompound
+            ),
+            "for should attach as a preposition, not a noun-compound head"
+        );
     }
 }
