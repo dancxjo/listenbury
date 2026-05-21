@@ -263,7 +263,7 @@ pub struct SpanRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineCursor {
-    pub now_index: usize,
+    pub now_index: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -421,7 +421,7 @@ pub struct RealizationConfig {
     pub enable_allophone_rules: bool,
     pub language: String,
     pub dialect: String,
-    pub now_index: usize,
+    pub now_index: Option<usize>,
     pub span_state: SpanState,
     pub confidence: f32,
     pub phrase_boundary: Option<PhraseBoundaryKind>,
@@ -437,7 +437,7 @@ impl Default for RealizationConfig {
             enable_allophone_rules: false,
             language: "en".to_string(),
             dialect: "american_english".to_string(),
-            now_index: usize::MAX,
+            now_index: None,
             span_state: SpanState::Candidate,
             confidence: 1.0,
             phrase_boundary: None,
@@ -483,14 +483,12 @@ pub fn realize_sequence(sequence: &[Phoneme], config: &RealizationConfig) -> Vec
         let context = RuleMatchContext::from_sequence(&realized, i, config);
         for rule in &rules {
             if let Some(mut environment_match) = match_environment_pattern(rule, &context) {
-                if rule.id == "american_english_intervocalic_flapping"
-                    && (config.careful_style
-                        || matches!(config.phrase_boundary, Some(PhraseBoundaryKind::Major)))
-                {
-                    continue;
-                }
-
                 if rule.id == "american_english_intervocalic_flapping" {
+                    if config.careful_style
+                        || matches!(config.phrase_boundary, Some(PhraseBoundaryKind::Major))
+                    {
+                        continue;
+                    }
                     environment_match.matched_environment.stress_context =
                         Some("between stressed vowel and unstressed vowel".to_string());
                 }
@@ -728,10 +726,11 @@ fn context_predicate_matches(
 
 fn timing_predicate_matches(predicate: &TimingPredicate, context: &RuleMatchContext<'_>) -> bool {
     match predicate {
-        TimingPredicate::AtOrBeforeNow => {
-            context.now.now_index == usize::MAX || context.index <= context.now.now_index
-        }
-        TimingPredicate::AtNow => context.index == context.now.now_index,
+        TimingPredicate::AtOrBeforeNow => context
+            .now
+            .now_index
+            .is_none_or(|now_index| context.index <= now_index),
+        TimingPredicate::AtNow => context.now.now_index == Some(context.index),
         TimingPredicate::SpanState(state) => &context.span_state == state,
         TimingPredicate::ConfidenceAtLeast(minimum) => context.confidence >= *minimum,
     }
@@ -784,20 +783,23 @@ fn phoneme_class_name(class: PhonemeClass) -> &'static str {
 
 fn phoneme_class_matches(class: PhonemeClass, phoneme: &Phoneme) -> bool {
     let actual = classify_symbol(&phoneme.symbol);
+    let actual_is_consonant = matches!(
+        actual,
+        PhonemeClass::Consonant
+            | PhonemeClass::AlveolarStop
+            | PhonemeClass::AlveolarNasal
+            | PhonemeClass::VelarStop
+            | PhonemeClass::VelarConsonant
+    );
     matches!(
         (class, actual),
         (PhonemeClass::Vowel, PhonemeClass::Vowel)
-            | (PhonemeClass::Consonant, PhonemeClass::Consonant)
-            | (PhonemeClass::Consonant, PhonemeClass::AlveolarStop)
-            | (PhonemeClass::Consonant, PhonemeClass::AlveolarNasal)
-            | (PhonemeClass::Consonant, PhonemeClass::VelarStop)
-            | (PhonemeClass::Consonant, PhonemeClass::VelarConsonant)
             | (PhonemeClass::AlveolarStop, PhonemeClass::AlveolarStop)
             | (PhonemeClass::AlveolarNasal, PhonemeClass::AlveolarNasal)
             | (PhonemeClass::VelarStop, PhonemeClass::VelarStop)
             | (PhonemeClass::VelarConsonant, PhonemeClass::VelarConsonant)
             | (PhonemeClass::VelarConsonant, PhonemeClass::VelarStop)
-    )
+    ) || (class == PhonemeClass::Consonant && actual_is_consonant)
 }
 
 fn word_position(index: usize, len: usize) -> WordPosition {
