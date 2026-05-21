@@ -1,0 +1,22 @@
+{"turn":0,"kind":"capture_started","t_unix_ns":1700000000000000000,"elapsed_ms":0}
+{"turn":1,"kind":"speech_started","t_unix_ns":1700000000400000000,"elapsed_ms":400}
+{"turn":1,"kind":"asr_started","t_unix_ns":1700000000570000000,"elapsed_ms":570}
+{"turn":1,"kind":"asr_timed_word_stream","t_unix_ns":1700000000950000000,"elapsed_ms":950,"artifact":{"id":1,"source":"LiveAsr","words":[{"id":1,"text":"Can","lexical_span":null,"timing":{"start_ms":400,"end_ms":530},"timing_confidence":0.97,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"you","lexical_span":null,"timing":{"start_ms":535,"end_ms":640},"timing_confidence":0.95,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":3,"text":"keep","lexical_span":null,"timing":{"start_ms":645,"end_ms":750},"timing_confidence":0.93,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":4,"text":"talking","lexical_span":null,"timing":{"start_ms":755,"end_ms":950},"timing_confidence":0.91,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":1,"kind":"asr_finished","t_unix_ns":1700000000950000000,"elapsed_ms":950}
+{"turn":1,"kind":"transcript","t_unix_ns":1700000000950000000,"elapsed_ms":950,"text":"Can you keep talking"}
+{"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000001050000000,"elapsed_ms":1050}
+{"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001210000000,"elapsed_ms":1210}
+{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001380000000,"elapsed_ms":1380,"text":"Sure I can keep speaking for a while if you would like me to.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001460000000,"elapsed_ms":1460,"text":"Sure I can keep speaking for a while if you would like me to.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001590000000,"elapsed_ms":1590}
+{"turn":1,"kind":"playback_started","t_unix_ns":1700000001650000000,"elapsed_ms":1650,"artifact":{"url":"clips/turn-001.wav","start_ms":1650,"end_ms":3200}}
+{"turn":1,"kind":"overlap_started","t_unix_ns":1700000002200000000,"elapsed_ms":2200,"reason":"external_speech_candidate","artifact":{"audio":{"url":"clips/turn-001.wav","clip_start_ms":2200,"clip_end_ms":2900}}}
+{"turn":1,"kind":"yield_started","t_unix_ns":1700000002310000000,"elapsed_ms":2310,"reason":"sustained_external_speech"}
+{"turn":1,"kind":"interruption_detected","t_unix_ns":1700000002390000000,"elapsed_ms":2390}
+{"turn":1,"kind":"yield_ended","t_unix_ns":1700000002650000000,"elapsed_ms":2650,"reason":"fade_then_stop"}
+{"turn":1,"kind":"overlap_ended","t_unix_ns":1700000002900000000,"elapsed_ms":2900}
+{"turn":2,"kind":"speech_started","t_unix_ns":1700000002200000000,"elapsed_ms":2200}
+{"turn":2,"kind":"asr_started","t_unix_ns":1700000002360000000,"elapsed_ms":2360}
+{"turn":2,"kind":"asr_timed_word_stream","t_unix_ns":1700000002780000000,"elapsed_ms":2780,"artifact":{"id":2,"source":"LiveAsr","words":[{"id":1,"text":"Actually","lexical_span":null,"timing":{"start_ms":2200,"end_ms":2420},"timing_confidence":0.95,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"stop","lexical_span":null,"timing":{"start_ms":2430,"end_ms":2590},"timing_confidence":0.97,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":3,"text":"please","lexical_span":null,"timing":{"start_ms":2600,"end_ms":2780},"timing_confidence":0.93,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":2,"kind":"asr_finished","t_unix_ns":1700000002780000000,"elapsed_ms":2780}
+{"turn":2,"kind":"transcript","t_unix_ns":1700000002780000000,"elapsed_ms":2780,"text":"Actually stop please"}

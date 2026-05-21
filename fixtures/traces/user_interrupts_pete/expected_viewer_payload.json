@@ -1,0 +1,1207 @@
+{
+  "title": "Listenbury Live Trace",
+  "streams": [
+    {
+      "label": "Pete intended speech",
+      "stream": {
+        "id": 1,
+        "source": "GeneratedText",
+        "words": [
+          {
+            "id": 1,
+            "text": "Sure",
+            "lexical_span": {
+              "start": 0,
+              "end": 4
+            },
+            "timing": {
+              "start_ms": 1380,
+              "end_ms": 1634
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "sure",
+              "phonemes": [
+                "SH",
+                "UH1",
+                "R"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "I",
+            "lexical_span": {
+              "start": 5,
+              "end": 6
+            },
+            "timing": {
+              "start_ms": 1634,
+              "end_ms": 1888
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "i",
+              "phonemes": [
+                "AY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "can",
+            "lexical_span": {
+              "start": 7,
+              "end": 10
+            },
+            "timing": {
+              "start_ms": 1888,
+              "end_ms": 2142
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "can",
+              "phonemes": [
+                "K",
+                "AE1",
+                "N"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "keep",
+            "lexical_span": {
+              "start": 11,
+              "end": 15
+            },
+            "timing": {
+              "start_ms": 2142,
+              "end_ms": 2396
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "keep",
+              "phonemes": [
+                "K",
+                "IY1",
+                "P"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "speaking",
+            "lexical_span": {
+              "start": 16,
+              "end": 24
+            },
+            "timing": {
+              "start_ms": 2396,
+              "end_ms": 2650
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "speaking",
+              "phonemes": [
+                "S",
+                "P",
+                "IY1",
+                "K",
+                "IH0",
+                "NG"
+              ],
+              "stressPattern": "10",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 6,
+            "text": "for",
+            "lexical_span": {
+              "start": 25,
+              "end": 28
+            },
+            "timing": {
+              "start_ms": 2650,
+              "end_ms": 2904
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "for",
+              "phonemes": [
+                "F",
+                "AO1",
+                "R"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 7,
+            "text": "a",
+            "lexical_span": {
+              "start": 29,
+              "end": 30
+            },
+            "timing": {
+              "start_ms": 2904,
+              "end_ms": 3158
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "a",
+              "phonemes": [
+                "AH0"
+              ],
+              "stressPattern": "0",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 8,
+            "text": "while",
+            "lexical_span": {
+              "start": 31,
+              "end": 36
+            },
+            "timing": {
+              "start_ms": 3158,
+              "end_ms": 3412
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "while",
+              "phonemes": [
+                "W",
+                "AY1",
+                "L"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 9,
+            "text": "if",
+            "lexical_span": {
+              "start": 37,
+              "end": 39
+            },
+            "timing": {
+              "start_ms": 3412,
+              "end_ms": 3666
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "if",
+              "phonemes": [
+                "IH1",
+                "F"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 10,
+            "text": "you",
+            "lexical_span": {
+              "start": 40,
+              "end": 43
+            },
+            "timing": {
+              "start_ms": 3666,
+              "end_ms": 3920
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "you",
+              "phonemes": [
+                "Y",
+                "UW1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 11,
+            "text": "would",
+            "lexical_span": {
+              "start": 44,
+              "end": 49
+            },
+            "timing": {
+              "start_ms": 3920,
+              "end_ms": 4174
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "would",
+              "phonemes": [
+                "W",
+                "UH1",
+                "D"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 12,
+            "text": "like",
+            "lexical_span": {
+              "start": 50,
+              "end": 54
+            },
+            "timing": {
+              "start_ms": 4174,
+              "end_ms": 4428
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "like",
+              "phonemes": [
+                "L",
+                "AY1",
+                "K"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 13,
+            "text": "me",
+            "lexical_span": {
+              "start": 55,
+              "end": 57
+            },
+            "timing": {
+              "start_ms": 4428,
+              "end_ms": 4682
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "me",
+              "phonemes": [
+                "M",
+                "IY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 14,
+            "text": "to.",
+            "lexical_span": {
+              "start": 58,
+              "end": 61
+            },
+            "timing": {
+              "start_ms": 4682,
+              "end_ms": 4940
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "to",
+              "phonemes": [
+                "T",
+                "UW1"
+              ],
+              "stressPattern": "1",
+              "status": "normalized"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "User transcript",
+      "stream": {
+        "id": 2,
+        "source": "LiveAsr",
+        "words": [
+          {
+            "id": 1,
+            "text": "Can",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 400,
+              "end_ms": 530
+            },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "can",
+              "phonemes": [
+                "K",
+                "AE1",
+                "N"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "you",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 535,
+              "end_ms": 640
+            },
+            "timing_confidence": 0.95,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "you",
+              "phonemes": [
+                "Y",
+                "UW1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "keep",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 645,
+              "end_ms": 750
+            },
+            "timing_confidence": 0.93,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "keep",
+              "phonemes": [
+                "K",
+                "IY1",
+                "P"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "talking",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 755,
+              "end_ms": 950
+            },
+            "timing_confidence": 0.91,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "talking",
+              "phonemes": [
+                "T",
+                "AO1",
+                "K",
+                "IH0",
+                "NG"
+              ],
+              "stressPattern": "10",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "Actually",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 2200,
+              "end_ms": 2420
+            },
+            "timing_confidence": 0.95,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "actually",
+              "phonemes": [
+                "AE1",
+                "K",
+                "CH",
+                "UW2",
+                "AH0",
+                "L",
+                "IY0"
+              ],
+              "stressPattern": "1200",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 6,
+            "text": "stop",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 2430,
+              "end_ms": 2590
+            },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "stop",
+              "phonemes": [
+                "S",
+                "T",
+                "AA1",
+                "P"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 7,
+            "text": "please",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 2600,
+              "end_ms": 2780
+            },
+            "timing_confidence": 0.93,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "please",
+              "phonemes": [
+                "P",
+                "L",
+                "IY1",
+                "Z"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "span_graph": {
+    "text_id": 1,
+    "spans": [
+      {
+        "id": 1,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1380,
+        "end": 1634,
+        "contents": "Sure",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 2,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1634,
+        "end": 1888,
+        "contents": "I",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 3,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1888,
+        "end": 2142,
+        "contents": "can",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 4,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2142,
+        "end": 2396,
+        "contents": "keep",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 5,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2396,
+        "end": 2650,
+        "contents": "speaking",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 6,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2650,
+        "end": 2904,
+        "contents": "for",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 7,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2904,
+        "end": 3158,
+        "contents": "a",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 8,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3158,
+        "end": 3412,
+        "contents": "while",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 9,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3412,
+        "end": 3666,
+        "contents": "if",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 10,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3666,
+        "end": 3920,
+        "contents": "you",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 11,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3920,
+        "end": 4174,
+        "contents": "would",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 12,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4174,
+        "end": 4428,
+        "contents": "like",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 13,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4428,
+        "end": 4682,
+        "contents": "me",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 14,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4682,
+        "end": 4940,
+        "contents": "to.",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 15,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 400,
+        "end": 530,
+        "contents": "Can",
+        "confidence": 0.97,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 16,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 535,
+        "end": 640,
+        "contents": "you",
+        "confidence": 0.95,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 17,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 645,
+        "end": 750,
+        "contents": "keep",
+        "confidence": 0.93,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 18,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 755,
+        "end": 950,
+        "contents": "talking",
+        "confidence": 0.91,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 19,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 2200,
+        "end": 2420,
+        "contents": "Actually",
+        "confidence": 0.95,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 20,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 2430,
+        "end": 2590,
+        "contents": "stop",
+        "confidence": 0.97,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 21,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 2600,
+        "end": 2780,
+        "contents": "please",
+        "confidence": 0.93,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 22,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 570,
+        "end": 950,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 23,
+        "text_id": 1,
+        "modality": "BreathGroup",
+        "state": "Committed",
+        "start": 2200,
+        "end": 2900,
+        "contents": "overlap",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 24,
+        "text_id": 1,
+        "modality": "Semantic",
+        "state": "Committed",
+        "start": 2310,
+        "end": 2650,
+        "contents": "yield",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 25,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 2360,
+        "end": 2780,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      }
+    ],
+    "alignments": []
+  },
+  "events": [
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 570,
+      "end_ms": 950,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 950,
+        "end_event_ms": 950,
+        "start_event_ms": 570,
+        "t_unix_ns": 1700000000950000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Overlap",
+      "kind": "overlap",
+      "start_ms": 2200,
+      "end_ms": 2900,
+      "label": "Overlap",
+      "metadata": {
+        "artifact": {
+          "audio": {
+            "clip_end_ms": 2900,
+            "clip_start_ms": 2200,
+            "url": "clips/turn-001.wav"
+          }
+        },
+        "elapsed_ms": 2900,
+        "end_event_ms": 2900,
+        "reason": "external_speech_candidate",
+        "start_event_ms": 2200,
+        "t_unix_ns": 1700000002900000000,
+        "turn": 1
+      },
+      "audio_ref": {
+        "url": "clips/turn-001.wav",
+        "start_ms": 2200,
+        "end_ms": 2900
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "yield",
+      "start_ms": 2310,
+      "end_ms": 2650,
+      "label": "Yield",
+      "metadata": {
+        "elapsed_ms": 2650,
+        "end_event_ms": 2650,
+        "reason": "fade_then_stop",
+        "start_event_ms": 2310,
+        "t_unix_ns": 1700000002650000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 2360,
+      "end_ms": 2780,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 2780,
+        "end_event_ms": 2780,
+        "start_event_ms": 2360,
+        "t_unix_ns": 1700000002780000000,
+        "turn": 2
+      }
+    }
+  ],
+  "markers": [
+    {
+      "lane": "Latency",
+      "kind": "capture_started",
+      "at_ms": 0,
+      "label": "Capture Started",
+      "metadata": {
+        "elapsed_ms": 0,
+        "t_unix_ns": 1700000000000000000,
+        "turn": 0
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 400,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 400,
+        "t_unix_ns": 1700000000400000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 570,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 570,
+        "t_unix_ns": 1700000000570000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 950,
+      "label": "Transcript",
+      "metadata": {
+        "elapsed_ms": 950,
+        "t_unix_ns": 1700000000950000000,
+        "text": "Can you keep talking",
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "llm_generation_started",
+      "at_ms": 1050,
+      "label": "Llm Generation Started",
+      "metadata": {
+        "elapsed_ms": 1050,
+        "t_unix_ns": 1700000001050000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_llm_token",
+      "at_ms": 1210,
+      "label": "First Llm Token",
+      "metadata": {
+        "elapsed_ms": 1210,
+        "t_unix_ns": 1700000001210000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "first_safe_speech_unit_emitted",
+      "at_ms": 1380,
+      "label": "First Safe Speech Unit Emitted",
+      "metadata": {
+        "elapsed_ms": 1380,
+        "t_unix_ns": 1700000001380000000,
+        "text": "Sure I can keep speaking for a while if you would like me to.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "tts_enqueue_started",
+      "at_ms": 1460,
+      "label": "Tts Enqueue Started",
+      "metadata": {
+        "elapsed_ms": 1460,
+        "t_unix_ns": 1700000001460000000,
+        "text": "Sure I can keep speaking for a while if you would like me to.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_tts_audio_frame_available",
+      "at_ms": 1590,
+      "label": "First Tts Audio Frame Available",
+      "metadata": {
+        "elapsed_ms": 1590,
+        "t_unix_ns": 1700000001590000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback_started",
+      "at_ms": 1650,
+      "label": "Playback Started",
+      "metadata": {
+        "artifact": {
+          "end_ms": 3200,
+          "start_ms": 1650,
+          "url": "clips/turn-001.wav"
+        },
+        "elapsed_ms": 1650,
+        "t_unix_ns": 1700000001650000000,
+        "turn": 1
+      },
+      "audio_ref": {
+        "url": "clips/turn-001.wav",
+        "start_ms": 1650,
+        "end_ms": 3200
+      }
+    },
+    {
+      "lane": "Overlap",
+      "kind": "overlap_started",
+      "at_ms": 2200,
+      "label": "Overlap Started",
+      "metadata": {
+        "artifact": {
+          "audio": {
+            "clip_end_ms": 2900,
+            "clip_start_ms": 2200,
+            "url": "clips/turn-001.wav"
+          }
+        },
+        "elapsed_ms": 2200,
+        "reason": "external_speech_candidate",
+        "t_unix_ns": 1700000002200000000,
+        "turn": 1
+      },
+      "audio_ref": {
+        "url": "clips/turn-001.wav",
+        "start_ms": 2200,
+        "end_ms": 2900
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 2200,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 2200,
+        "t_unix_ns": 1700000002200000000,
+        "turn": 2
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "yield_started",
+      "at_ms": 2310,
+      "label": "Yield Started",
+      "metadata": {
+        "elapsed_ms": 2310,
+        "reason": "sustained_external_speech",
+        "t_unix_ns": 1700000002310000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 2360,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 2360,
+        "t_unix_ns": 1700000002360000000,
+        "turn": 2
+      }
+    },
+    {
+      "lane": "Interruption",
+      "kind": "interruption_detected",
+      "at_ms": 2390,
+      "label": "Interruption Detected",
+      "metadata": {
+        "elapsed_ms": 2390,
+        "t_unix_ns": 1700000002390000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 2780,
+      "label": "Transcript",
+      "metadata": {
+        "elapsed_ms": 2780,
+        "t_unix_ns": 1700000002780000000,
+        "text": "Actually stop please",
+        "turn": 2
+      }
+    }
+  ]
+}

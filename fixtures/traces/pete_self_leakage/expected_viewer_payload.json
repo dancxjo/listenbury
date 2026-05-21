@@ -1,0 +1,1361 @@
+{
+  "title": "Listenbury Live Trace",
+  "streams": [
+    {
+      "label": "Pete intended speech",
+      "stream": {
+        "id": 1,
+        "source": "GeneratedText",
+        "words": [
+          {
+            "id": 1,
+            "text": "Why",
+            "lexical_span": {
+              "start": 0,
+              "end": 3
+            },
+            "timing": {
+              "start_ms": 1270,
+              "end_ms": 1524
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "why",
+              "phonemes": [
+                "W",
+                "AY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "did",
+            "lexical_span": {
+              "start": 4,
+              "end": 7
+            },
+            "timing": {
+              "start_ms": 1524,
+              "end_ms": 1778
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "did",
+              "phonemes": [
+                "D",
+                "IH1",
+                "D"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "the",
+            "lexical_span": {
+              "start": 8,
+              "end": 11
+            },
+            "timing": {
+              "start_ms": 1778,
+              "end_ms": 2032
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "the",
+              "phonemes": [
+                "DH",
+                "AH0"
+              ],
+              "stressPattern": "0",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "scarecrow",
+            "lexical_span": {
+              "start": 12,
+              "end": 21
+            },
+            "timing": {
+              "start_ms": 2032,
+              "end_ms": 2286
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "scarecrow",
+              "phonemes": [
+                "S",
+                "K",
+                "AE1",
+                "R",
+                "K",
+                "R",
+                "OW2"
+              ],
+              "stressPattern": "12",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "win",
+            "lexical_span": {
+              "start": 22,
+              "end": 25
+            },
+            "timing": {
+              "start_ms": 2286,
+              "end_ms": 2540
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "win",
+              "phonemes": [
+                "W",
+                "IH1",
+                "N"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 6,
+            "text": "an",
+            "lexical_span": {
+              "start": 26,
+              "end": 28
+            },
+            "timing": {
+              "start_ms": 2540,
+              "end_ms": 2794
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "an",
+              "phonemes": [
+                "AE1",
+                "N"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 7,
+            "text": "award?",
+            "lexical_span": {
+              "start": 29,
+              "end": 35
+            },
+            "timing": {
+              "start_ms": 2794,
+              "end_ms": 3048
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "award",
+              "phonemes": [
+                "AH0",
+                "W",
+                "AO1",
+                "R",
+                "D"
+              ],
+              "stressPattern": "01",
+              "status": "normalized"
+            }
+          },
+          {
+            "id": 8,
+            "text": "Because",
+            "lexical_span": {
+              "start": 36,
+              "end": 43
+            },
+            "timing": {
+              "start_ms": 3048,
+              "end_ms": 3302
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "because",
+              "phonemes": [
+                "B",
+                "IH0",
+                "K",
+                "AO1",
+                "Z"
+              ],
+              "stressPattern": "01",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 9,
+            "text": "he",
+            "lexical_span": {
+              "start": 44,
+              "end": 46
+            },
+            "timing": {
+              "start_ms": 3302,
+              "end_ms": 3556
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "he",
+              "phonemes": [
+                "HH",
+                "IY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 10,
+            "text": "was",
+            "lexical_span": {
+              "start": 47,
+              "end": 50
+            },
+            "timing": {
+              "start_ms": 3556,
+              "end_ms": 3810
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "was",
+              "phonemes": [
+                "W",
+                "AA1",
+                "Z"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 11,
+            "text": "outstanding",
+            "lexical_span": {
+              "start": 51,
+              "end": 62
+            },
+            "timing": {
+              "start_ms": 3810,
+              "end_ms": 4064
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "outstanding",
+              "phonemes": [
+                "AW2",
+                "T",
+                "S",
+                "T",
+                "AE1",
+                "N",
+                "D",
+                "IH0",
+                "NG"
+              ],
+              "stressPattern": "210",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 12,
+            "text": "in",
+            "lexical_span": {
+              "start": 63,
+              "end": 65
+            },
+            "timing": {
+              "start_ms": 4064,
+              "end_ms": 4318
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "in",
+              "phonemes": [
+                "IH0",
+                "N"
+              ],
+              "stressPattern": "0",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 13,
+            "text": "his",
+            "lexical_span": {
+              "start": 66,
+              "end": 69
+            },
+            "timing": {
+              "start_ms": 4318,
+              "end_ms": 4572
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "his",
+              "phonemes": [
+                "HH",
+                "IH1",
+                "Z"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 14,
+            "text": "field!",
+            "lexical_span": {
+              "start": 70,
+              "end": 76
+            },
+            "timing": {
+              "start_ms": 4572,
+              "end_ms": 4830
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "field",
+              "phonemes": [
+                "F",
+                "IY1",
+                "L",
+                "D"
+              ],
+              "stressPattern": "1",
+              "status": "normalized"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "User transcript",
+      "stream": {
+        "id": 2,
+        "source": "LiveAsr",
+        "words": [
+          {
+            "id": 1,
+            "text": "Tell",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 300,
+              "end_ms": 440
+            },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "tell",
+              "phonemes": [
+                "T",
+                "EH1",
+                "L"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "me",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 445,
+              "end_ms": 540
+            },
+            "timing_confidence": 0.96,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "me",
+              "phonemes": [
+                "M",
+                "IY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "a",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 545,
+              "end_ms": 610
+            },
+            "timing_confidence": 0.94,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "a",
+              "phonemes": [
+                "AH0"
+              ],
+              "stressPattern": "0",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "joke",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 615,
+              "end_ms": 840
+            },
+            "timing_confidence": 0.93,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "joke",
+              "phonemes": [
+                "JH",
+                "OW1",
+                "K"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "why",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 1780,
+              "end_ms": 1950
+            },
+            "timing_confidence": 0.61,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "why",
+              "phonemes": [
+                "W",
+                "AY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 6,
+            "text": "did",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 1955,
+              "end_ms": 2100
+            },
+            "timing_confidence": 0.58,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "did",
+              "phonemes": [
+                "D",
+                "IH1",
+                "D"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 7,
+            "text": "That",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 4200,
+              "end_ms": 4380
+            },
+            "timing_confidence": 0.97,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "that",
+              "phonemes": [
+                "DH",
+                "AE1",
+                "T"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 8,
+            "text": "was",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 4385,
+              "end_ms": 4490
+            },
+            "timing_confidence": 0.96,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "was",
+              "phonemes": [
+                "W",
+                "AA1",
+                "Z"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 9,
+            "text": "terrible",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 4495,
+              "end_ms": 4750
+            },
+            "timing_confidence": 0.94,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "terrible",
+              "phonemes": [
+                "T",
+                "EH1",
+                "R",
+                "AH0",
+                "B",
+                "AH0",
+                "L"
+              ],
+              "stressPattern": "100",
+              "status": "exact"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "span_graph": {
+    "text_id": 1,
+    "spans": [
+      {
+        "id": 1,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1270,
+        "end": 1524,
+        "contents": "Why",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 2,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1524,
+        "end": 1778,
+        "contents": "did",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 3,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1778,
+        "end": 2032,
+        "contents": "the",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 4,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2032,
+        "end": 2286,
+        "contents": "scarecrow",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 5,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2286,
+        "end": 2540,
+        "contents": "win",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 6,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2540,
+        "end": 2794,
+        "contents": "an",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 7,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2794,
+        "end": 3048,
+        "contents": "award?",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 8,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3048,
+        "end": 3302,
+        "contents": "Because",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 9,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3302,
+        "end": 3556,
+        "contents": "he",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 10,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3556,
+        "end": 3810,
+        "contents": "was",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 11,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3810,
+        "end": 4064,
+        "contents": "outstanding",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 12,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4064,
+        "end": 4318,
+        "contents": "in",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 13,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4318,
+        "end": 4572,
+        "contents": "his",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 14,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 4572,
+        "end": 4830,
+        "contents": "field!",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 15,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 300,
+        "end": 440,
+        "contents": "Tell",
+        "confidence": 0.97,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 16,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 445,
+        "end": 540,
+        "contents": "me",
+        "confidence": 0.96,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 17,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 545,
+        "end": 610,
+        "contents": "a",
+        "confidence": 0.94,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 18,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 615,
+        "end": 840,
+        "contents": "joke",
+        "confidence": 0.93,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 19,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 1780,
+        "end": 1950,
+        "contents": "why",
+        "confidence": 0.61,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 20,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 1955,
+        "end": 2100,
+        "contents": "did",
+        "confidence": 0.58,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 21,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 4200,
+        "end": 4380,
+        "contents": "That",
+        "confidence": 0.97,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 22,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 4385,
+        "end": 4490,
+        "contents": "was",
+        "confidence": 0.96,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 23,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 4495,
+        "end": 4750,
+        "contents": "terrible",
+        "confidence": 0.94,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 24,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 470,
+        "end": 840,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 25,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 1550,
+        "end": 3950,
+        "contents": "self_hearing_suppression",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 26,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 1550,
+        "end": 3950,
+        "contents": "playback",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 27,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 1920,
+        "end": 2100,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 28,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 4380,
+        "end": 4750,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      }
+    ],
+    "alignments": [
+      {
+        "source": 26,
+        "target": 2,
+        "confidence": 1.0,
+        "relation": "Overlaps",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 3,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 4,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 5,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 6,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 7,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 8,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 9,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 10,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 26,
+        "target": 11,
+        "confidence": 1.0,
+        "relation": "Overlaps",
+        "source_offset": null,
+        "target_offset": null
+      }
+    ]
+  },
+  "events": [
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 470,
+      "end_ms": 840,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 840,
+        "end_event_ms": 840,
+        "start_event_ms": 470,
+        "t_unix_ns": 1700000000840000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "self_hearing_suppression",
+      "start_ms": 1550,
+      "end_ms": 3950,
+      "label": "Self Hearing Suppression",
+      "metadata": {
+        "elapsed_ms": 1550,
+        "expected_until_unix_ns": 1700000003950000000,
+        "t_unix_ns": 1700000001550000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback",
+      "start_ms": 1550,
+      "end_ms": 3950,
+      "label": "Playback",
+      "metadata": {
+        "elapsed_ms": 3950,
+        "end_event_ms": 3950,
+        "start_event_ms": 1550,
+        "t_unix_ns": 1700000003950000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 1920,
+      "end_ms": 2100,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 2100,
+        "end_event_ms": 2100,
+        "start_event_ms": 1920,
+        "t_unix_ns": 1700000002100000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 4380,
+      "end_ms": 4750,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 4750,
+        "end_event_ms": 4750,
+        "start_event_ms": 4380,
+        "t_unix_ns": 1700000004750000000,
+        "turn": 2
+      }
+    }
+  ],
+  "markers": [
+    {
+      "lane": "Latency",
+      "kind": "capture_started",
+      "at_ms": 0,
+      "label": "Capture Started",
+      "metadata": {
+        "elapsed_ms": 0,
+        "t_unix_ns": 1700000000000000000,
+        "turn": 0
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 300,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 300,
+        "t_unix_ns": 1700000000300000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 470,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 470,
+        "t_unix_ns": 1700000000470000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 840,
+      "label": "Transcript",
+      "metadata": {
+        "elapsed_ms": 840,
+        "t_unix_ns": 1700000000840000000,
+        "text": "Tell me a joke",
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "llm_generation_started",
+      "at_ms": 940,
+      "label": "Llm Generation Started",
+      "metadata": {
+        "elapsed_ms": 940,
+        "t_unix_ns": 1700000000940000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_llm_token",
+      "at_ms": 1100,
+      "label": "First Llm Token",
+      "metadata": {
+        "elapsed_ms": 1100,
+        "t_unix_ns": 1700000001100000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "first_safe_speech_unit_emitted",
+      "at_ms": 1270,
+      "label": "First Safe Speech Unit Emitted",
+      "metadata": {
+        "elapsed_ms": 1270,
+        "t_unix_ns": 1700000001270000000,
+        "text": "Why did the scarecrow win an award? Because he was outstanding in his field!",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "tts_enqueue_started",
+      "at_ms": 1350,
+      "label": "Tts Enqueue Started",
+      "metadata": {
+        "elapsed_ms": 1350,
+        "t_unix_ns": 1700000001350000000,
+        "text": "Why did the scarecrow win an award? Because he was outstanding in his field!",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_tts_audio_frame_available",
+      "at_ms": 1490,
+      "label": "First Tts Audio Frame Available",
+      "metadata": {
+        "elapsed_ms": 1490,
+        "t_unix_ns": 1700000001490000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback_started",
+      "at_ms": 1550,
+      "label": "Playback Started",
+      "metadata": {
+        "elapsed_ms": 1550,
+        "t_unix_ns": 1700000001550000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 1780,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 1780,
+        "t_unix_ns": 1700000001780000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 1920,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 1920,
+        "t_unix_ns": 1700000001920000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "self_hearing_suppression_ended",
+      "at_ms": 3950,
+      "label": "Self Hearing Suppression Ended",
+      "metadata": {
+        "elapsed_ms": 3950,
+        "t_unix_ns": 1700000003950000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 4200,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 4200,
+        "t_unix_ns": 1700000004200000000,
+        "turn": 2
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 4380,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 4380,
+        "t_unix_ns": 1700000004380000000,
+        "turn": 2
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 4750,
+      "label": "Transcript",
+      "metadata": {
+        "elapsed_ms": 4750,
+        "t_unix_ns": 1700000004750000000,
+        "text": "That was terrible",
+        "turn": 2
+      }
+    }
+  ]
+}

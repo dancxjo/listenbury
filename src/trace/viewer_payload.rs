@@ -559,7 +559,15 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         if let Some((base_kind, _end_kind)) = start_to_end_kind(&event.kind) {
             if event.kind == "self_hearing_suppression_started" {
                 if let Some(until_unix_ns) = event.expected_until_unix_ns {
-                    let until_ms = until_unix_ns / 1_000_000;
+                    // `expected_until_unix_ns` is an absolute Unix timestamp in
+                    // nanoseconds.  Convert to session-relative elapsed_ms by
+                    // subtracting the session start time inferred from this
+                    // event's own (t_unix_ns, elapsed_ms) pair.
+                    let session_start_ns = event
+                        .t_unix_ns
+                        .saturating_sub(event.elapsed_ms.saturating_mul(1_000_000));
+                    let until_relative_ns = until_unix_ns.saturating_sub(session_start_ns);
+                    let until_ms = until_relative_ns / 1_000_000;
                     let end_ms = until_ms.max(event.elapsed_ms);
                     spans.push(ViewerEvent {
                         lane,
@@ -1232,6 +1240,33 @@ mod tests {
                 start_ms: Some(0),
                 end_ms: Some(210),
             })
+        );
+    }
+
+    #[test]
+    fn suppression_span_end_uses_session_relative_elapsed_ms() {
+        // `expected_until_unix_ns` is an absolute Unix timestamp in
+        // nanoseconds.  The span end_ms must be session-relative, not an
+        // absolute Unix millisecond value.
+        let mut suppression_started = event(1, "self_hearing_suppression_started", 1_000);
+        // Session start is at unix_ns=0, elapsed_ms=1000 → unix_ns=1_000_000_000.
+        // expected_until = session-relative 3_500ms = unix_ns 3_500_000_000.
+        suppression_started.expected_until_unix_ns =
+            Some(suppression_started.elapsed_ms.saturating_mul(1_000_000) + 2_500_000_000);
+
+        let payload = live_trace_events_to_viewer_payload(&[suppression_started]);
+
+        let suppression_event = payload
+            .events
+            .iter()
+            .find(|event| event.kind == "self_hearing_suppression")
+            .expect("self_hearing_suppression span should be present");
+
+        assert_eq!(suppression_event.start_ms, 1_000, "start_ms must be elapsed_ms");
+        assert_eq!(
+            suppression_event.end_ms,
+            Some(3_500),
+            "end_ms must be session-relative elapsed ms, not absolute Unix ms"
         );
     }
 

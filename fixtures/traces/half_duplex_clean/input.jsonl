@@ -1,0 +1,13 @@
+{"turn":0,"kind":"capture_started","t_unix_ns":1700000000000000000,"elapsed_ms":0}
+{"turn":1,"kind":"speech_started","t_unix_ns":1700000000500000000,"elapsed_ms":500}
+{"turn":1,"kind":"asr_started","t_unix_ns":1700000000680000000,"elapsed_ms":680}
+{"turn":1,"kind":"asr_timed_word_stream","t_unix_ns":1700000001050000000,"elapsed_ms":1050,"artifact":{"id":1,"source":"LiveAsr","words":[{"id":1,"text":"Hello","lexical_span":null,"timing":{"start_ms":500,"end_ms":640},"timing_confidence":0.98,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"how","lexical_span":null,"timing":{"start_ms":645,"end_ms":760},"timing_confidence":0.96,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":3,"text":"are","lexical_span":null,"timing":{"start_ms":765,"end_ms":860},"timing_confidence":0.94,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":4,"text":"you","lexical_span":null,"timing":{"start_ms":865,"end_ms":960},"timing_confidence":0.96,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":5,"text":"today","lexical_span":null,"timing":{"start_ms":965,"end_ms":1050},"timing_confidence":0.92,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":1,"kind":"asr_finished","t_unix_ns":1700000001050000000,"elapsed_ms":1050}
+{"turn":1,"kind":"transcript","t_unix_ns":1700000001050000000,"elapsed_ms":1050,"text":"Hello how are you today"}
+{"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000001150000000,"elapsed_ms":1150}
+{"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001310000000,"elapsed_ms":1310}
+{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001480000000,"elapsed_ms":1480,"text":"I am doing well thank you for asking.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001560000000,"elapsed_ms":1560,"text":"I am doing well thank you for asking.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001700000000,"elapsed_ms":1700}
+{"turn":1,"kind":"playback_started","t_unix_ns":1700000001760000000,"elapsed_ms":1760}
+{"turn":1,"kind":"playback_finished","t_unix_ns":1700000002620000000,"elapsed_ms":2620}

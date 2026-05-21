@@ -1,0 +1,3 @@
+[User]  Tell me a joke
+[Pete]  Why did the scarecrow win an award? Because he was outstanding in his field!
+[User]  That was terrible

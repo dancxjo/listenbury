@@ -1,0 +1,754 @@
+{
+  "title": "Listenbury Live Trace",
+  "streams": [
+    {
+      "label": "Pete intended speech",
+      "stream": {
+        "id": 1,
+        "source": "GeneratedText",
+        "words": [
+          {
+            "id": 1,
+            "text": "I",
+            "lexical_span": {
+              "start": 0,
+              "end": 1
+            },
+            "timing": {
+              "start_ms": 1480,
+              "end_ms": 1745
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "i",
+              "phonemes": [
+                "AY1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "am",
+            "lexical_span": {
+              "start": 2,
+              "end": 4
+            },
+            "timing": {
+              "start_ms": 1745,
+              "end_ms": 2010
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "am",
+              "phonemes": [
+                "AE1",
+                "M"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "doing",
+            "lexical_span": {
+              "start": 5,
+              "end": 10
+            },
+            "timing": {
+              "start_ms": 2010,
+              "end_ms": 2275
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "doing",
+              "phonemes": [
+                "D",
+                "UW1",
+                "IH0",
+                "NG"
+              ],
+              "stressPattern": "10",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "well",
+            "lexical_span": {
+              "start": 11,
+              "end": 15
+            },
+            "timing": {
+              "start_ms": 2275,
+              "end_ms": 2540
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "well",
+              "phonemes": [
+                "W",
+                "EH1",
+                "L"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "thank",
+            "lexical_span": {
+              "start": 16,
+              "end": 21
+            },
+            "timing": {
+              "start_ms": 2540,
+              "end_ms": 2805
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "thank",
+              "phonemes": [
+                "TH",
+                "AE1",
+                "NG",
+                "K"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 6,
+            "text": "you",
+            "lexical_span": {
+              "start": 22,
+              "end": 25
+            },
+            "timing": {
+              "start_ms": 2805,
+              "end_ms": 3070
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "you",
+              "phonemes": [
+                "Y",
+                "UW1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 7,
+            "text": "for",
+            "lexical_span": {
+              "start": 26,
+              "end": 29
+            },
+            "timing": {
+              "start_ms": 3070,
+              "end_ms": 3335
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "for",
+              "phonemes": [
+                "F",
+                "AO1",
+                "R"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 8,
+            "text": "asking.",
+            "lexical_span": {
+              "start": 30,
+              "end": 37
+            },
+            "timing": {
+              "start_ms": 3335,
+              "end_ms": 3600
+            },
+            "timing_confidence": null,
+            "commitment": "StableText",
+            "boundary_source": "Predicted",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "asking",
+              "phonemes": [
+                "AE1",
+                "S",
+                "K",
+                "IH0",
+                "NG"
+              ],
+              "stressPattern": "10",
+              "status": "normalized"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "label": "User transcript",
+      "stream": {
+        "id": 2,
+        "source": "LiveAsr",
+        "words": [
+          {
+            "id": 1,
+            "text": "Hello",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 500,
+              "end_ms": 640
+            },
+            "timing_confidence": 0.98,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "hello",
+              "phonemes": [
+                "HH",
+                "AH0",
+                "L",
+                "OW1"
+              ],
+              "stressPattern": "01",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 2,
+            "text": "how",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 645,
+              "end_ms": 760
+            },
+            "timing_confidence": 0.96,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "how",
+              "phonemes": [
+                "HH",
+                "AW1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 3,
+            "text": "are",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 765,
+              "end_ms": 860
+            },
+            "timing_confidence": 0.94,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "are",
+              "phonemes": [
+                "AA1",
+                "R"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 4,
+            "text": "you",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 865,
+              "end_ms": 960
+            },
+            "timing_confidence": 0.96,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "you",
+              "phonemes": [
+                "Y",
+                "UW1"
+              ],
+              "stressPattern": "1",
+              "status": "exact"
+            }
+          },
+          {
+            "id": 5,
+            "text": "today",
+            "lexical_span": null,
+            "timing": {
+              "start_ms": 965,
+              "end_ms": 1050
+            },
+            "timing_confidence": 0.92,
+            "commitment": "Final",
+            "boundary_source": "Whisper",
+            "audio_ref": null,
+            "pronunciation": {
+              "source": "cmudict",
+              "lookup": "today",
+              "phonemes": [
+                "T",
+                "AH0",
+                "D",
+                "EY1"
+              ],
+              "stressPattern": "01",
+              "status": "exact"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "span_graph": {
+    "text_id": 1,
+    "spans": [
+      {
+        "id": 1,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1480,
+        "end": 1745,
+        "contents": "I",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 2,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 1745,
+        "end": 2010,
+        "contents": "am",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 3,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2010,
+        "end": 2275,
+        "contents": "doing",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 4,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2275,
+        "end": 2540,
+        "contents": "well",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 5,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2540,
+        "end": 2805,
+        "contents": "thank",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 6,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 2805,
+        "end": 3070,
+        "contents": "you",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 7,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3070,
+        "end": 3335,
+        "contents": "for",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 8,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Stable",
+        "start": 3335,
+        "end": 3600,
+        "contents": "asking.",
+        "confidence": 0.5,
+        "stability": 0.7,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 9,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 500,
+        "end": 640,
+        "contents": "Hello",
+        "confidence": 0.98,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 10,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 645,
+        "end": 760,
+        "contents": "how",
+        "confidence": 0.96,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 11,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 765,
+        "end": 860,
+        "contents": "are",
+        "confidence": 0.94,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 12,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 865,
+        "end": 960,
+        "contents": "you",
+        "confidence": 0.96,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 13,
+        "text_id": 1,
+        "modality": "Word",
+        "state": "Committed",
+        "start": 965,
+        "end": 1050,
+        "contents": "today",
+        "confidence": 0.92,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 14,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 680,
+        "end": 1050,
+        "contents": "asr",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      },
+      {
+        "id": 15,
+        "text_id": 1,
+        "modality": "Audio",
+        "state": "Committed",
+        "start": 1760,
+        "end": 2620,
+        "contents": "playback",
+        "confidence": 1.0,
+        "stability": 1.0,
+        "needs_review": false,
+        "repair_attempts": 0,
+        "revisions": []
+      }
+    ],
+    "alignments": [
+      {
+        "source": 15,
+        "target": 2,
+        "confidence": 1.0,
+        "relation": "Overlaps",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 15,
+        "target": 3,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 15,
+        "target": 4,
+        "confidence": 1.0,
+        "relation": "Contains",
+        "source_offset": null,
+        "target_offset": null
+      },
+      {
+        "source": 15,
+        "target": 5,
+        "confidence": 1.0,
+        "relation": "Overlaps",
+        "source_offset": null,
+        "target_offset": null
+      }
+    ]
+  },
+  "events": [
+    {
+      "lane": "Latency",
+      "kind": "asr",
+      "start_ms": 680,
+      "end_ms": 1050,
+      "label": "Asr",
+      "metadata": {
+        "elapsed_ms": 1050,
+        "end_event_ms": 1050,
+        "start_event_ms": 680,
+        "t_unix_ns": 1700000001050000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback",
+      "start_ms": 1760,
+      "end_ms": 2620,
+      "label": "Playback",
+      "metadata": {
+        "elapsed_ms": 2620,
+        "end_event_ms": 2620,
+        "start_event_ms": 1760,
+        "t_unix_ns": 1700000002620000000,
+        "turn": 1
+      }
+    }
+  ],
+  "markers": [
+    {
+      "lane": "Latency",
+      "kind": "capture_started",
+      "at_ms": 0,
+      "label": "Capture Started",
+      "metadata": {
+        "elapsed_ms": 0,
+        "t_unix_ns": 1700000000000000000,
+        "turn": 0
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "speech_started",
+      "at_ms": 500,
+      "label": "Speech Started",
+      "metadata": {
+        "elapsed_ms": 500,
+        "t_unix_ns": 1700000000500000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "asr_started",
+      "at_ms": 680,
+      "label": "Asr Started",
+      "metadata": {
+        "elapsed_ms": 680,
+        "t_unix_ns": 1700000000680000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "transcript",
+      "at_ms": 1050,
+      "label": "Transcript",
+      "metadata": {
+        "elapsed_ms": 1050,
+        "t_unix_ns": 1700000001050000000,
+        "text": "Hello how are you today",
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "llm_generation_started",
+      "at_ms": 1150,
+      "label": "Llm Generation Started",
+      "metadata": {
+        "elapsed_ms": 1150,
+        "t_unix_ns": 1700000001150000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_llm_token",
+      "at_ms": 1310,
+      "label": "First Llm Token",
+      "metadata": {
+        "elapsed_ms": 1310,
+        "t_unix_ns": 1700000001310000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Runtime",
+      "kind": "first_safe_speech_unit_emitted",
+      "at_ms": 1480,
+      "label": "First Safe Speech Unit Emitted",
+      "metadata": {
+        "elapsed_ms": 1480,
+        "t_unix_ns": 1700000001480000000,
+        "text": "I am doing well thank you for asking.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "tts_enqueue_started",
+      "at_ms": 1560,
+      "label": "Tts Enqueue Started",
+      "metadata": {
+        "elapsed_ms": 1560,
+        "t_unix_ns": 1700000001560000000,
+        "text": "I am doing well thank you for asking.",
+        "turn": 1,
+        "unit_kind": "complete_sentence"
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "first_tts_audio_frame_available",
+      "at_ms": 1700,
+      "label": "First Tts Audio Frame Available",
+      "metadata": {
+        "elapsed_ms": 1700,
+        "t_unix_ns": 1700000001700000000,
+        "turn": 1
+      }
+    },
+    {
+      "lane": "Latency",
+      "kind": "playback_started",
+      "at_ms": 1760,
+      "label": "Playback Started",
+      "metadata": {
+        "elapsed_ms": 1760,
+        "t_unix_ns": 1700000001760000000,
+        "turn": 1
+      }
+    }
+  ]
+}

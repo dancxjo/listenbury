@@ -1,0 +1,24 @@
+{"turn":0,"kind":"capture_started","t_unix_ns":1700000000000000000,"elapsed_ms":0}
+{"turn":1,"kind":"speech_started","t_unix_ns":1700000000300000000,"elapsed_ms":300}
+{"turn":1,"kind":"asr_started","t_unix_ns":1700000000470000000,"elapsed_ms":470}
+{"turn":1,"kind":"asr_timed_word_stream","t_unix_ns":1700000000840000000,"elapsed_ms":840,"artifact":{"id":1,"source":"LiveAsr","words":[{"id":1,"text":"Tell","lexical_span":null,"timing":{"start_ms":300,"end_ms":440},"timing_confidence":0.97,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"me","lexical_span":null,"timing":{"start_ms":445,"end_ms":540},"timing_confidence":0.96,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":3,"text":"a","lexical_span":null,"timing":{"start_ms":545,"end_ms":610},"timing_confidence":0.94,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":4,"text":"joke","lexical_span":null,"timing":{"start_ms":615,"end_ms":840},"timing_confidence":0.93,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":1,"kind":"asr_finished","t_unix_ns":1700000000840000000,"elapsed_ms":840}
+{"turn":1,"kind":"transcript","t_unix_ns":1700000000840000000,"elapsed_ms":840,"text":"Tell me a joke"}
+{"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000000940000000,"elapsed_ms":940}
+{"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001100000000,"elapsed_ms":1100}
+{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001270000000,"elapsed_ms":1270,"text":"Why did the scarecrow win an award? Because he was outstanding in his field!","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001350000000,"elapsed_ms":1350,"text":"Why did the scarecrow win an award? Because he was outstanding in his field!","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001490000000,"elapsed_ms":1490}
+{"turn":1,"kind":"playback_started","t_unix_ns":1700000001550000000,"elapsed_ms":1550}
+{"turn":1,"kind":"self_hearing_suppression_started","t_unix_ns":1700000001550000000,"elapsed_ms":1550,"expected_until_unix_ns":1700000003950000000}
+{"turn":1,"kind":"speech_started","t_unix_ns":1700000001780000000,"elapsed_ms":1780}
+{"turn":1,"kind":"asr_started","t_unix_ns":1700000001920000000,"elapsed_ms":1920}
+{"turn":1,"kind":"asr_timed_word_stream","t_unix_ns":1700000002100000000,"elapsed_ms":2100,"artifact":{"id":2,"source":"LiveAsr","words":[{"id":1,"text":"why","lexical_span":null,"timing":{"start_ms":1780,"end_ms":1950},"timing_confidence":0.61,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"did","lexical_span":null,"timing":{"start_ms":1955,"end_ms":2100},"timing_confidence":0.58,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":1,"kind":"asr_finished","t_unix_ns":1700000002100000000,"elapsed_ms":2100}
+{"turn":1,"kind":"self_hearing_suppression_ended","t_unix_ns":1700000003950000000,"elapsed_ms":3950}
+{"turn":1,"kind":"playback_finished","t_unix_ns":1700000003950000000,"elapsed_ms":3950}
+{"turn":2,"kind":"speech_started","t_unix_ns":1700000004200000000,"elapsed_ms":4200}
+{"turn":2,"kind":"asr_started","t_unix_ns":1700000004380000000,"elapsed_ms":4380}
+{"turn":2,"kind":"asr_timed_word_stream","t_unix_ns":1700000004750000000,"elapsed_ms":4750,"artifact":{"id":3,"source":"LiveAsr","words":[{"id":1,"text":"That","lexical_span":null,"timing":{"start_ms":4200,"end_ms":4380},"timing_confidence":0.97,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":2,"text":"was","lexical_span":null,"timing":{"start_ms":4385,"end_ms":4490},"timing_confidence":0.96,"commitment":"Final","boundary_source":"Whisper","audio_ref":null},{"id":3,"text":"terrible","lexical_span":null,"timing":{"start_ms":4495,"end_ms":4750},"timing_confidence":0.94,"commitment":"Final","boundary_source":"Whisper","audio_ref":null}]}}
+{"turn":2,"kind":"asr_finished","t_unix_ns":1700000004750000000,"elapsed_ms":4750}
+{"turn":2,"kind":"transcript","t_unix_ns":1700000004750000000,"elapsed_ms":4750,"text":"That was terrible"}
