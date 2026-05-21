@@ -9,3 +9,6 @@
 //! duration, velocity, and articulation.
 
 pub mod note_target;
+pub mod syllable;
+pub mod phonotactics;
+pub mod syllabification;
