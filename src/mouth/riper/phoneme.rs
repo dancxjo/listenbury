@@ -78,50 +78,55 @@ pub fn espeak_compatible_sequence(
 }
 
 fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
-    let expanded = match symbol {
-        "AA" => &["ɑ"][..],
-        "AH0" => &["ə"],
-        "AH1" | "AH2" => &["ʌ"],
-        "AH" => &["ə"],
-        "AY" => &["a", "ɪ"],
-        "AE" => &["æ"],
-        "AO" => &["ɔ"],
-        "AW" => &["a", "ʊ"],
-        "B" => &["b"],
-        "CH" => &["t", "ʃ"],
-        "D" => &["d"],
-        "DH" => &["ð"],
-        "EH" => &["ɛ"],
-        "ER" => &["ɚ"],
-        "EY" => &["ˈ", "e", "ɪ"],
-        "F" => &["f"],
-        "G" => &["ɡ"],
-        "HH" => &["h"],
-        "IH" => &["ɪ"],
-        "IY" => &["i"],
-        "JH" => &["d", "ʒ"],
-        "K" => &["k"],
-        "L" => &["l"],
-        "M" => &["m"],
-        "N" => &["n"],
-        "NG" => &["ŋ"],
-        "OW" => &["o", "ʊ"],
-        "OY" => &["ɔ", "ɪ"],
-        "P" => &["p"],
-        "R" => &["ɹ"],
-        "S" => &["s"],
-        "SH" => &["ʃ"],
-        "T" => &["t"],
-        "TH" => &["θ"],
-        "TS" => &["t", "s"],
-        "UH" => &["ʊ"],
-        "UW" => &["u"],
-        "V" => &["v"],
-        "W" => &["w"],
-        "Y" => &["j"],
-        "Z" => &["z"],
-        "ZH" => &["ʒ"],
-        "|" => &["."],
+    let base_symbol = symbol
+        .strip_suffix(['0', '1', '2'])
+        .filter(|base| is_arpabet_vowel(base))
+        .unwrap_or(symbol);
+
+    let expanded = match (symbol, base_symbol) {
+        ("AH0", _) => &["ə"][..],
+        ("AH1" | "AH2", _) => &["ʌ"],
+        (_, "AA") => &["ɑ"],
+        (_, "AH") => &["ə"],
+        (_, "AY") => &["a", "ɪ"],
+        (_, "AE") => &["æ"],
+        (_, "AO") => &["ɔ"],
+        (_, "AW") => &["a", "ʊ"],
+        (_, "B") => &["b"],
+        (_, "CH") => &["t", "ʃ"],
+        (_, "D") => &["d"],
+        (_, "DH") => &["ð"],
+        (_, "EH") => &["ɛ"],
+        (_, "ER") => &["ɚ"],
+        (_, "EY") => &["ˈ", "e", "ɪ"],
+        (_, "F") => &["f"],
+        (_, "G") => &["ɡ"],
+        (_, "HH") => &["h"],
+        (_, "IH") => &["ɪ"],
+        (_, "IY") => &["i"],
+        (_, "JH") => &["d", "ʒ"],
+        (_, "K") => &["k"],
+        (_, "L") => &["l"],
+        (_, "M") => &["m"],
+        (_, "N") => &["n"],
+        (_, "NG") => &["ŋ"],
+        (_, "OW") => &["o", "ʊ"],
+        (_, "OY") => &["ɔ", "ɪ"],
+        (_, "P") => &["p"],
+        (_, "R") => &["ɹ"],
+        (_, "S") => &["s"],
+        (_, "SH") => &["ʃ"],
+        (_, "T") => &["t"],
+        (_, "TH") => &["θ"],
+        (_, "TS") => &["t", "s"],
+        (_, "UH") => &["ʊ"],
+        (_, "UW") => &["u"],
+        (_, "V") => &["v"],
+        (_, "W") => &["w"],
+        (_, "Y") => &["j"],
+        (_, "Z") => &["z"],
+        (_, "ZH") => &["ʒ"],
+        (_, "|") => &["."],
         _ if config.phoneme_id_map.contains_key(symbol) => return Some(vec![symbol.to_string()]),
         _ => return None,
     };
@@ -135,6 +140,26 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
                 .map(|symbol| (*symbol).to_string())
                 .collect()
         })
+}
+
+fn is_arpabet_vowel(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
+    )
 }
 
 #[cfg(test)]
@@ -277,6 +302,33 @@ mod tests {
             ids,
             PiperIdSequence {
                 ids: vec![1, 2, 4, 2, 5, 2, 5, 2, 3]
+            }
+        );
+    }
+
+    #[test]
+    fn compatible_conversion_expands_stressed_non_ah_vowels_for_espeak_voice_maps() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                "ɛ": [4],
+                "ɪ": [5]
+              }
+            }
+            "#,
+        );
+        let ids = sequence(&["EH0", "IH0"])
+            .to_piper_ids_compatible(&config)
+            .expect("stress-specific non-AH vowels should expand for eSpeak maps");
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 2, 4, 2, 5, 2, 3]
             }
         );
     }
