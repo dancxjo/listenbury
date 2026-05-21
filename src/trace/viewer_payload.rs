@@ -7,6 +7,10 @@ use serde_json::{Map, Value};
 
 use crate::live_trace::LiveTraceEvent;
 use crate::live_trace::{TraceSessionAudioArtifact, TraceSessionEnvelope};
+use crate::span::{
+    Alignment, AlignmentGraph, AlignmentKind, Cursor, Modality, Span as RuntimeSpan,
+    SpanId as RuntimeSpanId, SpanRevision, SpanState, TextId,
+};
 use crate::word::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
     WordStreamSource, WordTiming, attach_cmudict_pronunciations,
@@ -14,6 +18,7 @@ use crate::word::{
 
 const DEFAULT_WORD_SLOT_MS: u64 = 240;
 const DEFAULT_LANE_TAIL_BUFFER_MS: u64 = 200;
+const RUNTIME_TRACE_TEXT_ID: TextId = TextId(1);
 const USER_TRANSCRIPT_LANE: &str = "User transcript";
 const PETE_INTENDED_SPEECH_LANE: &str = "Pete intended speech";
 
@@ -23,6 +28,8 @@ pub struct ViewerPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio: Option<ViewerAudio>,
     pub streams: Vec<ViewerWordLane>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_graph: Option<ViewerSpanGraph>,
     #[serde(default)]
     pub events: Vec<ViewerEvent>,
     #[serde(default)]
@@ -86,6 +93,14 @@ pub struct ViewerClipAudioRef {
     pub end_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ViewerSpanGraph {
+    pub text_id: TextId,
+    pub spans: Vec<RuntimeSpan<String>>,
+    #[serde(default)]
+    pub alignments: Vec<Alignment>,
+}
+
 pub fn live_trace_jsonl_to_viewer_payload(input: &str) -> Result<ViewerPayload> {
     let mut events = Vec::new();
     for (line_index, line) in input.lines().enumerate() {
@@ -134,10 +149,12 @@ pub fn live_trace_events_to_viewer_payload(events: &[LiveTraceEvent]) -> ViewerP
         title: "Listenbury Live Trace".to_string(),
         audio: None,
         streams: text_lanes,
+        span_graph: None,
         events: viewer_events,
         markers: viewer_markers,
     };
     enrich_payload_pronunciations(&mut payload);
+    payload.span_graph = build_runtime_span_graph(&payload);
     payload
 }
 
@@ -166,6 +183,156 @@ fn enrich_payload_pronunciations(payload: &mut ViewerPayload) {
     for lane in &mut payload.streams {
         attach_cmudict_pronunciations(&mut lane.stream);
     }
+}
+
+fn build_runtime_span_graph(payload: &ViewerPayload) -> Option<ViewerSpanGraph> {
+    let text_id = RUNTIME_TRACE_TEXT_ID;
+    let mut next_span_id = 1u64;
+    let mut spans = Vec::<RuntimeSpan<String>>::new();
+    let mut timed_word_spans = Vec::<(RuntimeSpanId, String, u64, u64)>::new();
+    let mut playback_spans = Vec::<(RuntimeSpanId, u64, u64)>::new();
+
+    for lane in &payload.streams {
+        for word in &lane.stream.words {
+            let Some(timing) = word.timing else {
+                continue;
+            };
+            let span_id = take_next_runtime_span_id(&mut next_span_id);
+            let state = span_state_for_word_commitment(word.commitment);
+            spans.push(RuntimeSpan {
+                id: span_id,
+                text_id,
+                modality: Modality::Word,
+                state,
+                start: Cursor(timing.start_ms),
+                end: Some(Cursor(timing.end_ms)),
+                contents: word.text.clone(),
+                confidence: word.timing_confidence.unwrap_or(0.5),
+                stability: span_state_stability(state),
+                needs_review: false,
+                repair_attempts: 0,
+                revisions: Vec::<SpanRevision<String>>::new(),
+            });
+            timed_word_spans.push((span_id, lane.label.clone(), timing.start_ms, timing.end_ms));
+        }
+    }
+
+    for event in &payload.events {
+        let Some(end_ms) = event.end_ms else {
+            continue;
+        };
+        let span_id = take_next_runtime_span_id(&mut next_span_id);
+        spans.push(RuntimeSpan {
+            id: span_id,
+            text_id,
+            modality: event_modality(&event.kind),
+            state: SpanState::Committed,
+            start: Cursor(event.start_ms),
+            end: Some(Cursor(end_ms)),
+            contents: event.kind.clone(),
+            confidence: 1.0,
+            stability: 1.0,
+            needs_review: false,
+            repair_attempts: 0,
+            revisions: Vec::<SpanRevision<String>>::new(),
+        });
+        if event.kind == "playback" {
+            playback_spans.push((span_id, event.start_ms, end_ms));
+        }
+    }
+
+    if spans.is_empty() {
+        return None;
+    }
+
+    let mut graph = AlignmentGraph::new();
+    for (playback_span_id, playback_start_ms, playback_end_ms) in playback_spans {
+        for (word_span_id, lane_label, word_start_ms, word_end_ms) in &timed_word_spans {
+            if lane_label != PETE_INTENDED_SPEECH_LANE {
+                continue;
+            }
+            if !ranges_overlap(
+                playback_start_ms,
+                playback_end_ms,
+                *word_start_ms,
+                *word_end_ms,
+            ) {
+                continue;
+            }
+            let relation = if playback_start_ms <= *word_start_ms && playback_end_ms >= *word_end_ms
+            {
+                AlignmentKind::Contains
+            } else {
+                AlignmentKind::Overlaps
+            };
+            graph.add_alignment(Alignment::new(
+                playback_span_id,
+                *word_span_id,
+                1.0,
+                relation,
+            ));
+        }
+    }
+
+    Some(ViewerSpanGraph {
+        text_id,
+        spans,
+        alignments: graph.alignments,
+    })
+}
+
+fn span_state_for_word_commitment(commitment: WordCommitment) -> SpanState {
+    match commitment {
+        WordCommitment::Hypothetical => SpanState::Hypothesis,
+        WordCommitment::StableText
+        | WordCommitment::Prepared
+        | WordCommitment::Playable
+        | WordCommitment::Played => SpanState::Stable,
+        WordCommitment::Final | WordCommitment::Confirmed => SpanState::Committed,
+        WordCommitment::Cancelled => SpanState::Deprecated,
+    }
+}
+
+fn take_next_runtime_span_id(next_span_id: &mut u64) -> RuntimeSpanId {
+    let span_id = RuntimeSpanId(*next_span_id);
+    *next_span_id = next_span_id.saturating_add(1);
+    span_id
+}
+
+fn span_state_stability(state: SpanState) -> f32 {
+    match state {
+        SpanState::Hypothesis => 0.25,
+        SpanState::Stable => 0.7,
+        SpanState::Committed => 1.0,
+        SpanState::Revised => 0.8,
+        SpanState::Deprecated => 0.0,
+    }
+}
+
+fn event_modality(kind: &str) -> Modality {
+    match kind {
+        "playback" | "speech" | "asr" | "capture" | "self_hearing_suppression" => Modality::Audio,
+        "tts" | "llm" => Modality::Clause,
+        "overlap" => Modality::BreathGroup,
+        _ if kind.contains("speech")
+            || kind.contains("playback")
+            || kind.contains("asr")
+            || kind.contains("capture")
+            || kind.contains("suppression") =>
+        {
+            Modality::Audio
+        }
+        _ if kind.contains("tts") || kind.contains("llm") => Modality::Clause,
+        _ if kind.contains("overlap") => Modality::BreathGroup,
+        _ => Modality::Semantic,
+    }
+}
+
+/// Returns true when two inclusive millisecond ranges overlap.
+///
+/// Boundary-touching ranges are treated as overlapping (`a_end == b_start`).
+fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+    a_start <= b_end && a_end >= b_start
 }
 
 #[derive(Clone, Copy)]
@@ -928,6 +1095,87 @@ mod tests {
                 .iter()
                 .any(|word| word.commitment == WordCommitment::Final)
         );
+    }
+
+    #[test]
+    fn builds_playback_to_word_alignments_in_span_graph() {
+        let mut playback_started = event(1, "playback_started", 900);
+        playback_started.text = Some("playback start".to_string());
+        let playback_finished = event(1, "playback_finished", 1420);
+
+        let mut tts_revision = event(1, "tts_timed_word_stream_revision", 920);
+        let stream = TimedWordStream {
+            id: WordStreamId(10),
+            source: WordStreamSource::SyntheticSpeech,
+            words: vec![
+                WordNode {
+                    id: WordId(1),
+                    text: "sure".to_string(),
+                    lexical_span: Some(TextSpan { start: 0, end: 4 }),
+                    timing: Some(WordTiming {
+                        start_ms: 980,
+                        end_ms: 1120,
+                    }),
+                    timing_confidence: Some(0.88),
+                    commitment: WordCommitment::Final,
+                    boundary_source: BoundarySource::Predicted,
+                    audio_ref: None,
+                    pronunciation: None,
+                },
+                WordNode {
+                    id: WordId(2),
+                    text: "thing".to_string(),
+                    lexical_span: Some(TextSpan { start: 5, end: 10 }),
+                    timing: Some(WordTiming {
+                        start_ms: 1130,
+                        end_ms: 1350,
+                    }),
+                    timing_confidence: Some(0.9),
+                    commitment: WordCommitment::Final,
+                    boundary_source: BoundarySource::Predicted,
+                    audio_ref: None,
+                    pronunciation: None,
+                },
+            ],
+        };
+        tts_revision.artifact = Some(serde_json::to_value(stream).expect("serialize stream"));
+
+        let payload = live_trace_events_to_viewer_payload(&[
+            playback_started,
+            tts_revision,
+            playback_finished,
+        ]);
+        let span_graph = payload
+            .span_graph
+            .as_ref()
+            .expect("span graph should be emitted");
+
+        let playback_span = span_graph
+            .spans
+            .iter()
+            .find(|span| span.contents == "playback")
+            .expect("playback span should exist");
+        let sure_span = span_graph
+            .spans
+            .iter()
+            .find(|span| span.contents == "sure")
+            .expect("sure word span should exist");
+        let thing_span = span_graph
+            .spans
+            .iter()
+            .find(|span| span.contents == "thing")
+            .expect("thing word span should exist");
+
+        assert!(span_graph.alignments.iter().any(|alignment| {
+            alignment.source == playback_span.id
+                && alignment.target == sure_span.id
+                && alignment.relation == AlignmentKind::Contains
+        }));
+        assert!(span_graph.alignments.iter().any(|alignment| {
+            alignment.source == playback_span.id
+                && alignment.target == thing_span.id
+                && alignment.relation == AlignmentKind::Contains
+        }));
     }
 
     #[test]

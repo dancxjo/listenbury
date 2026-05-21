@@ -1489,6 +1489,7 @@ mod tests {
                     }],
                 },
             }],
+            span_graph: None,
             events: Vec::new(),
             markers: Vec::new(),
         };

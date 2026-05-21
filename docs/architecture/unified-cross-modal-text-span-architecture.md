@@ -61,3 +61,13 @@ The acceptance flow is covered in `src/span.rs` tests:
 - `aligns_multiple_modalities_under_one_text_id`
 
 These show provisional/hypothesis spans becoming committed, then revised with preserved history, and aligned across modalities on the same `TextId`.
+
+## Runtime trace/timeline compatibility adapter
+
+`src/trace/viewer_payload.rs` now emits a `span_graph` alongside legacy `streams`, `events`, and `markers`.
+
+- Legacy fields remain for existing WaveDeck/browser payload consumers.
+- `span_graph.spans` materializes timed words and runtime event regions as canonical `Span<String>` values.
+- `span_graph.alignments` carries cross-modal edges (for example, `playback` audio regions containing overlapping Pete word spans).
+
+This keeps old UI payload contracts working while moving runtime timeline interpretation onto the shared span/alignment substrate.
