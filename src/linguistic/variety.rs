@@ -78,7 +78,7 @@ impl LinguisticVariety {
 /// Which English phonological variety drives phonotactics and inventory policy.
 ///
 /// Only [`GeneralAmerican`][EnglishVariety::GeneralAmerican] is a full
-/// production implementation. The others intentionally use GA as a labelled
+/// production implementation. The others intentionally use GA as a labeled
 /// stub for future differentiation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EnglishVariety {
@@ -100,7 +100,7 @@ impl EnglishVariety {
     ///
     /// Currently only [`GeneralAmerican`][EnglishVariety::GeneralAmerican] has
     /// a complete inventory. All other variants use the GA inventory with
-    /// distinct identifiers as clearly labelled stubs.
+    /// distinct identifiers as clearly labeled stubs.
     pub fn phonemic_inventory(self) -> PhonemicInventory {
         match self {
             EnglishVariety::GeneralAmerican => general_american_english(),
