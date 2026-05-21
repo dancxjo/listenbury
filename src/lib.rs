@@ -10,8 +10,8 @@ pub mod mind;
 #[cfg(feature = "model-download")]
 pub mod models;
 pub mod mouth;
-pub mod prosody;
 pub mod playback_check;
+pub mod prosody;
 pub mod runtime;
 pub mod runtime_event;
 pub mod soundscape;
@@ -59,8 +59,9 @@ pub use mouth::read_aloud::{
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
-    Soundscape, SoundscapeId, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
-    VoiceRoleInSpan,
+    AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
+    SoundSource, Soundscape, SoundscapeFrame, SoundscapeId, SourceId, SourceKind, SourceLabel,
+    TimePoint, TimeRange, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel, VoiceRoleInSpan,
 };
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
