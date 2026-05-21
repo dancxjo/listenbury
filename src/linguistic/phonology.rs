@@ -29,6 +29,65 @@ pub struct PhoneString {
     pub phones: Vec<Phone>,
 }
 
+impl Phone {
+    /// Construct a [`Phone`] directly from an IPA string with no source symbol.
+    ///
+    /// Useful for constructing phones outside the ARPABET lookup path, e.g.
+    /// in tests or when working with raw IPA input.
+    pub fn new_ipa(ipa: impl Into<String>) -> Self {
+        Self {
+            ipa: ipa.into(),
+            source_symbol: None,
+            status: PhoneStatus::Mapped,
+        }
+    }
+}
+
+impl PhoneString {
+    /// Construct an empty [`PhoneString`].
+    pub fn empty() -> Self {
+        Self { phones: vec![] }
+    }
+
+    /// Concatenate the IPA strings of all contained phones into a single
+    /// `String`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use listenbury::linguistic::phonology::{Phone, PhoneString};
+    ///
+    /// let ps = PhoneString { phones: vec![
+    ///     Phone::new_ipa("s"),
+    ///     Phone::new_ipa("t"),
+    ///     Phone::new_ipa("ɹ"),
+    ///     Phone::new_ipa("ʌ"),
+    /// ]};
+    /// assert_eq!(ps.to_ipa(), "stɹʌ");
+    /// ```
+    pub fn to_ipa(&self) -> String {
+        self.phones.iter().map(|p| p.ipa.as_str()).collect()
+    }
+
+    /// Build a [`PhoneString`] from a slice of [`Phoneme`]s by reading each
+    /// phoneme's current [`realization.ipa`][Realization] field.
+    ///
+    /// This is the primary bridge from the phoneme layer to the phone layer
+    /// used by the syllabifier.
+    pub fn from_realized(phonemes: &[Phoneme]) -> Self {
+        Self {
+            phones: phonemes
+                .iter()
+                .map(|p| Phone {
+                    ipa: p.realization.ipa.clone(),
+                    source_symbol: Some(p.source_symbol.clone()),
+                    status: PhoneStatus::Mapped,
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhonemeSchema {

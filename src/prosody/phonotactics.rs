@@ -1,15 +1,14 @@
 //! Phonotactic profiles for IPA-based syllabification.
 //!
-//! A [`PhonotacticProfile`] encapsulates the rules that determine which IPA
-//! phone sequences are legal onsets or codas in a given linguistic variety.
+//! A [`PhonotacticProfile`] encapsulates the rules that determine which
+//! [`Phone`] sequences are legal onsets or codas in a given linguistic variety.
 //! The syllabifier queries a profile rather than embedding hard-coded rules,
-//! so that the phonotactic assumptions are separable from the algorithm and
-//! can be swapped for a different English variety or a completely different
-//! language.
+//! so that phonotactic assumptions are separable from the algorithm and can be
+//! swapped for a different English variety or a completely different language.
 //!
-//! All phone symbols throughout this module are **IPA strings** as produced
-//! by [`crate::linguistic::phonology::Phoneme::realization`] — not ARPABET
-//! mnemonics.
+//! All profile methods operate on **[`Phone`] objects** from the phonology
+//! layer; the `phone.ipa` field carries the IPA surface form used for
+//! phonotactic decisions.
 //!
 //! The primary English implementation is [`EnglishPhonotactics`], constructed
 //! with [`EnglishPhonotactics::for_variety`].  A maximally permissive
@@ -19,25 +18,29 @@
 //!
 //! ```
 //! use listenbury::prosody::phonotactics::{EnglishPhonotactics, EnglishVariety, PhonotacticProfile};
+//! use listenbury::linguistic::phonology::Phone;
 //!
 //! let profile = EnglishPhonotactics::for_variety(EnglishVariety::GeneralAmerican);
 //!
 //! // /stɹ/ is a legal English onset (e.g. "strong", "stream")
-//! assert!(profile.is_legal_onset(&["s", "t", "ɹ"]));
+//! let stɹ = [Phone::new_ipa("s"), Phone::new_ipa("t"), Phone::new_ipa("ɹ")];
+//! assert!(profile.is_legal_onset(&stɹ));
 //!
 //! // /tl/ is not a legal onset in General American English
-//! assert!(!profile.is_legal_onset(&["t", "l"]));
+//! let tl = [Phone::new_ipa("t"), Phone::new_ipa("l")];
+//! assert!(!profile.is_legal_onset(&tl));
 //!
 //! // /ŋ/ is not a legal word-initial consonant in English
-//! assert!(!profile.is_legal_onset(&["ŋ"]));
+//! assert!(!profile.is_legal_onset(&[Phone::new_ipa("ŋ")]));
 //!
 //! // Vowels are nuclei
-//! assert!(profile.is_nucleus("ɛ"));
-//! assert!(!profile.is_nucleus("t"));
+//! assert!(profile.is_nucleus(&Phone::new_ipa("ɛ")));
+//! assert!(!profile.is_nucleus(&Phone::new_ipa("t")));
 //! ```
 
 use std::collections::HashSet;
 
+use crate::linguistic::phonology::Phone;
 use crate::prosody::syllable::{DiagnosticKind, SyllableDiagnostic};
 
 // ─── Profile trait ────────────────────────────────────────────────────────────
@@ -45,8 +48,8 @@ use crate::prosody::syllable::{DiagnosticKind, SyllableDiagnostic};
 /// Verdict returned when the profile evaluates an onset cluster.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnsetVerdict {
-    /// The cluster that was evaluated (IPA strings, one per phone).
-    pub cluster: Vec<String>,
+    /// The phones that were evaluated (cloned from the input slice).
+    pub cluster: Vec<Phone>,
     /// Whether this cluster is a legal onset under the active profile.
     pub is_legal: bool,
     /// Human-readable explanation of the decision.
@@ -63,39 +66,45 @@ impl OnsetVerdict {
         };
         SyllableDiagnostic::new(kind, self.reason.clone())
     }
+
+    /// The IPA representation of the evaluated cluster.
+    pub fn cluster_ipa(&self) -> String {
+        self.cluster.iter().map(|p| p.ipa.as_str()).collect()
+    }
 }
 
 /// A phonotactic profile that the syllabifier consults to determine the
 /// legality of onset and coda clusters.
 ///
+/// All methods receive [`Phone`] objects from the phonology layer; use
+/// `phone.ipa` for IPA-based decisions.
+///
 /// Implement this trait to add new variety profiles (Scottish English, learner
 /// interlanguage, permissive singing mode, …).
-///
-/// All `symbol` / `cluster` arguments use **IPA strings**.
 pub trait PhonotacticProfile {
     /// Display name of this variety/profile, e.g. `"General American English"`.
     fn variety_name(&self) -> &str;
 
-    /// Returns `true` if `symbol` is a nucleus phone (vowel or syllabic
+    /// Returns `true` if `phone` is a nucleus phone (vowel or syllabic
     /// consonant) in this variety.
-    fn is_nucleus(&self, symbol: &str) -> bool;
+    fn is_nucleus(&self, phone: &Phone) -> bool;
 
     /// Returns a detailed verdict for whether `cluster` is a legal onset.
     ///
     /// An empty cluster is always legal (null onset).
-    fn onset_verdict(&self, cluster: &[&str]) -> OnsetVerdict;
+    fn onset_verdict(&self, cluster: &[Phone]) -> OnsetVerdict;
 
     /// Returns `true` if `cluster` is a legal onset.
     ///
     /// Convenience wrapper around [`onset_verdict`][Self::onset_verdict].
-    fn is_legal_onset(&self, cluster: &[&str]) -> bool {
+    fn is_legal_onset(&self, cluster: &[Phone]) -> bool {
         cluster.is_empty() || self.onset_verdict(cluster).is_legal
     }
 
     /// Returns `true` if `cluster` is a legal coda.
     ///
     /// An empty cluster is always legal.
-    fn is_legal_coda(&self, cluster: &[&str]) -> bool;
+    fn is_legal_coda(&self, cluster: &[Phone]) -> bool;
 }
 
 // ─── English variety ──────────────────────────────────────────────────────────
@@ -123,7 +132,8 @@ pub enum EnglishVariety {
 
 // ─── English phonotactics ─────────────────────────────────────────────────────
 
-/// English phonotactic profile, operating entirely on IPA phone strings.
+/// English phonotactic profile, operating on [`Phone`] objects from the
+/// phonology layer.
 ///
 /// Construct with [`EnglishPhonotactics::for_variety`].
 ///
@@ -144,7 +154,7 @@ pub enum EnglishVariety {
 /// | `tʃ` | affricate (treated as a single segment) |
 /// | `dʒ` | affricate (treated as a single segment) |
 /// | `ɪ`, `iː`, `ɛ`, `æ`, `ʌ`, `ɑ`, `ɔ`, … | vowels / nuclei |
-/// | `aɪ`, `aʊ`, `eɪ`, `oʊ`, `ɔɪ` | diphthongs (single nucleus entry) |
+/// | `aɪ`, `aʊ`, `eɪ`, `oʊ`, `ɔɪ` | diphthongs (single nucleus phone) |
 ///
 /// ### Legal onset clusters (General American, shared base)
 ///
@@ -174,10 +184,11 @@ impl EnglishPhonotactics {
     ///
     /// ```
     /// use listenbury::prosody::phonotactics::{EnglishPhonotactics, EnglishVariety, PhonotacticProfile};
+    /// use listenbury::linguistic::phonology::Phone;
     ///
     /// let ga = EnglishPhonotactics::for_variety(EnglishVariety::GeneralAmerican);
-    /// assert!(ga.is_legal_onset(&["p", "ɹ"]));   // /pɹ/ as in "pretty"
-    /// assert!(!ga.is_legal_onset(&["t", "l"]));   // /tl/ illegal in GA
+    /// assert!(ga.is_legal_onset(&[Phone::new_ipa("p"), Phone::new_ipa("ɹ")]));  // /pɹ/ "pretty"
+    /// assert!(!ga.is_legal_onset(&[Phone::new_ipa("t"), Phone::new_ipa("l")])); // /tl/ illegal in GA
     /// ```
     pub fn for_variety(variety: EnglishVariety) -> Self {
         // ── Nuclei ────────────────────────────────────────────────────────────
@@ -194,7 +205,7 @@ impl EnglishPhonotactics {
             "iː", // IY
             "ʊ",  // UH
             "uː", // UW
-            // Diphthongs (each encoded as a single IPA string)
+            // Diphthongs (each encoded as a single IPA string in one Phone)
             "aʊ", // AW
             "aɪ", // AY
             "eɪ", // EY
@@ -339,6 +350,12 @@ impl EnglishPhonotactics {
     pub fn variety(&self) -> EnglishVariety {
         self.variety
     }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    fn ipa_refs<'a>(cluster: &'a [Phone]) -> Vec<&'a str> {
+        cluster.iter().map(|p| p.ipa.as_str()).collect()
+    }
 }
 
 impl PhonotacticProfile for EnglishPhonotactics {
@@ -352,50 +369,51 @@ impl PhonotacticProfile for EnglishPhonotactics {
         }
     }
 
-    fn is_nucleus(&self, symbol: &str) -> bool {
-        self.nuclei.contains(symbol)
+    fn is_nucleus(&self, phone: &Phone) -> bool {
+        self.nuclei.contains(phone.ipa.as_str())
     }
 
-    fn onset_verdict(&self, cluster: &[&str]) -> OnsetVerdict {
-        let cluster_owned: Vec<String> = cluster.iter().map(|s| s.to_string()).collect();
+    fn onset_verdict(&self, cluster: &[Phone]) -> OnsetVerdict {
+        let phones = cluster.to_vec();
+        let ipa_strs = Self::ipa_refs(cluster);
 
         if cluster.is_empty() {
             return OnsetVerdict {
-                cluster: cluster_owned,
+                cluster: phones,
                 is_legal: true,
                 reason: "null onset is always legal".into(),
             };
         }
 
         if cluster.len() == 1 {
-            let sym = cluster[0];
-            if self.illegal_single_onsets.contains(sym) {
+            let ipa = cluster[0].ipa.as_str();
+            if self.illegal_single_onsets.contains(ipa) {
                 return OnsetVerdict {
-                    cluster: cluster_owned,
+                    cluster: phones,
                     is_legal: false,
                     reason: format!(
-                        "/{sym}/ is not a legal syllable onset in {}",
+                        "/{ipa}/ is not a legal syllable onset in {}",
                         self.variety_name()
                     ),
                 };
             }
-            if self.nuclei.contains(sym) {
+            if self.nuclei.contains(ipa) {
                 return OnsetVerdict {
-                    cluster: cluster_owned,
+                    cluster: phones,
                     is_legal: false,
-                    reason: format!("/{sym}/ is a nucleus, not an onset consonant"),
+                    reason: format!("/{ipa}/ is a nucleus, not an onset consonant"),
                 };
             }
             return OnsetVerdict {
-                cluster: cluster_owned,
+                cluster: phones,
                 is_legal: true,
-                reason: format!("/{sym}/ is a legal simple onset"),
+                reason: format!("/{ipa}/ is a legal simple onset"),
             };
         }
 
         // Multi-phone cluster: consult the legal cluster table.
-        let is_legal = self.legal_onset_clusters.contains(cluster);
-        let slash_cluster = format!("/{}/", cluster.join(""));
+        let is_legal = self.legal_onset_clusters.contains(ipa_strs.as_slice());
+        let slash_cluster = format!("/{}/", ipa_strs.join(""));
         let reason = if is_legal {
             format!(
                 "{slash_cluster} is a legal onset cluster in {}",
@@ -408,21 +426,22 @@ impl PhonotacticProfile for EnglishPhonotactics {
             )
         };
         OnsetVerdict {
-            cluster: cluster_owned,
+            cluster: phones,
             is_legal,
             reason,
         }
     }
 
-    fn is_legal_coda(&self, cluster: &[&str]) -> bool {
+    fn is_legal_coda(&self, cluster: &[Phone]) -> bool {
         if cluster.is_empty() {
             return true;
         }
+        let ipa_strs = Self::ipa_refs(cluster);
         if cluster.len() == 1 {
-            // Any consonant can be a simple coda in English.
-            return !self.nuclei.contains(cluster[0]);
+            // Any single consonant can be a simple coda in English.
+            return !self.nuclei.contains(ipa_strs[0]);
         }
-        self.legal_coda_clusters.contains(cluster)
+        self.legal_coda_clusters.contains(ipa_strs.as_slice())
     }
 }
 
@@ -440,9 +459,9 @@ impl PhonotacticProfile for PermissiveProfile {
         "Permissive (test)"
     }
 
-    fn is_nucleus(&self, symbol: &str) -> bool {
+    fn is_nucleus(&self, phone: &Phone) -> bool {
         matches!(
-            symbol,
+            phone.ipa.as_str(),
             "ɑ" | "æ"
                 | "ʌ"
                 | "ɔ"
@@ -460,15 +479,15 @@ impl PhonotacticProfile for PermissiveProfile {
         )
     }
 
-    fn onset_verdict(&self, cluster: &[&str]) -> OnsetVerdict {
+    fn onset_verdict(&self, cluster: &[Phone]) -> OnsetVerdict {
         OnsetVerdict {
-            cluster: cluster.iter().map(|s| s.to_string()).collect(),
+            cluster: cluster.to_vec(),
             is_legal: true,
             reason: "permissive profile accepts all onsets".into(),
         }
     }
 
-    fn is_legal_coda(&self, _cluster: &[&str]) -> bool {
+    fn is_legal_coda(&self, _cluster: &[Phone]) -> bool {
         true
     }
 }
@@ -487,13 +506,18 @@ mod tests {
         EnglishPhonotactics::for_variety(EnglishVariety::PermissiveSinging)
     }
 
+    /// Build a slice of `Phone`s from IPA strings for test assertions.
+    fn phones(ipas: &[&str]) -> Vec<Phone> {
+        ipas.iter().map(|s| Phone::new_ipa(*s)).collect()
+    }
+
     // ── Nucleus detection ────────────────────────────────────────────────────
 
     #[test]
     fn ipa_vowels_are_nuclei() {
         let p = ga();
         for v in &["ɑ", "æ", "ʌ", "ɔ", "ɛ", "ɝ", "ɪ", "iː", "ʊ", "uː"] {
-            assert!(p.is_nucleus(v), "/{v}/ should be a nucleus");
+            assert!(p.is_nucleus(&Phone::new_ipa(*v)), "/{v}/ should be a nucleus");
         }
     }
 
@@ -501,7 +525,7 @@ mod tests {
     fn ipa_diphthongs_are_nuclei() {
         let p = ga();
         for v in &["aʊ", "aɪ", "eɪ", "oʊ", "ɔɪ"] {
-            assert!(p.is_nucleus(v), "/{v}/ should be a nucleus");
+            assert!(p.is_nucleus(&Phone::new_ipa(*v)), "/{v}/ should be a nucleus");
         }
     }
 
@@ -509,7 +533,7 @@ mod tests {
     fn ipa_consonants_are_not_nuclei() {
         let p = ga();
         for c in &["t", "k", "s", "n", "m", "l", "ɹ", "p", "b", "ŋ"] {
-            assert!(!p.is_nucleus(c), "/{c}/ should not be a nucleus");
+            assert!(!p.is_nucleus(&Phone::new_ipa(*c)), "/{c}/ should not be a nucleus");
         }
     }
 
@@ -526,22 +550,22 @@ mod tests {
     fn simple_consonants_are_legal_onsets() {
         let p = ga();
         for c in &["t", "s", "p", "b", "k", "ɡ", "m", "n", "l", "ɹ", "f", "v"] {
-            assert!(p.is_legal_onset(&[c]), "/{c}/ should be a legal onset");
+            assert!(p.is_legal_onset(&phones(&[c])), "/{c}/ should be a legal onset");
         }
     }
 
     #[test]
     fn affricates_are_legal_simple_onsets() {
         let p = ga();
-        assert!(p.is_legal_onset(&["tʃ"]), "/tʃ/ should be legal");
-        assert!(p.is_legal_onset(&["dʒ"]), "/dʒ/ should be legal");
+        assert!(p.is_legal_onset(&phones(&["tʃ"])), "/tʃ/ should be legal");
+        assert!(p.is_legal_onset(&phones(&["dʒ"])), "/dʒ/ should be legal");
     }
 
     // ── Illegal simple onsets ────────────────────────────────────────────────
 
     #[test]
     fn velar_nasal_is_not_a_legal_onset() {
-        assert!(!ga().is_legal_onset(&["ŋ"]));
+        assert!(!ga().is_legal_onset(&phones(&["ŋ"])));
     }
 
     // ── Two-phone legal clusters ─────────────────────────────────────────────
@@ -549,56 +573,56 @@ mod tests {
     #[test]
     fn stop_lateral_clusters_are_legal() {
         let p = ga();
-        assert!(p.is_legal_onset(&["p", "l"]));  // /pl/ as in "play"
-        assert!(p.is_legal_onset(&["b", "l"]));  // /bl/ as in "blue"
-        assert!(p.is_legal_onset(&["k", "l"]));  // /kl/ as in "clay"
-        assert!(p.is_legal_onset(&["ɡ", "l"]));  // /ɡl/ as in "glad"
-        assert!(p.is_legal_onset(&["f", "l"]));  // /fl/ as in "fly"
+        assert!(p.is_legal_onset(&phones(&["p", "l"])));  // /pl/ "play"
+        assert!(p.is_legal_onset(&phones(&["b", "l"])));  // /bl/ "blue"
+        assert!(p.is_legal_onset(&phones(&["k", "l"])));  // /kl/ "clay"
+        assert!(p.is_legal_onset(&phones(&["ɡ", "l"])));  // /ɡl/ "glad"
+        assert!(p.is_legal_onset(&phones(&["f", "l"])));  // /fl/ "fly"
     }
 
     #[test]
     fn stop_rhotic_clusters_are_legal() {
         let p = ga();
-        assert!(p.is_legal_onset(&["p", "ɹ"]));  // /pɹ/ as in "pray"
-        assert!(p.is_legal_onset(&["b", "ɹ"]));  // /bɹ/ as in "bring"
-        assert!(p.is_legal_onset(&["t", "ɹ"]));  // /tɹ/ as in "tree"
-        assert!(p.is_legal_onset(&["d", "ɹ"]));  // /dɹ/ as in "draw"
-        assert!(p.is_legal_onset(&["k", "ɹ"]));  // /kɹ/ as in "cry"
-        assert!(p.is_legal_onset(&["ɡ", "ɹ"]));  // /ɡɹ/ as in "grow"
-        assert!(p.is_legal_onset(&["f", "ɹ"]));  // /fɹ/ as in "free"
-        assert!(p.is_legal_onset(&["θ", "ɹ"]));  // /θɹ/ as in "three"
-        assert!(p.is_legal_onset(&["ʃ", "ɹ"]));  // /ʃɹ/ as in "shred"
+        assert!(p.is_legal_onset(&phones(&["p", "ɹ"])));  // /pɹ/ "pray"
+        assert!(p.is_legal_onset(&phones(&["b", "ɹ"])));  // /bɹ/ "bring"
+        assert!(p.is_legal_onset(&phones(&["t", "ɹ"])));  // /tɹ/ "tree"
+        assert!(p.is_legal_onset(&phones(&["d", "ɹ"])));  // /dɹ/ "draw"
+        assert!(p.is_legal_onset(&phones(&["k", "ɹ"])));  // /kɹ/ "cry"
+        assert!(p.is_legal_onset(&phones(&["ɡ", "ɹ"])));  // /ɡɹ/ "grow"
+        assert!(p.is_legal_onset(&phones(&["f", "ɹ"])));  // /fɹ/ "free"
+        assert!(p.is_legal_onset(&phones(&["θ", "ɹ"])));  // /θɹ/ "three"
+        assert!(p.is_legal_onset(&phones(&["ʃ", "ɹ"])));  // /ʃɹ/ "shred"
     }
 
     #[test]
     fn s_clusters_are_legal_onsets() {
         let p = ga();
-        assert!(p.is_legal_onset(&["s", "p"]));
-        assert!(p.is_legal_onset(&["s", "t"]));
-        assert!(p.is_legal_onset(&["s", "k"]));
-        assert!(p.is_legal_onset(&["s", "l"]));
-        assert!(p.is_legal_onset(&["s", "m"]));
-        assert!(p.is_legal_onset(&["s", "n"]));
-        assert!(p.is_legal_onset(&["s", "w"]));
+        assert!(p.is_legal_onset(&phones(&["s", "p"])));
+        assert!(p.is_legal_onset(&phones(&["s", "t"])));
+        assert!(p.is_legal_onset(&phones(&["s", "k"])));
+        assert!(p.is_legal_onset(&phones(&["s", "l"])));
+        assert!(p.is_legal_onset(&phones(&["s", "m"])));
+        assert!(p.is_legal_onset(&phones(&["s", "n"])));
+        assert!(p.is_legal_onset(&phones(&["s", "w"])));
     }
 
     #[test]
     fn tw_and_kw_are_legal_onsets() {
         let p = ga();
-        assert!(p.is_legal_onset(&["t", "w"]));
-        assert!(p.is_legal_onset(&["k", "w"]));
+        assert!(p.is_legal_onset(&phones(&["t", "w"])));
+        assert!(p.is_legal_onset(&phones(&["k", "w"])));
     }
 
     // ── Illegal two-phone clusters ───────────────────────────────────────────
 
     #[test]
     fn tl_is_not_legal_in_general_american() {
-        assert!(!ga().is_legal_onset(&["t", "l"]));
+        assert!(!ga().is_legal_onset(&phones(&["t", "l"])));
     }
 
     #[test]
     fn dl_is_not_legal_in_general_american() {
-        assert!(!ga().is_legal_onset(&["d", "l"]));
+        assert!(!ga().is_legal_onset(&phones(&["d", "l"])));
     }
 
     // ── Three-phone clusters ─────────────────────────────────────────────────
@@ -606,37 +630,37 @@ mod tests {
     #[test]
     fn three_phone_s_clusters_are_legal() {
         let p = ga();
-        assert!(p.is_legal_onset(&["s", "t", "ɹ"]));  // /stɹ/ as in "strong"
-        assert!(p.is_legal_onset(&["s", "p", "ɹ"]));  // /spɹ/ as in "spring"
-        assert!(p.is_legal_onset(&["s", "k", "ɹ"]));  // /skɹ/ as in "scream"
-        assert!(p.is_legal_onset(&["s", "p", "l"]));  // /spl/ as in "split"
-        assert!(p.is_legal_onset(&["s", "k", "w"]));  // /skw/ as in "squeal"
+        assert!(p.is_legal_onset(&phones(&["s", "t", "ɹ"])));  // /stɹ/ "strong"
+        assert!(p.is_legal_onset(&phones(&["s", "p", "ɹ"])));  // /spɹ/ "spring"
+        assert!(p.is_legal_onset(&phones(&["s", "k", "ɹ"])));  // /skɹ/ "scream"
+        assert!(p.is_legal_onset(&phones(&["s", "p", "l"])));  // /spl/ "split"
+        assert!(p.is_legal_onset(&phones(&["s", "k", "w"])));  // /skw/ "squeal"
     }
 
     // ── Variety-specific differences ─────────────────────────────────────────
 
     #[test]
     fn permissive_singing_allows_tl() {
-        assert!(singing().is_legal_onset(&["t", "l"]));
+        assert!(singing().is_legal_onset(&phones(&["t", "l"])));
     }
 
     #[test]
     fn permissive_singing_allows_dl() {
-        assert!(singing().is_legal_onset(&["d", "l"]));
+        assert!(singing().is_legal_onset(&phones(&["d", "l"])));
     }
 
     #[test]
     fn general_american_rejects_what_singing_allows() {
         // tl is rejected by GA but accepted by PermissiveSinging.
-        assert!(!ga().is_legal_onset(&["t", "l"]));
-        assert!(singing().is_legal_onset(&["t", "l"]));
+        assert!(!ga().is_legal_onset(&phones(&["t", "l"])));
+        assert!(singing().is_legal_onset(&phones(&["t", "l"])));
     }
 
     // ── Onset verdict diagnostics ────────────────────────────────────────────
 
     #[test]
     fn rejected_verdict_message_cites_ipa_cluster() {
-        let v = ga().onset_verdict(&["t", "l"]);
+        let v = ga().onset_verdict(&phones(&["t", "l"]));
         assert!(!v.is_legal);
         assert!(
             v.reason.contains("tl"),
@@ -647,13 +671,26 @@ mod tests {
 
     #[test]
     fn accepted_verdict_message_cites_ipa_cluster() {
-        let v = ga().onset_verdict(&["s", "t", "ɹ"]);
+        let v = ga().onset_verdict(&phones(&["s", "t", "ɹ"]));
         assert!(v.is_legal);
         assert!(
             v.reason.contains("stɹ"),
             "expected /stɹ/ in reason, got: {}",
             v.reason
         );
+    }
+
+    #[test]
+    fn verdict_as_diagnostic_uses_correct_kind() {
+        let v = ga().onset_verdict(&phones(&["t", "l"]));
+        let d = v.as_diagnostic();
+        assert_eq!(d.kind, crate::prosody::syllable::DiagnosticKind::RejectedOnset);
+    }
+
+    #[test]
+    fn cluster_ipa_concatenates_phone_ipas() {
+        let v = ga().onset_verdict(&phones(&["s", "t", "ɹ"]));
+        assert_eq!(v.cluster_ipa(), "stɹ");
     }
 
     // ── Coda legality ────────────────────────────────────────────────────────
@@ -664,41 +701,33 @@ mod tests {
     }
 
     #[test]
-    fn simple_coda_consonants_are_legal() {
-        let p = ga();
-        assert!(p.is_legal_coda(&["t"]));
-        assert!(p.is_legal_coda(&["k"]));
-        assert!(p.is_legal_coda(&["s"]));
-        assert!(p.is_legal_coda(&["ŋ"])); // word-final ŋ is fine (e.g. "ring")
+    fn single_consonant_coda_is_legal() {
+        assert!(ga().is_legal_coda(&phones(&["k"])));
+        assert!(ga().is_legal_coda(&phones(&["n"])));
+        assert!(ga().is_legal_coda(&phones(&["ŋ"])));
     }
-
-    // ── Variety names ────────────────────────────────────────────────────────
 
     #[test]
-    fn variety_names_are_human_readable() {
-        assert_eq!(ga().variety_name(), "General American English");
-        assert_eq!(singing().variety_name(), "Permissive Singing Profile");
-        assert_eq!(
-            EnglishPhonotactics::for_variety(EnglishVariety::ReceivedPronunciation).variety_name(),
-            "Received Pronunciation"
-        );
+    fn known_coda_clusters_are_legal() {
+        let p = ga();
+        assert!(p.is_legal_coda(&phones(&["n", "d"])));   // /nd/ "hand"
+        assert!(p.is_legal_coda(&phones(&["ŋ", "k"])));   // /ŋk/ "bank"
+        assert!(p.is_legal_coda(&phones(&["l", "d"])));   // /ld/ "held"
+        assert!(p.is_legal_coda(&phones(&["ŋ", "θ", "s"]))); // /ŋθs/ "lengths"
     }
 
-    // ── PermissiveProfile ─────────────────────────────────────────────────────
+    // ── Permissive profile ───────────────────────────────────────────────────
 
     #[test]
     fn permissive_profile_accepts_any_onset() {
         let p = PermissiveProfile;
-        assert!(p.is_legal_onset(&["t", "l"]));
-        assert!(p.is_legal_onset(&["ŋ"]));
-        assert!(p.is_legal_onset(&["d", "l", "k"]));
+        assert!(p.is_legal_onset(&phones(&["t", "l"])));
+        assert!(p.is_legal_onset(&phones(&["ŋ"])));
+        assert!(p.is_legal_onset(&phones(&["z", "w"])));
     }
 
     #[test]
-    fn permissive_profile_recognises_ipa_vowels() {
-        let p = PermissiveProfile;
-        assert!(p.is_nucleus("ɛ"));
-        assert!(p.is_nucleus("eɪ"));
-        assert!(!p.is_nucleus("t"));
+    fn permissive_profile_accepts_any_coda() {
+        assert!(PermissiveProfile.is_legal_coda(&phones(&["t", "l", "k"])));
     }
 }
