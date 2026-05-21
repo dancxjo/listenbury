@@ -42,7 +42,7 @@ pub use crate::linguistic::variety::EnglishVariety;
 mod english;
 mod permissive;
 mod profile;
-mod tables;
+pub(crate) mod tables;
 
 pub use english::EnglishPhonotactics;
 pub use permissive::PermissiveProfile;

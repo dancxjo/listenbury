@@ -1,11 +1,9 @@
 use crate::linguistic::phonology::{
     Phone, PhoneString, PhonemeClass, PhonemicInventory, phones_equivalent,
 };
+use crate::linguistic::rule_registry::RuleRegistry;
 use crate::prosody::phonotactics::EnglishVariety;
 use crate::prosody::phonotactics::profile::{OnsetVerdict, PhonotacticProfile};
-use crate::prosody::phonotactics::tables::{
-    illegal_single_onsets, legal_coda_clusters, legal_onset_clusters,
-};
 
 /// English phonotactic profile, operating on [`Phone`] objects via
 /// [`PhonemicInventory`]-driven comparison.
@@ -44,7 +42,10 @@ impl EnglishPhonotactics {
     /// assert!(!ga.is_legal_onset(&tl.iter().collect::<Vec<_>>()));  // /tl/ illegal in GA
     /// ```
     pub fn for_variety(variety: EnglishVariety) -> Self {
-        let inventory = variety.phonemic_inventory();
+        let profile = RuleRegistry::builtin()
+            .profile(variety.rule_id())
+            .expect("built-in registry should include English variety profile");
+        let inventory = profile.inventory;
 
         // ── Nuclei ────────────────────────────────────────────────────────────
         // Derived dynamically from the inventory's vowel phonemes so that the
@@ -60,9 +61,9 @@ impl EnglishPhonotactics {
             variety,
             inventory,
             nuclei,
-            illegal_single_onsets: illegal_single_onsets(),
-            legal_onset_clusters: legal_onset_clusters(variety),
-            legal_coda_clusters: legal_coda_clusters(),
+            illegal_single_onsets: profile.illegal_single_onsets,
+            legal_onset_clusters: profile.legal_onset_clusters,
+            legal_coda_clusters: profile.legal_coda_clusters,
         }
     }
 

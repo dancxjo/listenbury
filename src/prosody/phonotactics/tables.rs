@@ -1,18 +1,17 @@
 use crate::linguistic::phonology::{Phone, PhoneString};
-use crate::prosody::phonotactics::EnglishVariety;
 
-pub(super) fn illegal_single_onsets() -> Vec<Phone> {
+pub(crate) fn illegal_single_onsets() -> Vec<Phone> {
     ["ŋ"].iter().map(|s| Phone::mapped(*s)).collect()
 }
 
-pub(super) fn legal_onset_clusters(variety: EnglishVariety) -> Vec<PhoneString> {
+pub(crate) fn legal_onset_clusters() -> Vec<PhoneString> {
     let ps = |syms: &[&str]| -> PhoneString {
         PhoneString {
             phones: syms.iter().map(|s| Phone::mapped(*s)).collect(),
         }
     };
 
-    let mut legal_onset_clusters: Vec<PhoneString> = vec![
+    vec![
         // ── Stop / fricative + lateral ───────────────────────────────────
         ps(&["p", "l"]),
         ps(&["b", "l"]),
@@ -52,23 +51,25 @@ pub(super) fn legal_onset_clusters(variety: EnglishVariety) -> Vec<PhoneString> 
         ps(&["s", "k", "ɹ"]),
         ps(&["s", "k", "w"]),
         ps(&["s", "t", "w"]),
-    ];
-
-    // ── Variety-specific additions ────────────────────────────────────────
-    if variety == EnglishVariety::PermissiveSinging {
-        legal_onset_clusters.extend([
-            ps(&["t", "l"]),
-            ps(&["d", "l"]),
-            ps(&["v", "ɹ"]),
-            ps(&["v", "l"]),
-            ps(&["z", "w"]),
-        ]);
-    }
-
-    legal_onset_clusters
+    ]
 }
 
-pub(super) fn legal_coda_clusters() -> Vec<PhoneString> {
+pub(crate) fn permissive_singing_onset_additions() -> Vec<PhoneString> {
+    let ps = |syms: &[&str]| -> PhoneString {
+        PhoneString {
+            phones: syms.iter().map(|s| Phone::mapped(*s)).collect(),
+        }
+    };
+    vec![
+        ps(&["t", "l"]),
+        ps(&["d", "l"]),
+        ps(&["v", "ɹ"]),
+        ps(&["v", "l"]),
+        ps(&["z", "w"]),
+    ]
+}
+
+pub(crate) fn legal_coda_clusters() -> Vec<PhoneString> {
     let ps = |syms: &[&str]| -> PhoneString {
         PhoneString {
             phones: syms.iter().map(|s| Phone::mapped(*s)).collect(),
