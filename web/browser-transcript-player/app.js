@@ -183,6 +183,7 @@ const inputUiState = {
   browserAudioAvailable: false,
   browserRecording: false,
   browserCameraAvailable: false,
+  browserVideoStarting: false,
   browserVideoRecording: false,
   browserError: null,
   nativeMicAvailable: false,
@@ -208,6 +209,7 @@ const browserVideoState = {
   startedAtPerformanceMs: 0,
   frameIndex: 0,
   sendChain: Promise.resolve(),
+  startGeneration: 0,
 };
 
 const BROWSER_AUDIO_SAMPLE_RATE_HZ = 16_000;
@@ -369,14 +371,14 @@ function ConnectionChrome({ projection }) {
         id: "browser-video-start",
         type: "button",
         className: projection.browserVideoRecording ? "active-toggle record-active" : "",
-        disabled: !projection.browserCameraAvailable || projection.browserVideoRecording,
+        disabled: !projection.browserCameraAvailable || projection.browserVideoStarting || projection.browserVideoRecording,
         "aria-pressed": projection.browserVideoRecording,
         onClick: () => startBrowserVideoCapture(),
-      }, "Camera On"),
+      }, projection.browserVideoStarting ? "Camera Starting" : "Camera On"),
       h("button", {
         id: "browser-video-stop",
         type: "button",
-        disabled: !projection.browserVideoRecording,
+        disabled: !projection.browserVideoStarting && !projection.browserVideoRecording,
         onClick: () => stopBrowserVideoCapture(),
       }, "Camera Off"),
       h("button", {
@@ -546,6 +548,7 @@ function buildShellProjection() {
     browserAudioAvailable: inputUiState.browserAudioAvailable,
     browserRecording: inputUiState.browserRecording,
     browserCameraAvailable: inputUiState.browserCameraAvailable,
+    browserVideoStarting: inputUiState.browserVideoStarting,
     browserVideoRecording: inputUiState.browserVideoRecording,
     browserError: inputUiState.browserError,
     nativeMicAvailable: inputUiState.nativeMicAvailable,
@@ -834,7 +837,7 @@ function resampleInputBufferToMono(inputBuffer, fromSampleRate, toSampleRate) {
 }
 
 async function startBrowserVideoCapture() {
-  if (inputUiState.browserVideoRecording) {
+  if (inputUiState.browserVideoStarting || inputUiState.browserVideoRecording) {
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -842,8 +845,15 @@ async function startBrowserVideoCapture() {
     renderShell();
     return;
   }
+  const startGeneration = browserVideoState.startGeneration + 1;
+  browserVideoState.startGeneration = startGeneration;
+  inputUiState.browserVideoStarting = true;
+  inputUiState.browserError = null;
+  renderShell();
+  let stream = null;
+  let video = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "user",
         width: { ideal: 640 },
@@ -851,11 +861,22 @@ async function startBrowserVideoCapture() {
       },
       audio: false,
     });
-    const video = document.createElement("video");
+    if (startGeneration !== browserVideoState.startGeneration) {
+      stopMediaStream(stream);
+      return;
+    }
+    video = document.createElement("video");
     video.muted = true;
     video.playsInline = true;
+    video.autoplay = true;
+    video.style.cssText = "position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-10000px;top:0;";
+    document.body.append(video);
     video.srcObject = stream;
     await video.play();
+    if (startGeneration !== browserVideoState.startGeneration) {
+      cleanupBrowserVideoTransport(video, stream);
+      return;
+    }
 
     const canvas = document.createElement("canvas");
     canvas.width = BROWSER_VIDEO_TRANSPORT_WIDTH;
@@ -875,12 +896,16 @@ async function startBrowserVideoCapture() {
       transportBrowserVideoFrameToBackend,
       BROWSER_VIDEO_FRAME_INTERVAL_MS,
     );
+    inputUiState.browserVideoStarting = false;
     inputUiState.browserVideoRecording = true;
     inputUiState.browserError = null;
     uiState.statusMessage = "Streaming browser camera frames to the backend visual speech extractor.";
     renderShell();
   } catch (error) {
-    stopBrowserVideoCapture({ updateStatus: false });
+    cleanupBrowserVideoTransport(video, stream);
+    if (startGeneration === browserVideoState.startGeneration) {
+      inputUiState.browserVideoStarting = false;
+    }
     inputUiState.browserError = conciseErrorMessage(error);
     renderShell();
   }
@@ -888,12 +913,11 @@ async function startBrowserVideoCapture() {
 
 function stopBrowserVideoCapture(options = {}) {
   const { updateStatus = true } = options;
+  browserVideoState.startGeneration += 1;
   if (browserVideoState.timerId !== null) {
     window.clearInterval(browserVideoState.timerId);
   }
-  for (const track of browserVideoState.stream?.getTracks?.() ?? []) {
-    track.stop();
-  }
+  cleanupBrowserVideoTransport(browserVideoState.video, browserVideoState.stream);
   browserVideoState.stream = null;
   browserVideoState.video = null;
   browserVideoState.canvas = null;
@@ -901,11 +925,27 @@ function stopBrowserVideoCapture(options = {}) {
   browserVideoState.timerId = null;
   browserVideoState.startedAtPerformanceMs = 0;
   browserVideoState.frameIndex = 0;
+  inputUiState.browserVideoStarting = false;
   inputUiState.browserVideoRecording = false;
   if (updateStatus) {
     uiState.statusMessage = "Browser camera stream stopped.";
   }
   renderShell();
+}
+
+function cleanupBrowserVideoTransport(video, stream) {
+  if (video) {
+    video.pause();
+    video.srcObject = null;
+    video.remove();
+  }
+  stopMediaStream(stream);
+}
+
+function stopMediaStream(stream) {
+  for (const track of stream?.getTracks?.() ?? []) {
+    track.stop();
+  }
 }
 
 function transportBrowserVideoFrameToBackend() {
