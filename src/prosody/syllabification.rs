@@ -43,14 +43,14 @@
 
 use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, Stress};
 use crate::prosody::phonotactics::PhonotacticProfile;
-use crate::prosody::syllable::{DiagnosticKind, Syllable, SyllableDiagnostic};
+use crate::prosody::syllable::{DiagnosticKind, SourceSpan, Syllable, SyllableDiagnostic};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Syllabify a sequence of [`Phoneme`]s using the given [`PhonotacticProfile`].
 ///
-/// Returns a `Vec<Syllable>` in order.  Each syllable's `source_start` and
-/// `source_end` fields index back into the `phonemes` slice.
+/// Returns a `Vec<Syllable>` in order. Each syllable's
+/// `source_span.start..source_span.end` indexes back into the `phonemes` slice.
 ///
 /// If the sequence contains no nucleus (e.g. an all-consonant cluster), the
 /// entire sequence is returned as a single degenerate syllable with an empty
@@ -87,8 +87,10 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
             onset: all,
             nucleus: PhoneString::empty(),
             coda: PhoneString::empty(),
-            source_start: 0,
-            source_end: phonemes.len(),
+            source_span: SourceSpan {
+                start: 0,
+                end: phonemes.len(),
+            },
             stress: None,
             variety: profile.variety_name().to_string(),
             diagnostics: vec![SyllableDiagnostic::new(
@@ -155,8 +157,10 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
                 phones: phones[nuc_pos..nuc_end].to_vec(),
             },
             coda: PhoneString::empty(), // filled in by next iteration
-            source_start,
-            source_end: nuc_end,
+            source_span: SourceSpan {
+                start: source_start,
+                end: nuc_end,
+            },
             stress,
             variety: profile.variety_name().to_string(),
             diagnostics,
@@ -173,8 +177,8 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         last.coda = PhoneString { phones: trailing };
     }
 
-    // Fix source_end for the last syllable to include trailing coda.
-    last.source_end = phonemes.len();
+    // Fix source span end for the last syllable to include trailing coda.
+    last.source_span.end = phonemes.len();
 
     syllables
 }
@@ -417,8 +421,8 @@ mod tests {
         let len = seq_in.len();
         let s = syllabify(&seq_in, &ga());
         for syl in &s {
-            assert!(syl.source_start <= syl.source_end);
-            assert!(syl.source_end <= len);
+            assert!(syl.source_span.start <= syl.source_span.end);
+            assert!(syl.source_span.end <= len);
         }
     }
 

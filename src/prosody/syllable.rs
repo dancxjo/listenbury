@@ -65,6 +65,16 @@ impl SyllableDiagnostic {
 
 // ─── Syllable ─────────────────────────────────────────────────────────────────
 
+/// Inclusive/exclusive source index span into the original `&[Phoneme]` slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSpan {
+    /// Inclusive start index into the source `&[Phoneme]` slice.
+    pub start: usize,
+    /// Exclusive end index into the source `&[Phoneme]` slice.
+    pub end: usize,
+}
+
 /// A phonological syllable produced by the syllabifier.
 ///
 /// Each constituent is stored as a [`PhoneString`] (a `Vec<Phone>`) where
@@ -80,7 +90,7 @@ impl SyllableDiagnostic {
 /// a single `Phone` whose `.ipa` is the multi-character IPA string, matching
 /// the phoneme's [`realization.ipa`][`crate::linguistic::phonology::Realization`].
 ///
-/// The `source_start..source_end` span indexes back into the `&[Phoneme]`
+/// The `source_span.start..source_span.end` span indexes back into the `&[Phoneme]`
 /// slice passed to the syllabifier, enabling downstream code to recover
 /// timing, allophone, and morphological data without re-parsing.
 ///
@@ -95,8 +105,7 @@ impl SyllableDiagnostic {
 ///     onset:   PhoneString::empty(),
 ///     nucleus: PhoneString { phones: vec![Phone::new_ipa("ɛ")] },
 ///     coda:    PhoneString { phones: vec![Phone::new_ipa("k")] },
-///     source_start: 0,
-///     source_end:   2,
+///     source_span: listenbury::prosody::syllable::SourceSpan { start: 0, end: 2 },
 ///     stress: Some(Stress::Primary),
 ///     variety: "General American English".into(),
 ///     diagnostics: vec![],
@@ -114,10 +123,8 @@ pub struct Syllable {
     pub nucleus: PhoneString,
     /// Coda consonant phones, in sequence order.
     pub coda: PhoneString,
-    /// Inclusive start index into the source `&[Phoneme]` slice.
-    pub source_start: usize,
-    /// Exclusive end index into the source `&[Phoneme]` slice.
-    pub source_end: usize,
+    /// Source span into the original `&[Phoneme]` slice.
+    pub source_span: SourceSpan,
     /// Stress level inferred from the nucleus phone's corresponding
     /// [`Phoneme.stress`][`crate::linguistic::phonology::Phoneme`] field.
     pub stress: Option<Stress>,
@@ -156,8 +163,7 @@ impl Syllable {
     ///     ]},
     ///     nucleus: PhoneString { phones: vec![Phone::new_ipa("ʌ")] },
     ///     coda:    PhoneString::empty(),
-    ///     source_start: 2,
-    ///     source_end:   6,
+    ///     source_span: listenbury::prosody::syllable::SourceSpan { start: 2, end: 6 },
     ///     stress: None,
     ///     variety: "General American English".into(),
     ///     diagnostics: vec![],
@@ -200,8 +206,10 @@ mod tests {
             onset: ps(onset),
             nucleus: ps(nucleus),
             coda: ps(coda),
-            source_start: 0,
-            source_end: onset.len() + nucleus.len() + coda.len(),
+            source_span: SourceSpan {
+                start: 0,
+                end: onset.len() + nucleus.len() + coda.len(),
+            },
             stress: None,
             variety: "General American English".into(),
             diagnostics: vec![],
