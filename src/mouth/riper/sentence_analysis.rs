@@ -392,13 +392,14 @@ fn build_link_parses(
                 },
             );
             if matches!(left, "a" | "an" | "the") {
-                let onset = if has_vowel_like_onset(right) {
+                let article_noun_range = vec![idx, idx + 1];
+                let onset = if has_graphemic_vowel_onset(right) {
                     "vowel"
                 } else {
                     "consonant"
                 };
                 claims.push(AnalysisClaim::new(
-                    AnalysisTarget::WordRange(vec![idx, idx + 1]),
+                    AnalysisTarget::WordRange(article_noun_range),
                     ClaimKind::MorphologicalForm,
                     ClaimValue::MorphologicalForm(format!(
                         "article_phonetic_agreement:{left}_before_{onset}"
@@ -1092,7 +1093,7 @@ fn has_likely_verb_suffix(word: &str) -> bool {
         || (word.len() >= 4 && word.ends_with("ed") && !COMMON_NON_VERB_ED.contains(&word))
 }
 
-fn has_vowel_like_onset(word: &str) -> bool {
+fn has_graphemic_vowel_onset(word: &str) -> bool {
     word.chars()
         .next()
         .is_some_and(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
