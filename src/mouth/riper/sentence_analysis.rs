@@ -4,7 +4,7 @@ use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
 use crate::mouth::riper::evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
 };
-use crate::mouth::riper::text::{NormalizedText, NormalizedToken, detect_vocative_spans};
+use crate::mouth::riper::text::{detect_vocative_spans, NormalizedText, NormalizedToken};
 
 pub type WordIndex = usize;
 
@@ -18,6 +18,9 @@ const CONTRAST_PAIR_CONFIDENCE: f32 = 0.91;
 const VOCATIVE_LINK_CONFIDENCE: f32 = 0.86;
 const APPOSITION_LINK_CONFIDENCE: f32 = 0.8;
 const PARENTHETICAL_LINK_CONFIDENCE: f32 = 0.79;
+const CONTRASTIVE_FOCUS_CLAIM_CONFIDENCE: f32 = 0.89;
+const COMMA_BEHAVIOR_CLAIM_CONFIDENCE: f32 = 0.84;
+const ARTICLE_HOOK_CLAIM_CONFIDENCE: f32 = 0.85;
 const AMBIGUOUS_NOUN_ATTACHMENT_CONFIDENCE: f32 = 0.46;
 const AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE: f32 = 0.44;
 
@@ -388,6 +391,31 @@ fn build_link_parses(
                     source: SyntacticLinkSource::HeuristicGrammarIsland,
                 },
             );
+            if matches!(left, "a" | "an" | "the") {
+                let onset = if has_vowel_like_onset(right) {
+                    "vowel"
+                } else {
+                    "consonant"
+                };
+                claims.push(AnalysisClaim::new(
+                    AnalysisTarget::WordRange(vec![idx, idx + 1]),
+                    ClaimKind::MorphologicalForm,
+                    ClaimValue::MorphologicalForm(format!(
+                        "article_phonetic_agreement:{left}_before_{onset}"
+                    )),
+                    AnalysisSourceKind::SyntaxRule,
+                    ARTICLE_HOOK_CLAIM_CONFIDENCE,
+                    "article+noun pair emitted for phonetic agreement/allomorph selection hooks",
+                ));
+                claims.push(AnalysisClaim::new(
+                    AnalysisTarget::WordIndex(idx),
+                    ClaimKind::WeakFunctionCandidate,
+                    ClaimValue::Syntactic,
+                    AnalysisSourceKind::SyntaxRule,
+                    WEAK_FUNCTION_CANDIDATE_CONFIDENCE,
+                    "article is a weak-form candidate unless contrastively focused",
+                ));
+            }
         }
 
         if is_auxiliary(left) && is_likely_verb(right) {
@@ -449,6 +477,24 @@ fn build_link_parses(
             CONTRAST_PAIR_CONFIDENCE,
             "contrastive negation pattern detected",
         ));
+        for pole in [left, right] {
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(pole),
+                ClaimKind::ProsodicRole,
+                ClaimValue::ProsodicRole("Contrastive".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                CONTRASTIVE_FOCUS_CLAIM_CONFIDENCE,
+                "contrast pair marks focused item",
+            ));
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(pole),
+                ClaimKind::Reduction,
+                ClaimValue::Reduction("WeakFormSuppressed".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                CONTRASTIVE_FOCUS_CLAIM_CONFIDENCE,
+                "contrastive focus suppresses weak-form reduction",
+            ));
+        }
     }
 
     let vocative_spans = detect_vocative_spans(source_text);
@@ -479,6 +525,25 @@ fn build_link_parses(
                 AnalysisSourceKind::SyntaxRule,
                 VOCATIVE_LINK_CONFIDENCE,
                 "comma-delimited proper name after verb is a vocative boundary",
+            ));
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::WordIndex(first_target),
+                ClaimKind::ProsodicRole,
+                ClaimValue::ProsodicRole("DirectAddress".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                VOCATIVE_LINK_CONFIDENCE,
+                "vocative addressee receives direct-address prosodic role",
+            ));
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::Boundary {
+                    left_word: Some(anchor),
+                    right_word: Some(first_target),
+                },
+                ClaimKind::BoundaryKind,
+                ClaimValue::BoundaryKind("VocativeCommaPauseSuppressed".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                COMMA_BEHAVIOR_CLAIM_CONFIDENCE,
+                "vocative comma prefers reduced pause behavior",
             ));
         }
     }
@@ -1027,6 +1092,12 @@ fn has_likely_verb_suffix(word: &str) -> bool {
         || (word.len() >= 4 && word.ends_with("ed") && !COMMON_NON_VERB_ED.contains(&word))
 }
 
+fn has_vowel_like_onset(word: &str) -> bool {
+    word.chars()
+        .next()
+        .is_some_and(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1072,30 +1143,24 @@ mod tests {
             go,
             SyntacticLinkKind::InfinitivalMarker
         ));
-        assert!(
-            parse
-                .claims
-                .iter()
-                .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
-                    && claim.target == AnalysisTarget::WordIndex(to))
-        );
-        assert!(
-            parse
-                .claims
-                .iter()
-                .any(|claim| claim.kind == ClaimKind::WeakFunctionCandidate
-                    && claim.target == AnalysisTarget::WordIndex(to))
-        );
-        assert!(
-            analysis
-                .environment_patterns()
-                .iter()
-                .any(|pattern| pattern
-                    .predicates
-                    .contains(&ContextPredicate::SyntacticLink(
-                        SyntacticLinkKind::InfinitivalMarker
-                    )))
-        );
+        assert!(parse
+            .claims
+            .iter()
+            .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
+                && claim.target == AnalysisTarget::WordIndex(to)));
+        assert!(parse
+            .claims
+            .iter()
+            .any(|claim| claim.kind == ClaimKind::WeakFunctionCandidate
+                && claim.target == AnalysisTarget::WordIndex(to)));
+        assert!(analysis
+            .environment_patterns()
+            .iter()
+            .any(|pattern| pattern
+                .predicates
+                .contains(&ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::InfinitivalMarker
+                ))));
     }
 
     #[test]
@@ -1109,6 +1174,16 @@ mod tests {
             claim.kind == ClaimKind::ContrastPair
                 && claim.target == AnalysisTarget::WordRange(vec![to, from])
         }));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(to)
+                && claim.value == ClaimValue::ProsodicRole("Contrastive".to_string())
+        }));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::Reduction
+                && claim.target == AnalysisTarget::WordIndex(from)
+                && claim.value == ClaimValue::Reduction("WeakFormSuppressed".to_string())
+        }));
     }
 
     #[test]
@@ -1118,13 +1193,21 @@ mod tests {
         let you = word_index(&analysis, "you");
         let dave = word_index(&analysis, "dave");
         assert!(has_link(parse, you, dave, SyntacticLinkKind::Vocative));
-        assert!(
-            parse
-                .claims
-                .iter()
-                .any(|claim| claim.kind == ClaimKind::VocativeBoundary
-                    && claim.target == AnalysisTarget::WordIndex(dave))
-        );
+        assert!(parse
+            .claims
+            .iter()
+            .any(|claim| claim.kind == ClaimKind::VocativeBoundary
+                && claim.target == AnalysisTarget::WordIndex(dave)));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(dave)
+                && claim.value == ClaimValue::ProsodicRole("DirectAddress".to_string())
+        }));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::BoundaryKind
+                && claim.value
+                    == ClaimValue::BoundaryKind("VocativeCommaPauseSuppressed".to_string())
+        }));
     }
 
     #[test]
@@ -1146,12 +1229,10 @@ mod tests {
             exploded,
             SyntacticLinkKind::Parenthetical
         ));
-        assert!(
-            parse
-                .claims
-                .iter()
-                .any(|claim| claim.kind == ClaimKind::ParentheticalBoundary)
-        );
+        assert!(parse
+            .claims
+            .iter()
+            .any(|claim| claim.kind == ClaimKind::ParentheticalBoundary));
 
         let apposition = analyze("My brother, who lives in Tacoma, arrived.");
         let apposition_parse = apposition.link_parses.first().expect("link parse");
@@ -1163,12 +1244,104 @@ mod tests {
             who,
             SyntacticLinkKind::Apposition
         ));
-        assert!(
-            apposition_parse
-                .claims
-                .iter()
-                .any(|claim| claim.kind == ClaimKind::AppositionBoundary)
-        );
+        assert!(apposition_parse
+            .claims
+            .iter()
+            .any(|claim| claim.kind == ClaimKind::AppositionBoundary));
+    }
+
+    #[test]
+    fn fixture_emits_article_phonetic_agreement_hooks() {
+        let a_dog = analyze("a dog");
+        let a_dog_parse = a_dog.link_parses.first().expect("link parse");
+        let a = word_index(&a_dog, "a");
+        let dog = word_index(&a_dog, "dog");
+        assert!(has_link(a_dog_parse, a, dog, SyntacticLinkKind::Determiner));
+        assert!(a_dog_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::MorphologicalForm
+                && claim.target == AnalysisTarget::WordRange(vec![a, dog])
+                && claim.value
+                    == ClaimValue::MorphologicalForm(
+                        "article_phonetic_agreement:a_before_consonant".to_string(),
+                    )
+        }));
+
+        let an_owl = analyze("an owl");
+        let an_owl_parse = an_owl.link_parses.first().expect("link parse");
+        let an = word_index(&an_owl, "an");
+        let owl = word_index(&an_owl, "owl");
+        assert!(has_link(
+            an_owl_parse,
+            an,
+            owl,
+            SyntacticLinkKind::Determiner
+        ));
+        assert!(an_owl_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::MorphologicalForm
+                && claim.target == AnalysisTarget::WordRange(vec![an, owl])
+                && claim.value
+                    == ClaimValue::MorphologicalForm(
+                        "article_phonetic_agreement:an_before_vowel".to_string(),
+                    )
+        }));
+
+        let the_owl = analyze("the owl");
+        let the_owl_parse = the_owl.link_parses.first().expect("link parse");
+        let the = word_index(&the_owl, "the");
+        assert!(the_owl_parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::WeakFunctionCandidate
+                && claim.target == AnalysisTarget::WordIndex(the)
+        }));
+
+        let the_door = analyze("the door");
+        let the_door_parse = the_door.link_parses.first().expect("link parse");
+        let the_door_idx = word_index(&the_door, "the");
+        let door = word_index(&the_door, "door");
+        assert!(has_link(
+            the_door_parse,
+            the_door_idx,
+            door,
+            SyntacticLinkKind::Determiner
+        ));
+        assert!(the_door
+            .environment_patterns()
+            .iter()
+            .any(|pattern| pattern
+                .predicates
+                .contains(&ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::Determiner
+                ))));
+    }
+
+    #[test]
+    fn fixture_covers_remaining_infinitival_and_vocative_examples_with_diagnostics() {
+        for text in ["We need to leave.", "Try to remember."] {
+            let analysis = analyze(text);
+            let parse = analysis.link_parses.first().expect("link parse");
+            let to = word_index(&analysis, "to");
+            assert!(parse.links.iter().any(|link| {
+                link.left == to && link.kind == SyntacticLinkKind::InfinitivalMarker
+            }));
+            assert!(parse.claims.iter().any(|claim| {
+                claim.kind == ClaimKind::WeakFunctionCandidate
+                    && claim.target == AnalysisTarget::WordIndex(to)
+                    && !claim.rationale.is_empty()
+            }));
+        }
+
+        let vocative = analyze("Listen, professor, this matters.");
+        let parse = vocative.link_parses.first().expect("link parse");
+        let professor = word_index(&vocative, "professor");
+        assert!(parse
+            .links
+            .iter()
+            .any(|link| { link.right == professor && link.kind == SyntacticLinkKind::Vocative }));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(professor)
+                && claim.value == ClaimValue::ProsodicRole("DirectAddress".to_string())
+                && !claim.rationale.is_empty()
+        }));
     }
 
     #[test]
