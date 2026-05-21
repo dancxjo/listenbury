@@ -138,7 +138,7 @@ impl RuleRegistry {
             PhonotacticData {
                 illegal_single_onsets: vec![],
                 legal_onset_clusters: vec![phone_string(&["p", "l"]), phone_string(&["p", "r"])],
-                legal_coda_clusters: vec![phone_string(&["n"]), phone_string(&["s"])],
+                legal_coda_clusters: vec![],
             },
         );
 
@@ -543,6 +543,7 @@ fn phone_string(symbols: &[&str]) -> PhoneString {
 }
 
 fn esperanto_phonemes() -> Vec<PhonemeDefinition> {
+    // (phoneme_symbol, ipa, is_vowel)
     let rows: &[(&str, &str, bool)] = &[
         ("A", "a", true),
         ("E", "e", true),
