@@ -18,10 +18,8 @@ use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::mouth::riper::{
-    EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan, PiperIdSequence, PiperPhoneme,
-    PiperPhonemeSequence, PiperVoiceConfig, RiperBackend, SimpleEnglishG2p,
+    EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan,
 };
-#[cfg(all(not(feature = "asr-whisper"), feature = "tts-riper"))]
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
 #[cfg(feature = "tts-riper")]
