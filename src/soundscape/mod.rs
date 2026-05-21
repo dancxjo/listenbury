@@ -1,7 +1,25 @@
+//! Soundscape-first data model for source-attributed listening.
+//!
+//! This module keeps source identity independent from transcript text so that
+//! playback, voices, room noise, and other audible events can coexist in one
+//! timeline.
+
+pub mod event;
+pub mod frame;
+pub mod source;
+pub mod time;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::audio::VoiceSignatureId;
+
+pub use event::{
+    AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
+};
+pub use frame::SoundscapeFrame;
+pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
+pub use time::{TimePoint, TimeRange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SoundscapeId(pub Uuid);
