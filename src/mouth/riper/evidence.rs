@@ -387,20 +387,19 @@ pub fn claim_from_environment_match(
     phoneme_index: usize,
     rule_name: &str,
 ) -> AnalysisClaim {
+    let target = &env_match.target;
+    let result = &env_match.result;
     AnalysisClaim::new(
         AnalysisTarget::PhonemeIndex {
             word: word_index,
             phoneme: phoneme_index,
         },
         ClaimKind::PhonemeRealization,
-        ClaimValue::PhonemeRealization(env_match.result.clone()),
+        ClaimValue::PhonemeRealization(result.clone()),
         AnalysisSourceKind::EnvironmentPattern,
         0.85,
         format!(
-            "environment_pattern.{rule_name}: target /{target}/ realizes as [{result}]",
-            rule_name = rule_name,
-            target = env_match.target,
-            result = env_match.result,
+            "environment_pattern.{rule_name}: target /{target}/ realizes as [{result}]"
         ),
     )
 }
