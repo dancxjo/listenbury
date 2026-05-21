@@ -61,14 +61,7 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
     }
 
     // Derive realized phones from phoneme realizations.
-    let phones: Vec<Phone> = phonemes
-        .iter()
-        .map(|p| Phone {
-            ipa: p.realization.ipa.clone(),
-            source_symbol: Some(p.source_symbol.clone()),
-            status: crate::linguistic::phonology::PhoneStatus::Mapped,
-        })
-        .collect();
+    let phones: Vec<Phone> = PhoneString::from_phoneme_slice(phonemes).phones;
 
     // Find all nucleus positions.
     let nucleus_indices: Vec<usize> = phones
