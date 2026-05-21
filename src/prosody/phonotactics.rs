@@ -827,11 +827,6 @@ mod tests {
     #[test]
     fn known_coda_clusters_are_legal() {
         let p = ga();
-        for triple in [
-            ["n", "d", "x"],   // placeholder, won't use 3rd
-        ] {
-            let _ = triple;
-        }
         let nd = phones(&["n", "d"]);
         let ngk = phones(&["ŋ", "k"]);
         let ngths = phones(&["ŋ", "θ", "s"]);

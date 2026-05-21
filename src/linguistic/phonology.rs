@@ -319,8 +319,8 @@ impl PhonemeDefinition {
 /// The phoneme inventory and phone comparison policy for a specific linguistic
 /// variety.
 ///
-/// This is the phonological backbone consumed by [`EnglishPhonotactics`] and
-/// the syllabifier.  It is *not* the same as
+/// This is the phonological backbone consumed by
+/// [`crate::prosody::phonotactics::EnglishPhonotactics`] and the syllabifier.  It is *not* the same as
 /// [`crate::linguistic::variety::LinguisticVariety`], which handles runtime
 /// configuration; `PhonemicInventory` is purely about phonological facts.
 ///

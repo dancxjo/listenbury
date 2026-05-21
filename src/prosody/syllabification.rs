@@ -253,16 +253,14 @@ fn split_mop<P: PhonotacticProfile>(
         let verdict = profile.onset_verdict(candidate_onset);
 
         if verdict.is_legal {
-            if split > 0 || candidate_onset.len() < cluster.len() {
+            if split > 0 {
                 diagnostics.push(verdict.as_diagnostic());
-                if split > 0 {
-                    // We had to trim — record the rejected full cluster too.
-                    let rejected_ipa: String = cluster.iter().map(|p| p.ipa.as_str()).collect();
-                    diagnostics.push(SyllableDiagnostic::new(
-                        DiagnosticKind::RejectedOnset,
-                        format!("/{rejected_ipa}/ trimmed to find legal onset"),
-                    ));
-                }
+                // Record the originally-rejected full cluster.
+                let rejected_ipa: String = cluster.iter().map(|p| p.ipa.as_str()).collect();
+                diagnostics.push(SyllableDiagnostic::new(
+                    DiagnosticKind::RejectedOnset,
+                    format!("/{rejected_ipa}/ trimmed to find legal onset"),
+                ));
             } else {
                 // Full cluster was immediately legal — only add diagnostic if
                 // it's non-trivial (multi-phone) so noise is kept low.
