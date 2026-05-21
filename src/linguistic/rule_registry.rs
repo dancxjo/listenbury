@@ -137,6 +137,8 @@ impl RuleRegistry {
             "eo/base_phonotactics".into(),
             PhonotacticData {
                 illegal_single_onsets: vec![],
+                // Intentionally tiny proof-of-shape sample for this ticket; not
+                // a full Esperanto phonotactic model.
                 legal_onset_clusters: vec![phone_string(&["p", "l"]), phone_string(&["p", "r"])],
                 legal_coda_clusters: vec![],
             },
@@ -544,6 +546,8 @@ fn phone_string(symbols: &[&str]) -> PhoneString {
 
 fn esperanto_phonemes() -> Vec<PhonemeDefinition> {
     // (phoneme_symbol, ipa, is_vowel)
+    // Intentionally minimal sample inventory proving non-English registry
+    // shape; this is not a complete Esperanto phoneme list.
     let rows: &[(&str, &str, bool)] = &[
         ("A", "a", true),
         ("E", "e", true),
