@@ -903,9 +903,10 @@ async function startBrowserVideoCapture() {
     renderShell();
   } catch (error) {
     cleanupBrowserVideoTransport(video, stream);
-    if (startGeneration === browserVideoState.startGeneration) {
-      inputUiState.browserVideoStarting = false;
+    if (startGeneration !== browserVideoState.startGeneration) {
+      return;
     }
+    inputUiState.browserVideoStarting = false;
     inputUiState.browserError = conciseErrorMessage(error);
     renderShell();
   }
