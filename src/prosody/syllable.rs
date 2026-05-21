@@ -97,7 +97,7 @@ pub struct SourceSpan {
 /// # Example
 ///
 /// ```
-/// use listenbury::prosody::syllable::Syllable;
+/// use listenbury::prosody::syllable::{SourceSpan, Syllable};
 /// use listenbury::linguistic::phonology::{Phone, PhoneString, Stress};
 ///
 /// // Syllable representing /ˈɛk/ in "extra"
@@ -105,7 +105,7 @@ pub struct SourceSpan {
 ///     onset:   PhoneString::empty(),
 ///     nucleus: PhoneString { phones: vec![Phone::new_ipa("ɛ")] },
 ///     coda:    PhoneString { phones: vec![Phone::new_ipa("k")] },
-///     source_span: listenbury::prosody::syllable::SourceSpan { start: 0, end: 2 },
+///     source_span: SourceSpan { start: 0, end: 2 },
 ///     stress: Some(Stress::Primary),
 ///     variety: "General American English".into(),
 ///     diagnostics: vec![],
@@ -154,7 +154,7 @@ impl Syllable {
     /// # Example
     ///
     /// ```
-    /// use listenbury::prosody::syllable::Syllable;
+    /// use listenbury::prosody::syllable::{SourceSpan, Syllable};
     /// use listenbury::linguistic::phonology::{Phone, PhoneString};
     ///
     /// let syl = Syllable {
@@ -163,7 +163,7 @@ impl Syllable {
     ///     ]},
     ///     nucleus: PhoneString { phones: vec![Phone::new_ipa("ʌ")] },
     ///     coda:    PhoneString::empty(),
-    ///     source_span: listenbury::prosody::syllable::SourceSpan { start: 2, end: 6 },
+    ///     source_span: SourceSpan { start: 2, end: 6 },
     ///     stress: None,
     ///     variety: "General American English".into(),
     ///     diagnostics: vec![],
