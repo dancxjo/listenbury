@@ -781,14 +781,16 @@ mod tests {
         assert_eq!(plan.controls.boundary_overrides.len(), 2);
         assert_eq!(plan.controls.pause_overrides.len(), 1);
         assert!(!plan.controls.phoneme_duration_overrides.is_empty());
-        assert!(plan
-            .prosody_ops
-            .iter()
-            .any(|op| matches!(op, ProsodyOp::SetAccent { .. })));
-        assert!(plan
-            .prosody_ops
-            .iter()
-            .any(|op| matches!(op, ProsodyOp::SetPitchShape { .. })));
+        assert!(
+            plan.prosody_ops
+                .iter()
+                .any(|op| matches!(op, ProsodyOp::SetAccent { .. }))
+        );
+        assert!(
+            plan.prosody_ops
+                .iter()
+                .any(|op| matches!(op, ProsodyOp::SetPitchShape { .. }))
+        );
         assert!(!plan.advisory_controls.is_empty());
     }
 
@@ -885,9 +887,11 @@ mod tests {
             comparison.matched_accents[0].control_status,
             ProsodyControlStatus::AdvisoryOnly
         );
-        assert!(comparison
-            .unrealized_controls
-            .iter()
-            .any(|entry| entry.contains("phoneme_duration_override[0]")));
+        assert!(
+            comparison
+                .unrealized_controls
+                .iter()
+                .any(|entry| entry.contains("phoneme_duration_override[0]"))
+        );
     }
 }

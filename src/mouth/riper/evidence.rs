@@ -398,9 +398,7 @@ pub fn claim_from_environment_match(
         ClaimValue::PhonemeRealization(result.clone()),
         AnalysisSourceKind::EnvironmentPattern,
         0.85,
-        format!(
-            "environment_pattern.{rule_name}: target /{target}/ realizes as [{result}]"
-        ),
+        format!("environment_pattern.{rule_name}: target /{target}/ realizes as [{result}]"),
     )
 }
 
@@ -612,8 +610,8 @@ mod tests {
 
         let fresh = contrastive_to_claim(Some(11));
 
-        let resolved = resolve_claims(&[stale, fresh.clone()], |c| c.value.clone())
-            .expect("should resolve");
+        let resolved =
+            resolve_claims(&[stale, fresh.clone()], |c| c.value.clone()).expect("should resolve");
 
         assert_eq!(resolved.selected_claim, fresh.id);
         assert!(
@@ -666,10 +664,7 @@ mod tests {
         let claim = claim_from_environment_match(&env_match, 1, 2, "alveolar_nasal_before_velar");
 
         assert_eq!(claim.kind, ClaimKind::PhonemeRealization);
-        assert_eq!(
-            claim.value,
-            ClaimValue::PhonemeRealization("ŋ".to_string())
-        );
+        assert_eq!(claim.value, ClaimValue::PhonemeRealization("ŋ".to_string()));
         assert_eq!(claim.source, AnalysisSourceKind::EnvironmentPattern);
         assert_eq!(
             claim.target,

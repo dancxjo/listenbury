@@ -5,6 +5,8 @@ use crate::cli::model_paths::resolve_piper_voice;
 use crate::cli::model_paths::resolve_whisper_model;
 use crate::cli::{EchoCommand, RiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::WhisperSpeechRecognizer;
 use listenbury::audio::frame::AudioFrame;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::audio::read_wav_as_whisper_frames;
@@ -16,12 +18,10 @@ use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
-use listenbury::mouth::riper::{
-    EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan,
-};
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::riper::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
@@ -30,8 +30,6 @@ use listenbury::mouth::riper::{
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
-use listenbury::WhisperSpeechRecognizer;
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "tts-riper")]
 use std::io::Write;
@@ -874,7 +872,8 @@ fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     let channel_count = u64::from(frame.channels);
     let sample_count = frame.samples.len() as u64;
     // (samples / channels / sample_rate) * 1000, reordered to preserve integer precision.
-    sample_count.saturating_mul(1_000) / channel_count.saturating_mul(u64::from(frame.sample_rate_hz))
+    sample_count.saturating_mul(1_000)
+        / channel_count.saturating_mul(u64::from(frame.sample_rate_hz))
 }
 
 pub(crate) fn piper_config_for_voice(

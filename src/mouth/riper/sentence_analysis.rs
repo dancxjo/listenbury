@@ -4,7 +4,7 @@ use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
 use crate::mouth::riper::evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
 };
-use crate::mouth::riper::text::{detect_vocative_spans, NormalizedText, NormalizedToken};
+use crate::mouth::riper::text::{NormalizedText, NormalizedToken, detect_vocative_spans};
 
 pub type WordIndex = usize;
 
@@ -1178,24 +1178,30 @@ mod tests {
             go,
             SyntacticLinkKind::InfinitivalMarker
         ));
-        assert!(parse
-            .claims
-            .iter()
-            .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
-                && claim.target == AnalysisTarget::WordIndex(to)));
-        assert!(parse
-            .claims
-            .iter()
-            .any(|claim| claim.kind == ClaimKind::WeakFunctionCandidate
-                && claim.target == AnalysisTarget::WordIndex(to)));
-        assert!(analysis
-            .environment_patterns()
-            .iter()
-            .any(|pattern| pattern
-                .predicates
-                .contains(&ContextPredicate::SyntacticLink(
-                    SyntacticLinkKind::InfinitivalMarker
-                ))));
+        assert!(
+            parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::InfinitivalMarker
+                    && claim.target == AnalysisTarget::WordIndex(to))
+        );
+        assert!(
+            parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::WeakFunctionCandidate
+                    && claim.target == AnalysisTarget::WordIndex(to))
+        );
+        assert!(
+            analysis
+                .environment_patterns()
+                .iter()
+                .any(|pattern| pattern
+                    .predicates
+                    .contains(&ContextPredicate::SyntacticLink(
+                        SyntacticLinkKind::InfinitivalMarker
+                    )))
+        );
     }
 
     #[test]
@@ -1228,11 +1234,13 @@ mod tests {
         let you = word_index(&analysis, "you");
         let dave = word_index(&analysis, "dave");
         assert!(has_link(parse, you, dave, SyntacticLinkKind::Vocative));
-        assert!(parse
-            .claims
-            .iter()
-            .any(|claim| claim.kind == ClaimKind::VocativeBoundary
-                && claim.target == AnalysisTarget::WordIndex(dave)));
+        assert!(
+            parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::VocativeBoundary
+                    && claim.target == AnalysisTarget::WordIndex(dave))
+        );
         assert!(parse.claims.iter().any(|claim| {
             claim.kind == ClaimKind::ProsodicRole
                 && claim.target == AnalysisTarget::WordIndex(dave)
@@ -1264,10 +1272,12 @@ mod tests {
             exploded,
             SyntacticLinkKind::Parenthetical
         ));
-        assert!(parse
-            .claims
-            .iter()
-            .any(|claim| claim.kind == ClaimKind::ParentheticalBoundary));
+        assert!(
+            parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::ParentheticalBoundary)
+        );
 
         let apposition = analyze("My brother, who lives in Tacoma, arrived.");
         let apposition_parse = apposition.link_parses.first().expect("link parse");
@@ -1279,10 +1289,12 @@ mod tests {
             who,
             SyntacticLinkKind::Apposition
         ));
-        assert!(apposition_parse
-            .claims
-            .iter()
-            .any(|claim| claim.kind == ClaimKind::AppositionBoundary));
+        assert!(
+            apposition_parse
+                .claims
+                .iter()
+                .any(|claim| claim.kind == ClaimKind::AppositionBoundary)
+        );
     }
 
     #[test]
@@ -1338,14 +1350,16 @@ mod tests {
             door,
             SyntacticLinkKind::Determiner
         ));
-        assert!(the_door
-            .environment_patterns()
-            .iter()
-            .any(|pattern| pattern
-                .predicates
-                .contains(&ContextPredicate::SyntacticLink(
-                    SyntacticLinkKind::Determiner
-                ))));
+        assert!(
+            the_door
+                .environment_patterns()
+                .iter()
+                .any(|pattern| pattern
+                    .predicates
+                    .contains(&ContextPredicate::SyntacticLink(
+                        SyntacticLinkKind::Determiner
+                    )))
+        );
     }
 
     #[test]
@@ -1367,10 +1381,11 @@ mod tests {
         let vocative = analyze("Listen, professor, this matters.");
         let parse = vocative.link_parses.first().expect("link parse");
         let professor = word_index(&vocative, "professor");
-        assert!(parse
-            .links
-            .iter()
-            .any(|link| { link.right == professor && link.kind == SyntacticLinkKind::Vocative }));
+        assert!(
+            parse.links.iter().any(|link| {
+                link.right == professor && link.kind == SyntacticLinkKind::Vocative
+            })
+        );
         assert!(parse.claims.iter().any(|claim| {
             claim.kind == ClaimKind::ProsodicRole
                 && claim.target == AnalysisTarget::WordIndex(professor)

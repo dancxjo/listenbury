@@ -12,6 +12,7 @@ use crate::mouth::riper::prosody_audit::{
 };
 use crate::mouth::riper::sentence_analysis::{
     HeuristicSentenceAnalyzer, ProsodicRole, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+    SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -24,6 +25,7 @@ const WORD_SEPARATOR_SYMBOL: &str = " ";
 const PHRASE_BREAK_SYMBOL: &str = "|";
 const BREATH_BREAK_WORD_INTERVAL: usize = 9;
 const BREATH_BREAK_MIN_WORDS_AFTER: usize = 4;
+const BREATH_BREAK_SEARCH_RADIUS: usize = 3;
 
 pub trait GraphemeToPhoneme {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence>;
@@ -219,6 +221,7 @@ impl SimpleEnglishG2p {
     pub fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError> {
         let normalized = self.normalizer.normalize(text)?;
         let sentence_analysis = HeuristicSentenceAnalyzer.analyze(text, &normalized);
+        let breath_break_after_words = syntax_guided_breath_breaks(&normalized, &sentence_analysis);
         let mut symbols = Vec::new();
         let mut word_targets = Vec::new();
         let mut phoneme_to_word = Vec::new();
@@ -302,6 +305,7 @@ impl SimpleEnglishG2p {
                             emitted_pronounceable,
                             pronounceable_count,
                             normalized.tokens.get(token_index + 1),
+                            &breath_break_after_words,
                         ));
                         phoneme_to_word.push(None);
                     }
@@ -326,6 +330,7 @@ impl SimpleEnglishG2p {
                             emitted_pronounceable,
                             pronounceable_count,
                             normalized.tokens.get(token_index + 1),
+                            &breath_break_after_words,
                         ));
                         phoneme_to_word.push(None);
                     }
@@ -644,8 +649,14 @@ fn inter_word_boundary_symbol(
     emitted_pronounceable: usize,
     pronounceable_count: usize,
     next_token: Option<&NormalizedToken>,
+    breath_break_after_words: &std::collections::BTreeSet<usize>,
 ) -> String {
-    if should_insert_breath_break(emitted_pronounceable, pronounceable_count, next_token) {
+    if should_insert_breath_break(
+        emitted_pronounceable,
+        pronounceable_count,
+        next_token,
+        breath_break_after_words,
+    ) {
         PHRASE_BREAK_SYMBOL
     } else {
         WORD_SEPARATOR_SYMBOL
@@ -657,11 +668,208 @@ fn should_insert_breath_break(
     emitted_pronounceable: usize,
     pronounceable_count: usize,
     next_token: Option<&NormalizedToken>,
+    breath_break_after_words: &std::collections::BTreeSet<usize>,
 ) -> bool {
-    emitted_pronounceable >= BREATH_BREAK_WORD_INTERVAL
-        && emitted_pronounceable % BREATH_BREAK_WORD_INTERVAL == 0
-        && pronounceable_count.saturating_sub(emitted_pronounceable) >= BREATH_BREAK_MIN_WORDS_AFTER
+    let Some(after_word_index) = emitted_pronounceable.checked_sub(1) else {
+        return false;
+    };
+    emitted_pronounceable < pronounceable_count
         && !matches!(next_token, Some(NormalizedToken::PhraseBreak))
+        && breath_break_after_words.contains(&after_word_index)
+}
+
+fn syntax_guided_breath_breaks(
+    normalized: &crate::mouth::riper::text::NormalizedText,
+    sentence_analysis: &SentenceAnalysis,
+) -> std::collections::BTreeSet<usize> {
+    let word_count = sentence_analysis
+        .tokens
+        .iter()
+        .filter_map(|token| token.word_index)
+        .max()
+        .map_or(0, |index| index + 1);
+    let explicit_phrase_breaks = explicit_phrase_break_after_words(normalized);
+    let mut breaks = std::collections::BTreeSet::new();
+    let mut segment_start = 0usize;
+
+    for phrase_break_after in explicit_phrase_breaks.iter().copied() {
+        if phrase_break_after >= segment_start {
+            collect_segment_breath_breaks(
+                segment_start,
+                phrase_break_after,
+                true,
+                sentence_analysis,
+                &explicit_phrase_breaks,
+                &mut breaks,
+            );
+        }
+        segment_start = phrase_break_after.saturating_add(1);
+    }
+
+    if segment_start < word_count {
+        collect_segment_breath_breaks(
+            segment_start,
+            word_count - 1,
+            false,
+            sentence_analysis,
+            &explicit_phrase_breaks,
+            &mut breaks,
+        );
+    }
+
+    breaks
+}
+
+fn explicit_phrase_break_after_words(
+    normalized: &crate::mouth::riper::text::NormalizedText,
+) -> std::collections::BTreeSet<usize> {
+    let mut token_to_word_index = std::collections::HashMap::new();
+    let mut word_index = 0usize;
+    for (token_index, token) in normalized.tokens.iter().enumerate() {
+        if matches!(
+            token,
+            NormalizedToken::Word(_) | NormalizedToken::Initial(_)
+        ) {
+            token_to_word_index.insert(token_index, word_index);
+            word_index += 1;
+        }
+    }
+
+    normalized
+        .tokens
+        .iter()
+        .enumerate()
+        .filter_map(|(token_index, token)| {
+            if !matches!(token, NormalizedToken::PhraseBreak) {
+                return None;
+            }
+            (0..token_index)
+                .rev()
+                .find_map(|idx| token_to_word_index.get(&idx).copied())
+        })
+        .collect()
+}
+
+fn collect_segment_breath_breaks(
+    segment_start: usize,
+    segment_end: usize,
+    ended_by_phrase_break: bool,
+    sentence_analysis: &SentenceAnalysis,
+    explicit_phrase_breaks: &std::collections::BTreeSet<usize>,
+    breaks: &mut std::collections::BTreeSet<usize>,
+) {
+    if segment_end <= segment_start {
+        return;
+    }
+
+    let mut target = segment_start + BREATH_BREAK_WORD_INTERVAL - 1;
+    while target < segment_end {
+        let words_after = segment_end.saturating_sub(target);
+        if words_after < BREATH_BREAK_MIN_WORDS_AFTER {
+            break;
+        }
+        if ended_by_phrase_break && words_after <= BREATH_BREAK_MIN_WORDS_AFTER {
+            break;
+        }
+        if let Some(boundary) = best_syntax_guided_breath_boundary(
+            target,
+            segment_start,
+            segment_end,
+            sentence_analysis,
+            explicit_phrase_breaks,
+        ) {
+            breaks.insert(boundary);
+            target = boundary + BREATH_BREAK_WORD_INTERVAL;
+        } else {
+            target += BREATH_BREAK_WORD_INTERVAL;
+        }
+    }
+}
+
+fn best_syntax_guided_breath_boundary(
+    target: usize,
+    segment_start: usize,
+    segment_end: usize,
+    sentence_analysis: &SentenceAnalysis,
+    explicit_phrase_breaks: &std::collections::BTreeSet<usize>,
+) -> Option<usize> {
+    let min_boundary = target
+        .saturating_sub(BREATH_BREAK_SEARCH_RADIUS)
+        .max(segment_start);
+    let max_boundary = (target + BREATH_BREAK_SEARCH_RADIUS).min(segment_end - 1);
+    (min_boundary..=max_boundary)
+        .filter(|boundary| !explicit_phrase_breaks.contains(boundary))
+        .filter(|boundary| !crosses_tight_syntactic_link(*boundary, sentence_analysis))
+        .min_by_key(|boundary| {
+            let distance = boundary.abs_diff(target);
+            (
+                distance,
+                breath_boundary_penalty(*boundary, sentence_analysis),
+                usize::from(*boundary < target),
+            )
+        })
+}
+
+fn crosses_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
+    sentence_analysis.link_parses.first().is_some_and(|parse| {
+        parse.links.iter().any(|link| {
+            let (left, right) = if link.left <= link.right {
+                (link.left, link.right)
+            } else {
+                (link.right, link.left)
+            };
+            left == boundary
+                && right == boundary + 1
+                && matches!(
+                    link.kind,
+                    SyntacticLinkKind::InfinitivalMarker
+                        | SyntacticLinkKind::Determiner
+                        | SyntacticLinkKind::Auxiliary
+                        | SyntacticLinkKind::Modifier
+                        | SyntacticLinkKind::NounCompound
+                )
+        })
+    })
+}
+
+fn breath_boundary_penalty(boundary: usize, sentence_analysis: &SentenceAnalysis) -> usize {
+    let current = word_text(sentence_analysis, boundary);
+    let next = word_text(sentence_analysis, boundary + 1);
+    let mut penalty = 10usize;
+
+    if current.is_some_and(is_default_function_word) {
+        penalty += 12;
+    }
+    if next.is_some_and(is_default_function_word) {
+        penalty += 4;
+    }
+    if ends_tight_syntactic_link(boundary, sentence_analysis) {
+        penalty = penalty.saturating_sub(8);
+    }
+
+    penalty
+}
+
+fn ends_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
+    sentence_analysis.link_parses.first().is_some_and(|parse| {
+        parse.links.iter().any(|link| {
+            link.right == boundary
+                && matches!(
+                    link.kind,
+                    SyntacticLinkKind::Determiner
+                        | SyntacticLinkKind::Modifier
+                        | SyntacticLinkKind::NounCompound
+                )
+        })
+    })
+}
+
+fn word_text(sentence_analysis: &SentenceAnalysis, word_index: usize) -> Option<&str> {
+    sentence_analysis
+        .tokens
+        .iter()
+        .find(|token| token.word_index == Some(word_index))
+        .map(|token| token.text.as_str())
 }
 
 fn is_nucleus_symbol(symbol: &str) -> bool {
@@ -922,9 +1130,9 @@ mod tests {
             .find(|target| target.normalized_text == "needs")
             .expect("needs target");
 
-        assert_eq!(
+        assert_ne!(
             unit.phonemes.phonemes[needs.phoneme_range.end].0, "|",
-            "long unpunctuated runs should take a breath after the ninth word"
+            "breath placement should move off a noun-compound boundary when the grammar links it"
         );
         assert!(
             symbols(&unit.phonemes)
@@ -977,6 +1185,24 @@ mod tests {
                 .iter()
                 .any(|stress| stress.stress == LexicalStressLevel::Primary),
             "expected at least one primary stress target in unpunctuated sentence"
+        );
+        let vowel = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "vowel")
+            .expect("vowel target");
+        let nuclei = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "nuclei")
+            .expect("nuclei target");
+        assert_eq!(
+            unit.phonemes.phonemes[vowel.phoneme_range.end].0, " ",
+            "noun compounds should not receive an automatic breath break"
+        );
+        assert_eq!(
+            unit.phonemes.phonemes[nuclei.phoneme_range.end].0, " ",
+            "the upcoming comma should carry the phrase break instead of an extra periodic breath"
         );
     }
 
