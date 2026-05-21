@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::linguistic::cmudict::{self, CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::orthography::OrthographicWord;
-use crate::linguistic::phonology::{
-    RealizationConfig, RealizationMethod, phoneme_from_arpabet, realize_sequence,
-};
 use crate::linguistic::pronounce::OrthographyToPhonemes;
 use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
 use crate::linguistic::variety::{LinguisticVariety, Phonology};
@@ -728,29 +725,10 @@ fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
 }
 
 fn cmu_phones_to_symbols(phones: &[CmuPhoneme]) -> WordPronunciation {
-    let phonology_sequence = phones
-        .iter()
-        .map(|phone| phoneme_from_arpabet(&cmu_phone_source_symbol(phone), "cmudict"))
-        .collect::<Vec<_>>();
-    let realized = realize_sequence(
-        &phonology_sequence,
-        &RealizationConfig {
-            enable_allophone_rules: true,
-            ..RealizationConfig::default()
-        },
-    );
-
     let symbols = phones
         .iter()
-        .zip(realized.iter())
-        .map(|(source, realized)| {
-            if matches!(
-                realized.realization.method,
-                RealizationMethod::AllophoneRule
-            ) && realized.realization.ipa == "ɾ"
-            {
-                "ɾ".to_string()
-            } else if source.base == "AH" {
+        .map(|source| {
+            if source.base == "AH" {
                 cmu_phone_source_symbol(source)
             } else {
                 source.base.clone()
@@ -907,6 +885,7 @@ fn arpabet_to_ipa(symbol: &str) -> String {
         "CH" => "tʃ",
         "D" => "d",
         "DH" => "ð",
+        "DX" => "ɾ",
         "EH" => "ɛ",
         "ER" => "ɚ",
         "EY" => "eɪ",
@@ -1004,6 +983,13 @@ mod tests {
             .expect("phonology")
             .display(DisplayNotation::Ipa);
         assert!(ipa.contains("ˈ"), "expected stress mark in IPA: {ipa}");
+        assert_eq!(
+            result.pronunciation.symbols,
+            vec![
+                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "T", "IH0", "D"
+            ],
+            "morphophonology should keep the phonemic /t/ before G2P surface realization"
+        );
     }
 
     #[test]

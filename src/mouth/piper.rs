@@ -714,7 +714,7 @@ mod tests {
 
     #[cfg(feature = "tts-riper")]
     #[test]
-    fn riper_text_id_conversion_preserves_already_flap_for_espeak_voice_maps() {
+    fn riper_text_id_conversion_preserves_already_d_for_espeak_voice_maps() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
             {
@@ -728,7 +728,7 @@ mod tests {
                 "ɔ": [12],
                 "ɛ": [13],
                 "ɹ": [14],
-                "ɾ": [15]
+                "d": [15]
               }
             }
             "#,
@@ -741,7 +741,7 @@ mod tests {
 
         let ids = phonemes
             .to_riper_text_ids(&config, Path::new("/tmp/voice.onnx"))
-            .expect("already should keep the tap in the compatible ID path");
+            .expect("already should keep /d/ in the compatible ID path");
 
         assert_eq!(
             ids,

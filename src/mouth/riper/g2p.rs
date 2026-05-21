@@ -4,6 +4,10 @@ use thiserror::Error;
 
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
+use crate::linguistic::phonology::{
+    PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
+    realize_sequence_as_schema,
+};
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
@@ -278,8 +282,10 @@ impl SimpleEnglishG2p {
                     } else {
                         word_realization.stress_by_phone.clone()
                     };
+                    let surface_symbols =
+                        realize_emitted_symbols(&emitted_symbols, &emitted_stress_by_phone);
                     let start = symbols.len();
-                    symbols.extend(emitted_symbols.iter().cloned());
+                    symbols.extend(surface_symbols.iter().cloned());
                     let end = symbols.len();
                     phoneme_to_word.extend(std::iter::repeat(Some(word_index)).take(end - start));
                     word_targets.push(WordProsodyTarget {
@@ -917,6 +923,44 @@ fn stress_from_phonological(stress: Option<PhonologicalStress>) -> Option<Lexica
     }
 }
 
+fn realize_emitted_symbols(
+    symbols: &[String],
+    stress_by_phone: &[Option<LexicalStressLevel>],
+) -> Vec<String> {
+    let phonemes = symbols
+        .iter()
+        .enumerate()
+        .map(|(index, symbol)| {
+            let mut phoneme = phoneme_from_arpabet(symbol, "riper_g2p");
+            if phoneme.stress.is_none() {
+                phoneme.stress = stress_by_phone
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map(phonology_stress_from_lexical);
+            }
+            phoneme
+        })
+        .collect::<Vec<_>>();
+
+    realize_sequence_as_schema(
+        &phonemes,
+        &RealizationConfig {
+            enable_allophone_rules: true,
+            ..RealizationConfig::default()
+        },
+        PhonemeSchema::ArpabetSurface,
+    )
+}
+
+fn phonology_stress_from_lexical(stress: LexicalStressLevel) -> PhonologyStress {
+    match stress {
+        LexicalStressLevel::Primary => PhonologyStress::Primary,
+        LexicalStressLevel::Secondary => PhonologyStress::Secondary,
+        LexicalStressLevel::Unstressed => PhonologyStress::Unstressed,
+    }
+}
+
 fn map_lexical_stress(stress: LexicalStressLevel) -> Stress {
     match stress {
         LexicalStressLevel::Primary => Stress::Primary,
@@ -1171,9 +1215,9 @@ mod tests {
         assert_eq!(
             symbols_for_word(&unit, "unpunctuated"),
             vec![
-                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "T", "IH0", "D"
+                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"
             ],
-            "expected unpunctuated to include un- + punctuate + -ed realization"
+            "expected unpunctuated to flap /t/ before the unstressed -ed vowel"
         );
         assert_eq!(
             symbols_for_word(&unit, "for"),
@@ -1220,16 +1264,16 @@ mod tests {
     fn applies_intervocalic_flap_for_riper() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");
-        assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "ɾ", "AH0", "L"]);
+        assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "DX", "AH0", "L"]);
     }
 
     #[test]
-    fn applies_intervocalic_d_flap_for_already() {
+    fn does_not_apply_t_flap_rule_to_d_in_already() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("already").expect("phonemize");
         assert_eq!(
             symbols(&unit.phonemes),
-            vec!["AO", "L", "R", "EH", "ɾ", "IY"]
+            vec!["AO", "L", "R", "EH", "D", "IY"]
         );
     }
 

@@ -28,7 +28,7 @@ impl Environment {
 }
 
 /// A single grapheme-to-phoneme mapping rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GraphemeRule {
     /// The orthographic grapheme (one or more characters) to match.
     pub grapheme: String,

@@ -140,6 +140,7 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         (_, "CH") => &["t", "ʃ"],
         (_, "D") => &["d"],
         (_, "DH") => &["ð"],
+        (_, "DX") => &["ɾ"],
         (_, "EH") => &["ɛ"],
         (_, "ER") => &["ɚ"],
         (_, "EY") => &["e", "ɪ"],

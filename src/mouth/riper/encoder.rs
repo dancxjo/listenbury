@@ -1,4 +1,5 @@
 use crate::linguistic::phoneme::{PhonemeText, PhonemeTextUnit};
+use crate::linguistic::phonology::PhonemeSchema;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 
 const WORD_SEPARATOR: &str = " ";
@@ -34,7 +35,8 @@ impl PiperEncoder {
                         word_phonemes
                             .phonemes
                             .iter()
-                            .map(|p| PiperPhoneme(p.symbol.clone())),
+                            .flat_map(|p| p.symbols_in_schema(PhonemeSchema::Arpabet))
+                            .map(PiperPhoneme),
                     );
                 }
                 PhonemeTextUnit::WordBoundary => {

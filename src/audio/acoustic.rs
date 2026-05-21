@@ -1091,6 +1091,7 @@ fn arpabet_to_ipa(token: &str) -> String {
         "CH" => "tʃ",
         "D" => "d",
         "DH" => "ð",
+        "DX" => "ɾ",
         "EH" => "ɛ",
         "ER" => "ɝ",
         "EY" => "eɪ",

@@ -1288,7 +1288,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "tts-riper")]
-    fn espeak_compatible_ids_preserve_riper_flap_symbol() {
+    fn espeak_compatible_ids_map_arpabet_flap_symbol() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
             {
@@ -1308,7 +1308,7 @@ mod tests {
         )
         .expect("voice config should parse");
         let sequence = PiperPhonemeSequence {
-            phonemes: ["B", "AA", "ɾ", "AH0", "L"]
+            phonemes: ["B", "AA", "DX", "AH0", "L"]
                 .into_iter()
                 .map(|symbol| PiperPhoneme(symbol.to_string()))
                 .collect(),

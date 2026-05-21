@@ -1,19 +1,8 @@
 use crate::linguistic::orthography::OrthographicWord;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Phoneme {
-    pub symbol: String,
-}
+pub use crate::linguistic::phonology::Phoneme;
 
-impl Phoneme {
-    pub fn new(symbol: impl Into<String>) -> Self {
-        Self {
-            symbol: symbol.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PhonemeSeq {
     pub phonemes: Vec<Phoneme>,
 }
@@ -24,7 +13,7 @@ impl PhonemeSeq {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PhonemeText {
     pub units: Vec<PhonemeTextUnit>,
 }
@@ -35,7 +24,7 @@ impl PhonemeText {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PhonemeTextUnit {
     Word {
         orthography: OrthographicWord,

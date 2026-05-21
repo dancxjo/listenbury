@@ -29,6 +29,15 @@ pub struct PhoneString {
     pub phones: Vec<Phone>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhonemeSchema {
+    Arpabet,
+    Cmudict,
+    ArpabetSurface,
+    Ipa,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WordPosition {
@@ -416,6 +425,38 @@ pub struct Phoneme {
     pub realization: Realization,
 }
 
+impl Phoneme {
+    pub fn new(symbol: impl Into<String>) -> Self {
+        let symbol = symbol.into();
+        phoneme_from_arpabet(&symbol, "manual")
+    }
+
+    pub fn symbols_in_schema(&self, schema: PhonemeSchema) -> Vec<String> {
+        match schema {
+            PhonemeSchema::Arpabet => vec![self.source_symbol.clone()],
+            PhonemeSchema::Cmudict => vec![self.source_symbol.clone()],
+            PhonemeSchema::ArpabetSurface => {
+                if self.is_realized_american_english_tap() {
+                    vec!["DX".to_string()]
+                } else {
+                    vec![self.source_symbol.clone()]
+                }
+            }
+            PhonemeSchema::Ipa => vec![self.realization.ipa.clone()],
+        }
+    }
+
+    pub fn symbol_in_schema(&self, schema: PhonemeSchema) -> String {
+        self.symbols_in_schema(schema).join(" ")
+    }
+
+    fn is_realized_american_english_tap(&self) -> bool {
+        matches!(self.realization.method, RealizationMethod::AllophoneRule)
+            && self.symbol == "T"
+            && self.realization.ipa == "ɾ"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RealizationConfig {
     pub enable_allophone_rules: bool,
@@ -507,6 +548,17 @@ pub fn realize_sequence(sequence: &[Phoneme], config: &RealizationConfig) -> Vec
     realized
 }
 
+pub fn realize_sequence_as_schema(
+    sequence: &[Phoneme],
+    config: &RealizationConfig,
+    schema: PhonemeSchema,
+) -> Vec<String> {
+    realize_sequence(sequence, config)
+        .iter()
+        .flat_map(|phoneme| phoneme.symbols_in_schema(schema))
+        .collect()
+}
+
 #[derive(Debug, Clone)]
 struct DeclarativeAllophoneRule {
     id: String,
@@ -520,7 +572,7 @@ fn declarative_environment_rules(config: &RealizationConfig) -> Vec<DeclarativeA
             id: "american_english_intervocalic_flapping".to_string(),
             output_ipa: "ɾ".to_string(),
             pattern: EnvironmentPattern {
-                target: TargetPattern::PhonemeClass(PhonemeClass::AlveolarStop),
+                target: TargetPattern::Symbol("T".to_string()),
                 left: vec![
                     ContextPredicate::PhonemeClass(PhonemeClass::Vowel),
                     ContextPredicate::Stress(StressPattern::Stressed),
@@ -980,7 +1032,48 @@ mod tests {
     }
 
     #[test]
-    fn opt_in_flapping_rule_realizes_d_between_stressed_and_unstressed_vowels() {
+    fn central_phoneme_presents_realized_tap_by_requested_schema() {
+        let seq = vec![
+            phoneme_from_arpabet("EY2", "morphophonology"),
+            phoneme_from_arpabet("T", "morphophonology"),
+            phoneme_from_arpabet("IH0", "morphophonology"),
+        ];
+
+        let realized = realize_sequence(
+            &seq,
+            &RealizationConfig {
+                enable_allophone_rules: true,
+                ..RealizationConfig::default()
+            },
+        );
+
+        assert_eq!(realized[1].symbol, "T");
+        assert_eq!(realized[1].realization.ipa, "ɾ");
+        assert_eq!(
+            realized[1].realization.rule.as_deref(),
+            Some("american_english_intervocalic_flapping")
+        );
+        assert_eq!(realized[1].symbol_in_schema(PhonemeSchema::Arpabet), "T");
+        assert_eq!(
+            realized[1].symbol_in_schema(PhonemeSchema::ArpabetSurface),
+            "DX"
+        );
+        assert_eq!(realized[1].symbol_in_schema(PhonemeSchema::Ipa), "ɾ");
+        assert_eq!(
+            realize_sequence_as_schema(
+                &seq,
+                &RealizationConfig {
+                    enable_allophone_rules: true,
+                    ..RealizationConfig::default()
+                },
+                PhonemeSchema::ArpabetSurface,
+            ),
+            vec!["EY2", "DX", "IH0"]
+        );
+    }
+
+    #[test]
+    fn flapping_rule_does_not_apply_to_d() {
         let seq = vec![
             phoneme_from_arpabet("EH1", "cmudict"),
             phoneme_from_arpabet("D", "cmudict"),
@@ -994,15 +1087,8 @@ mod tests {
             },
         );
         assert_eq!(realized[1].symbol, "D");
-        assert_eq!(realized[1].realization.ipa, "ɾ");
-        assert_eq!(
-            realized[1].realization.method,
-            RealizationMethod::AllophoneRule
-        );
-        assert_eq!(
-            realized[1].realization.rule.as_deref(),
-            Some("american_english_intervocalic_flapping")
-        );
+        assert_eq!(realized[1].realization.ipa, "d");
+        assert_eq!(realized[1].realization.method, RealizationMethod::Default);
     }
 
     #[test]
