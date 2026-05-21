@@ -7,6 +7,7 @@ use super::sources::{
     AcousticEvidenceSource, PhoneticEvidenceSource, TranscriptStabilityEvidenceSource,
     VisualSpeechEvidenceSource,
 };
+use super::weights::{FusionProfile, FusionWeights};
 use super::{
     EvidenceTraceEntry, FusionInput, FusionResult, HypothesisLattice, SpeechEvidenceSource,
     fuse_hypotheses,
@@ -34,6 +35,8 @@ pub struct SpeechHypothesisFusion {
 pub struct SpeechHypothesisEngine {
     sources: Vec<Box<dyn SpeechEvidenceSource>>,
     stable_confidence_threshold: f32,
+    /// Weighting configuration used for all fusion calls.
+    weights: FusionWeights,
 }
 
 impl Default for SpeechHypothesisEngine {
@@ -43,15 +46,16 @@ impl Default for SpeechHypothesisEngine {
 }
 
 impl SpeechHypothesisEngine {
-    /// Create an empty engine with no evidence sources.
+    /// Create an empty engine with no evidence sources and default weights.
     pub fn new() -> Self {
         Self {
             sources: Vec::new(),
             stable_confidence_threshold: 0.75,
+            weights: FusionWeights::default(),
         }
     }
 
-    /// Create an engine with built-in evidence sources.
+    /// Create an engine with built-in evidence sources and default weights.
     pub fn with_default_sources() -> Self {
         let mut engine = Self::new();
         engine.add_source(AcousticEvidenceSource);
@@ -59,6 +63,30 @@ impl SpeechHypothesisEngine {
         engine.add_source(TranscriptStabilityEvidenceSource);
         engine.add_source(VisualSpeechEvidenceSource);
         engine
+    }
+
+    /// Create an engine with built-in evidence sources and the weights derived
+    /// from the given [`FusionProfile`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let engine = SpeechHypothesisEngine::with_profile(FusionProfile::Realtime);
+    /// ```
+    pub fn with_profile(profile: FusionProfile) -> Self {
+        let mut engine = Self::with_default_sources();
+        engine.weights = FusionWeights::from(profile);
+        engine
+    }
+
+    /// Replace the engine's weighting configuration.
+    pub fn set_weights(&mut self, weights: FusionWeights) {
+        self.weights = weights;
+    }
+
+    /// Return a reference to the current weighting configuration.
+    pub fn weights(&self) -> &FusionWeights {
+        &self.weights
     }
 
     /// Add a new composable evidence source.
@@ -95,14 +123,14 @@ impl SpeechHypothesisEngine {
             evidence_pairs.push((SpanHypothesisId(id.clone()), input.clone()));
         }
 
-        let fusion = fuse_hypotheses(lattice, &evidence_pairs)?;
+        let fusion = fuse_hypotheses(lattice, &evidence_pairs, &self.weights)?;
 
         let mut stable_span_ids = Vec::new();
         let mut revisable_span_ids = Vec::new();
         for hypothesis in lattice.active_hypotheses() {
             let conf = merged
                 .get(&hypothesis.id.0)
-                .map(FusionInput::weighted_confidence)
+                .map(|input| input.weighted_confidence_with(&self.weights))
                 .unwrap_or(hypothesis.confidence)
                 .clamp(0.0, 1.0);
             if conf >= self.stable_confidence_threshold {

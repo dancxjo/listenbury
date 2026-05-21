@@ -162,7 +162,7 @@ fn conflicting_boundary_hypotheses_are_distinguishable() {
         1.0,
     );
     assert_eq!(lattice.active_hypotheses().len(), 2);
-    let result = fuse_hypotheses(&lattice, &[]).unwrap();
+    let result = fuse_hypotheses(&lattice, &[], &FusionWeights::default()).unwrap();
     assert!(!result.conflicting_ids.is_empty());
 }
 
@@ -173,7 +173,7 @@ fn fusion_resolves_highest_confidence_candidate() {
     lattice.add(make_word_candidate("texting", 1000, 1300, 0.19));
     lattice.add(make_word_candidate("test in", 1000, 1300, 0.07));
 
-    let result = fuse_hypotheses(&lattice, &[]).unwrap();
+    let result = fuse_hypotheses(&lattice, &[], &FusionWeights::default()).unwrap();
     assert_eq!(result.resolved.label, "testing");
     assert!(result.confidence > 0.5);
 }
@@ -196,7 +196,7 @@ fn fusion_boosted_by_asr_and_energy_evidence_can_flip_winner() {
             ..Default::default()
         },
     )];
-    let result = fuse_hypotheses(&lattice, &evidence).unwrap();
+    let result = fuse_hypotheses(&lattice, &evidence, &FusionWeights::default()).unwrap();
     assert_eq!(result.resolved.label, "texting");
 }
 
@@ -216,7 +216,7 @@ fn fusion_classifies_conflicting_and_supporting_correctly() {
         1.0,
     );
 
-    let result = fuse_hypotheses(&lattice, &[]).unwrap();
+    let result = fuse_hypotheses(&lattice, &[], &FusionWeights::default()).unwrap();
     assert!(result.conflicting_ids.contains(&h2_id));
     assert!(!result.conflicting_summary.contains("no conflicting"));
 }
@@ -225,7 +225,7 @@ fn fusion_classifies_conflicting_and_supporting_correctly() {
 fn fusion_result_preserves_provenance_json() {
     let mut lattice = HypothesisLattice::new();
     lattice.add(make_word_candidate("testing", 1000, 1300, 0.72));
-    let result = fuse_hypotheses(&lattice, &[]).unwrap();
+    let result = fuse_hypotheses(&lattice, &[], &FusionWeights::default()).unwrap();
     assert_eq!(result.provenance["fusion"], "first_pass_weighted_average");
     assert!(result.provenance["candidate_count"].as_u64().unwrap() >= 1);
 }
@@ -233,7 +233,7 @@ fn fusion_result_preserves_provenance_json() {
 #[test]
 fn fusion_on_empty_lattice_returns_none() {
     let lattice = HypothesisLattice::new();
-    assert!(fuse_hypotheses(&lattice, &[]).is_none());
+    assert!(fuse_hypotheses(&lattice, &[], &FusionWeights::default()).is_none());
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn fusion_input_zero_signals_returns_zero_confidence() {
 fn fusion_result_serializes_to_json() {
     let mut lattice = HypothesisLattice::new();
     lattice.add(make_word_candidate("testing", 1000, 1300, 0.72));
-    let result = fuse_hypotheses(&lattice, &[]).unwrap();
+    let result = fuse_hypotheses(&lattice, &[], &FusionWeights::default()).unwrap();
     let json = serde_json::to_string(&result).expect("serialise");
     assert!(json.contains("resolved"));
     assert!(json.contains("confidence"));
@@ -403,4 +403,188 @@ fn lattice_serializes_and_deserializes_round_trip() {
     assert_eq!(restored.hypotheses.len(), 2);
     assert_eq!(restored.edges.len(), 1);
     assert_eq!(restored.edges[0].kind, HypothesisEdgeKind::Contradicts);
+}
+
+// ── FusionProfile / FusionWeights tests ──────────────────────────────────────
+
+/// Verify that the Default profile exactly reproduces the original heuristic
+/// weights that were previously embedded as numeric literals.
+#[test]
+fn fusion_profile_default_matches_original_weights() {
+    let w = FusionWeights::from(FusionProfile::Default);
+    assert_eq!(w.asr_confidence, 3.0);
+    assert_eq!(w.energy_alignment_quality, 1.5);
+    assert_eq!(w.phone_segmentation_agreement, 1.0);
+    assert_eq!(w.pronunciation_fit, 1.0);
+    assert_eq!(w.spectral_evidence, 0.75);
+    assert_eq!(w.prosody_consistency, 0.5);
+    assert_eq!(w.timing_coherence, 1.25);
+    assert_eq!(w.mechanical_recognizer_score, 1.0);
+    assert_eq!(w.visual_speech_evidence, 0.9);
+    assert_eq!(w.external_evidence_blend, 3.0);
+}
+
+/// FusionWeights::default() must produce the same values as FusionProfile::Default.
+#[test]
+fn fusion_weights_default_impl_matches_profile_default() {
+    assert_eq!(FusionWeights::default(), FusionWeights::from(FusionProfile::Default));
+}
+
+/// When a hypothesis has high ASR confidence but low acoustic signals and a
+/// competing hypothesis has the inverse, the Default profile (ASR weight 3.0)
+/// picks the ASR-favoured candidate while the AcousticHeavy profile (ASR
+/// weight 1.0, energy weight 3.0) picks the acoustic-favoured candidate.
+///
+/// This test proves that profile changes can alter the winning hypothesis.
+#[test]
+fn fusion_profile_acoustic_heavy_overrides_default_winner() {
+    // h_asr  : moderate base confidence, strong ASR signal, weak energy signal
+    // h_acoustic: moderate base confidence, weak ASR signal, strong energy signal
+    let h_asr = make_word_candidate("whisper-word", 1000, 1300, 0.5);
+    let h_acoustic = make_word_candidate("acoustic-word", 1000, 1300, 0.5);
+    let asr_id = h_asr.id.clone();
+    let acoustic_id = h_acoustic.id.clone();
+
+    let mut lattice = HypothesisLattice::new();
+    lattice.add(h_asr);
+    lattice.add(h_acoustic);
+
+    let evidence = vec![
+        (
+            asr_id,
+            FusionInput {
+                asr_confidence: Some(0.9),
+                energy_alignment_quality: Some(0.2),
+                ..Default::default()
+            },
+        ),
+        (
+            acoustic_id,
+            FusionInput {
+                asr_confidence: Some(0.2),
+                energy_alignment_quality: Some(0.9),
+                ..Default::default()
+            },
+        ),
+    ];
+
+    // Default profile: ASR weight dominates → "whisper-word" wins.
+    let default_result =
+        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Default))
+            .unwrap();
+    assert_eq!(
+        default_result.resolved.label, "whisper-word",
+        "Default profile should favour the high-ASR hypothesis"
+    );
+
+    // AcousticHeavy profile: energy/acoustic weight dominates → "acoustic-word" wins.
+    let acoustic_result =
+        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::AcousticHeavy))
+            .unwrap();
+    assert_eq!(
+        acoustic_result.resolved.label, "acoustic-word",
+        "AcousticHeavy profile should favour the high-energy hypothesis"
+    );
+}
+
+/// The Realtime profile must also produce a valid fusion result and must differ
+/// from the Default profile when ASR and energy signals conflict.
+#[test]
+fn fusion_profile_realtime_favours_energy_over_asr() {
+    let h_asr = make_word_candidate("asr-word", 1000, 1300, 0.5);
+    let h_energy = make_word_candidate("energy-word", 1000, 1300, 0.5);
+    let asr_id = h_asr.id.clone();
+    let energy_id = h_energy.id.clone();
+
+    let mut lattice = HypothesisLattice::new();
+    lattice.add(h_asr);
+    lattice.add(h_energy);
+
+    let evidence = vec![
+        (
+            asr_id,
+            FusionInput {
+                asr_confidence: Some(0.9),
+                energy_alignment_quality: Some(0.1),
+                timing_coherence: Some(0.1),
+                ..Default::default()
+            },
+        ),
+        (
+            energy_id,
+            FusionInput {
+                asr_confidence: Some(0.1),
+                energy_alignment_quality: Some(0.9),
+                timing_coherence: Some(0.9),
+                ..Default::default()
+            },
+        ),
+    ];
+
+    // Default profile: ASR weight (3.0) beats energy (1.5) + timing (1.25) → asr-word wins.
+    let default_result =
+        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Default))
+            .unwrap();
+    assert_eq!(default_result.resolved.label, "asr-word");
+
+    // Realtime profile: energy (2.5) + timing (2.0) beats ASR (1.5) → energy-word wins.
+    let realtime_result =
+        fuse_hypotheses(&lattice, &evidence, &FusionWeights::from(FusionProfile::Realtime))
+            .unwrap();
+    assert_eq!(realtime_result.resolved.label, "energy-word");
+}
+
+/// Verify that SpeechHypothesisEngine::with_profile() stores the expected
+/// weights and that with_profile(Default) == with_default_sources().
+#[test]
+fn speech_hypothesis_engine_with_profile_stores_weights() {
+    let default_engine = SpeechHypothesisEngine::with_default_sources();
+    let profile_engine = SpeechHypothesisEngine::with_profile(FusionProfile::Default);
+    assert_eq!(
+        default_engine.weights(),
+        profile_engine.weights(),
+        "with_profile(Default) must produce the same weights as with_default_sources()"
+    );
+
+    let acoustic_engine = SpeechHypothesisEngine::with_profile(FusionProfile::AcousticHeavy);
+    assert_ne!(
+        acoustic_engine.weights(),
+        default_engine.weights(),
+        "AcousticHeavy weights must differ from Default weights"
+    );
+}
+
+/// Verify that set_weights() is reflected in subsequent fusions.
+#[test]
+fn speech_hypothesis_engine_set_weights_changes_profile() {
+    let mut engine = SpeechHypothesisEngine::with_default_sources();
+    engine.set_weights(FusionWeights::from(FusionProfile::VisualAssist));
+    assert_eq!(engine.weights(), &FusionWeights::from(FusionProfile::VisualAssist));
+}
+
+/// All five named profiles must each produce a valid (non-None) fusion result
+/// from the same lattice.
+#[test]
+fn all_fusion_profiles_produce_valid_results() {
+    let mut lattice = HypothesisLattice::new();
+    lattice.add(make_word_candidate("alpha", 1000, 1300, 0.6));
+    lattice.add(make_word_candidate("beta", 1000, 1300, 0.4));
+
+    let profiles = [
+        FusionProfile::Default,
+        FusionProfile::Conservative,
+        FusionProfile::Realtime,
+        FusionProfile::AcousticHeavy,
+        FusionProfile::VisualAssist,
+    ];
+
+    for profile in profiles {
+        let weights = FusionWeights::from(profile);
+        let result = fuse_hypotheses(&lattice, &[], &weights);
+        assert!(
+            result.is_some(),
+            "Profile {:?} should produce a fusion result",
+            profile
+        );
+    }
 }
