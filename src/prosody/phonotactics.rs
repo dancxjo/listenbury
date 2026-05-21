@@ -37,7 +37,7 @@
 //! ```
 
 use crate::linguistic::phonology::{
-    Phone, PhoneString, PhonemicInventory, phones_equivalent,
+    Phone, PhoneString, PhonemeClass, PhonemicInventory, phones_equivalent,
 };
 use crate::prosody::syllable::{DiagnosticKind, SyllableDiagnostic};
 
@@ -149,14 +149,14 @@ impl EnglishPhonotactics {
         let inventory = variety.phonemic_inventory();
 
         // ── Nuclei ────────────────────────────────────────────────────────────
-        // IPA values from default_phone_for_arpabet in linguistic/phonology.rs.
-        let nuclei: Vec<Phone> = [
-            "ɑ", "æ", "ʌ", "ɔ", "ɛ", "ɝ", "ɪ", "iː", "ʊ", "uː",
-            "aʊ", "aɪ", "eɪ", "oʊ", "ɔɪ",
-        ]
-        .iter()
-        .map(|s| Phone::mapped(*s))
-        .collect();
+        // Derived dynamically from the inventory's vowel phonemes so that the
+        // phonotactic profile stays in sync with the phonemic inventory and
+        // duplicated vowel knowledge is avoided.
+        let nuclei: Vec<Phone> = inventory
+            .phonemes_of_class(PhonemeClass::Vowel)
+            .into_iter()
+            .flat_map(|def| def.default_phone_string.phones.iter().cloned())
+            .collect();
 
         // ── Illegal simple onsets ─────────────────────────────────────────────
         let illegal_single_onsets: Vec<Phone> = ["ŋ"].iter().map(|s| Phone::mapped(*s)).collect();
