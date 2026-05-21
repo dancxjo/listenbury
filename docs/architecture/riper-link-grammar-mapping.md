@@ -56,7 +56,7 @@ From Link Grammar English examples and docs (`README.md`, `data/en/tiny.dict`, `
 | non-restrictive/appositive comma islands | `Apposition` | `ClaimKind::AppositionBoundary`, `ClaimKind::BoundaryKind` | side-channel phrase lowering and pause insertion | P0 |
 | parenthetical comma pair islands | `Parenthetical` | `ClaimKind::ParentheticalBoundary`, `ClaimKind::BoundaryKind` | phrase break and parenthetical de-emphasis | P0 |
 | punctuation links (`Xp`, comma connectors, affix punctuation classes) | `Parenthetical` / `Coordination` / `Vocative` depending on pattern | `ClaimKind::BoundaryKind` | break strength and boundary timing | P1 |
-| phonetic agreement (`PH`, plus `AN`-related article selection evidence) | (near-term) `Determiner`; (future) add dedicated `PhoneticAgreement` link kind | `ClaimKind::PhonemeRealization` and/or `ClaimKind::MorphologicalForm` | `a/an`, article allomorphy, reduced-vs-strong article realization | P0 |
+| phonetic agreement (`PH`, plus `AN`-related article selection evidence) | `Determiner` | `ClaimKind::PhonemeRealization` and/or `ClaimKind::MorphologicalForm` | `a/an`, article allomorphy, reduced-vs-strong article realization | P0 |
 | morphology/token splitting classes (`PRE`, `SUF`, `LPUNC`, `RPUNC`, `MPUNC`) | (pre-link stage; can feed `Modifier`/`Parenthetical`/`InfinitivalMarker`) | `ClaimKind::MorphologicalForm`, `ClaimKind::BoundaryKind` | contraction handling, clitic-like reduction, punctuation-aware phrasing | P1 |
 
 Priority legend: `P0` = first wave grammar islands, `P1` = next, `P2` = later.
