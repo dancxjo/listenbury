@@ -3,6 +3,7 @@ use serde_json::json;
 
 use crate::audio::hypothesis::{SpanHypothesis, SpanHypothesisId};
 
+use super::weights::FusionWeights;
 use super::{HypothesisEdgeKind, HypothesisLattice};
 
 /// Evidence signals fed into the first-pass fusion scorer.
@@ -60,10 +61,12 @@ impl FusionInput {
         self
     }
 
-    /// Compute a weighted average of the available evidence signals.
+    /// Compute a weighted average of the available evidence signals using the
+    /// supplied [`FusionWeights`] configuration.
     ///
-    /// Weights are heuristic and can be tuned in a follow-up.
-    pub fn weighted_confidence(&self) -> f32 {
+    /// Only signals that are `Some` contribute to the average; missing signals
+    /// do not drag the score down.
+    pub fn weighted_confidence_with(&self, weights: &FusionWeights) -> f32 {
         let mut total_weight = 0.0_f32;
         let mut weighted_sum = 0.0_f32;
 
@@ -74,21 +77,36 @@ impl FusionInput {
             }
         };
 
-        push(self.asr_confidence, 3.0);
-        push(self.energy_alignment_quality, 1.5);
-        push(self.phone_segmentation_agreement, 1.0);
-        push(self.pronunciation_fit, 1.0);
-        push(self.spectral_evidence, 0.75);
-        push(self.prosody_consistency, 0.5);
-        push(self.timing_coherence, 1.25);
-        push(self.mechanical_recognizer_score, 1.0);
-        push(self.visual_speech_evidence, 0.9);
+        push(self.asr_confidence, weights.asr_confidence);
+        push(self.energy_alignment_quality, weights.energy_alignment_quality);
+        push(
+            self.phone_segmentation_agreement,
+            weights.phone_segmentation_agreement,
+        );
+        push(self.pronunciation_fit, weights.pronunciation_fit);
+        push(self.spectral_evidence, weights.spectral_evidence);
+        push(self.prosody_consistency, weights.prosody_consistency);
+        push(self.timing_coherence, weights.timing_coherence);
+        push(
+            self.mechanical_recognizer_score,
+            weights.mechanical_recognizer_score,
+        );
+        push(self.visual_speech_evidence, weights.visual_speech_evidence);
 
         if total_weight > 0.0 {
             (weighted_sum / total_weight).clamp(0.0, 1.0)
         } else {
             0.0
         }
+    }
+
+    /// Compute a weighted average of the available evidence signals using the
+    /// default [`FusionWeights`] (i.e. [`FusionProfile::Default`]).
+    ///
+    /// This is a convenience wrapper around [`Self::weighted_confidence_with`]
+    /// and preserves the original heuristic behaviour.
+    pub fn weighted_confidence(&self) -> f32 {
+        self.weighted_confidence_with(&FusionWeights::default())
     }
 }
 
@@ -118,15 +136,19 @@ pub struct FusionResult {
 /// external evidence for specific hypotheses. The scorer:
 ///
 /// 1. Blends each hypothesis's own `confidence` with any matching
-///    [`FusionInput`] to produce a fused score.
+///    [`FusionInput`] to produce a fused score using the supplied `weights`.
 /// 2. Picks the highest-scoring active hypothesis as the resolved candidate.
 /// 3. Classifies the remaining candidates as supporting or conflicting by
 ///    checking explicit lattice edges first, then falling back to temporal
 ///    overlap as a proxy for conflict.
 /// 4. Returns `None` when the lattice has no active hypotheses.
+///
+/// Pass `&FusionWeights::default()` to reproduce the original heuristic
+/// behaviour.
 pub fn fuse_hypotheses(
     lattice: &HypothesisLattice,
     evidence: &[(SpanHypothesisId, FusionInput)],
+    weights: &FusionWeights,
 ) -> Option<FusionResult> {
     let actives = lattice.active_hypotheses();
     if actives.is_empty() {
@@ -135,7 +157,7 @@ pub fn fuse_hypotheses(
 
     let evidence_map: std::collections::HashMap<&str, f32> = evidence
         .iter()
-        .map(|(id, input)| (id.0.as_str(), input.weighted_confidence()))
+        .map(|(id, input)| (id.0.as_str(), input.weighted_confidence_with(weights)))
         .collect();
 
     struct Scored<'a> {
@@ -143,15 +165,15 @@ pub fn fuse_hypotheses(
         fused_confidence: f32,
     }
 
-    const EXTERNAL_EVIDENCE_WEIGHT: f32 = 3.0;
+    let external_evidence_blend = weights.external_evidence_blend;
 
     let mut scored: Vec<Scored> = actives
         .into_iter()
         .map(|hyp| {
             let extra = evidence_map.get(hyp.id.0.as_str()).copied().unwrap_or(0.0);
             let fused = if extra > 0.0 {
-                (hyp.confidence + extra * EXTERNAL_EVIDENCE_WEIGHT)
-                    / (1.0 + EXTERNAL_EVIDENCE_WEIGHT)
+                (hyp.confidence + extra * external_evidence_blend)
+                    / (1.0 + external_evidence_blend)
             } else {
                 hyp.confidence
             };

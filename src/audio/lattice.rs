@@ -10,17 +10,22 @@
 //! composes multiple evidence sources (acoustic, phonetic/pronunciation, ASR
 //! stability, visual speech), standardizes confidence handling, and produces
 //! stable/revisable span partitions with inspectable debug traces.
+//!
+//! Weighting policy is configured via [`FusionWeights`] and [`FusionProfile`],
+//! keeping numeric heuristics out of the scoring mechanics.
 
 mod engine;
 mod evidence;
 mod fusion;
 mod graph;
 mod sources;
+mod weights;
 
 pub use engine::{SpeechHypothesisEngine, SpeechHypothesisFusion};
 pub use evidence::{EvidenceTraceEntry, SpeechEvidenceSource};
 pub use fusion::{FusionInput, FusionResult, fuse_hypotheses};
 pub use graph::{HypothesisEdge, HypothesisEdgeKind, HypothesisLattice};
+pub use weights::{FusionProfile, FusionWeights};
 
 #[cfg(test)]
 mod tests;

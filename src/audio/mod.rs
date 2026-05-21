@@ -29,9 +29,9 @@ pub use hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
 };
 pub use lattice::{
-    EvidenceTraceEntry, FusionInput, FusionResult, HypothesisEdge, HypothesisEdgeKind,
-    HypothesisLattice, SpeechEvidenceSource, SpeechHypothesisEngine, SpeechHypothesisFusion,
-    fuse_hypotheses,
+    EvidenceTraceEntry, FusionInput, FusionProfile, FusionResult, FusionWeights, HypothesisEdge,
+    HypothesisEdgeKind, HypothesisLattice, SpeechEvidenceSource, SpeechHypothesisEngine,
+    SpeechHypothesisFusion, fuse_hypotheses,
 };
 pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};
 pub use viterbi::{PhoneState, viterbi_align_pronunciation};
