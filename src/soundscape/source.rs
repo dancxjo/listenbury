@@ -23,6 +23,7 @@ pub struct SoundSource {
     pub id: SourceId,
     pub kind: SourceKind,
     pub label: SourceLabel,
+    /// Source attribution confidence in the inclusive range `[0.0, 1.0]`.
     pub confidence: f32,
 }
 

@@ -42,6 +42,7 @@ pub struct SoundEvent {
     pub source_id: SourceId,
     pub kind: SoundEventKind,
     pub range: TimeRange,
+    /// Event confidence in the inclusive range `[0.0, 1.0]`.
     pub confidence: f32,
 }
 
@@ -59,6 +60,7 @@ pub enum SoundEventKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AcousticContribution {
     pub source_id: SourceId,
+    /// Relative linear gain contribution, typically normalized to `[0.0, 1.0]`.
     pub gain: f32,
 }
 

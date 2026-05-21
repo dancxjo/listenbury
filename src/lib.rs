@@ -10,8 +10,8 @@ pub mod mind;
 #[cfg(feature = "model-download")]
 pub mod models;
 pub mod mouth;
-pub mod prosody;
 pub mod playback_check;
+pub mod prosody;
 pub mod runtime;
 pub mod runtime_event;
 pub mod soundscape;
