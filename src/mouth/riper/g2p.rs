@@ -1116,6 +1116,8 @@ mod tests {
                 diagnostic.status,
                 crate::mouth::riper::ReductionStatus::Applied
             );
+            assert_eq!(diagnostic.rule, "weak_form_to_before_verb");
+            assert_eq!(diagnostic.source, "espeak-ng-derived");
             assert_eq!(diagnostic.citation, "T UW1");
             assert_eq!(diagnostic.realized, "T AH0");
             assert!(
@@ -1179,6 +1181,8 @@ mod tests {
             .reduction_diagnostic
             .as_ref()
             .expect("reduction diagnostic");
+        assert_eq!(diagnostic.rule, "strong_to_contrastive_uppercase");
+        assert_eq!(diagnostic.source, "espeak-ng-derived");
         assert_eq!(diagnostic.reason, "contrastive_emphasis".to_string());
         assert_eq!(
             diagnostic.status,

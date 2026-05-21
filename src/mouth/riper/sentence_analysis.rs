@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
 use crate::mouth::riper::text::{NormalizedText, NormalizedToken};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +73,10 @@ pub enum ReductionStatus {
 pub struct ReductionDiagnostic {
     pub word: String,
     pub word_index: usize,
+    pub rule: String,
+    pub source: String,
+    pub source_file: String,
+    pub source_license: String,
     pub citation: String,
     pub realized: String,
     pub reason: String,
@@ -152,8 +157,9 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     .get(token_index)
                     .and_then(|span| source_text.get(span.clone()))
                     .unwrap_or("to");
-                let prev = word_slots
-                    .get(word_index.saturating_sub(1))
+                let prev = word_index
+                    .checked_sub(1)
+                    .and_then(|idx| word_slots.get(idx))
                     .map(|(_, text)| text.as_str());
                 let prev_prev = word_index
                     .checked_sub(2)
@@ -163,12 +169,8 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     .get(word_index + 1)
                     .map(|(_, text)| text.as_str());
 
-                let citation = "T UW1".to_string();
-                let reduced = "T AH0".to_string();
-
-                let (pos, syntactic_role, prosodic_role, reduction, diagnostic) = classify_to_token(
-                    raw_token, word_index, prev_prev, prev, next, &citation, &reduced,
-                );
+                let (pos, syntactic_role, prosodic_role, reduction, diagnostic) =
+                    classify_to_token(raw_token, word_index, prev_prev, prev, next);
 
                 TokenAnalysis {
                     token_index,
@@ -193,8 +195,6 @@ fn classify_to_token(
     prev_prev: Option<&str>,
     prev: Option<&str>,
     next: Option<&str>,
-    citation: &str,
-    reduced: &str,
 ) -> (
     PartOfSpeech,
     Option<SyntacticRole>,
@@ -202,13 +202,46 @@ fn classify_to_token(
     ReductionClass,
     ReductionDiagnostic,
 ) {
-    let diagnostic = |realized: &str, reason: &str, status| ReductionDiagnostic {
-        word: "to".to_string(),
-        word_index,
-        citation: citation.to_string(),
-        realized: realized.to_string(),
-        reason: reason.to_string(),
-        status,
+    let resolve_rule = |rule_id: &str| -> ToRuleDescriptorFallback {
+        english_to_rule_descriptor(rule_id)
+            .map(Into::into)
+            .unwrap_or_else(|| {
+                let output_transformation = if rule_id == "weak_form_to_before_verb" {
+                    "T AH0"
+                } else {
+                    "T UW1"
+                };
+                ToRuleDescriptorFallback {
+                    rule_id: rule_id.to_string(),
+                    source: "espeak-ng-derived".to_string(),
+                    source_file: "dictsource/en_rules".to_string(),
+                    source_license: "GPL-3.0-or-later".to_string(),
+                    citation_form: "T UW1".to_string(),
+                    output_transformation: output_transformation.to_string(),
+                }
+            })
+    };
+    let weak_before_verb = resolve_rule("weak_form_to_before_verb");
+    let phrase_final = resolve_rule("weak_form_to_phrase_final_provisional");
+    let contrastive = resolve_rule("strong_to_contrastive_uppercase");
+    let explicit_override = resolve_rule("strong_to_explicit_phonetic_override");
+    let citation_initial = resolve_rule("strong_to_citation_phrase_initial");
+    let quotation_citation = resolve_rule("strong_to_quotation_or_citation");
+    let prepositional = resolve_rule("strong_to_prepositional");
+
+    let diagnostic = |rule: &ToRuleDescriptorFallback, realized: &str, reason: &str, status| {
+        ReductionDiagnostic {
+            word: "to".to_string(),
+            word_index,
+            rule: rule.rule_id.clone(),
+            source: rule.source.clone(),
+            source_file: rule.source_file.clone(),
+            source_license: rule.source_license.clone(),
+            citation: rule.citation_form.clone(),
+            realized: realized.to_string(),
+            reason: reason.to_string(),
+            status,
+        }
     };
 
     if raw_token.chars().all(|ch| ch.is_ascii_uppercase()) && raw_token.len() > 1 {
@@ -217,7 +250,12 @@ fn classify_to_token(
             Some(SyntacticRole::PrepositionalObjectLink),
             ProsodicRole::Contrastive,
             ReductionClass::None,
-            diagnostic(citation, "contrastive_emphasis", ReductionStatus::Blocked),
+            diagnostic(
+                &contrastive,
+                &contrastive.output_transformation,
+                "contrastive_emphasis",
+                ReductionStatus::Blocked,
+            ),
         );
     }
 
@@ -228,7 +266,8 @@ fn classify_to_token(
             ProsodicRole::FunctionStrong,
             ReductionClass::None,
             diagnostic(
-                citation,
+                &explicit_override,
+                &explicit_override.output_transformation,
                 "explicit_phonetic_override",
                 ReductionStatus::Blocked,
             ),
@@ -242,7 +281,8 @@ fn classify_to_token(
             ProsodicRole::FunctionWeak,
             ReductionClass::WeakFunctionWord,
             diagnostic(
-                citation,
+                &phrase_final,
+                &phrase_final.output_transformation,
                 "phrase_final_uncertainty",
                 ReductionStatus::Provisional,
             ),
@@ -256,7 +296,8 @@ fn classify_to_token(
             ProsodicRole::FunctionStrong,
             ReductionClass::None,
             diagnostic(
-                citation,
+                &citation_initial,
+                &citation_initial.output_transformation,
                 "citation_form_phrase_initial",
                 ReductionStatus::Blocked,
             ),
@@ -270,7 +311,8 @@ fn classify_to_token(
             ProsodicRole::FunctionStrong,
             ReductionClass::None,
             diagnostic(
-                citation,
+                &quotation_citation,
+                &quotation_citation.output_transformation,
                 "quotation_or_citation_form",
                 ReductionStatus::Blocked,
             ),
@@ -284,7 +326,8 @@ fn classify_to_token(
             ProsodicRole::FunctionWeak,
             ReductionClass::WeakFunctionWord,
             diagnostic(
-                reduced,
+                &weak_before_verb,
+                &weak_before_verb.output_transformation,
                 "unstressed_function_word_before_verb",
                 ReductionStatus::Applied,
             ),
@@ -296,8 +339,35 @@ fn classify_to_token(
         Some(SyntacticRole::PrepositionalObjectLink),
         ProsodicRole::FunctionStrong,
         ReductionClass::None,
-        diagnostic(citation, "prepositional_to", ReductionStatus::Blocked),
+        diagnostic(
+            &prepositional,
+            &prepositional.output_transformation,
+            "prepositional_to",
+            ReductionStatus::Blocked,
+        ),
     )
+}
+
+struct ToRuleDescriptorFallback {
+    rule_id: String,
+    source: String,
+    source_file: String,
+    source_license: String,
+    citation_form: String,
+    output_transformation: String,
+}
+
+impl From<crate::mouth::riper::espeak_ng_rules::ToRuleDescriptor> for ToRuleDescriptorFallback {
+    fn from(value: crate::mouth::riper::espeak_ng_rules::ToRuleDescriptor) -> Self {
+        Self {
+            rule_id: value.rule_id,
+            source: value.provenance.source,
+            source_file: value.provenance.source_file,
+            source_license: value.provenance.source_license,
+            citation_form: value.citation_form,
+            output_transformation: value.output_transformation,
+        }
+    }
 }
 
 fn base_pos(word: &str) -> PartOfSpeech {

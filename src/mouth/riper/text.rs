@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::mouth::riper::espeak_ng_rules::english_punctuation_rule;
 use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 
 const MAX_VOCATIVE_WORDS: usize = 3;
@@ -323,6 +324,13 @@ fn classify_phrase_boundary_kind(
     else {
         return PhraseBoundaryKind::None;
     };
+    if let Some(rule) = english_punctuation_rule(last) {
+        return match rule.output_transformation.as_str() {
+            "boundary:exclamation" => PhraseBoundaryKind::Exclamation,
+            "boundary:final_rising" => PhraseBoundaryKind::FinalRising,
+            _ => PhraseBoundaryKind::None,
+        };
+    }
     match last {
         ',' => PhraseBoundaryKind::MinorPhrase,
         ';' | ':' => PhraseBoundaryKind::MajorPhrase,
@@ -682,6 +690,21 @@ mod tests {
 
         let exclamation = TextNormalizer.normalize("Listen!").expect("normalize");
         assert_eq!(exclamation.boundary_kind, PhraseBoundaryKind::Exclamation);
+    }
+
+    #[test]
+    fn punctuation_boundary_rules_include_espeak_provenance() {
+        let exclamation_rule = english_punctuation_rule('!').expect("exclamation rule");
+        assert_eq!(exclamation_rule.rule_id, "punctuation_exclamation_boundary");
+        assert_eq!(
+            exclamation_rule.output_transformation,
+            "boundary:exclamation"
+        );
+        assert_eq!(exclamation_rule.provenance.source, "espeak-ng-derived");
+        assert_eq!(
+            exclamation_rule.provenance.source_license,
+            "GPL-3.0-or-later"
+        );
     }
 
     #[test]

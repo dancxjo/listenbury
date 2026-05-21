@@ -1555,6 +1555,8 @@ mod tests {
             .find(|entry| entry.word == "to")
             .expect("to diagnostic");
         let reduction = to_entry.reduction.as_ref().expect("reduction diagnostic");
+        assert_eq!(reduction.rule, "weak_form_to_before_verb");
+        assert_eq!(reduction.source, "espeak-ng-derived");
         assert_eq!(reduction.citation, "T UW1");
         assert_eq!(reduction.realized, "T AH0");
         assert_eq!(reduction.reason, "unstressed_function_word_before_verb");

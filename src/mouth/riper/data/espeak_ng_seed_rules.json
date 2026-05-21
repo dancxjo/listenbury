@@ -1,0 +1,401 @@
+{
+  "source": "espeak-ng-derived",
+  "imported_at": "2026-05-21T00:23:41Z",
+  "source_license": "GPL-3.0-or-later",
+  "linguistic_varieties": {
+    "roots": [
+      {
+        "tag": "en",
+        "name": "English",
+        "children": [
+          {
+            "tag": "en-us",
+            "name": "English (US)",
+            "children": [
+              {
+                "tag": "en-us-general",
+                "name": "English (US, General American)",
+                "children": [],
+                "weak_form_rules": [
+                  {
+                    "rule_id": "weak_form_to_before_verb",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [
+                        "verb"
+                      ],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": false
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T AH0",
+                    "confidence": 95,
+                    "priority": 100,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules, phsource/en_us",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "weak_form_to_phrase_final_provisional",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": true
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 65,
+                    "priority": 50,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
+                "stress_rules": [
+                  {
+                    "rule_id": "stress_to_unstressed_in_infinitive_chain",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [
+                        "verb"
+                      ],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": false
+                    },
+                    "output_transformation": "unstressed",
+                    "confidence": 85,
+                    "priority": 90,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
+                "pronunciation_override_rules": [
+                  {
+                    "rule_id": "strong_to_contrastive_uppercase",
+                    "match_pattern": "TO",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 99,
+                    "priority": 200,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "strong_to_citation_phrase_initial",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [
+                        "be"
+                      ],
+                      "next_pos": [],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": false
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 90,
+                    "priority": 180,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "strong_to_quotation_or_citation",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [
+                        "not"
+                      ],
+                      "next_words": [
+                        "be"
+                      ],
+                      "next_pos": [],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": false
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 90,
+                    "priority": 175,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "strong_to_prepositional",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [
+                        "noun",
+                        "pronoun"
+                      ],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": true
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 88,
+                    "priority": 120,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "strong_to_explicit_phonetic_override",
+                    "match_pattern": "to",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "citation_form": "T UW1",
+                    "output_transformation": "T UW1",
+                    "confidence": 99,
+                    "priority": 210,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
+                "punctuation_prosody_rules": [
+                  {
+                    "rule_id": "punctuation_exclamation_boundary",
+                    "match_pattern": "!",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "boundary:exclamation",
+                    "confidence": 90,
+                    "priority": 100,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "punctuation_question_rising_boundary",
+                    "match_pattern": "?",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "boundary:final_rising",
+                    "confidence": 90,
+                    "priority": 100,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
+                "voice_variant_rules": [
+                  {
+                    "rule_id": "voice_variant_default_en_us",
+                    "match_pattern": "default",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "style:neutral",
+                    "confidence": 70,
+                    "priority": 20,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "phsource/en_us",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
+                "phoneme_mapping_rules": [
+                  {
+                    "rule_id": "phoneme_mapping_uw_to_piper_u",
+                    "match_pattern": "UW1",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "u",
+                    "confidence": 80,
+                    "priority": 10,
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "phsource/phonemes",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ]
+              }
+            ],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          },
+          {
+            "tag": "en-gb",
+            "name": "English (GB)",
+            "children": [],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          },
+          {
+            "tag": "en-au",
+            "name": "English (AU)",
+            "children": [],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          }
+        ],
+        "weak_form_rules": [],
+        "stress_rules": [],
+        "pronunciation_override_rules": [],
+        "punctuation_prosody_rules": [],
+        "voice_variant_rules": [],
+        "phoneme_mapping_rules": []
+      },
+      {
+        "tag": "fr",
+        "name": "French",
+        "children": [
+          {
+            "tag": "fr-fr",
+            "name": "French (France)",
+            "children": [],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          }
+        ],
+        "weak_form_rules": [],
+        "stress_rules": [],
+        "pronunciation_override_rules": [],
+        "punctuation_prosody_rules": [],
+        "voice_variant_rules": [],
+        "phoneme_mapping_rules": []
+      },
+      {
+        "tag": "de",
+        "name": "German",
+        "children": [
+          {
+            "tag": "de-de",
+            "name": "German (Germany)",
+            "children": [],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          }
+        ],
+        "weak_form_rules": [],
+        "stress_rules": [],
+        "pronunciation_override_rules": [],
+        "punctuation_prosody_rules": [],
+        "voice_variant_rules": [],
+        "phoneme_mapping_rules": []
+      },
+      {
+        "tag": "es",
+        "name": "Spanish",
+        "children": [
+          {
+            "tag": "es-es",
+            "name": "Spanish (Spain)",
+            "children": [],
+            "weak_form_rules": [],
+            "stress_rules": [],
+            "pronunciation_override_rules": [],
+            "punctuation_prosody_rules": [],
+            "voice_variant_rules": [],
+            "phoneme_mapping_rules": []
+          }
+        ],
+        "weak_form_rules": [],
+        "stress_rules": [],
+        "pronunciation_override_rules": [],
+        "punctuation_prosody_rules": [],
+        "voice_variant_rules": [],
+        "phoneme_mapping_rules": []
+      }
+    ]
+  }
+}
