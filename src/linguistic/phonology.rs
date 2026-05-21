@@ -29,6 +29,337 @@ pub struct PhoneString {
     pub phones: Vec<Phone>,
 }
 
+impl Phone {
+    /// Construct a [`Phone`] directly from an IPA string with no source symbol.
+    ///
+    /// Useful for constructing phones outside the ARPABET lookup path, e.g.
+    /// in tests or when working with raw IPA input.
+    pub fn new_ipa(ipa: impl Into<String>) -> Self {
+        Self {
+            ipa: ipa.into(),
+            source_symbol: None,
+            status: PhoneStatus::Mapped,
+        }
+    }
+
+    /// Construct a [`Phone`] from a mapped IPA string.  Alias for [`new_ipa`].
+    ///
+    /// Preferred in phonotactic table construction and test assertions where
+    /// the name `mapped` emphasises that the phone has a known IPA symbol.
+    pub fn mapped(ipa: impl Into<String>) -> Self {
+        Self::new_ipa(ipa)
+    }
+}
+
+impl PhoneString {
+    /// Construct an empty [`PhoneString`].
+    pub fn empty() -> Self {
+        Self { phones: vec![] }
+    }
+
+    /// Concatenate the IPA strings of all contained phones into a single
+    /// `String`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use listenbury::linguistic::phonology::{Phone, PhoneString};
+    ///
+    /// let ps = PhoneString { phones: vec![
+    ///     Phone::new_ipa("s"),
+    ///     Phone::new_ipa("t"),
+    ///     Phone::new_ipa("ɹ"),
+    ///     Phone::new_ipa("ʌ"),
+    /// ]};
+    /// assert_eq!(ps.to_ipa(), "stɹʌ");
+    /// ```
+    pub fn to_ipa(&self) -> String {
+        self.phones.iter().map(|p| p.ipa.as_str()).collect()
+    }
+
+    /// Return the IPA string for each contained phone as a `Vec<&str>`.
+    ///
+    /// Useful for phonotactic table lookup and diagnostics without allocating
+    /// a concatenated string.
+    pub fn ipa_segments(&self) -> Vec<&str> {
+        self.phones.iter().map(|p| p.ipa.as_str()).collect()
+    }
+
+    /// Build a single-phone [`PhoneString`] from one [`Phoneme`] by reading
+    /// its current [`realization.ipa`][Realization] field.
+    ///
+    /// For a slice of phonemes, use [`from_phoneme_slice`].
+    ///
+    /// # Note — future multi-phone realizations
+    ///
+    /// Currently `Realization` stores a single IPA string.  When realizations
+    /// become proper [`PhoneString`]s (affricates, diphthongs, syllabic
+    /// consonants), this function will naturally extend to multi-phone output.
+    pub fn from_realized(phoneme: &Phoneme) -> Self {
+        Self {
+            phones: vec![Phone {
+                ipa: phoneme.realization.ipa.clone(),
+                source_symbol: Some(phoneme.source_symbol.clone()),
+                status: PhoneStatus::Mapped,
+            }],
+        }
+    }
+
+    /// Build a [`PhoneString`] from a slice of [`Phoneme`]s by reading each
+    /// phoneme's current [`realization.ipa`][Realization] field.
+    ///
+    /// This is the primary bridge from a phoneme sequence to the phone
+    /// representation used by the syllabifier.
+    pub fn from_phoneme_slice(phonemes: &[Phoneme]) -> Self {
+        Self {
+            phones: phonemes
+                .iter()
+                .map(|p| Phone {
+                    ipa: p.realization.ipa.clone(),
+                    source_symbol: Some(p.source_symbol.clone()),
+                    status: PhoneStatus::Mapped,
+                })
+                .collect(),
+        }
+    }
+}
+
+// ─── Phone comparison ─────────────────────────────────────────────────────────
+
+/// Controls how two [`Phone`]s are compared for equality.
+///
+/// `ExactIpa` is the default: two phones match only if their `ipa` strings are
+/// identical.  `Broad` applies the active [`PhoneEqualityOptions`] flags to
+/// strip length marks, tie bars, and/or diacritics before comparing, allowing
+/// `[tʰ]` to match `/t/` when aspiration is considered non-contrastive.
+///
+/// `Segmental` is reserved for a future feature-bundle comparison layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneComparisonMode {
+    /// Two phones are equal only when their IPA strings are byte-identical.
+    ExactIpa,
+    /// Apply the [`PhoneEqualityOptions`] normalization flags before comparing.
+    Broad,
+    /// Reserved: future feature-bundle / distinctive-feature comparison.
+    Segmental,
+}
+
+/// Policy for comparing two [`Phone`]s for "same segment" equality.
+///
+/// The default compares IPA strings exactly.  Set flags to strip phonetic
+/// detail that the calling context does not care about.
+///
+/// # Example
+///
+/// ```
+/// use listenbury::linguistic::phonology::{Phone, PhoneComparisonMode, PhoneEqualityOptions, phones_equivalent};
+///
+/// let t    = Phone::mapped("t");
+/// let t_h  = Phone::mapped("tʰ");
+///
+/// // Exact mode: aspirated /tʰ/ ≠ plain /t/
+/// assert!(!phones_equivalent(&t, &t_h, &PhoneEqualityOptions::default()));
+///
+/// // Broad mode + ignore_diacritics: /tʰ/ ≈ /t/
+/// let broad = PhoneEqualityOptions {
+///     mode: PhoneComparisonMode::Broad,
+///     ignore_diacritics: true,
+///     ..Default::default()
+/// };
+/// assert!(phones_equivalent(&t, &t_h, &broad));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneEqualityOptions {
+    /// Which comparison algorithm to use.
+    pub mode: PhoneComparisonMode,
+    /// Strip IPA stress diacritics (ˈ ˌ) before comparing.
+    pub ignore_stress: bool,
+    /// Strip length marks (ː ˑ) before comparing.
+    pub ignore_length: bool,
+    /// Strip tie bars (͡ ͜) before comparing.
+    pub ignore_tie_bars: bool,
+    /// Strip superscript modifier diacritics (aspiration ʰ, labialization ʷ,
+    /// palatalization ʲ, etc.) and combining marks before comparing.
+    pub ignore_diacritics: bool,
+}
+
+impl Default for PhoneEqualityOptions {
+    fn default() -> Self {
+        Self {
+            mode: PhoneComparisonMode::ExactIpa,
+            ignore_stress: false,
+            ignore_length: false,
+            ignore_tie_bars: false,
+            ignore_diacritics: false,
+        }
+    }
+}
+
+/// Normalize a phone's IPA string according to `options`, producing a
+/// comparison key.
+pub fn phone_comparison_key(phone: &Phone, options: &PhoneEqualityOptions) -> String {
+    if options.mode == PhoneComparisonMode::ExactIpa {
+        return phone.ipa.clone();
+    }
+    let mut s = phone.ipa.clone();
+    if options.ignore_stress {
+        // ˈ U+02C8, ˌ U+02CC
+        s = s.replace('\u{02C8}', "").replace('\u{02CC}', "");
+    }
+    if options.ignore_length {
+        // ː U+02D0, ˑ U+02D1
+        s = s.replace('\u{02D0}', "").replace('\u{02D1}', "");
+    }
+    if options.ignore_tie_bars {
+        // ͡ U+0361, ͜ U+035C
+        s = s.replace('\u{0361}', "").replace('\u{035C}', "");
+    }
+    if options.ignore_diacritics {
+        // Strip superscript modifier letters (U+02B0..=U+02FF) and combining
+        // diacritical marks (U+0300..=U+036F), but only those that represent
+        // phonetic detail rather than base segment identity.
+        s = s
+            .chars()
+            .filter(|c| {
+                let cp = *c as u32;
+                // Keep: regular IPA base characters, length (already stripped above),
+                // stress (already stripped above).
+                // Remove: superscript modifiers (aspiration, labialization, …) and
+                // combining diacritics (dental, nasalization, …).
+                // Spacing modifier letters (02B0–02FF) excluding stress marks
+                // ˈ (02C8) and ˌ (02CC), plus combining diacritics (0300–036F).
+                !matches!(cp, 0x02B0..=0x02C7 | 0x02C9..=0x02CB | 0x02CD..=0x02FF | 0x0300..=0x036F)
+            })
+            .collect();
+    }
+    s
+}
+
+/// Return `true` if `left` and `right` represent the same phone segment under
+/// the given comparison `options`.
+///
+/// This is the canonical comparison function for phonotactic lookup: it lets
+/// `[tʰ]` match `/t/` when `ignore_diacritics` is set, while keeping `/t/`
+/// distinct from `/ɾ/` (a different segment, not a diacritic variant).
+pub fn phones_equivalent(left: &Phone, right: &Phone, options: &PhoneEqualityOptions) -> bool {
+    phone_comparison_key(left, options) == phone_comparison_key(right, options)
+}
+
+// ─── Phonemic inventory ───────────────────────────────────────────────────────
+
+/// Stable identifier for a phonological variety.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct VarietyId(pub String);
+
+impl VarietyId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// Stable identifier for a phoneme within a variety's inventory.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PhonemeId(pub String);
+
+impl PhonemeId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+}
+
+/// A source-schema symbol that maps to a phoneme in the inventory.
+///
+/// For example, the CMU Pronouncing Dictionary symbol `"AE"` maps to the IPA
+/// phoneme `/æ/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceSymbol {
+    /// The schema this symbol comes from.
+    pub schema: PhonemeSchema,
+    /// The symbol string, e.g. `"AE"`, `"æ"`.
+    pub symbol: String,
+}
+
+/// A single phoneme entry in a [`PhonemicInventory`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhonemeDefinition {
+    /// Stable identifier for this phoneme.
+    pub id: PhonemeId,
+    /// Canonical IPA representation.
+    pub ipa: String,
+    /// Source symbols across different encoding schemas.
+    pub source_symbols: Vec<SourceSymbol>,
+    /// Default phone realization as a sequence of zero or more phones.
+    ///
+    /// Most phonemes realize as a single [`Phone`]; affricates, diphthongs,
+    /// and syllabic consonants may realize as multiple phones.
+    pub default_phone_string: PhoneString,
+    /// Broad phonological class(es) for this phoneme.
+    pub classes: Vec<PhonemeClass>,
+}
+
+impl PhonemeDefinition {
+    /// Return the canonical default [`Phone`] (first element of
+    /// `default_phone_string`), or a freshly constructed phone from the IPA
+    /// string if the phone string is empty.
+    pub fn default_phone(&self) -> Phone {
+        self.default_phone_string
+            .phones
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Phone::mapped(self.ipa.clone()))
+    }
+}
+
+/// The phoneme inventory and phone comparison policy for a specific linguistic
+/// variety.
+///
+/// This is the phonological backbone consumed by
+/// [`crate::prosody::phonotactics::EnglishPhonotactics`] and the syllabifier.  It is *not* the same as
+/// [`crate::linguistic::variety::LinguisticVariety`], which handles runtime
+/// configuration; `PhonemicInventory` is purely about phonological facts.
+///
+/// Construct via [`crate::prosody::phonotactics::EnglishVariety::phonemic_inventory`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhonemicInventory {
+    /// Stable identifier for this variety.
+    pub id: VarietyId,
+    /// ISO 639 language code, e.g. `"en"`.
+    pub language: String,
+    /// Human-readable label, e.g. `"General American English"`.
+    pub label: String,
+    /// All phonemes in this variety's inventory.
+    pub phonemes: Vec<PhonemeDefinition>,
+    /// Phone comparison policy.
+    pub phone_equality: PhoneEqualityOptions,
+}
+
+impl PhonemicInventory {
+    /// Return all phoneme definitions that belong to `class`.
+    pub fn phonemes_of_class(&self, class: PhonemeClass) -> Vec<&PhonemeDefinition> {
+        self.phonemes
+            .iter()
+            .filter(|def| def.classes.contains(&class))
+            .collect()
+    }
+
+    /// Look up the phoneme definition whose canonical IPA matches `ipa`
+    /// using this inventory's equality policy.
+    pub fn find_by_ipa(&self, ipa: &str) -> Option<&PhonemeDefinition> {
+        let query = Phone::mapped(ipa);
+        self.phonemes.iter().find(|def| {
+            let canonical = Phone::mapped(def.ipa.clone());
+            phones_equivalent(&query, &canonical, &self.phone_equality)
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhonemeSchema {

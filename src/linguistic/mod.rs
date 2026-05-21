@@ -10,6 +10,10 @@ pub mod variety;
 pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
+pub use phonology::{
+    Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemicInventory,
+    PhonemeDefinition, PhonemeId, SourceSymbol, VarietyId, phone_comparison_key, phones_equivalent,
+};
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
 pub use service::PronunciationService;
 pub use sound_it_out::{Environment, GraphemeRule, SoundItOutPronouncer, SoundItOutRules};
