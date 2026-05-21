@@ -4,6 +4,7 @@ pub mod config;
 pub mod encoder;
 pub mod espeak_ng_rules;
 pub mod g2p;
+pub mod morphophonology;
 pub mod phoneme;
 pub mod prosody_audit;
 pub mod prosody_controls;
@@ -27,6 +28,12 @@ pub use g2p::{
     PhonemeProsodyCandidateEvent, PhonemeProsodyCandidateTracker, PhonemeProsodyPhonemizer,
     PhonemizedUnit, SimpleEnglishG2p, SpeechCandidateId, TimingHintSource, WordProsodyTarget,
     WordTimingHint,
+};
+pub use morphophonology::{
+    AnalysisSource, DisplayNotation, MorphemeAnalysis, MorphemeBoundary, MorphemeFeatures,
+    MorphemeKind, MorphologicalAnalysis, MorphophonologyResult, PhonologicalForm,
+    PhonologicalStress, RealizedPhoneSequence, StressPattern, UnderlyingPhonologicalForm,
+    WordPronunciation, analyze_word,
 };
 pub use phoneme::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeIdConversionError, PiperPhonemeSequence,

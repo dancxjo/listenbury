@@ -1,19 +1,11 @@
-use std::sync::OnceLock;
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::linguistic::cmudict;
-use crate::linguistic::cmudict::{CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
-use crate::linguistic::phonology::{
-    RealizationConfig, RealizationMethod, phoneme_from_arpabet, realize_sequence,
-};
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
-use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
-use crate::linguistic::variety::{LinguisticVariety, Phonology};
+use crate::linguistic::variety::LinguisticVariety;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
@@ -25,6 +17,7 @@ use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
+use crate::mouth::riper::{AnalysisSource, PhonologicalStress, morphophonology};
 use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
@@ -627,29 +620,23 @@ struct WordPhoneRealization {
 }
 
 fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
-    if let Some(phones) = cmudict::bundled().lookup(word) {
-        return Some(cmu_phones_to_riper_symbols(phones));
-    }
-
-    let ortho = OrthographicWord::new(word);
-    let variety = LinguisticVariety::untagged("en-US-fallback", Phonology::new("English fallback"));
-    fallback_english_pronouncer()
-        .realize_word(&variety, &ortho)
-        .ok()
-        .map(|seq| {
-            let symbols = seq
-                .phonemes
-                .into_iter()
-                .map(|phoneme| phoneme.symbol)
-                .collect::<Vec<_>>();
-            let stress_by_phone = vec![None; symbols.len()];
-            WordPhoneRealization {
-                symbols,
-                stress_by_phone,
-                stress_source: LexicalStressSource::HeuristicFallback,
-            }
-        })
-        .filter(|realization| !realization.symbols.is_empty())
+    let resolved = morphophonology::analyze_word(word);
+    Some(WordPhoneRealization {
+        symbols: resolved.pronunciation.symbols,
+        stress_by_phone: resolved
+            .pronunciation
+            .stress_by_phone
+            .into_iter()
+            .map(stress_from_phonological)
+            .collect(),
+        stress_source: match resolved.analysis.source {
+            AnalysisSource::ExactLexicalEntry => LexicalStressSource::Cmudict,
+            AnalysisSource::KnownDerivedEntry
+            | AnalysisSource::ProductiveMorphology
+            | AnalysisSource::SpellingToSoundFallback
+            | AnalysisSource::UnknownWordSafeFallback => LexicalStressSource::HeuristicFallback,
+        },
+    })
 }
 
 fn word_to_phones(word: &str) -> Option<Vec<String>> {
@@ -715,72 +702,11 @@ fn is_nucleus_symbol(symbol: &str) -> bool {
     )
 }
 
-fn fallback_english_pronouncer() -> &'static SoundItOutPronouncer {
-    static FALLBACK: OnceLock<SoundItOutPronouncer> = OnceLock::new();
-    FALLBACK.get_or_init(|| SoundItOutPronouncer::new(SoundItOutRules::english_arpabet_fallback()))
-}
-
-fn cmu_phones_to_riper_symbols(phones: &[CmuPhoneme]) -> WordPhoneRealization {
-    let phonology_sequence = phones
-        .iter()
-        .map(|phone| phoneme_from_arpabet(&cmu_phone_source_symbol(phone), "cmudict"))
-        .collect::<Vec<_>>();
-    let realized = realize_sequence(
-        &phonology_sequence,
-        &RealizationConfig {
-            enable_allophone_rules: true,
-            ..RealizationConfig::default()
-        },
-    );
-
-    let symbols = phones
-        .iter()
-        .zip(realized.iter())
-        .map(|(source, realized)| {
-            if matches!(
-                realized.realization.method,
-                RealizationMethod::AllophoneRule
-            ) && realized.realization.ipa == "ɾ"
-            {
-                "ɾ".to_string()
-            } else if source.base == "AH" {
-                cmu_phone_source_symbol(source)
-            } else {
-                source.base.clone()
-            }
-        })
-        .collect::<Vec<_>>();
-    let stress_by_phone = phones
-        .iter()
-        .map(|phone| cmu_stress_level(phone.stress))
-        .collect();
-    WordPhoneRealization {
-        symbols,
-        stress_by_phone,
-        stress_source: LexicalStressSource::Cmudict,
-    }
-}
-
-fn cmu_phone_source_symbol(phone: &CmuPhoneme) -> String {
-    match phone.stress {
-        Some(stress) => format!("{}{}", phone.base, cmu_stress_digit(stress)),
-        None => phone.base.clone(),
-    }
-}
-
-fn cmu_stress_digit(stress: crate::linguistic::cmudict::Stress) -> char {
+fn stress_from_phonological(stress: Option<PhonologicalStress>) -> Option<LexicalStressLevel> {
     match stress {
-        crate::linguistic::cmudict::Stress::Primary => '1',
-        crate::linguistic::cmudict::Stress::Secondary => '2',
-        crate::linguistic::cmudict::Stress::Unstressed => '0',
-    }
-}
-
-fn cmu_stress_level(stress: Option<CmuStress>) -> Option<LexicalStressLevel> {
-    match stress {
-        Some(CmuStress::Primary) => Some(LexicalStressLevel::Primary),
-        Some(CmuStress::Secondary) => Some(LexicalStressLevel::Secondary),
-        Some(CmuStress::Unstressed) => Some(LexicalStressLevel::Unstressed),
+        Some(PhonologicalStress::Primary) => Some(LexicalStressLevel::Primary),
+        Some(PhonologicalStress::Secondary) => Some(LexicalStressLevel::Secondary),
+        Some(PhonologicalStress::Unstressed) => Some(LexicalStressLevel::Unstressed),
         None => None,
     }
 }
@@ -984,6 +910,30 @@ mod tests {
                 .count()
                 >= 2,
             "breath break should coexist with the final sentence break"
+        );
+    }
+
+    #[test]
+    fn phonemizes_unpunctuated_with_stressful_productive_path() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit(
+                "I’m going to make the timing model distinguish vowel nuclei from other phones, then add a periodic breath break for long unpunctuated runs.",
+            )
+            .expect("phonemize");
+        let output = symbols(&unit.phonemes);
+        assert!(
+            output.windows(12).any(|chunk| chunk
+                == [
+                    "AH0", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY", "T", "IH0", "D"
+                ]),
+            "expected unpunctuated to include un- + punctuate + -ed realization"
+        );
+        assert!(
+            unit.lexical_stress
+                .iter()
+                .any(|stress| stress.stress == LexicalStressLevel::Primary),
+            "expected at least one primary stress target in unpunctuated sentence"
         );
     }
 
