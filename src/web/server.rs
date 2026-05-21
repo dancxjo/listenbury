@@ -48,6 +48,7 @@ struct ServerState {
 #[derive(Clone, Debug)]
 pub struct InputRouter {
     clock: SessionClock,
+    arbitration_lock: Arc<Mutex<()>>,
     native_capture_enabled: Option<Arc<AtomicBool>>,
     browser_audio_enabled: Arc<AtomicBool>,
     browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
@@ -60,6 +61,7 @@ impl Default for InputRouter {
     fn default() -> Self {
         Self {
             clock: SessionClock::start_now(),
+            arbitration_lock: Arc::new(Mutex::new(())),
             native_capture_enabled: None,
             browser_audio_enabled: Arc::new(AtomicBool::new(true)),
             browser_audio_tx: None,
@@ -75,6 +77,7 @@ impl InputRouter {
     ) -> Self {
         Self {
             clock: SessionClock::start_now(),
+            arbitration_lock: Arc::new(Mutex::new(())),
             native_capture_enabled,
             browser_audio_enabled: Arc::new(AtomicBool::new(true)),
             browser_audio_tx,
@@ -102,7 +105,19 @@ impl InputRouter {
         self.browser_audio_enabled.load(Ordering::Relaxed)
     }
 
+    fn native_mic_available(&self) -> bool {
+        self.native_capture_enabled.is_some()
+    }
+
+    fn browser_mic_available(&self, live_audio: Option<&LiveSessionAudioStore>) -> bool {
+        self.browser_audio_tx.is_some() || live_audio.is_some()
+    }
+
     fn set_browser_audio_enabled(&self, enabled: bool) {
+        let _guard = self
+            .arbitration_lock
+            .lock()
+            .expect("input router mutex poisoned");
         self.browser_audio_enabled.store(enabled, Ordering::Relaxed);
         if enabled {
             if let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() {
@@ -115,6 +130,10 @@ impl InputRouter {
         let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() else {
             return false;
         };
+        let _guard = self
+            .arbitration_lock
+            .lock()
+            .expect("input router mutex poisoned");
         native_capture_enabled.store(enabled, Ordering::Relaxed);
         if enabled {
             self.browser_audio_enabled.store(false, Ordering::Relaxed);
@@ -770,14 +789,15 @@ fn route_request_with_range_and_body(
 }
 
 fn input_status_json(state: &Arc<ServerState>) -> Vec<u8> {
-    let native_available = state.input_control.native_capture_enabled.is_some();
+    let native_available = state.input_control.native_mic_available();
     let native_enabled = state
         .input_control
         .native_capture_enabled
         .as_ref()
         .is_some_and(|enabled| enabled.load(Ordering::Relaxed));
-    let browser_available =
-        state.input_control.browser_audio_tx.is_some() || state.live_audio.is_some();
+    let browser_available = state
+        .input_control
+        .browser_mic_available(state.live_audio.as_ref());
     let browser_enabled = state.input_control.browser_audio_enabled();
     let browser_camera_available = state.input_control.browser_visual_speech_tx.is_some()
         || state.live_visual_speech.is_some();
@@ -789,7 +809,7 @@ fn input_status_json(state: &Arc<ServerState>) -> Vec<u8> {
 }
 
 fn update_native_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
-    if state.input_control.native_capture_enabled.is_none() {
+    if !state.input_control.native_mic_available() {
         return HttpResponse::not_found("native microphone control is not available\n");
     }
     let payload: serde_json::Value = match serde_json::from_slice(body) {
@@ -804,9 +824,10 @@ fn update_native_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
 }
 
 fn update_browser_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
-    let browser_available =
-        state.input_control.browser_audio_tx.is_some() || state.live_audio.is_some();
-    if !browser_available {
+    if !state
+        .input_control
+        .browser_mic_available(state.live_audio.as_ref())
+    {
         return HttpResponse::not_found("browser microphone control is not available\n");
     }
     let payload: serde_json::Value = match serde_json::from_slice(body) {
