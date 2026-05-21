@@ -22,7 +22,7 @@ pub struct TimeRange {
 impl TimeRange {
     /// Creates an inclusive range with `start <= end`.
     pub fn new(start: TimePoint, end: TimePoint) -> Self {
-        debug_assert!(start <= end, "time range start must be <= end");
+        assert!(start <= end, "time range start must be <= end");
         Self { start, end }
     }
 
