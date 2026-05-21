@@ -80,6 +80,9 @@ impl PitchCurve {
     ///
     /// Each note contributes a point at its onset; a final endpoint is added at
     /// the end of the last note to preserve the final sustain.
+    ///
+    /// Returns `None` when no notes are provided or when the final note end time
+    /// overflows `u64` milliseconds.
     pub fn from_note_targets<'a, I>(notes: I, interpolation: Interpolation) -> Option<Self>
     where
         I: IntoIterator<Item = &'a NoteTarget>,
@@ -99,7 +102,8 @@ impl PitchCurve {
         }
 
         let last = notes.last().expect("checked non-empty");
-        let end_t = Duration::from_millis(last.onset.millis.saturating_add(last.duration.millis));
+        let end_millis = last.onset.millis.checked_add(last.duration.millis)?;
+        let end_t = Duration::from_millis(end_millis);
         let end_hz = last.pitch.frequency_hz() as f32;
         push_or_replace(&mut points, PitchPoint::new(end_t, end_hz));
 
@@ -123,7 +127,11 @@ impl PitchCurve {
             return last.hz;
         }
 
-        let upper = self.points.partition_point(|point| point.t <= t);
+        if let Ok(index) = self.points.binary_search_by_key(&t, |point| point.t) {
+            return self.points[index].hz;
+        }
+
+        let upper = self.points.partition_point(|point| point.t < t);
         let lower = upper.saturating_sub(1);
         let a = self.points[lower];
         let b = self.points[upper];
