@@ -598,13 +598,14 @@ fn find_piper_executable(name: &str) -> Option<PathBuf> {
     })
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(feature = "tts-riper")]
 fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     if frame.sample_rate_hz == 0 || frame.channels == 0 {
         return 0;
     }
-    ((frame.samples.len() as u64 / u64::from(frame.channels)) * 1_000)
-        / u64::from(frame.sample_rate_hz)
+    let channel_count = u64::from(frame.channels);
+    let sample_count = frame.samples.len() as u64;
+    sample_count.saturating_mul(1_000) / channel_count.saturating_mul(u64::from(frame.sample_rate_hz))
 }
 
 pub(crate) fn piper_config_for_voice(
@@ -840,6 +841,42 @@ mod tests {
 
         assert!(args.riper);
         assert_eq!(args.text, "hello there");
+    }
+
+    #[test]
+    #[cfg(feature = "tts-riper")]
+    fn frame_duration_ms_handles_zero_values() {
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 0,
+            channels: 1,
+            samples: vec![0.0; 1600],
+            voice_signatures: Vec::new(),
+        };
+        assert_eq!(frame_duration_ms(&frame), 0);
+
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 0,
+            samples: vec![0.0; 1600],
+            voice_signatures: Vec::new(),
+        };
+        assert_eq!(frame_duration_ms(&frame), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "tts-riper")]
+    fn frame_duration_ms_preserves_fractional_millisecond_precision() {
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 16_000,
+            channels: 2,
+            samples: vec![0.0; 3_200],
+            voice_signatures: Vec::new(),
+        };
+
+        assert_eq!(frame_duration_ms(&frame), 100);
     }
 
     #[test]
