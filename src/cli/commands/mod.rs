@@ -33,10 +33,14 @@ pub(crate) use vad_trace::run_vad_trace;
 pub(crate) use web::run_web;
 
 #[cfg(feature = "tts-piper")]
+pub(crate) use crate::cli::piper::run_echo;
+#[cfg(feature = "tts-piper")]
 pub(crate) use crate::cli::piper::run_riper_compare;
 #[cfg(feature = "tts-piper")]
 pub(crate) use crate::cli::piper::run_say;
 
+#[cfg(not(feature = "tts-piper"))]
+use crate::cli::EchoCommand;
 #[cfg(not(feature = "tts-piper"))]
 use crate::cli::RiperCompareCommand;
 #[cfg(not(feature = "tts-piper"))]
@@ -51,5 +55,10 @@ pub(crate) fn run_say(_command: SayCommand) -> Result<()> {
 
 #[cfg(not(feature = "tts-piper"))]
 pub(crate) fn run_riper_compare(_command: RiperCompareCommand) -> Result<()> {
+    anyhow::bail!("listenbury was built without the `tts-piper` feature")
+}
+
+#[cfg(not(feature = "tts-piper"))]
+pub(crate) fn run_echo(_command: EchoCommand) -> Result<()> {
     anyhow::bail!("listenbury was built without the `tts-piper` feature")
 }

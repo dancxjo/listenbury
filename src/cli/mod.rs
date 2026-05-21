@@ -34,6 +34,11 @@ enum Command {
     )]
     RiperCompare(RiperCompareCommand),
     #[command(
+        alias = "monkey-do",
+        about = "Transcribe a WAV and echo the same text back with matched prosody hints"
+    )]
+    Echo(EchoCommand),
+    #[command(
         alias = "live-half-duplex",
         about = "Listen and reply in a live voice loop"
     )]
@@ -310,6 +315,21 @@ pub(crate) struct RiperCompareCommand {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct EchoCommand {
+    pub(crate) input_wav: PathBuf,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, alias = "model-path")]
+    pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) riper_config: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) output_wav: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) comparison_json: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct RoundTripWavCommand {
     pub(crate) input_wav: PathBuf,
     #[arg(long)]
@@ -507,6 +527,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
+        Command::Echo(cmd) => commands::run_echo(cmd),
         Command::Listen(cmd) => {
             if cmd.duplex {
                 commands::run_continue(continue_command_from_listen_command(cmd))
@@ -763,6 +784,48 @@ mod tests {
             panic!("expected riper-compare command");
         };
         assert!(command.words.is_empty());
+    }
+
+    #[test]
+    fn echo_accepts_wav_output_and_comparison_paths() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "echo",
+            "fixtures/in.wav",
+            "--whisper-model",
+            "models/ggml-base.en.bin",
+            "--model-path",
+            "voices/en_US.onnx",
+            "--riper-config",
+            "voices/en_US.onnx.json",
+            "--output-wav",
+            "out/echo.wav",
+            "--comparison-json",
+            "out/echo.json",
+        ])
+        .expect("echo should parse offline echo options");
+
+        let Some(Command::Echo(command)) = cli.command else {
+            panic!("expected echo command");
+        };
+        assert_eq!(command.input_wav, PathBuf::from("fixtures/in.wav"));
+        assert_eq!(
+            command.whisper_model,
+            Some(PathBuf::from("models/ggml-base.en.bin"))
+        );
+        assert_eq!(
+            command.piper_voice,
+            Some(PathBuf::from("voices/en_US.onnx"))
+        );
+        assert_eq!(
+            command.riper_config,
+            Some(PathBuf::from("voices/en_US.onnx.json"))
+        );
+        assert_eq!(command.output_wav, Some(PathBuf::from("out/echo.wav")));
+        assert_eq!(
+            command.comparison_json,
+            Some(PathBuf::from("out/echo.json"))
+        );
     }
 
     #[test]
