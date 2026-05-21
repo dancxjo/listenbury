@@ -494,6 +494,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let server_broadcaster = broadcaster.clone();
     let live_audio = listenbury::web::LiveSessionAudioStore::new();
     let server_live_audio = live_audio.clone();
+    let live_visual_speech = listenbury::web::LiveSessionVisualSpeechStore::new();
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let (browser_audio_tx, browser_audio_rx) = crossbeam_channel::bounded::<AudioFrame>(128);
     let bind_host = command.web_host.clone();
@@ -504,6 +505,7 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         trace: None,
         broadcaster: Some(server_broadcaster),
         live_audio: Some(server_live_audio),
+        live_visual_speech: Some(live_visual_speech),
         input_control: listenbury::web::WebInputControl::new(
             Some(Arc::clone(&capture_enabled)),
             Some(browser_audio_tx),

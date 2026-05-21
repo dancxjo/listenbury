@@ -7,14 +7,19 @@ use std::sync::{
 };
 
 use anyhow::{Context, Result};
+use serde_json::json;
 
 use crate::audio::{
     AcousticAnalysis, AudioFrame, analyze_audio_frames, read_wav_frames,
     segment_pronunciation_with_acoustics, write_wav_bytes,
 };
+use crate::live_trace::{LiveTraceEvent, LiveTraceSink};
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
 use crate::time::ExactTimestamp;
 use crate::trace::viewer_payload::{ViewerPayload, trace_session_to_viewer_payload};
+use crate::vision::{
+    VisionFrame, VisualProvenance, VisualSpeechFrame, extract_visual_speech_frame_from_rgba,
+};
 
 use super::assets;
 
@@ -26,6 +31,7 @@ pub struct ServeConfig {
     pub trace: Option<PathBuf>,
     pub broadcaster: Option<SseBroadcaster>,
     pub live_audio: Option<LiveSessionAudioStore>,
+    pub live_visual_speech: Option<LiveSessionVisualSpeechStore>,
     pub input_control: WebInputControl,
 }
 
@@ -35,6 +41,7 @@ struct ServerState {
     trace: Option<PathBuf>,
     broadcaster: Option<SseBroadcaster>,
     live_audio: Option<LiveSessionAudioStore>,
+    live_visual_speech: Option<LiveSessionVisualSpeechStore>,
     input_control: WebInputControl,
 }
 
@@ -42,6 +49,7 @@ struct ServerState {
 pub struct WebInputControl {
     native_capture_enabled: Option<Arc<AtomicBool>>,
     browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
+    browser_visual_speech_tx: Option<crossbeam_channel::Sender<VisualSpeechFrame>>,
 }
 
 impl WebInputControl {
@@ -52,7 +60,45 @@ impl WebInputControl {
         Self {
             native_capture_enabled,
             browser_audio_tx,
+            browser_visual_speech_tx: None,
         }
+    }
+
+    pub fn with_visual_speech_tx(
+        mut self,
+        browser_visual_speech_tx: Option<crossbeam_channel::Sender<VisualSpeechFrame>>,
+    ) -> Self {
+        self.browser_visual_speech_tx = browser_visual_speech_tx;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LiveSessionVisualSpeechStore {
+    frames: Arc<Mutex<Vec<VisualSpeechFrame>>>,
+}
+
+impl LiveSessionVisualSpeechStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push_frame(&self, frame: VisualSpeechFrame) {
+        match self.frames.lock() {
+            Ok(mut frames) => frames.push(frame),
+            Err(error) => {
+                tracing::error!("live visual-speech mutex poisoned; dropping frame: {error}")
+            }
+        }
+    }
+
+    fn snapshot(&self) -> Result<Vec<VisualSpeechFrame>> {
+        let frames = self
+            .frames
+            .lock()
+            .map_err(|error| anyhow::anyhow!("live visual-speech mutex poisoned: {error}"))?
+            .clone();
+        Ok(frames)
     }
 }
 
@@ -137,7 +183,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/session-audio/*, /api/live-events, /api/browser-audio, /api/input-status, /api/native-mic, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/live-visual-speech.json, /api/session-audio/*, /api/live-events, /api/browser-audio, /api/browser-video-frame, /api/input-status, /api/native-mic, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -301,6 +347,7 @@ pub fn bind(config: ServeConfig) -> Result<BoundServer> {
         trace: config.trace,
         broadcaster: config.broadcaster,
         live_audio: config.live_audio,
+        live_visual_speech: config.live_visual_speech,
         input_control: config.input_control,
     });
 
@@ -487,6 +534,12 @@ fn route_request_with_range_and_body(
         }
         return receive_browser_audio(state, headers, body);
     }
+    if path == "/api/browser-video-frame" {
+        if !method.eq_ignore_ascii_case("POST") {
+            return HttpResponse::method_not_allowed("only POST is supported\n");
+        }
+        return receive_browser_video_frame(state, headers, body);
+    }
 
     if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
         return HttpResponse::method_not_allowed("only GET/HEAD are supported\n");
@@ -635,6 +688,14 @@ fn route_request_with_range_and_body(
             }
             Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
         },
+        "/api/live-visual-speech.json" => match load_live_visual_speech(state) {
+            Ok(Some(trace)) => HttpResponse::ok("application/json; charset=utf-8", trace),
+            Ok(None) if state.live_visual_speech.is_some() => {
+                HttpResponse::accepted("live visual speech is not available yet\n")
+            }
+            Ok(None) => HttpResponse::not_found("live visual speech is not available yet\n"),
+            Err(error) => HttpResponse::internal_error(format!("{error:#}\n")),
+        },
 
         _ if path.starts_with("/api/session-audio/") && path.ends_with("/acoustic.json") => {
             match load_session_acoustic(path, state) {
@@ -661,9 +722,11 @@ fn input_status_json(state: &Arc<ServerState>) -> Vec<u8> {
         .is_some_and(|enabled| enabled.load(Ordering::Relaxed));
     let browser_available =
         state.input_control.browser_audio_tx.is_some() || state.live_audio.is_some();
+    let browser_camera_available = state.input_control.browser_visual_speech_tx.is_some()
+        || state.live_visual_speech.is_some();
     format!(
-        "{{\"nativeMic\":{{\"available\":{},\"enabled\":{}}},\"browserMic\":{{\"available\":{}}}}}\n",
-        native_available, native_enabled, browser_available
+        "{{\"nativeMic\":{{\"available\":{},\"enabled\":{}}},\"browserMic\":{{\"available\":{}}},\"browserCamera\":{{\"available\":{}}}}}\n",
+        native_available, native_enabled, browser_available, browser_camera_available
     )
     .into_bytes()
 }
@@ -740,6 +803,100 @@ fn receive_browser_audio(
     } else {
         HttpResponse::not_found("browser audio input is not available\n")
     }
+}
+
+fn receive_browser_video_frame(
+    state: &Arc<ServerState>,
+    headers: &[(String, String)],
+    body: &[u8],
+) -> HttpResponse {
+    if body.is_empty() {
+        return HttpResponse::bad_request("video frame body must not be empty\n");
+    }
+    if body.len() > 2 * 1024 * 1024 {
+        return HttpResponse::bad_request("video frame is too large\n");
+    }
+    let width = match request_header(headers, "x-width").and_then(|value| value.parse::<u32>().ok())
+    {
+        Some(width) if (16..=1920).contains(&width) => width,
+        _ => return HttpResponse::bad_request("invalid X-Width header\n"),
+    };
+    let height =
+        match request_header(headers, "x-height").and_then(|value| value.parse::<u32>().ok()) {
+            Some(height) if (16..=1080).contains(&height) => height,
+            _ => return HttpResponse::bad_request("invalid X-Height header\n"),
+        };
+    if request_header(headers, "x-pixel-format")
+        .unwrap_or("rgba8")
+        .to_ascii_lowercase()
+        != "rgba8"
+    {
+        return HttpResponse::bad_request("only X-Pixel-Format: rgba8 is supported\n");
+    }
+    let expected_len = usize::try_from(width)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(usize::try_from(height).unwrap_or(usize::MAX))
+        .saturating_mul(4);
+    if body.len() != expected_len {
+        return HttpResponse::bad_request("rgba8 body length does not match width*height*4\n");
+    }
+
+    let start_ms = request_header(headers, "x-capture-elapsed-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let duration_ms = request_header(headers, "x-frame-duration-ms")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|duration| (1..=250).contains(duration))
+        .unwrap_or(67);
+    let frame_index =
+        request_header(headers, "x-frame-index").and_then(|value| value.parse::<u64>().ok());
+    let capture_time_ms =
+        request_header(headers, "x-capture-time-ms").and_then(|value| value.parse::<u64>().ok());
+    let audio_offset_ms = request_header(headers, "x-audio-offset-ms")
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+
+    let vision_frame = VisionFrame {
+        captured_at: ExactTimestamp::now(),
+        width,
+        height,
+        bytes: body.to_vec(),
+    };
+    let provenance = VisualProvenance {
+        source: "browser_camera.backend_rgba".to_string(),
+        frame_index,
+        capture_time_ms,
+        audio_offset_ms: Some(audio_offset_ms),
+        notes: vec![
+            "browser transported transient rgba8 frame; backend extracted derived features"
+                .to_string(),
+        ],
+    };
+    let Some(feature_frame) = extract_visual_speech_frame_from_rgba(
+        &vision_frame,
+        start_ms..start_ms.saturating_add(duration_ms),
+        provenance,
+    ) else {
+        return HttpResponse::bad_request("unable to extract visual speech features from frame\n");
+    };
+
+    if let Some(tx) = &state.input_control.browser_visual_speech_tx {
+        if let Err(error) = tx.try_send(feature_frame.clone()) {
+            return match error {
+                crossbeam_channel::TrySendError::Full(_) => {
+                    HttpResponse::service_unavailable("visual speech queue is full\n")
+                }
+                crossbeam_channel::TrySendError::Disconnected(_) => {
+                    HttpResponse::service_unavailable("visual speech processor is disconnected\n")
+                }
+            };
+        }
+    }
+    if let Some(store) = &state.live_visual_speech {
+        store.push_frame(feature_frame.clone());
+    }
+    broadcast_visual_speech_frame(state, &feature_frame);
+    HttpResponse::accepted("browser video frame accepted; derived features stored\n")
 }
 
 fn load_payload(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
@@ -858,6 +1015,57 @@ fn load_live_session_acoustic(state: &Arc<ServerState>) -> Result<Option<Vec<u8>
     };
     let json = serde_json::to_vec(&analysis).context("serialize live session acoustic analysis")?;
     Ok(Some(json))
+}
+
+fn load_live_visual_speech(state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
+    let Some(store) = state.live_visual_speech.as_ref() else {
+        return Ok(None);
+    };
+    let frames = store.snapshot()?;
+    if frames.is_empty() {
+        return Ok(None);
+    }
+    let json = serde_json::to_vec(&frames).context("serialize live visual speech frames")?;
+    Ok(Some(json))
+}
+
+fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechFrame) {
+    let Some(broadcaster) = &state.broadcaster else {
+        return;
+    };
+    let now = ExactTimestamp::now();
+    let mut event = LiveTraceEvent {
+        turn: 0,
+        soundscape_id: None,
+        voice_id: None,
+        voice_label: None,
+        voice_attributions: Vec::new(),
+        session_id: None,
+        turn_id: None,
+        utterance_id: None,
+        speech_unit_id: None,
+        transcript_revision_id: None,
+        span_id: None,
+        audio_clip_id: None,
+        kind: "visual_speech_frame".to_string(),
+        t_unix_ns: now.unix_nanos.min(u128::from(u64::MAX)) as u64,
+        elapsed_ms: frame.time_range_ms.start,
+        text: Some("derived_mouth_motion_features".to_string()),
+        confidence: Some(frame.visibility.weighted()),
+        group_id: None,
+        reason: None,
+        face: None,
+        unit_kind: None,
+        expected_until_unix_ns: None,
+        artifact: Some(json!(frame)),
+    };
+    if frame.visibility.value < 0.35 {
+        event.reason = Some("low_mouth_visibility".to_string());
+    }
+    let mut broadcaster = broadcaster.clone();
+    if let Err(error) = broadcaster.emit(event) {
+        tracing::error!("failed to broadcast visual speech frame: {error:#}");
+    }
 }
 
 fn load_session_audio(path: &str, state: &Arc<ServerState>) -> Result<Option<Vec<u8>>> {
@@ -1048,6 +1256,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         })
     }
@@ -1058,6 +1267,7 @@ mod tests {
             trace: None,
             broadcaster: Some(SseBroadcaster::new()),
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         })
     }
@@ -1208,6 +1418,7 @@ mod tests {
             trace: Some(trace_path.clone()),
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1339,6 +1550,7 @@ mod tests {
             trace: Some(root.clone()),
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
         let response = route_request("GET", "/api/session-audio/session-audio", &state);
@@ -1385,6 +1597,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(store),
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1412,6 +1625,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1430,6 +1644,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
         let headers = vec![
@@ -1457,6 +1672,59 @@ mod tests {
     }
 
     #[test]
+    fn browser_video_frame_post_stores_derived_visual_features_only() {
+        let live_visual_speech = LiveSessionVisualSpeechStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: None,
+            live_visual_speech: Some(live_visual_speech),
+            input_control: WebInputControl::default(),
+        });
+        let width = 40usize;
+        let height = 40usize;
+        let mut body = vec![180_u8; width * height * 4];
+        for px in body.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        for y in 24..30 {
+            for x in 16..24 {
+                let i = (y * width + x) * 4;
+                body[i] = 10;
+                body[i + 1] = 10;
+                body[i + 2] = 10;
+            }
+        }
+        let headers = vec![
+            ("x-pixel-format".to_string(), "rgba8".to_string()),
+            ("x-width".to_string(), width.to_string()),
+            ("x-height".to_string(), height.to_string()),
+            ("x-capture-elapsed-ms".to_string(), "1200".to_string()),
+            ("x-frame-duration-ms".to_string(), "33".to_string()),
+            ("x-frame-index".to_string(), "7".to_string()),
+        ];
+
+        let response = route_request_with_range_and_body(
+            "POST",
+            "/api/browser-video-frame",
+            &state,
+            None,
+            &headers,
+            &body,
+        );
+        assert_eq!(response.status, 202);
+
+        let visual_response = route_request("GET", "/api/live-visual-speech.json", &state);
+        assert_eq!(visual_response.status, 200);
+        let visual_json = String::from_utf8(visual_response.body).expect("utf8");
+        assert!(visual_json.contains("\"timeRangeMs\":[1200,1233]"));
+        assert!(visual_json.contains("\"lipClosure\""));
+        assert!(!visual_json.contains("rawVideo"));
+        assert!(!visual_json.contains(&format!("{body:?}")));
+    }
+
+    #[test]
     fn native_mic_control_updates_shared_capture_flag() {
         let enabled = Arc::new(AtomicBool::new(true));
         let state = Arc::new(ServerState {
@@ -1464,6 +1732,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::new(Some(Arc::clone(&enabled)), None),
         });
 
@@ -1490,6 +1759,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1517,6 +1787,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: Some(live_audio),
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1594,6 +1865,7 @@ mod tests {
             trace: Some(session_root.clone()),
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         });
 
@@ -1760,6 +2032,7 @@ mod tests {
             trace: None,
             broadcaster: None,
             live_audio: None,
+            live_visual_speech: None,
             input_control: WebInputControl::default(),
         })
         .expect_err("second bind should fail");

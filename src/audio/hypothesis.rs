@@ -71,6 +71,8 @@ pub enum HypothesisSource {
     DtwTemplateMatcher,
     /// Viterbi forced-alignment over a known pronunciation.
     ViterbiAlignment,
+    /// Backend-derived mouth-motion evidence from a local camera stream.
+    VisualSpeech,
     /// Manually created (e.g. for testing or seeding).
     Manual,
 }

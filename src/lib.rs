@@ -67,3 +67,7 @@ pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};
 pub use time::{ExactTimestamp, Timed};
+pub use vision::{
+    AvSyncConfig, EvidenceScore, PhonemeClass, VisualEvidenceStatus, VisualProvenance,
+    VisualSpeechClaim, VisualSpeechClaimKind, VisualSpeechFrame, VisualSpeechTrace, VowelShape,
+};

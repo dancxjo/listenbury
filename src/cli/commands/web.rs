@@ -20,6 +20,7 @@ pub(crate) fn run_web(command: WebCommand) -> Result<()> {
         trace: command.trace,
         broadcaster: None,
         live_audio: None,
+        live_visual_speech: None,
         input_control: listenbury::web::WebInputControl::default(),
     })
 }

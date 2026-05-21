@@ -1,0 +1,63 @@
+{
+  "description": "Controlled visual speech fixture for did vs deep. No final bilabial closure should conflict with final /P/ and support a non-bilabial final /D/ alternative.",
+  "sync": {
+    "manualVideoOffsetMs": 0,
+    "maxUsableDesyncMs": 80,
+    "confidenceDecayPerMs": 0.012
+  },
+  "alternatives": [
+    {
+      "word": "did",
+      "phonemes": ["D", "IH", "D"],
+      "finalPhoneWindowMs": [820, 860]
+    },
+    {
+      "word": "deep",
+      "phonemes": ["D", "IY", "P"],
+      "finalPhoneWindowMs": [820, 860]
+    }
+  ],
+  "visualSpeechFrames": [
+    {
+      "timeRangeMs": [792, 825],
+      "mouthOpen": { "value": 0.42, "confidence": 0.76 },
+      "lipClosure": { "value": 0.08, "confidence": 0.86 },
+      "lipRounding": { "value": 0.11, "confidence": 0.40 },
+      "jawOpening": { "value": 0.37, "confidence": 0.70 },
+      "visibility": { "value": 0.94, "confidence": 0.95 },
+      "provenance": {
+        "source": "fixture.backend_derived",
+        "frameIndex": 24,
+        "captureTimeMs": 792,
+        "audioOffsetMs": 0,
+        "notes": ["fixture contains derived mouth-motion scores only; no raw video"]
+      }
+    },
+    {
+      "timeRangeMs": [825, 858],
+      "mouthOpen": { "value": 0.39, "confidence": 0.74 },
+      "lipClosure": { "value": 0.05, "confidence": 0.88 },
+      "lipRounding": { "value": 0.10, "confidence": 0.40 },
+      "jawOpening": { "value": 0.34, "confidence": 0.70 },
+      "visibility": { "value": 0.95, "confidence": 0.95 },
+      "provenance": {
+        "source": "fixture.backend_derived",
+        "frameIndex": 25,
+        "captureTimeMs": 825,
+        "audioOffsetMs": 0,
+        "notes": ["no final bilabial closure near the candidate final stop"]
+      }
+    }
+  ],
+  "expectedClaims": [
+    {
+      "targetTimeMs": 840,
+      "claim": "candidate final consonant is unlikely bilabial",
+      "source": "visual_speech.lip_closure",
+      "supports": ["/D/"],
+      "conflicts": ["/P/"],
+      "rationale": "No visible lip closure near expected final stop closure/release window."
+    }
+  ],
+  "rawVideoPersistedByDefault": false
+}

@@ -188,6 +188,8 @@ pub struct FusionInput {
     pub timing_coherence: Option<f32>,
     /// Aggregate mechanical recogniser score (0.0–1.0, e.g. from DTW/Viterbi).
     pub mechanical_recognizer_score: Option<f32>,
+    /// Time-synchronised backend visual speech evidence (0.0–1.0).
+    pub visual_speech_evidence: Option<f32>,
 }
 
 impl FusionInput {
@@ -213,6 +215,7 @@ impl FusionInput {
         push(self.prosody_consistency, 0.5);
         push(self.timing_coherence, 1.25);
         push(self.mechanical_recognizer_score, 1.0);
+        push(self.visual_speech_evidence, 0.9);
 
         if total_weight > 0.0 {
             (weighted_sum / total_weight).clamp(0.0, 1.0)
@@ -648,6 +651,7 @@ mod tests {
             prosody_consistency: Some(1.0),
             timing_coherence: Some(1.0),
             mechanical_recognizer_score: Some(1.0),
+            visual_speech_evidence: Some(1.0),
         };
         assert!((input.weighted_confidence() - 1.0).abs() < 1e-5);
     }

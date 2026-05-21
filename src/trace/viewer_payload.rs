@@ -520,6 +520,8 @@ fn lane_for_kind(kind: &str) -> &'static str {
         "Overlap"
     } else if kind.contains("interrupt") || kind.contains("yield") {
         "Interruption"
+    } else if kind.contains("visual_speech") {
+        "Visual speech"
     } else if kind.contains("environment") {
         "Environmental"
     } else if kind.contains("asr")

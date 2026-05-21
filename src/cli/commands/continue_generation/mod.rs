@@ -844,6 +844,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
             trace: None,
             broadcaster: Some(server_bc),
             live_audio: live_audio.clone(),
+            live_visual_speech: Some(listenbury::web::LiveSessionVisualSpeechStore::new()),
             input_control: listenbury::web::WebInputControl::new(
                 Some(Arc::clone(&capture_enabled)),
                 browser_audio_tx,
