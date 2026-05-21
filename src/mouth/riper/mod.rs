@@ -47,8 +47,10 @@ pub use prosody_planner::{
     ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RiperProsodyRealization,
 };
 pub use sentence_analysis::{
+    AnalysisClaim, AnalysisClaimKind, AnalysisSource, ContextPredicate, EnvironmentPattern,
     HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole, ReductionClass, ReductionDiagnostic,
-    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticRole, TokenAnalysis,
+    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind,
+    SyntacticLinkParse, SyntacticRole, TokenAnalysis, WordIndex,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,
