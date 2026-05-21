@@ -36,6 +36,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::memory::trace::MemoryTrace;
+use crate::runtime_event::RuntimeEvent;
 
 // ---------------------------------------------------------------------------
 // JournalEntry
@@ -52,6 +53,9 @@ pub struct JournalEntry {
     pub timestamp: String,
     /// The trace event that was recorded.
     pub trace: MemoryTrace,
+    /// Canonical runtime envelope for trace correlation/replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_event: Option<RuntimeEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +113,7 @@ impl MemoryJournal {
         let entry = JournalEntry {
             timestamp: Utc::now().to_rfc3339(),
             trace: trace.clone(),
+            runtime_event: Some(RuntimeEvent::from_memory_trace(trace)),
         };
         let mut line = serde_json::to_string(&entry).context("serialize journal entry")?;
         line.push('\n');
@@ -261,6 +266,14 @@ mod tests {
             serde_json::from_str(line.trim()).expect("must be valid JSON");
         assert!(value.get("timestamp").is_some(), "must have timestamp");
         assert!(value.get("trace").is_some(), "must have trace");
+        assert!(
+            value.get("runtime_event").is_some(),
+            "must have canonical runtime_event envelope"
+        );
+        assert_eq!(
+            value["runtime_event"]["source"],
+            serde_json::Value::String("memory_ingestion".to_string())
+        );
     }
 
     // -------------------------------------------------------------------------

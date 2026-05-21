@@ -886,6 +886,7 @@ mod tests {
             unit_kind: None,
             expected_until_unix_ns: None,
             artifact: None,
+            runtime_event: None,
         }
     }
 

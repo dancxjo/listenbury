@@ -38,3 +38,30 @@ Ordering guarantee:
 1. Event wall-clock (`t_unix_ns`) and normalized wall-clock (`normalized_unix_ns`) are emitted from the session clock normalization path.
 2. Session-relative ordering uses `normalized_elapsed_ms`.
 3. Routed browser camera events use explicit provenance (`browser.camera`), while trace-runtime events use `runtime.trace`.
+
+## Canonical runtime envelope and causality
+
+Live traces and memory journal entries now both emit a canonical `RuntimeEvent`
+envelope (`runtime_event`) with:
+
+- stable `id`
+- `timestamp` (wall-clock)
+- `monotonic_ms` (session-relative ordering anchor)
+- typed `kind` (`domain` + typed event payload)
+- source/provenance tag (`source`)
+- `causality` references and coarse `correlation` tags
+
+Event ordering semantics:
+
+1. Within one session, `monotonic_ms` is the primary ordering field.
+2. `timestamp` is used for wall-clock comparison across sessions/subsystems.
+3. When `monotonic_ms` is equal, consumers should retain source order or break
+   ties with stable `id`.
+
+Causality semantics:
+
+- `causality` entries point to upstream IDs or correlation anchors
+  (`turn:*`, `utterance:*`, `speech_unit:*`, etc.).
+- `correlation` is a looser grouping key for cross-subsystem joins and replay
+  slices.
+- Consumers should treat missing `causality` as unknown ancestry (not an error).

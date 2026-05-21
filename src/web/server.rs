@@ -1164,6 +1164,7 @@ fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechF
         unit_kind: None,
         expected_until_unix_ns: None,
         artifact: Some(json!(frame)),
+        runtime_event: None,
     };
     if frame.visibility.value < 0.35 {
         event.reason = Some("low_mouth_visibility".to_string());

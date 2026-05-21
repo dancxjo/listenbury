@@ -10,6 +10,7 @@ pub mod mind;
 pub mod models;
 pub mod mouth;
 pub mod runtime;
+pub mod runtime_event;
 pub mod soundscape;
 pub mod span;
 pub mod speculative;
@@ -53,6 +54,7 @@ pub use mouth::read_aloud::{
     SpeechCandidateCommitment, SpeechCandidateId,
 };
 pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
+pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
     Soundscape, SoundscapeId, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
     VoiceRoleInSpan,
