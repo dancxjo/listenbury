@@ -1,4 +1,4 @@
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,69 @@ impl ExactTimestamp {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NormalizedTimestamp {
+    pub unix_ns: u64,
+    pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionClock {
+    session_started_at: ExactTimestamp,
+    monotonic_origin: Instant,
+}
+
+impl SessionClock {
+    pub fn start_now() -> Self {
+        Self {
+            session_started_at: ExactTimestamp::now(),
+            monotonic_origin: Instant::now(),
+        }
+    }
+
+    pub fn with_session_start(session_started_at: ExactTimestamp) -> Self {
+        Self {
+            session_started_at,
+            monotonic_origin: Instant::now(),
+        }
+    }
+
+    pub fn session_started_at(&self) -> ExactTimestamp {
+        self.session_started_at
+    }
+
+    pub fn now(&self) -> ExactTimestamp {
+        self.at_elapsed(self.monotonic_origin.elapsed())
+    }
+
+    pub fn at_elapsed_ms(&self, elapsed_ms: u64) -> ExactTimestamp {
+        self.at_elapsed(Duration::from_millis(elapsed_ms))
+    }
+
+    pub fn at_elapsed(&self, elapsed: Duration) -> ExactTimestamp {
+        ExactTimestamp {
+            unix_nanos: self
+                .session_started_at
+                .unix_nanos
+                .saturating_add(elapsed.as_nanos()),
+        }
+    }
+
+    pub fn elapsed_ms(&self, at: ExactTimestamp) -> u64 {
+        at.unix_nanos
+            .saturating_sub(self.session_started_at.unix_nanos)
+            .saturating_div(1_000_000)
+            .min(u128::from(u64::MAX)) as u64
+    }
+
+    pub fn normalize(&self, at: ExactTimestamp) -> NormalizedTimestamp {
+        NormalizedTimestamp {
+            unix_ns: at.unix_nanos.min(u128::from(u64::MAX)) as u64,
+            elapsed_ms: self.elapsed_ms(at),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Timed<T> {
     pub at: Instant,
@@ -60,5 +123,22 @@ impl<T> Timed<T> {
             at: Instant::now(),
             body,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_clock_normalizes_elapsed_time_from_session_start() {
+        let session_started_at = ExactTimestamp {
+            unix_nanos: 10_000_000_000,
+        };
+        let clock = SessionClock::with_session_start(session_started_at);
+        let at = clock.at_elapsed_ms(225);
+        let normalized = clock.normalize(at);
+        assert_eq!(normalized.unix_ns, 10_225_000_000);
+        assert_eq!(normalized.elapsed_ms, 225);
     }
 }

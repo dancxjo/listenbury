@@ -15,7 +15,7 @@ use crate::audio::{
 };
 use crate::live_trace::{LiveTraceEvent, LiveTraceSink};
 use crate::live_trace::{SseBroadcaster, read_trace_jsonl, read_trace_session};
-use crate::time::ExactTimestamp;
+use crate::time::{ExactTimestamp, SessionClock};
 use crate::trace::viewer_payload::{ViewerPayload, trace_session_to_viewer_payload};
 use crate::vision::{
     VisionFrame, VisualProvenance, VisualSpeechFrame, extract_visual_speech_frame_from_rgba,
@@ -45,20 +45,41 @@ struct ServerState {
     input_control: WebInputControl,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct WebInputControl {
+#[derive(Clone, Debug)]
+pub struct InputRouter {
+    clock: SessionClock,
+    arbitration_lock: Arc<Mutex<()>>,
     native_capture_enabled: Option<Arc<AtomicBool>>,
+    browser_audio_enabled: Arc<AtomicBool>,
     browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
     browser_visual_speech_tx: Option<crossbeam_channel::Sender<VisualSpeechFrame>>,
 }
 
-impl WebInputControl {
+pub type WebInputControl = InputRouter;
+
+impl Default for InputRouter {
+    fn default() -> Self {
+        Self {
+            clock: SessionClock::start_now(),
+            arbitration_lock: Arc::new(Mutex::new(())),
+            native_capture_enabled: None,
+            browser_audio_enabled: Arc::new(AtomicBool::new(true)),
+            browser_audio_tx: None,
+            browser_visual_speech_tx: None,
+        }
+    }
+}
+
+impl InputRouter {
     pub fn new(
         native_capture_enabled: Option<Arc<AtomicBool>>,
         browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
     ) -> Self {
         Self {
+            clock: SessionClock::start_now(),
+            arbitration_lock: Arc::new(Mutex::new(())),
             native_capture_enabled,
+            browser_audio_enabled: Arc::new(AtomicBool::new(true)),
             browser_audio_tx,
             browser_visual_speech_tx: None,
         }
@@ -70,6 +91,54 @@ impl WebInputControl {
     ) -> Self {
         self.browser_visual_speech_tx = browser_visual_speech_tx;
         self
+    }
+
+    fn now(&self) -> ExactTimestamp {
+        self.clock.now()
+    }
+
+    fn normalize_elapsed_ms(&self, at: ExactTimestamp) -> u64 {
+        self.clock.elapsed_ms(at)
+    }
+
+    fn browser_audio_enabled(&self) -> bool {
+        self.browser_audio_enabled.load(Ordering::Relaxed)
+    }
+
+    fn native_mic_available(&self) -> bool {
+        self.native_capture_enabled.is_some()
+    }
+
+    fn browser_mic_available(&self, live_audio: Option<&LiveSessionAudioStore>) -> bool {
+        self.browser_audio_tx.is_some() || live_audio.is_some()
+    }
+
+    fn set_browser_audio_enabled(&self, enabled: bool) {
+        let _guard = self
+            .arbitration_lock
+            .lock()
+            .expect("input router mutex poisoned");
+        self.browser_audio_enabled.store(enabled, Ordering::Relaxed);
+        if enabled {
+            if let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() {
+                native_capture_enabled.store(false, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn set_native_capture_enabled(&self, enabled: bool) -> bool {
+        let Some(native_capture_enabled) = self.native_capture_enabled.as_ref() else {
+            return false;
+        };
+        let _guard = self
+            .arbitration_lock
+            .lock()
+            .expect("input router mutex poisoned");
+        native_capture_enabled.store(enabled, Ordering::Relaxed);
+        if enabled {
+            self.browser_audio_enabled.store(false, Ordering::Relaxed);
+        }
+        true
     }
 }
 
@@ -183,7 +252,7 @@ impl BoundServer {
             self.local_addr
         );
         println!(
-            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/live-visual-speech.json, /api/session-audio/*, /api/live-events, /api/browser-audio, /api/browser-video-frame, /api/input-status, /api/native-mic, /healthz"
+            "Routes: /, /wavedeck, /replay, /screenplay, /assets/*, /fixtures/*, /api/*, /api/trace-session, /api/live-session-audio.wav, /api/live-session-acoustic.json, /api/live-visual-speech.json, /api/session-audio/*, /api/live-events, /api/browser-audio, /api/browser-video-frame, /api/input-status, /api/native-mic, /api/browser-mic, /healthz"
         );
 
         for stream in self.listener.incoming() {
@@ -528,6 +597,12 @@ fn route_request_with_range_and_body(
         }
         return update_native_mic(state, body);
     }
+    if path == "/api/browser-mic" {
+        if !method.eq_ignore_ascii_case("POST") {
+            return HttpResponse::method_not_allowed("only POST is supported\n");
+        }
+        return update_browser_mic(state, body);
+    }
     if path == "/api/browser-audio" {
         if !method.eq_ignore_ascii_case("POST") {
             return HttpResponse::method_not_allowed("only POST is supported\n");
@@ -714,27 +789,29 @@ fn route_request_with_range_and_body(
 }
 
 fn input_status_json(state: &Arc<ServerState>) -> Vec<u8> {
-    let native_available = state.input_control.native_capture_enabled.is_some();
+    let native_available = state.input_control.native_mic_available();
     let native_enabled = state
         .input_control
         .native_capture_enabled
         .as_ref()
         .is_some_and(|enabled| enabled.load(Ordering::Relaxed));
-    let browser_available =
-        state.input_control.browser_audio_tx.is_some() || state.live_audio.is_some();
+    let browser_available = state
+        .input_control
+        .browser_mic_available(state.live_audio.as_ref());
+    let browser_enabled = state.input_control.browser_audio_enabled();
     let browser_camera_available = state.input_control.browser_visual_speech_tx.is_some()
         || state.live_visual_speech.is_some();
     format!(
-        "{{\"nativeMic\":{{\"available\":{},\"enabled\":{}}},\"browserMic\":{{\"available\":{}}},\"browserCamera\":{{\"available\":{}}}}}\n",
-        native_available, native_enabled, browser_available, browser_camera_available
+        "{{\"nativeMic\":{{\"available\":{},\"enabled\":{}}},\"browserMic\":{{\"available\":{},\"enabled\":{}}},\"browserCamera\":{{\"available\":{}}}}}\n",
+        native_available, native_enabled, browser_available, browser_enabled, browser_camera_available
     )
     .into_bytes()
 }
 
 fn update_native_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
-    let Some(native_capture_enabled) = state.input_control.native_capture_enabled.as_ref() else {
+    if !state.input_control.native_mic_available() {
         return HttpResponse::not_found("native microphone control is not available\n");
-    };
+    }
     let payload: serde_json::Value = match serde_json::from_slice(body) {
         Ok(payload) => payload,
         Err(error) => return HttpResponse::bad_request(format!("invalid JSON body: {error}\n")),
@@ -742,7 +819,25 @@ fn update_native_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
     let Some(enabled) = payload.get("enabled").and_then(serde_json::Value::as_bool) else {
         return HttpResponse::bad_request("expected JSON body with boolean field enabled\n");
     };
-    native_capture_enabled.store(enabled, Ordering::Relaxed);
+    state.input_control.set_native_capture_enabled(enabled);
+    HttpResponse::ok("application/json; charset=utf-8", input_status_json(state))
+}
+
+fn update_browser_mic(state: &Arc<ServerState>, body: &[u8]) -> HttpResponse {
+    if !state
+        .input_control
+        .browser_mic_available(state.live_audio.as_ref())
+    {
+        return HttpResponse::not_found("browser microphone control is not available\n");
+    }
+    let payload: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(payload) => payload,
+        Err(error) => return HttpResponse::bad_request(format!("invalid JSON body: {error}\n")),
+    };
+    let Some(enabled) = payload.get("enabled").and_then(serde_json::Value::as_bool) else {
+        return HttpResponse::bad_request("expected JSON body with boolean field enabled\n");
+    };
+    state.input_control.set_browser_audio_enabled(enabled);
     HttpResponse::ok("application/json; charset=utf-8", input_status_json(state))
 }
 
@@ -751,6 +846,12 @@ fn receive_browser_audio(
     headers: &[(String, String)],
     body: &[u8],
 ) -> HttpResponse {
+    let routed_at = state.input_control.now();
+    if !state.input_control.browser_audio_enabled() {
+        return HttpResponse::accepted(
+            "browser audio ignored because browser microphone is disabled\n",
+        );
+    }
     if body.is_empty() {
         return HttpResponse::bad_request("audio body must not be empty\n");
     }
@@ -780,7 +881,7 @@ fn receive_browser_audio(
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]).clamp(-1.0, 1.0))
         .collect::<Vec<_>>();
     let frame = AudioFrame {
-        captured_at: ExactTimestamp::now(),
+        captured_at: routed_at,
         sample_rate_hz,
         channels,
         samples,
@@ -810,6 +911,7 @@ fn receive_browser_video_frame(
     headers: &[(String, String)],
     body: &[u8],
 ) -> HttpResponse {
+    let routed_at = state.input_control.now();
     if body.is_empty() {
         return HttpResponse::bad_request("video frame body must not be empty\n");
     }
@@ -857,7 +959,7 @@ fn receive_browser_video_frame(
         .unwrap_or(0);
 
     let vision_frame = VisionFrame {
-        captured_at: ExactTimestamp::now(),
+        captured_at: routed_at,
         width,
         height,
         bytes: body.to_vec(),
@@ -1033,7 +1135,8 @@ fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechF
     let Some(broadcaster) = &state.broadcaster else {
         return;
     };
-    let now = ExactTimestamp::now();
+    let now = state.input_control.now();
+    let normalized_elapsed_ms = state.input_control.normalize_elapsed_ms(now);
     let mut event = LiveTraceEvent {
         turn: 0,
         soundscape_id: None,
@@ -1048,8 +1151,11 @@ fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechF
         span_id: None,
         audio_clip_id: None,
         kind: "visual_speech_frame".to_string(),
+        source: Some("browser.camera".to_string()),
         t_unix_ns: now.unix_nanos.min(u128::from(u64::MAX)) as u64,
         elapsed_ms: frame.time_range_ms.start,
+        normalized_elapsed_ms: Some(normalized_elapsed_ms),
+        normalized_unix_ns: Some(now.unix_nanos.min(u128::from(u64::MAX)) as u64),
         text: Some("derived_mouth_motion_features".to_string()),
         confidence: Some(frame.visibility.weighted()),
         group_id: None,
@@ -1750,6 +1856,47 @@ mod tests {
         assert!(!enabled.load(Ordering::Relaxed));
         let body = String::from_utf8(response.body).expect("utf8 input status");
         assert!(body.contains("\"enabled\":false"));
+    }
+
+    #[test]
+    fn browser_and_native_mic_controls_arbitrate_active_capture_source() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let live_audio = LiveSessionAudioStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+            live_visual_speech: None,
+            input_control: WebInputControl::new(Some(Arc::clone(&enabled)), None),
+        });
+
+        let browser_enable = route_request_with_range_and_body(
+            "POST",
+            "/api/browser-mic",
+            &state,
+            None,
+            &[],
+            br#"{"enabled":true}"#,
+        );
+        assert_eq!(browser_enable.status, 200);
+        assert!(!enabled.load(Ordering::Relaxed));
+        let browser_status = String::from_utf8(browser_enable.body).expect("utf8 input status");
+        assert!(browser_status.contains("\"browserMic\":{\"available\":true,\"enabled\":true}"));
+
+        let native_enable = route_request_with_range_and_body(
+            "POST",
+            "/api/native-mic",
+            &state,
+            None,
+            &[],
+            br#"{"enabled":true}"#,
+        );
+        assert_eq!(native_enable.status, 200);
+        assert!(enabled.load(Ordering::Relaxed));
+        let native_status = String::from_utf8(native_enable.body).expect("utf8 input status");
+        assert!(native_status.contains("\"nativeMic\":{\"available\":true,\"enabled\":true}"));
+        assert!(native_status.contains("\"browserMic\":{\"available\":true,\"enabled\":false}"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
     AudioClipId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId, UtteranceId,
 };
-use crate::time::ExactTimestamp;
+use crate::time::{ExactTimestamp, SessionClock};
 
 pub const TRACE_SESSION_FORMAT: &str = "listenbury.live-session.v1";
 pub const TRACE_SESSION_METADATA_FILE: &str = "metadata.json";
@@ -47,8 +47,14 @@ pub struct LiveTraceEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_clip_id: Option<AudioClipId>,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub t_unix_ns: u64,
     pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_elapsed_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_unix_ns: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,8 +81,9 @@ impl LiveTraceEvent {
         at: ExactTimestamp,
         session_started_at: ExactTimestamp,
     ) -> Self {
-        let t_unix_ns = unix_nanos_u64(at);
-        let started_unix_ns = unix_nanos_u64(session_started_at);
+        let clock = SessionClock::with_session_start(session_started_at);
+        let normalized = clock.normalize(at);
+        let t_unix_ns = normalized.unix_ns;
         Self {
             turn,
             soundscape_id: None,
@@ -91,10 +98,11 @@ impl LiveTraceEvent {
             span_id: None,
             audio_clip_id: None,
             kind: kind.into(),
+            source: Some("runtime.trace".to_string()),
             t_unix_ns,
-            elapsed_ms: t_unix_ns
-                .saturating_sub(started_unix_ns)
-                .saturating_div(1_000_000),
+            elapsed_ms: normalized.elapsed_ms,
+            normalized_elapsed_ms: Some(normalized.elapsed_ms),
+            normalized_unix_ns: Some(normalized.unix_ns),
             text: None,
             confidence: None,
             group_id: None,
@@ -353,7 +361,7 @@ struct PendingTurn {
 #[derive(Debug)]
 pub struct LiveTraceRecorder<S> {
     session_id: SessionId,
-    session_started_at: ExactTimestamp,
+    session_clock: SessionClock,
     sink: S,
     pending_turn: Option<PendingTurn>,
     pending_suppression: Option<PendingSuppression>,
@@ -370,7 +378,7 @@ where
     ) -> Self {
         Self {
             session_id,
-            session_started_at,
+            session_clock: SessionClock::with_session_start(session_started_at),
             sink,
             pending_turn: None,
             pending_suppression: None,
@@ -390,7 +398,13 @@ where
     }
 
     pub fn event(&self, turn: u64, kind: impl Into<String>, at: ExactTimestamp) -> LiveTraceEvent {
-        LiveTraceEvent::new(self.session_id, turn, kind, at, self.session_started_at)
+        LiveTraceEvent::new(
+            self.session_id,
+            turn,
+            kind,
+            at,
+            self.session_clock.session_started_at(),
+        )
     }
 
     pub fn emit(&mut self, event: LiveTraceEvent) -> anyhow::Result<()> {
@@ -953,5 +967,16 @@ mod tests {
         assert_eq!(events[9].unit_kind.as_deref(), Some("complete_sentence"));
         assert_eq!(events[12].expected_until_unix_ns, Some(2_050_000_000));
         assert!(events.iter().all(|event| event.turn != 2));
+    }
+
+    #[test]
+    fn live_trace_event_carries_stable_source_and_normalized_timing() {
+        let event =
+            LiveTraceEvent::new(SessionId::new(), 1, "capture_started", ts(1_250), ts(1_000));
+        assert_eq!(event.source.as_deref(), Some("runtime.trace"));
+        assert_eq!(event.elapsed_ms, 250);
+        assert_eq!(event.normalized_elapsed_ms, Some(250));
+        assert_eq!(event.t_unix_ns, 1_250_000_000);
+        assert_eq!(event.normalized_unix_ns, Some(event.t_unix_ns));
     }
 }

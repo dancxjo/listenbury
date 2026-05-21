@@ -199,7 +199,9 @@ use listenbury::word::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{
+    AudioFrame, ExactTimestamp, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech, SessionClock,
+};
 #[cfg(any(
     test,
     all(
@@ -372,6 +374,7 @@ fn live_trace_session_metadata(
     feature = "tts-piper"
 ))]
 struct LiveHalfDuplexState {
+    session_clock: SessionClock,
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
@@ -395,6 +398,10 @@ impl std::fmt::Debug for LiveHalfDuplexState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LiveHalfDuplexState")
             .field("vad", &"dyn VoiceActivityDetector")
+            .field(
+                "session_clock",
+                &self.session_clock.session_started_at().unix_nanos,
+            )
             .field("segmenter", &self.segmenter)
             .field("active_groups", &self.active_groups)
             .field("self_hearing", &self.self_hearing)
@@ -544,7 +551,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         anyhow::ensure!(seconds > 0, "--seconds must be greater than zero");
     }
 
-    let trace_started_at = ExactTimestamp::now();
+    let session_clock = SessionClock::start_now();
+    let trace_started_at = session_clock.session_started_at();
     let trace_session_id = SessionId::new();
     let trace_writer = command
         .jsonl
@@ -749,7 +757,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         trace_started_at,
         TeeSink(trace_writer, broadcaster),
     );
-    trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
+    trace.emit_now(0, "capture_started", session_clock.now())?;
 
     println!(
         "live-half-duplex listening on {input_name}: {} Hz, {} channel(s), vad={}.",
@@ -770,6 +778,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
     let mut state = LiveHalfDuplexState {
+        session_clock: session_clock.clone(),
         vad: create_vad_backend(vad_backend)?,
         segmenter: BreathGroupSegmenter::default(),
         active_groups: HashMap::new(),
@@ -802,6 +811,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             frame_channels,
             &mut ring_tx,
             &dropped_in_ring,
+            &session_clock,
         );
         let turn_id = turns as u64 + 1;
         let processed = process_ring_frames(&mut ring_rx, &mut state, turn_id)?;
@@ -890,11 +900,12 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     }
 
     drop(stream);
-    state.trace.maybe_end_suppression(ExactTimestamp::now())?;
+    state.trace.maybe_end_suppression(session_clock.now())?;
     persist_session_audio_artifact(
         command.jsonl.as_deref(),
         trace_session_id,
         &state.session_audio_frames,
+        &session_clock,
     )?;
 
     println!(
@@ -916,6 +927,7 @@ fn persist_session_audio_artifact(
     trace_path: Option<&Path>,
     session_id: SessionId,
     frames: &[AudioFrame],
+    session_clock: &SessionClock,
 ) -> Result<()> {
     let Some(trace_path) = trace_path else {
         return Ok(());
@@ -959,7 +971,7 @@ fn persist_session_audio_artifact(
         duration_ms,
         sample_rate_hz: first_frame.sample_rate_hz,
         channels: first_frame.channels,
-        created_at_unix_ns: unix_nanos_u64(ExactTimestamp::now().unix_nanos),
+        created_at_unix_ns: unix_nanos_u64(session_clock.now().unix_nanos),
     };
     add_trace_session_audio_artifact(trace_path, artifact)
         .with_context(|| format!("record session audio metadata in {}", trace_path.display()))?;
@@ -1511,6 +1523,7 @@ fn poll_simplex_turn_gap(
         monitor.frame_channels,
         monitor.ring_tx,
         monitor.dropped_in_ring,
+        &state.session_clock,
     );
     let processed = process_ring_frames(monitor.ring_rx, state, monitor.next_turn_id)?;
     Ok(simplex_turn_gap_status(
@@ -2477,6 +2490,7 @@ fn drain_pending_into_ring(
     frame_channels: u16,
     ring_tx: &mut listenbury::audio::ring::AudioRingTx,
     dropped_in_ring: &AtomicUsize,
+    session_clock: &SessionClock,
 ) {
     while pending.len() >= input_frame_samples {
         let mut samples = Vec::with_capacity(input_frame_samples);
@@ -2496,7 +2510,7 @@ fn drain_pending_into_ring(
             frame_channels,
         );
         let frame = AudioFrame {
-            captured_at: ExactTimestamp::now(),
+            captured_at: session_clock.now(),
             sample_rate_hz: frame_sample_rate_hz,
             channels: frame_channels,
             samples,
