@@ -55,6 +55,39 @@ pub enum RuntimeEventKind {
     Other(RuntimeEventSubtype),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypedRuntimeEvent {
+    Hearing(RuntimeEventSubtype),
+    Playback(RuntimeEventSubtype),
+    Asr(RuntimeEventSubtype),
+    TranscriptRevision(RuntimeEventSubtype),
+    Llm(RuntimeEventSubtype),
+    Suppression(RuntimeEventSubtype),
+    BrowserInput(RuntimeEventSubtype),
+    Diagnostics(RuntimeEventSubtype),
+    SpanMutation(RuntimeEventSubtype),
+    Other(RuntimeEventSubtype),
+}
+
+impl From<TypedRuntimeEvent> for RuntimeEventKind {
+    fn from(event: TypedRuntimeEvent) -> Self {
+        match event {
+            TypedRuntimeEvent::Hearing(subtype) => RuntimeEventKind::Hearing(subtype),
+            TypedRuntimeEvent::Playback(subtype) => RuntimeEventKind::Playback(subtype),
+            TypedRuntimeEvent::Asr(subtype) => RuntimeEventKind::Asr(subtype),
+            TypedRuntimeEvent::TranscriptRevision(subtype) => {
+                RuntimeEventKind::TranscriptRevision(subtype)
+            }
+            TypedRuntimeEvent::Llm(subtype) => RuntimeEventKind::Llm(subtype),
+            TypedRuntimeEvent::Suppression(subtype) => RuntimeEventKind::Suppression(subtype),
+            TypedRuntimeEvent::BrowserInput(subtype) => RuntimeEventKind::BrowserInput(subtype),
+            TypedRuntimeEvent::Diagnostics(subtype) => RuntimeEventKind::Diagnostics(subtype),
+            TypedRuntimeEvent::SpanMutation(subtype) => RuntimeEventKind::SpanMutation(subtype),
+            TypedRuntimeEvent::Other(subtype) => RuntimeEventKind::Other(subtype),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeEvent {
     pub id: EventId,
@@ -71,6 +104,11 @@ pub struct RuntimeEvent {
 }
 
 impl RuntimeEvent {
+    /// Builds a canonical runtime event from a live trace event.
+    ///
+    /// Preferred path: producers attach a typed `runtime_event.kind` on `LiveTraceEvent`.
+    /// Compatibility path: if no typed kind is present, this falls back to
+    /// `legacy_classify_runtime_kind_from_string` so replay of historical traces remains stable.
     pub fn from_live_trace_event(event: &LiveTraceEvent) -> Self {
         let id = format!(
             "live:{}:{}:{}:{}",
@@ -86,13 +124,18 @@ impl RuntimeEvent {
             unix_nanos: u128::from(event.t_unix_ns),
         };
         let source = EventSource::from_source_tag(event.source.as_deref());
-        let kind = classify_runtime_kind(
-            &event.kind,
-            event.text.as_deref(),
-            event.reason.as_deref(),
-            event.artifact.clone(),
-            false,
-        );
+        let kind = event
+            .runtime_event
+            .as_ref()
+            .map(|runtime| runtime.kind.clone())
+            .unwrap_or_else(|| {
+                legacy_classify_runtime_kind_from_string(
+                    &event.kind,
+                    event.text.as_deref(),
+                    event.reason.as_deref(),
+                    event.artifact.clone(),
+                )
+            });
         let mut causality = Vec::new();
         if let Some(turn_id) = event.turn_id {
             causality.push(format!("turn:{}", turn_id.0));
@@ -162,25 +205,27 @@ impl RuntimeEvent {
             timestamp: occurred_at,
             monotonic_ms: occurred_at.unix_nanos.saturating_div(1_000_000) as u64,
             source: EventSource::MemoryIngestion,
-            kind: classify_runtime_kind(
-                &kind_name,
-                text.as_deref(),
-                reason.as_deref(),
+            kind: RuntimeEventKind::MemoryIngestion(RuntimeEventSubtype {
+                kind: kind_name.clone(),
+                text,
+                reason,
                 artifact,
-                true,
-            ),
+            }),
             causality,
             correlation: vec![format!("memory_kind:{kind_name}")],
         }
     }
 }
 
-fn classify_runtime_kind(
+/// Legacy adapter for historical stringly `LiveTraceEvent.kind` values.
+///
+/// Keep this only while traces/events still rely on string classification.
+/// Delete after all live producers attach typed `runtime_event.kind`.
+fn legacy_classify_runtime_kind_from_string(
     kind: &str,
     text: Option<&str>,
     reason: Option<&str>,
     artifact: Option<Value>,
-    memory_mode: bool,
 ) -> RuntimeEventKind {
     let subtype = RuntimeEventSubtype {
         kind: kind.to_string(),
@@ -188,9 +233,6 @@ fn classify_runtime_kind(
         reason: reason.map(str::to_string),
         artifact,
     };
-    if memory_mode {
-        return RuntimeEventKind::MemoryIngestion(subtype);
-    }
     if kind.starts_with("speech_")
         || kind.starts_with("breath_")
         || kind == "capture_started"
@@ -268,5 +310,69 @@ mod tests {
         assert!(json.contains("\"domain\":\"memory_ingestion\""));
         let decoded: RuntimeEvent = serde_json::from_str(&json).expect("deserialize runtime event");
         assert_eq!(decoded.kind, runtime.kind);
+    }
+
+    fn subtype(kind: &str) -> RuntimeEventSubtype {
+        RuntimeEventSubtype {
+            kind: kind.to_string(),
+            text: None,
+            reason: None,
+            artifact: None,
+        }
+    }
+
+    #[test]
+    fn typed_runtime_event_converts_major_domains() {
+        let cases = vec![
+            (
+                TypedRuntimeEvent::Hearing(subtype("hearing")),
+                RuntimeEventKind::Hearing(subtype("hearing")),
+            ),
+            (
+                TypedRuntimeEvent::Playback(subtype("playback")),
+                RuntimeEventKind::Playback(subtype("playback")),
+            ),
+            (
+                TypedRuntimeEvent::Asr(subtype("asr")),
+                RuntimeEventKind::Asr(subtype("asr")),
+            ),
+            (
+                TypedRuntimeEvent::Llm(subtype("llm")),
+                RuntimeEventKind::Llm(subtype("llm")),
+            ),
+            (
+                TypedRuntimeEvent::BrowserInput(subtype("browser_input")),
+                RuntimeEventKind::BrowserInput(subtype("browser_input")),
+            ),
+            (
+                TypedRuntimeEvent::Suppression(subtype("suppression")),
+                RuntimeEventKind::Suppression(subtype("suppression")),
+            ),
+        ];
+
+        for (typed, expected) in cases {
+            let converted: RuntimeEventKind = typed.into();
+            assert_eq!(converted, expected);
+        }
+    }
+
+    #[test]
+    fn prefers_typed_runtime_kind_when_present() {
+        let mut event = LiveTraceEvent::new(
+            SessionId::new(),
+            7,
+            "brand_new_event_name",
+            ts(1_200),
+            ts(1_000),
+        );
+        let typed_runtime_kind: RuntimeEventKind =
+            TypedRuntimeEvent::BrowserInput(subtype("browser_pointer_move")).into();
+        event.set_runtime_kind(typed_runtime_kind);
+
+        let runtime = RuntimeEvent::from_live_trace_event(&event);
+        assert_eq!(
+            runtime.kind,
+            RuntimeEventKind::BrowserInput(subtype("browser_pointer_move"))
+        );
     }
 }
