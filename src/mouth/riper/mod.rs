@@ -1,6 +1,7 @@
 #[cfg(feature = "tts-riper")]
 pub mod backend;
 pub mod config;
+pub mod echo;
 pub mod encoder;
 pub mod espeak_ng_rules;
 pub mod evidence;
@@ -16,6 +17,10 @@ pub mod text;
 #[cfg(feature = "tts-riper")]
 pub use backend::{PiperModelContract, RiperBackend, RiperPcm};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
+pub use echo::{
+    EchoComparisonRecord, EchoMatchedAccent, EchoMatchedPause, EchoProsodyObservation,
+    EchoProsodyPlan, EchoWordProsodyObservation,
+};
 pub use encoder::PiperEncoder;
 pub use espeak_ng_rules::{
     EspeakNgSeedRuleTable, LinguisticVarieties, LinguisticVarietyRuleTable, PhonemeMappingRule,
@@ -64,10 +69,6 @@ pub use sentence_analysis::{
     ReductionClass, ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
     SyntacticLink, SyntacticLinkKind, SyntacticLinkParse, SyntacticLinkSource, SyntacticRole,
     TokenAnalysis, WordIndex,
-    AnalysisClaim, AnalysisClaimKind, AnalysisSource as SentenceAnalysisSource, ContextPredicate,
-    EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole, ReductionClass,
-    ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink,
-    SyntacticLinkKind, SyntacticLinkParse, SyntacticRole, TokenAnalysis, WordIndex,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

@@ -1,21 +1,36 @@
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::play_audio_frames;
 use crate::cli::model_paths::resolve_piper_voice;
-use crate::cli::{RiperCompareCommand, SayCommand};
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use crate::cli::model_paths::resolve_whisper_model;
+use crate::cli::{EchoCommand, RiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
 use listenbury::audio::frame::AudioFrame;
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::audio::read_wav_as_whisper_frames;
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::audio::streaming_prosody::StreamingProsodyAnalyzer;
 use listenbury::audio::write_wav;
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
-#[cfg(feature = "tts-riper")]
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::mouth::riper::{
+    EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan, PiperIdSequence, PiperPhoneme,
+    PiperPhonemeSequence, PiperVoiceConfig, RiperBackend, SimpleEnglishG2p,
+};
+#[cfg(all(not(feature = "asr-whisper"), feature = "tts-riper"))]
 use listenbury::mouth::riper::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
     SimpleEnglishG2p,
 };
 use listenbury::mouth::tts::TextToSpeech;
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::speech::recognizer::SpeechRecognizer;
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+use listenbury::WhisperSpeechRecognizer;
 use listenbury::{PiperConfig, PiperTextToSpeech};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -79,6 +94,139 @@ pub(crate) fn run_riper_compare(command: RiperCompareCommand) -> Result<()> {
     {
         run_riper_compare_impl(command)
     }
+}
+
+pub(crate) fn run_echo(command: EchoCommand) -> Result<()> {
+    #[cfg(not(all(feature = "asr-whisper", feature = "tts-riper")))]
+    {
+        let _ = command;
+        anyhow::bail!("listenbury echo requires both the `asr-whisper` and `tts-riper` features");
+    }
+
+    #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+    {
+        run_echo_impl(command)
+    }
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+fn run_echo_impl(command: EchoCommand) -> Result<()> {
+    let whisper_model = resolve_whisper_model(command.whisper_model)?;
+    let riper_model_path = resolve_piper_voice(command.piper_voice)?;
+    let riper_config_path = command
+        .riper_config
+        .unwrap_or_else(|| riper_model_path.with_extension("onnx.json"));
+    let output_wav = command
+        .output_wav
+        .unwrap_or_else(|| PathBuf::from("out/riper-echo.wav"));
+    let comparison_json = command.comparison_json;
+
+    let frames = read_wav_as_whisper_frames(&command.input_wav, 1_600).with_context(|| {
+        format!(
+            "failed to read echo input WAV at {}",
+            command.input_wav.display()
+        )
+    })?;
+    anyhow::ensure!(
+        !frames.is_empty(),
+        "echo input WAV produced no audio frames: {}",
+        command.input_wav.display()
+    );
+
+    let mut recognizer = WhisperSpeechRecognizer::new_quiet(&whisper_model).with_context(|| {
+        format!(
+            "failed to initialize Whisper model at {}",
+            whisper_model.display()
+        )
+    })?;
+    let mut analyzer = StreamingProsodyAnalyzer::default();
+    let mut updates = Vec::new();
+    let mut frame_start_ms = 0u64;
+    for frame in &frames {
+        recognizer.push_frame(frame)?;
+        if let Some(update) = analyzer.ingest_frame(frame, frame_start_ms) {
+            updates.push(update);
+        }
+        frame_start_ms = frame_start_ms.saturating_add(frame_duration_ms(frame));
+    }
+
+    let Some((transcript, _events)) = recognizer.poll_timed_transcript_with_finality(true)? else {
+        anyhow::bail!(
+            "Whisper produced no transcript for echo input {}",
+            command.input_wav.display()
+        );
+    };
+    anyhow::ensure!(
+        !transcript.text.trim().is_empty(),
+        "Whisper produced an empty transcript for echo input {}",
+        command.input_wav.display()
+    );
+
+    let observation = EchoProsodyObservation::from_streaming_updates(
+        transcript.text.clone(),
+        &transcript.words,
+        &updates,
+    );
+    let phonemized = SimpleEnglishG2p::default()
+        .phonemize_unit(&transcript.text)
+        .with_context(|| {
+            format!(
+                "failed to phonemize echoed transcript `{}`",
+                transcript.text
+            )
+        })?;
+    let plan = EchoProsodyPlan::from_observation(&observation, Some(&phonemized));
+    let voice_config = read_riper_voice_config(&riper_config_path)?;
+    let ids = phonemized
+        .phonemes
+        .to_piper_ids_compatible(&voice_config)
+        .with_context(|| {
+            format!(
+                "Riper voice config at {} cannot map one or more phonemes for `{}`",
+                riper_config_path.display(),
+                transcript.text
+            )
+        })?;
+
+    let mut backend = RiperBackend::load(&riper_model_path, voice_config).with_context(|| {
+        format!(
+            "failed to initialize Riper backend from model {}",
+            riper_model_path.display()
+        )
+    })?;
+    let (echo_frames, diagnostics) = backend
+        .synthesize_id_frames_with_controls(&ids, Some(&plan.controls))
+        .with_context(|| {
+            format!(
+                "failed to synthesize echoed transcript `{}`",
+                transcript.text
+            )
+        })?;
+    let comparison = EchoComparisonRecord::from_plan(&observation, &plan, &diagnostics);
+
+    write_say_wav(&output_wav, &echo_frames)?;
+    println!("Heard: {}", transcript.text);
+    println!("{}", serde_json::to_string_pretty(&comparison)?);
+
+    if let Some(path) = comparison_json {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create comparison output directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        std::fs::write(&path, serde_json::to_vec_pretty(&comparison)?).with_context(|| {
+            format!("failed to write echo comparison JSON to {}", path.display())
+        })?;
+        println!("Wrote {}", path.display());
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "tts-riper")]
@@ -448,6 +596,15 @@ fn find_piper_executable(name: &str) -> Option<PathBuf> {
             .map(|dir| dir.join(name))
             .find(|candidate| candidate.is_file())
     })
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+fn frame_duration_ms(frame: &AudioFrame) -> u64 {
+    if frame.sample_rate_hz == 0 || frame.channels == 0 {
+        return 0;
+    }
+    ((frame.samples.len() as u64 / u64::from(frame.channels)) * 1_000)
+        / u64::from(frame.sample_rate_hz)
 }
 
 pub(crate) fn piper_config_for_voice(
