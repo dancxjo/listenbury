@@ -135,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn ramp_reaches_full_depth_after_ramp_duration() {
+    fn ramp_reaches_full_depth_after_ramp_duration_with_static_phase() {
         let vibrato = Vibrato::new(
             0.0,
             60.0,
@@ -193,17 +193,10 @@ mod tests {
         )
         .unwrap();
 
-        let vibrato = Vibrato::new(
-            0.0,
-            100.0,
-            Duration::ZERO,
-            Duration::ZERO,
-            std::f32::consts::FRAC_PI_2,
-        );
-
+        let vibrato = Vibrato::new(2.0, 100.0, Duration::ZERO, Duration::ZERO, 0.0);
         let expected = 440.0 * 2.0_f32.powf(100.0 / 1200.0);
         approx_eq(
-            vibrato.sample_over_curve_hz(&curve, Duration::from_millis(500)),
+            vibrato.sample_over_curve_hz(&curve, Duration::from_millis(125)),
             expected,
             1e-4,
         );
