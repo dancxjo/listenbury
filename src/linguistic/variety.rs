@@ -1,5 +1,5 @@
-use super::inventory::general_american_english;
-use super::phonology::{PhoneComparisonMode, PhoneEqualityOptions, PhonemicInventory};
+use super::phonology::PhonemicInventory;
+use super::rule_registry::RuleRegistry;
 
 pub use super::phonology::VarietyId;
 
@@ -96,47 +96,26 @@ pub enum EnglishVariety {
 }
 
 impl EnglishVariety {
+    pub fn rule_id(self) -> &'static str {
+        match self {
+            EnglishVariety::GeneralAmerican => "en-US-GA",
+            EnglishVariety::ReceivedPronunciation => "en-GB-RP",
+            EnglishVariety::ScottishEnglish => "en-GB-ScotE",
+            EnglishVariety::AfricanAmericanEnglish => "en-US-AAE",
+            EnglishVariety::PermissiveSinging => "en-US-singing",
+        }
+    }
+
     /// Construct the [`PhonemicInventory`] for this variety.
     ///
     /// Currently only [`GeneralAmerican`][EnglishVariety::GeneralAmerican] has
     /// a complete inventory. All other variants use the GA inventory with
     /// distinct identifiers as clearly labeled stubs.
     pub fn phonemic_inventory(self) -> PhonemicInventory {
-        match self {
-            EnglishVariety::GeneralAmerican => general_american_english(),
-            EnglishVariety::ReceivedPronunciation => {
-                stub_inventory("en-GB-RP", "Received Pronunciation (stub)")
-            }
-            EnglishVariety::ScottishEnglish => {
-                stub_inventory("en-GB-ScotE", "Scottish English (stub)")
-            }
-            EnglishVariety::AfricanAmericanEnglish => {
-                stub_inventory("en-US-AAE", "African American English (stub)")
-            }
-            EnglishVariety::PermissiveSinging => {
-                // Same inventory as GA but with a broad comparison mode so
-                // aspiration and other diacritics don't interfere.
-                let mut inv = general_american_english();
-                inv.id = VarietyId::new("en-US-singing");
-                inv.label = "Permissive Singing Profile".into();
-                inv.phone_equality = PhoneEqualityOptions {
-                    mode: PhoneComparisonMode::Broad,
-                    ignore_diacritics: true,
-                    ignore_length: true,
-                    ..Default::default()
-                };
-                inv
-            }
-        }
+        RuleRegistry::builtin()
+            .inventory(self.rule_id())
+            .expect("built-in registry should include English variety profile")
     }
-}
-
-fn stub_inventory(id: &str, label: &str) -> PhonemicInventory {
-    // TODO: differentiate these varieties from GA
-    let mut inv = general_american_english();
-    inv.id = VarietyId::new(id);
-    inv.label = label.into();
-    inv
 }
 
 #[cfg(test)]

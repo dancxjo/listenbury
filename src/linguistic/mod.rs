@@ -4,6 +4,7 @@ pub mod orthography;
 pub mod phoneme;
 pub mod phonology;
 pub mod pronounce;
+pub mod rule_registry;
 pub mod service;
 pub mod sound_it_out;
 pub mod variety;
@@ -17,6 +18,10 @@ pub use phonology::{
     PhonemeId, PhonemicInventory, SourceSymbol, VarietyId, phone_comparison_key, phones_equivalent,
 };
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
+pub use rule_registry::{
+    InventoryData, PhonotacticData, RuleFragment, RuleProfile, RuleRegistry, RuleRegistryError,
+    VarietyRuleData,
+};
 pub use service::PronunciationService;
 pub use sound_it_out::{Environment, GraphemeRule, SoundItOutPronouncer, SoundItOutRules};
 pub use variety::{

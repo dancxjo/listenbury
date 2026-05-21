@@ -1,6 +1,5 @@
-use super::phonology::{
-    Phone, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeClass, PhonemeSchema, VarietyId,
-};
+use super::phonology::{Phone, PhoneStatus, PhoneString, PhonemeClass, PhonemeSchema};
+use super::rule_registry::RuleRegistry;
 
 pub use super::phonology::{PhonemeDefinition, PhonemeId, PhonemicInventory, SourceSymbol};
 
@@ -13,19 +12,14 @@ pub use super::phonology::{PhonemeDefinition, PhonemeId, PhonemicInventory, Sour
 /// - a single-phone default realization
 /// - broad phoneme class(es)
 pub fn general_american_english() -> PhonemicInventory {
-    let defs = english_phoneme_table();
-    PhonemicInventory {
-        id: VarietyId::new("en-US-GA"),
-        language: "en".into(),
-        label: "General American English".into(),
-        phonemes: defs,
-        phone_equality: PhoneEqualityOptions::default(),
-    }
+    RuleRegistry::builtin()
+        .inventory("en-US-GA")
+        .expect("built-in registry should include en-US-GA")
 }
 
 /// ARPABET → IPA mapping used to populate the English phoneme inventory.
 /// Each row: (arpabet_base, ipa, is_vowel)
-fn english_phoneme_table() -> Vec<PhonemeDefinition> {
+pub(crate) fn english_phoneme_table() -> Vec<PhonemeDefinition> {
     let rows: &[(&str, &str, bool)] = &[
         // Vowels / nuclei
         ("AA", "ɑ", true),
@@ -107,6 +101,7 @@ fn english_phoneme_table() -> Vec<PhonemeDefinition> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linguistic::VarietyId;
 
     #[test]
     fn general_american_inventory_has_expected_id() {
