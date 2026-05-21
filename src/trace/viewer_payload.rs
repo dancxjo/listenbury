@@ -196,8 +196,7 @@ fn build_runtime_span_graph(payload: &ViewerPayload) -> Option<ViewerSpanGraph> 
             let Some(timing) = word.timing else {
                 continue;
             };
-            let span_id = RuntimeSpanId(next_span_id);
-            next_span_id = next_span_id.saturating_add(1);
+            let span_id = take_next_runtime_span_id(&mut next_span_id);
             let state = span_state_for_word_commitment(word.commitment);
             spans.push(RuntimeSpan {
                 id: span_id,
@@ -221,8 +220,7 @@ fn build_runtime_span_graph(payload: &ViewerPayload) -> Option<ViewerSpanGraph> 
         let Some(end_ms) = event.end_ms else {
             continue;
         };
-        let span_id = RuntimeSpanId(next_span_id);
-        next_span_id = next_span_id.saturating_add(1);
+        let span_id = take_next_runtime_span_id(&mut next_span_id);
         spans.push(RuntimeSpan {
             id: span_id,
             text_id,
@@ -294,6 +292,12 @@ fn span_state_for_word_commitment(commitment: WordCommitment) -> SpanState {
     }
 }
 
+fn take_next_runtime_span_id(next_span_id: &mut u64) -> RuntimeSpanId {
+    let span_id = RuntimeSpanId(*next_span_id);
+    *next_span_id = next_span_id.saturating_add(1);
+    span_id
+}
+
 fn span_state_stability(state: SpanState) -> f32 {
     match state {
         SpanState::Hypothesis => 0.25,
@@ -305,18 +309,21 @@ fn span_state_stability(state: SpanState) -> f32 {
 }
 
 fn event_modality(kind: &str) -> Modality {
-    if kind.contains("speech")
-        || kind.contains("playback")
-        || kind.contains("asr")
-        || kind.contains("capture")
-    {
-        Modality::Audio
-    } else if kind.contains("tts") || kind.contains("llm") {
-        Modality::Clause
-    } else if kind.contains("overlap") {
-        Modality::BreathGroup
-    } else {
-        Modality::Semantic
+    match kind {
+        "playback" | "speech" | "asr" | "capture" | "self_hearing_suppression" => Modality::Audio,
+        "tts" | "llm" => Modality::Clause,
+        "overlap" => Modality::BreathGroup,
+        _ if kind.contains("speech")
+            || kind.contains("playback")
+            || kind.contains("asr")
+            || kind.contains("capture")
+            || kind.contains("suppression") =>
+        {
+            Modality::Audio
+        }
+        _ if kind.contains("tts") || kind.contains("llm") => Modality::Clause,
+        _ if kind.contains("overlap") => Modality::BreathGroup,
+        _ => Modality::Semantic,
     }
 }
 
