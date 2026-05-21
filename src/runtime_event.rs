@@ -66,6 +66,7 @@ pub enum TypedRuntimeEvent {
     BrowserInput(RuntimeEventSubtype),
     Diagnostics(RuntimeEventSubtype),
     SpanMutation(RuntimeEventSubtype),
+    MemoryIngestion(RuntimeEventSubtype),
     Other(RuntimeEventSubtype),
 }
 
@@ -83,6 +84,9 @@ impl From<TypedRuntimeEvent> for RuntimeEventKind {
             TypedRuntimeEvent::BrowserInput(subtype) => RuntimeEventKind::BrowserInput(subtype),
             TypedRuntimeEvent::Diagnostics(subtype) => RuntimeEventKind::Diagnostics(subtype),
             TypedRuntimeEvent::SpanMutation(subtype) => RuntimeEventKind::SpanMutation(subtype),
+            TypedRuntimeEvent::MemoryIngestion(subtype) => {
+                RuntimeEventKind::MemoryIngestion(subtype)
+            }
             TypedRuntimeEvent::Other(subtype) => RuntimeEventKind::Other(subtype),
         }
     }
@@ -199,20 +203,22 @@ impl RuntimeEvent {
         if let MemoryTrace::RecallResultUsed { query, .. } = trace {
             causality.push(format!("query:{query}"));
         }
+        let memory_kind_correlation = format!("memory_kind:{kind_name}");
         Self {
             id: format!("memory:{}:{}", occurred_at.unix_nanos, kind_name),
             session_id: None,
             timestamp: occurred_at,
             monotonic_ms: occurred_at.unix_nanos.saturating_div(1_000_000) as u64,
             source: EventSource::MemoryIngestion,
-            kind: RuntimeEventKind::MemoryIngestion(RuntimeEventSubtype {
-                kind: kind_name.clone(),
+            kind: TypedRuntimeEvent::MemoryIngestion(RuntimeEventSubtype {
+                kind: kind_name,
                 text,
                 reason,
                 artifact,
-            }),
+            })
+            .into(),
             causality,
-            correlation: vec![format!("memory_kind:{kind_name}")],
+            correlation: vec![memory_kind_correlation],
         }
     }
 }
