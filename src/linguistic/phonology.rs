@@ -629,7 +629,7 @@ fn match_environment_pattern(
     }
 
     if let Some(stress_pattern) = rule.pattern.stress {
-        if !stress_pattern_matches(stress_pattern, context.target().stress) {
+        if !stress_pattern_matches(stress_pattern, target.stress) {
             return None;
         }
         diagnostics.push(PredicateDiagnostic {
@@ -664,10 +664,8 @@ fn match_environment_pattern(
     let matched_environment = Environment {
         left_phone: left.map(|phone| phone.realization.ipa.clone()),
         right_phone: right.map(|phone| phone.realization.ipa.clone()),
-        left_class: left
-            .map(|phone| phoneme_class_name(classify_symbol(&phone.symbol)).to_string()),
-        right_class: right
-            .map(|phone| phoneme_class_name(classify_symbol(&phone.symbol)).to_string()),
+        left_class: left.map(phoneme_class_label),
+        right_class: right.map(phoneme_class_label),
         word_position: Some(word_position(context.index, context.sequence.len())),
         syllable_position: None,
         stress_context: None,
@@ -781,6 +779,10 @@ fn phoneme_class_name(class: PhonemeClass) -> &'static str {
     }
 }
 
+fn phoneme_class_label(phoneme: &Phoneme) -> String {
+    phoneme_class_name(classify_symbol(&phoneme.symbol)).to_string()
+}
+
 fn phoneme_class_matches(class: PhonemeClass, phoneme: &Phoneme) -> bool {
     let actual = classify_symbol(&phoneme.symbol);
     let actual_is_consonant = matches!(
@@ -798,6 +800,7 @@ fn phoneme_class_matches(class: PhonemeClass, phoneme: &Phoneme) -> bool {
             | (PhonemeClass::AlveolarNasal, PhonemeClass::AlveolarNasal)
             | (PhonemeClass::VelarStop, PhonemeClass::VelarStop)
             | (PhonemeClass::VelarConsonant, PhonemeClass::VelarConsonant)
+            // VelarConsonant intentionally includes velar stops as a subtype.
             | (PhonemeClass::VelarConsonant, PhonemeClass::VelarStop)
     ) || (class == PhonemeClass::Consonant && actual_is_consonant)
 }
