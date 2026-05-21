@@ -11,6 +11,7 @@ use crate::span::{
     Alignment, AlignmentGraph, AlignmentKind, Cursor, Modality, Span as RuntimeSpan,
     SpanId as RuntimeSpanId, SpanRevision, SpanState, TextId,
 };
+use crate::speech::prosody_timing::ProsodyTimingPlan;
 use crate::trace::timestamp_sanity::normalize_live_trace_events;
 use crate::word::{
     BoundarySource, TextSpan, TimedWordStream, WordCommitment, WordId, WordNode, WordStreamId,
@@ -552,6 +553,10 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
         if event.kind == "asr_timed_word_stream" || event.kind == "tts_timed_word_stream_revision" {
             continue;
         }
+        if event.kind == "prosody_plan" {
+            append_prosody_plan_lanes(event, &mut spans, &mut markers);
+            continue;
+        }
         let lane = lane_for_kind(&event.kind).to_string();
         let metadata = Some(metadata_from_event(event));
         let audio_ref = event_audio_ref(event);
@@ -627,6 +632,101 @@ fn collect_event_lanes(events: &[LiveTraceEvent]) -> (Vec<ViewerEvent>, Vec<View
     spans.sort_by_key(|event| (event.start_ms, event.end_ms.unwrap_or(event.start_ms)));
     markers.sort_by_key(|marker| marker.at_ms);
     (spans, markers)
+}
+
+fn append_prosody_plan_lanes(
+    event: &LiveTraceEvent,
+    spans: &mut Vec<ViewerEvent>,
+    markers: &mut Vec<ViewerMarker>,
+) {
+    let Some(plan) = prosody_plan_from_event(event) else {
+        return;
+    };
+    let base_metadata = metadata_from_event(event);
+    let audio_ref = event_audio_ref(event);
+
+    for group in &plan.breath_groups {
+        let start_ms = seconds_to_ms(group.t0);
+        let end_ms = seconds_to_ms(group.t1).max(start_ms);
+        spans.push(ViewerEvent {
+            lane: "Breath Groups".to_string(),
+            kind: "breath_group".to_string(),
+            start_ms,
+            end_ms: Some(end_ms),
+            label: Some("breath group".to_string()),
+            metadata: Some(prosody_child_metadata(
+                &base_metadata,
+                serde_json::json!({
+                    "utterance_id": plan.utterance_id,
+                    "t0": group.t0,
+                    "t1": group.t1,
+                }),
+            )),
+            audio_ref: audio_ref.clone(),
+        });
+    }
+
+    for (word_index, segment) in plan.segments.iter().enumerate() {
+        for (phone_index, phone) in segment.phones.iter().enumerate() {
+            let start_ms = seconds_to_ms(phone.t0);
+            let end_ms = seconds_to_ms(phone.t1).max(start_ms);
+            spans.push(ViewerEvent {
+                lane: "Phones".to_string(),
+                kind: "phone".to_string(),
+                start_ms,
+                end_ms: Some(end_ms),
+                label: Some(phone.p.clone()),
+                metadata: Some(prosody_child_metadata(
+                    &base_metadata,
+                    serde_json::json!({
+                        "utterance_id": plan.utterance_id,
+                        "word": segment.word,
+                        "word_index": word_index,
+                        "phone_index": phone_index,
+                        "phone": phone.p,
+                        "nucleus": phone.nucleus,
+                        "pace_target_ms": phone.pace_target_ms,
+                        "t0": phone.t0,
+                        "t1": phone.t1,
+                    }),
+                )),
+                audio_ref: audio_ref.clone(),
+            });
+        }
+
+        if let Some(break_ms) = segment.break_hint_ms {
+            markers.push(ViewerMarker {
+                lane: "Breaks".to_string(),
+                kind: "break".to_string(),
+                at_ms: seconds_to_ms(segment.t1),
+                label: Some(format!("{break_ms}ms")),
+                metadata: Some(prosody_child_metadata(
+                    &base_metadata,
+                    serde_json::json!({
+                        "utterance_id": plan.utterance_id,
+                        "word": segment.word,
+                        "word_index": word_index,
+                        "break_hint_ms": break_ms,
+                        "break_reason": segment.break_reason,
+                    }),
+                )),
+                audio_ref: audio_ref.clone(),
+            });
+        }
+    }
+}
+
+fn prosody_child_metadata(base_metadata: &Value, child: Value) -> Value {
+    let mut metadata = match base_metadata {
+        Value::Object(map) => map.clone(),
+        value => {
+            let mut map = Map::new();
+            map.insert("parent".to_string(), value.clone());
+            map
+        }
+    };
+    metadata.insert("prosody".to_string(), child);
+    Value::Object(metadata)
 }
 
 fn apply_causal_clamps(spans: &mut [ViewerEvent]) {
@@ -872,6 +972,11 @@ fn live_tts_timed_word_stream_from_event(event: &LiveTraceEvent) -> Option<Timed
     serde_json::from_value(artifact.clone()).ok()
 }
 
+fn prosody_plan_from_event(event: &LiveTraceEvent) -> Option<ProsodyTimingPlan> {
+    let artifact = event.artifact.as_ref()?;
+    serde_json::from_value(artifact.clone()).ok()
+}
+
 fn event_audio_ref(event: &LiveTraceEvent) -> Option<ViewerClipAudioRef> {
     clip_audio_ref_from_value(event.artifact.as_ref()?)
 }
@@ -921,6 +1026,13 @@ fn clip_audio_ref_ms(value: Option<&Value>) -> Option<u64> {
         }
         _ => None,
     })
+}
+
+fn seconds_to_ms(seconds: f64) -> u64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return 0;
+    }
+    (seconds * 1000.0).round() as u64
 }
 
 fn humanize_kind(kind: &str) -> String {

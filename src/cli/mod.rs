@@ -77,6 +77,7 @@ enum DevCommand {
     LlamaTurn(LlamaTurnCommand),
     Continue(ContinueCommand),
     TraceViewerExport(TraceViewerExportCommand),
+    ProsodyPlan(ProsodyPlanCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
     DogfoodTwo(DogfoodTwoCommand),
@@ -234,6 +235,19 @@ pub(crate) struct TraceViewerExportCommand {
     pub(crate) input_jsonl: PathBuf,
     /// Destination browser viewer payload JSON.
     pub(crate) output_json: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ProsodyPlanCommand {
+    /// Forced-alignment JSON, usually adapted from WhisperX or MFA output.
+    pub(crate) alignment_json: PathBuf,
+    /// Praat nuclei/silence JSON.
+    pub(crate) praat_json: PathBuf,
+    /// Destination normalized prosody timing plan JSON.
+    pub(crate) output_json: PathBuf,
+    /// Optional SSML file with mark and break tags derived from the plan.
+    #[arg(long)]
+    pub(crate) ssml_output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -557,6 +571,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
             run_live_session(LiveSessionConfig::from_continue_command(cmd))
         }
         DevCommand::TraceViewerExport(cmd) => commands::run_trace_viewer_export(cmd),
+        DevCommand::ProsodyPlan(cmd) => commands::run_prosody_plan(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         DevCommand::LiveHalfDuplex(cmd) => {
             run_live_session(LiveSessionConfig::from_listen_command(cmd))
@@ -1358,6 +1373,32 @@ mod tests {
                 "examples/browser-transcript-player/fixtures/live-trace.sample.viewer.json"
             )
         );
+    }
+
+    #[test]
+    fn dev_prosody_plan_parses_alignment_praat_and_outputs() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "prosody-plan",
+            "out/alignment.json",
+            "out/praat.json",
+            "out/prosody-plan.json",
+            "--ssml-output",
+            "out/prosody.ssml",
+        ])
+        .expect("prosody-plan should parse");
+
+        let Some(Command::Dev {
+            command: DevCommand::ProsodyPlan(command),
+        }) = cli.command
+        else {
+            panic!("expected prosody-plan command");
+        };
+        assert_eq!(command.alignment_json, PathBuf::from("out/alignment.json"));
+        assert_eq!(command.praat_json, PathBuf::from("out/praat.json"));
+        assert_eq!(command.output_json, PathBuf::from("out/prosody-plan.json"));
+        assert_eq!(command.ssml_output, Some(PathBuf::from("out/prosody.ssml")));
     }
 
     #[test]

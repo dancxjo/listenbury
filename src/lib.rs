@@ -66,6 +66,13 @@ pub use span::{
     SpanRevision, SpanState, Text, TextId,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
+pub use speech::prosody_timing::{
+    AlignedPhone, AlignedWord, BreakReason, BreathGroup, ExternalAlignmentCommand, ForcedAlignment,
+    PiperTimingBreak, PiperTimingPhone, PiperTimingPlan, PraatCommandConfig, PraatNucleus,
+    PraatProsodyAnalysis, PraatSilence, ProsodyPhone, ProsodySegment, ProsodyTimingConfig,
+    ProsodyTimingPlan, forced_alignment_from_json, plan_prosody_timing, praat_analysis_from_json,
+    prosody_plan_to_piper_timing, prosody_plan_to_ssml, run_external_alignment, run_praat_analysis,
+};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
