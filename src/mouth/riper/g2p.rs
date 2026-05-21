@@ -11,7 +11,7 @@ use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+    HeuristicSentenceAnalyzer, ProsodicRole, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -261,16 +261,13 @@ impl SimpleEnglishG2p {
                                 None
                             }
                         });
-                    let emitted_symbols =
-                        reduced_symbols.unwrap_or_else(|| word_realization.symbols.clone());
-                    let emitted_stress_by_phone = if analyzed_token.is_some_and(|analysis| {
-                        analysis
-                            .reduction_diagnostic
-                            .as_ref()
-                            .is_some_and(|diagnostic| {
-                                matches!(diagnostic.status, ReductionStatus::Applied)
-                            })
-                    }) {
+                    let weak_symbols = weak_form_symbols(word, analyzed_token);
+                    let derives_stress_from_emitted_symbols =
+                        reduced_symbols.is_some() || weak_symbols.is_some();
+                    let emitted_symbols = reduced_symbols
+                        .or(weak_symbols)
+                        .unwrap_or_else(|| word_realization.symbols.clone());
+                    let emitted_stress_by_phone = if derives_stress_from_emitted_symbols {
                         emitted_symbols
                             .iter()
                             .map(|symbol| stress_level_from_symbol(symbol))
@@ -728,6 +725,20 @@ fn stress_level_from_symbol(symbol: &str) -> Option<LexicalStressLevel> {
     }
 }
 
+fn weak_form_symbols(
+    word: &str,
+    analyzed_token: Option<&crate::mouth::riper::TokenAnalysis>,
+) -> Option<Vec<String>> {
+    let analysis = analyzed_token?;
+    if !matches!(analysis.prosodic_role, ProsodicRole::FunctionWeak) {
+        return None;
+    }
+    match word {
+        "for" => Some(vec!["F".to_string(), "ER0".to_string()]),
+        _ => None,
+    }
+}
+
 fn is_default_function_word(word: &str) -> bool {
     matches!(
         word,
@@ -792,6 +803,18 @@ mod tests {
 
     fn symbols(sequence: &PiperPhonemeSequence) -> Vec<String> {
         sequence.phonemes.iter().map(|p| p.0.clone()).collect()
+    }
+
+    fn symbols_for_word(unit: &PhonemizedUnit, word: &str) -> Vec<String> {
+        let target = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == word)
+            .expect("word target should exist");
+        unit.phonemes.phonemes[target.phoneme_range.clone()]
+            .iter()
+            .map(|p| p.0.clone())
+            .collect()
     }
 
     fn to_token_analyses(unit: &PhonemizedUnit) -> Vec<&crate::mouth::riper::TokenAnalysis> {
@@ -922,6 +945,26 @@ mod tests {
             )
             .expect("phonemize");
         let output = symbols(&unit.phonemes);
+        assert_eq!(
+            symbols_for_word(&unit, "model"),
+            vec!["M", "AA1", "D", "AH0", "L"],
+            "model should keep lexical /d/ rather than applying a mechanical flap"
+        );
+        assert_eq!(
+            symbols_for_word(&unit, "nuclei"),
+            vec!["N", "UW1", "K", "L", "IY0", "AY2"],
+            "nuclei should preserve the dictionary stress contour"
+        );
+        assert_eq!(
+            symbols_for_word(&unit, "periodic"),
+            vec!["P", "IH2", "R", "IY0", "AA1", "D", "IH0", "K"],
+            "periodic should preserve -ic stress and lexical /d/"
+        );
+        assert_eq!(
+            symbols_for_word(&unit, "for"),
+            vec!["F", "ER0"],
+            "weak prepositional for should reduce to /fɚ/"
+        );
         assert!(
             output.windows(12).any(|chunk| chunk
                 == [

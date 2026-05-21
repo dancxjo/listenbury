@@ -78,6 +78,11 @@ pub fn espeak_compatible_sequence(
 }
 
 fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
+    let stress_marker = match symbol.chars().next_back() {
+        Some('1') => Some("ˈ"),
+        Some('2') => Some("ˌ"),
+        _ => None,
+    };
     let base_symbol = symbol
         .strip_suffix(['0', '1', '2'])
         .filter(|base| is_arpabet_vowel(base))
@@ -98,7 +103,7 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         (_, "DH") => &["ð"],
         (_, "EH") => &["ɛ"],
         (_, "ER") => &["ɚ"],
-        (_, "EY") => &["ˈ", "e", "ɪ"],
+        (_, "EY") => &["e", "ɪ"],
         (_, "F") => &["f"],
         (_, "G") => &["ɡ"],
         (_, "HH") => &["h"],
@@ -131,15 +136,21 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         _ => return None,
     };
 
-    expanded
+    if !expanded
         .iter()
         .all(|symbol| config.phoneme_id_map.contains_key(*symbol))
-        .then(|| {
-            expanded
-                .iter()
-                .map(|symbol| (*symbol).to_string())
-                .collect()
-        })
+    {
+        return None;
+    }
+
+    let mut output = Vec::new();
+    if let Some(marker) = stress_marker
+        && config.phoneme_id_map.contains_key(marker)
+    {
+        output.push(marker.to_string());
+    }
+    output.extend(expanded.iter().map(|symbol| (*symbol).to_string()));
+    Some(output)
 }
 
 fn is_arpabet_vowel(symbol: &str) -> bool {
@@ -317,18 +328,22 @@ mod tests {
                 "_": [2],
                 "$": [3],
                 "ɛ": [4],
-                "ɪ": [5]
+                "ɪ": [5],
+                "ɑ": [6],
+                "a": [7],
+                "ˈ": [8],
+                "ˌ": [9]
               }
             }
             "#,
         );
-        let ids = sequence(&["EH0", "IH0"])
+        let ids = sequence(&["EH0", "IH0", "AA1", "AY2"])
             .to_piper_ids_compatible(&config)
             .expect("stress-specific non-AH vowels should expand for eSpeak maps");
         assert_eq!(
             ids,
             PiperIdSequence {
-                ids: vec![1, 2, 4, 2, 5, 2, 3]
+                ids: vec![1, 2, 4, 2, 5, 2, 8, 2, 6, 2, 9, 2, 7, 2, 5, 2, 3]
             }
         );
     }

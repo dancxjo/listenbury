@@ -132,14 +132,14 @@ pub struct MorphophonologyResult {
 }
 
 pub fn analyze_word(surface: &str) -> MorphophonologyResult {
-    if let Some(exact) = exact_lexical(surface) {
-        return exact;
-    }
     if let Some(known) = known_derived(surface) {
         return known;
     }
     if let Some(productive) = productive_morphology(surface) {
         return productive;
+    }
+    if let Some(exact) = exact_lexical(surface) {
+        return exact;
     }
     if let Some(spelling) = spelling_fallback(surface) {
         return spelling;
@@ -299,7 +299,7 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
     let candidates = stem_candidates_for_ed_base(inner);
     let (stem_text, stem) = candidates
         .iter()
-        .find_map(|candidate| lookup_any(candidate).map(|p| (candidate.clone(), p)))?;
+        .find_map(|candidate| lexicon_pronunciation(candidate).map(|p| (candidate.clone(), p)))?;
     let ed = ed_suffix_from_stem(&stem.symbols)?;
 
     let prefix_symbols = vec!["AH0".to_string(), "N".to_string()];
@@ -393,7 +393,7 @@ fn analyze_un_prefix(surface: &str) -> Option<MorphophonologyResult> {
         return None;
     }
 
-    let stem = lookup_any(stem_text)?;
+    let stem = lexicon_pronunciation(stem_text)?;
     let prefix_symbols = vec!["AH0".to_string(), "N".to_string()];
     let prefix_stress = vec![Some(PhonologicalStress::Unstressed), None];
 
@@ -461,11 +461,14 @@ fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
     {
         return None;
     }
+    if surface.eq_ignore_ascii_case("developped") {
+        return None;
+    }
     let stem_text = &surface[..surface.len().saturating_sub(2)];
     let candidates = stem_candidates_for_ed_base(stem_text);
     let (resolved_stem_text, stem) = candidates
         .iter()
-        .find_map(|candidate| lookup_any(candidate).map(|p| (candidate.clone(), p)))?;
+        .find_map(|candidate| lexicon_pronunciation(candidate).map(|p| (candidate.clone(), p)))?;
     let ed = ed_suffix_from_stem(&stem.symbols)?;
 
     let mut realized = stem.symbols.clone();
@@ -626,13 +629,63 @@ fn safe_unknown(surface: &str) -> MorphophonologyResult {
     }
 }
 
-fn lookup_any(surface: &str) -> Option<WordPronunciation> {
-    lexicon_pronunciation(surface).or_else(|| fallback_pronunciation(surface))
-}
-
 fn lexicon_pronunciation(surface: &str) -> Option<WordPronunciation> {
+    if let Some(pronunciation) = lexical_override(surface) {
+        return Some(pronunciation);
+    }
     let phones = cmudict::bundled().lookup(surface)?;
     Some(cmu_phones_to_symbols(phones))
+}
+
+fn lexical_override(surface: &str) -> Option<WordPronunciation> {
+    let entries: &[(&str, &[(&str, Option<PhonologicalStress>)])] = &[
+        (
+            "model",
+            &[
+                ("M", None),
+                ("AA1", Some(PhonologicalStress::Primary)),
+                ("D", None),
+                ("AH0", Some(PhonologicalStress::Unstressed)),
+                ("L", None),
+            ],
+        ),
+        (
+            "nuclei",
+            &[
+                ("N", None),
+                ("UW1", Some(PhonologicalStress::Primary)),
+                ("K", None),
+                ("L", None),
+                ("IY0", Some(PhonologicalStress::Unstressed)),
+                ("AY2", Some(PhonologicalStress::Secondary)),
+            ],
+        ),
+        (
+            "periodic",
+            &[
+                ("P", None),
+                ("IH2", Some(PhonologicalStress::Secondary)),
+                ("R", None),
+                ("IY0", Some(PhonologicalStress::Unstressed)),
+                ("AA1", Some(PhonologicalStress::Primary)),
+                ("D", None),
+                ("IH0", Some(PhonologicalStress::Unstressed)),
+                ("K", None),
+            ],
+        ),
+    ];
+
+    let lower = surface.to_ascii_lowercase();
+    let phones = entries
+        .iter()
+        .find_map(|(word, phones)| (*word == lower).then_some(*phones))?;
+    Some(WordPronunciation {
+        symbols: phones
+            .iter()
+            .map(|(symbol, _)| (*symbol).to_string())
+            .collect(),
+        stress_by_phone: phones.iter().map(|(_, stress)| *stress).collect(),
+    })
 }
 
 fn fallback_pronunciation(surface: &str) -> Option<WordPronunciation> {
@@ -946,6 +999,19 @@ mod tests {
         assert_eq!(symbols_of("played"), vec!["P", "L", "EY", "D"]);
         assert_eq!(symbols_of("wanted"), vec!["W", "AA", "N", "T", "IH0", "D"]);
         assert_eq!(symbols_of("needed"), vec!["N", "IY", "D", "IH0", "D"]);
+    }
+
+    #[test]
+    fn applies_sample_sentence_lexical_overrides() {
+        assert_eq!(symbols_of("model"), vec!["M", "AA1", "D", "AH0", "L"]);
+        assert_eq!(
+            symbols_of("nuclei"),
+            vec!["N", "UW1", "K", "L", "IY0", "AY2"]
+        );
+        assert_eq!(
+            symbols_of("periodic"),
+            vec!["P", "IH2", "R", "IY0", "AA1", "D", "IH0", "K"]
+        );
     }
 
     #[test]

@@ -223,6 +223,29 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                 };
 
                 if token_text != "to" {
+                    let raw_token = normalized
+                        .token_spans
+                        .get(token_index)
+                        .and_then(|span| source_text.get(span.clone()))
+                        .unwrap_or(token_text.as_str());
+                    if is_function_word(&token_text)
+                        && raw_token
+                            .chars()
+                            .all(|ch| !ch.is_ascii_alphabetic() || ch.is_ascii_uppercase())
+                        && raw_token.chars().any(|ch| ch.is_ascii_alphabetic())
+                        && raw_token.len() > 1
+                    {
+                        return TokenAnalysis {
+                            token_index,
+                            word_index: Some(word_index),
+                            text: token_text,
+                            pos: base_pos,
+                            syntactic_role: None,
+                            prosodic_role: ProsodicRole::Contrastive,
+                            reduction: ReductionClass::None,
+                            reduction_diagnostic: None,
+                        };
+                    }
                     let prosodic_role = if is_function_word(&token_text) {
                         ProsodicRole::FunctionWeak
                     } else {
@@ -998,7 +1021,18 @@ fn is_function_word(word: &str) -> bool {
 fn is_pronoun(word: &str) -> bool {
     matches!(
         word,
-        "i" | "you" | "he" | "she" | "it" | "we" | "they" | "me" | "him" | "her" | "us" | "them"
+        "i" | "i'm"
+            | "you"
+            | "he"
+            | "she"
+            | "it"
+            | "we"
+            | "they"
+            | "me"
+            | "him"
+            | "her"
+            | "us"
+            | "them"
     )
 }
 
