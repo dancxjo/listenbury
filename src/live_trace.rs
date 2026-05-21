@@ -8,7 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::runtime_event::RuntimeEvent;
+use crate::runtime_event::{RuntimeEvent, RuntimeEventKind};
 use crate::soundscape::{SoundscapeId, VoiceAttribution, VoiceId, VoiceLabel};
 pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
@@ -122,6 +122,16 @@ impl LiveTraceEvent {
 
     pub fn canonical_runtime_event(&self) -> RuntimeEvent {
         RuntimeEvent::from_live_trace_event(self)
+    }
+
+    pub fn set_runtime_kind(&mut self, kind: RuntimeEventKind) {
+        if let Some(runtime_event) = self.runtime_event.as_mut() {
+            runtime_event.kind = kind;
+            return;
+        }
+        let mut runtime_event = self.canonical_runtime_event();
+        runtime_event.kind = kind;
+        self.runtime_event = Some(runtime_event);
     }
 
     pub fn refresh_runtime_event(&mut self) {
