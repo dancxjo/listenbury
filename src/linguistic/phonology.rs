@@ -324,7 +324,7 @@ impl PhonemeDefinition {
 /// [`crate::linguistic::variety::LinguisticVariety`], which handles runtime
 /// configuration; `PhonemicInventory` is purely about phonological facts.
 ///
-/// Construct via [`crate::prosody::phonotactics::EnglishVariety::phonemic_inventory`].
+/// Construct via [`crate::linguistic::variety::EnglishVariety::phonemic_inventory`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhonemicInventory {

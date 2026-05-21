@@ -37,11 +37,12 @@
 //! ```
 
 use crate::linguistic::phonology::{
-    Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemicInventory,
-    PhonemeClass, PhonemeDefinition, PhonemeId, PhonemeSchema, SourceSymbol, VarietyId,
-    phones_equivalent,
+    Phone, PhoneString, PhonemicInventory, phones_equivalent,
 };
 use crate::prosody::syllable::{DiagnosticKind, SyllableDiagnostic};
+
+pub use crate::linguistic::inventory::general_american_english;
+pub use crate::linguistic::variety::EnglishVariety;
 
 // ─── Profile trait ────────────────────────────────────────────────────────────
 
@@ -104,173 +105,6 @@ pub trait PhonotacticProfile {
     ///
     /// An empty cluster is always legal.
     fn is_legal_coda(&self, cluster: &[&Phone]) -> bool;
-}
-
-// ─── English variety ──────────────────────────────────────────────────────────
-
-/// Which English phonological variety drives the phonotactic decisions.
-///
-/// Only [`GeneralAmerican`][EnglishVariety::GeneralAmerican] is a full
-/// production implementation.  The others are listed so that the API makes
-/// variety selection explicit and future profiles can be added without an
-/// API break.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EnglishVariety {
-    /// General American English (default).
-    GeneralAmerican,
-    /// Received Pronunciation / Southern British English.
-    ReceivedPronunciation,
-    /// Scottish Standard English.
-    ScottishEnglish,
-    /// African American English.
-    AfricanAmericanEnglish,
-    /// Deliberately permissive profile for singing or poetic scansion where
-    /// normal phonotactic constraints are relaxed.
-    PermissiveSinging,
-}
-
-impl EnglishVariety {
-    /// Construct the [`PhonemicInventory`] for this variety.
-    ///
-    /// Currently only [`GeneralAmerican`] has a complete inventory.  All other
-    /// variants use the General American inventory with a distinct [`VarietyId`]
-    /// as a clearly-labelled stub for future differentiation.
-    pub fn phonemic_inventory(self) -> PhonemicInventory {
-        match self {
-            EnglishVariety::GeneralAmerican => general_american_english(),
-            EnglishVariety::ReceivedPronunciation => {
-                stub_inventory("en-GB-RP", "Received Pronunciation (stub)")
-            }
-            EnglishVariety::ScottishEnglish => {
-                stub_inventory("en-GB-ScotE", "Scottish English (stub)")
-            }
-            EnglishVariety::AfricanAmericanEnglish => {
-                stub_inventory("en-US-AAE", "African American English (stub)")
-            }
-            EnglishVariety::PermissiveSinging => {
-                // Same inventory as GA but with a broad comparison mode so
-                // aspiration and other diacritics don't interfere.
-                let mut inv = general_american_english();
-                inv.id = VarietyId::new("en-US-singing");
-                inv.label = "Permissive Singing Profile".into();
-                inv.phone_equality = PhoneEqualityOptions {
-                    mode: PhoneComparisonMode::Broad,
-                    ignore_diacritics: true,
-                    ignore_length: true,
-                    ..Default::default()
-                };
-                inv
-            }
-        }
-    }
-}
-
-// ─── General American English inventory ──────────────────────────────────────
-
-/// Build the General American English phonemic inventory.
-///
-/// Every phoneme is defined with:
-/// - a [`PhonemeId`] (ARPABET base as lowercase, e.g. `"ae"`)
-/// - canonical IPA from [`default_phone_for_arpabet`][crate::linguistic::phonology]
-/// - source symbols for both ARPABET and IPA schemas
-/// - a single-phone default realization
-/// - broad phoneme class(es)
-pub fn general_american_english() -> PhonemicInventory {
-    let defs = english_phoneme_table();
-    PhonemicInventory {
-        id: VarietyId::new("en-US-GA"),
-        language: "en".into(),
-        label: "General American English".into(),
-        phonemes: defs,
-        phone_equality: PhoneEqualityOptions::default(),
-    }
-}
-
-fn stub_inventory(id: &str, label: &str) -> PhonemicInventory {
-    // TODO: differentiate these varieties from GA
-    let mut inv = general_american_english();
-    inv.id = VarietyId::new(id);
-    inv.label = label.into();
-    inv
-}
-
-/// ARPABET → IPA mapping used to populate the English phoneme inventory.
-/// Each row: (arpabet_base, ipa, is_vowel)
-fn english_phoneme_table() -> Vec<PhonemeDefinition> {
-    let rows: &[(&str, &str, bool)] = &[
-        // Vowels / nuclei
-        ("AA", "ɑ", true),
-        ("AE", "æ", true),
-        ("AH", "ʌ", true),
-        ("AO", "ɔ", true),
-        ("AW", "aʊ", true),
-        ("AY", "aɪ", true),
-        ("EH", "ɛ", true),
-        ("ER", "ɝ", true),
-        ("EY", "eɪ", true),
-        ("IH", "ɪ", true),
-        ("IY", "iː", true),
-        ("OW", "oʊ", true),
-        ("OY", "ɔɪ", true),
-        ("UH", "ʊ", true),
-        ("UW", "uː", true),
-        // Consonants
-        ("B", "b", false),
-        ("CH", "tʃ", false),
-        ("D", "d", false),
-        ("DH", "ð", false),
-        ("F", "f", false),
-        ("G", "ɡ", false),
-        ("HH", "h", false),
-        ("JH", "dʒ", false),
-        ("K", "k", false),
-        ("L", "l", false),
-        ("M", "m", false),
-        ("N", "n", false),
-        ("NG", "ŋ", false),
-        ("P", "p", false),
-        ("R", "ɹ", false),
-        ("S", "s", false),
-        ("SH", "ʃ", false),
-        ("T", "t", false),
-        ("TH", "θ", false),
-        ("V", "v", false),
-        ("W", "w", false),
-        ("Y", "j", false),
-        ("Z", "z", false),
-        ("ZH", "ʒ", false),
-    ];
-    rows.iter()
-        .map(|(arpabet, ipa, is_vowel)| {
-            let id = PhonemeId::new(arpabet.to_lowercase());
-            let phone = Phone {
-                ipa: ipa.to_string(),
-                source_symbol: Some(arpabet.to_string()),
-                status: PhoneStatus::Mapped,
-            };
-            let classes = if *is_vowel {
-                vec![PhonemeClass::Vowel]
-            } else {
-                vec![PhonemeClass::Consonant]
-            };
-            PhonemeDefinition {
-                id,
-                ipa: ipa.to_string(),
-                source_symbols: vec![
-                    SourceSymbol {
-                        schema: PhonemeSchema::Arpabet,
-                        symbol: arpabet.to_string(),
-                    },
-                    SourceSymbol {
-                        schema: PhonemeSchema::Ipa,
-                        symbol: ipa.to_string(),
-                    },
-                ],
-                default_phone_string: PhoneString { phones: vec![phone] },
-                classes,
-            }
-        })
-        .collect()
 }
 
 // ─── English phonotactics ─────────────────────────────────────────────────────
@@ -605,7 +439,7 @@ impl PhonotacticProfile for PermissiveProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linguistic::phonology::{PhoneEqualityOptions, phones_equivalent};
+    use crate::linguistic::phonology::{PhoneComparisonMode, PhoneEqualityOptions, phones_equivalent};
 
     fn ga() -> EnglishPhonotactics {
         EnglishPhonotactics::for_variety(EnglishVariety::GeneralAmerican)
@@ -891,35 +725,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!phones_equivalent(&t, &th, &opts));
-    }
-
-    // ── PhonemicInventory ────────────────────────────────────────────────────
-
-    #[test]
-    fn general_american_inventory_has_expected_id() {
-        let inv = EnglishVariety::GeneralAmerican.phonemic_inventory();
-        assert_eq!(inv.id, VarietyId::new("en-US-GA"));
-    }
-
-    #[test]
-    fn inventory_can_find_vowel_phonemes_by_ipa() {
-        let inv = EnglishVariety::GeneralAmerican.phonemic_inventory();
-        let def = inv.find_by_ipa("æ").expect("æ should be in GA inventory");
-        assert!(def.classes.contains(&PhonemeClass::Vowel));
-    }
-
-    #[test]
-    fn inventory_can_find_consonant_by_ipa() {
-        let inv = EnglishVariety::GeneralAmerican.phonemic_inventory();
-        let def = inv.find_by_ipa("ɹ").expect("ɹ should be in GA inventory");
-        assert!(def.classes.contains(&PhonemeClass::Consonant));
-    }
-
-    #[test]
-    fn stub_varieties_have_distinct_ids() {
-        let ga = EnglishVariety::GeneralAmerican.phonemic_inventory();
-        let rp = EnglishVariety::ReceivedPronunciation.phonemic_inventory();
-        assert_ne!(ga.id, rp.id);
     }
 
     // ── Permissive profile ───────────────────────────────────────────────────

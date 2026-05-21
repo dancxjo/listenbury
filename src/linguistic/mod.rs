@@ -1,4 +1,5 @@
 pub mod cmudict;
+pub mod inventory;
 pub mod orthography;
 pub mod phoneme;
 pub mod phonology;
@@ -8,16 +9,19 @@ pub mod sound_it_out;
 pub mod variety;
 
 pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
+pub use inventory::general_american_english;
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use phonology::{
-    Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemicInventory,
-    PhonemeDefinition, PhonemeId, SourceSymbol, VarietyId, phone_comparison_key, phones_equivalent,
+    Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeDefinition,
+    PhonemeId, PhonemicInventory, SourceSymbol, VarietyId, phone_comparison_key, phones_equivalent,
 };
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
 pub use service::PronunciationService;
 pub use sound_it_out::{Environment, GraphemeRule, SoundItOutPronouncer, SoundItOutRules};
-pub use variety::{Lexicon, LinguisticRuntimeProfile, LinguisticVariety, Phonology, VarietyTag};
+pub use variety::{
+    EnglishVariety, Lexicon, LinguisticRuntimeProfile, LinguisticVariety, Phonology, VarietyTag,
+};
 
 #[cfg(test)]
 mod tests {
