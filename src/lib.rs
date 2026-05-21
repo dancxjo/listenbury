@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod config;
+pub mod diagnostics;
 pub mod event;
 pub mod hearing;
 pub mod linguistic;
@@ -28,6 +29,7 @@ pub use audio::{
     AcousticAnalysis, AudioInput, AudioOutput, VoiceSignature, VoiceSignatureId,
     VoiceSignatureLabel, VoiceSignatureSource, analyze_audio_frames, analyze_mono_samples,
 };
+pub use diagnostics::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
     VisionEvent,
@@ -53,7 +55,6 @@ pub use mouth::read_aloud::{
     ReadAloudAudioPreparer, ReadAloudCandidate, ReadAloudCandidateEvent, ReadAloudCandidateTracker,
     SpeechCandidateCommitment, SpeechCandidateId,
 };
-pub use runtime::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
     Soundscape, SoundscapeId, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
