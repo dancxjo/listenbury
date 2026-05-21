@@ -2,6 +2,7 @@
 pub mod backend;
 pub mod config;
 pub mod encoder;
+pub mod espeak_ng_rules;
 pub mod g2p;
 pub mod phoneme;
 pub mod prosody_audit;
@@ -14,6 +15,12 @@ pub mod text;
 pub use backend::{PiperModelContract, RiperBackend, RiperPcm};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
 pub use encoder::PiperEncoder;
+pub use espeak_ng_rules::{
+    EspeakNgSeedRuleTable, LinguisticVarieties, LinguisticVarietyRuleTable, PhonemeMappingRule,
+    PronunciationOverrideRule, PunctuationProsodyRule, RuleContextConstraint, RuleProvenance,
+    StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule, export_rule_table_to_json,
+    import_rule_table_from_str, load_seed_rule_table,
+};
 pub use g2p::{
     G2pError, GraphemeToPhoneme, LexicalStressLevel, LexicalStressSource, LexicalStressTarget,
     PhoneLengthClass, PhoneLengthHint, PhoneTimingHint, PhonemeProsodyCandidate,
