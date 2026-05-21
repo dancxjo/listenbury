@@ -287,9 +287,8 @@ fn productive_morphology(surface: &str) -> Option<MorphophonologyResult> {
 }
 
 fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> {
-    if !surface.to_ascii_lowercase().starts_with("un")
-        || !surface.to_ascii_lowercase().ends_with("ed")
-    {
+    let lower = surface.to_ascii_lowercase();
+    if !lower.starts_with("un") || !lower.ends_with("ed") {
         return None;
     }
     let inner = &surface[2..surface.len().saturating_sub(2)];
@@ -297,7 +296,7 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
         return None;
     }
 
-    let candidates = [inner.to_string(), format!("{inner}e")];
+    let candidates = stem_candidates_for_ed_base(inner);
     let (stem_text, stem) = candidates
         .iter()
         .find_map(|candidate| lookup_any(candidate).map(|p| (candidate.clone(), p)))?;
@@ -357,7 +356,7 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
                     kind: MorphemeKind::Suffix,
                     lemma: Some("ed".to_string()),
                     features: MorphemeFeatures {
-                        tags: vec!["past_tense_or_participle".to_string()],
+                        tags: vec!["past_participle".to_string()],
                         meaning: None,
                     },
                     phonology: None,
@@ -383,7 +382,10 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
 }
 
 fn analyze_un_prefix(surface: &str) -> Option<MorphophonologyResult> {
-    if !surface.to_ascii_lowercase().starts_with("un") {
+    if !surface
+        .get(0..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("un"))
+    {
         return None;
     }
     let stem_text = &surface[2..];
@@ -452,11 +454,18 @@ fn analyze_un_prefix(surface: &str) -> Option<MorphophonologyResult> {
 }
 
 fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
-    if !surface.to_ascii_lowercase().ends_with("ed") || surface.len() <= 2 {
+    if surface.len() <= 2
+        || !surface
+            .get(surface.len().saturating_sub(2)..)
+            .is_some_and(|suffix| suffix.eq_ignore_ascii_case("ed"))
+    {
         return None;
     }
-    let stem_text = &surface[..surface.len() - 2];
-    let stem = lookup_any(stem_text)?;
+    let stem_text = &surface[..surface.len().saturating_sub(2)];
+    let candidates = stem_candidates_for_ed_base(stem_text);
+    let (resolved_stem_text, stem) = candidates
+        .iter()
+        .find_map(|candidate| lookup_any(candidate).map(|p| (candidate.clone(), p)))?;
     let ed = ed_suffix_from_stem(&stem.symbols)?;
 
     let mut realized = stem.symbols.clone();
@@ -480,7 +489,7 @@ fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
             surface: surface.to_string(),
             morphemes: vec![
                 MorphemeAnalysis {
-                    surface: stem_text.to_string(),
+                    surface: resolved_stem_text,
                     kind: MorphemeKind::Stem,
                     lemma: None,
                     features: MorphemeFeatures::default(),
@@ -491,7 +500,7 @@ fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
                     kind: MorphemeKind::Suffix,
                     lemma: Some("ed".to_string()),
                     features: MorphemeFeatures {
-                        tags: vec!["past_tense_or_participle".to_string()],
+                        tags: vec!["past_participle".to_string()],
                         meaning: None,
                     },
                     phonology: None,
@@ -752,7 +761,33 @@ fn default_pipeline() -> Vec<String> {
 }
 
 fn parser_spike_path() -> String {
-    "custom_rule_engine_now__treebender_spike_path".to_string()
+    "custom_rule_engine_with_treebender_evaluation_path".to_string()
+}
+
+fn stem_candidates_for_ed_base(base: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    candidates.push(base.to_string());
+    candidates.push(format!("{base}e"));
+
+    let chars: Vec<char> = base.chars().collect();
+    if chars.len() >= 2 {
+        let last = chars[chars.len() - 1];
+        let prev = chars[chars.len() - 2];
+        if last == prev && !matches!(last, 'a' | 'e' | 'i' | 'o' | 'u') {
+            let stem = chars[..chars.len() - 1].iter().collect::<String>();
+            candidates.push(stem);
+        }
+    }
+
+    if base.ends_with('i') {
+        let mut y_stem = base.to_string();
+        y_stem.pop();
+        y_stem.push('y');
+        candidates.push(y_stem);
+    }
+
+    candidates.dedup();
+    candidates
 }
 
 fn encode_symbols(symbols: &[String], notation: DisplayNotation) -> String {
