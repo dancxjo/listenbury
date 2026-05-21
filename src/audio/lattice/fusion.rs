@@ -103,10 +103,8 @@ impl FusionInput {
     /// Compute a weighted average of the available evidence signals using the
     /// default [`FusionWeights`] (i.e. [`FusionProfile::Default`]).
     ///
-    /// This is a convenience wrapper around [`weighted_confidence_with`] and
-    /// preserves the original heuristic behaviour.
-    ///
-    /// [`weighted_confidence_with`]: FusionInput::weighted_confidence_with
+    /// This is a convenience wrapper around [`Self::weighted_confidence_with`]
+    /// and preserves the original heuristic behaviour.
     pub fn weighted_confidence(&self) -> f32 {
         self.weighted_confidence_with(&FusionWeights::default())
     }
