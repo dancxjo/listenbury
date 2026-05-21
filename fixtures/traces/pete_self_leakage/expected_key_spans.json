@@ -1,0 +1,13 @@
+{
+  "description": "Pete self-leakage: self-hearing suppression must appear as a span in the Latency lane, and its start must precede the post-suppression user transcript.",
+  "assertions": [
+    { "kind": "has_lane", "label": "User transcript" },
+    { "kind": "has_lane", "label": "Pete intended speech" },
+    { "kind": "has_event", "lane": "Latency", "event_kind": "self_hearing_suppression" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "self_hearing_suppression_ended" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "playback_started" },
+    { "kind": "no_event", "event_kind": "overlap" },
+    { "kind": "no_event", "event_kind": "yield" },
+    { "kind": "marker_ordering", "first_kind": "playback_started", "second_kind": "self_hearing_suppression_ended" }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "description": "Clean half-duplex turn: user speaks, Pete responds, no overlap or interruption.",
+  "assertions": [
+    { "kind": "has_lane", "label": "User transcript" },
+    { "kind": "has_lane", "label": "Pete intended speech" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "playback_started" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "first_llm_token" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "first_tts_audio_frame_available" },
+    { "kind": "no_event", "event_kind": "overlap" },
+    { "kind": "no_event", "event_kind": "yield" },
+    { "kind": "no_event", "event_kind": "self_hearing_suppression" },
+    { "kind": "marker_ordering", "first_kind": "first_llm_token", "second_kind": "playback_started" },
+    { "kind": "marker_ordering", "first_kind": "first_tts_audio_frame_available", "second_kind": "playback_started" }
+  ]
+}

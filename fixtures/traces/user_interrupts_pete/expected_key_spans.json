@@ -1,0 +1,14 @@
+{
+  "description": "User interrupts Pete mid-speech: overlap, yield, and interruption events must be present and correctly ordered.",
+  "assertions": [
+    { "kind": "has_lane", "label": "User transcript" },
+    { "kind": "has_lane", "label": "Pete intended speech" },
+    { "kind": "has_event", "lane": "Overlap", "event_kind": "overlap" },
+    { "kind": "has_event", "lane": "Interruption", "event_kind": "yield" },
+    { "kind": "has_marker", "lane": "Interruption", "marker_kind": "interruption_detected" },
+    { "kind": "has_marker", "lane": "Latency", "marker_kind": "playback_started" },
+    { "kind": "no_event", "event_kind": "self_hearing_suppression" },
+    { "kind": "event_ordering", "first_kind": "overlap", "second_kind": "yield" },
+    { "kind": "marker_ordering", "first_kind": "playback_started", "second_kind": "interruption_detected" }
+  ]
+}
