@@ -261,6 +261,102 @@
                       "source_license": "GPL-3.0-or-later",
                       "imported_at": "2026-05-21T00:23:41Z"
                     }
+                  },
+                  {
+                    "rule_id": "punctuation_period_final_boundary",
+                    "match_pattern": ".",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "boundary:final_falling",
+                    "confidence": 90,
+                    "priority": 100,
+                    "dictionary_flags": [
+                      "pause_after",
+                      "break_after",
+                      "clause_final_stress"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "punctuation_comma_minor_boundary",
+                    "match_pattern": ",",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": false
+                    },
+                    "output_transformation": "boundary:minor",
+                    "confidence": 80,
+                    "priority": 80,
+                    "dictionary_flags": [
+                      "pause_after"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "punctuation_semicolon_major_boundary",
+                    "match_pattern": ";",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "boundary:major",
+                    "confidence": 85,
+                    "priority": 90,
+                    "dictionary_flags": [
+                      "pause_after",
+                      "break_after"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "punctuation_colon_major_boundary",
+                    "match_pattern": ":",
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": false,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "boundary:major",
+                    "confidence": 82,
+                    "priority": 85,
+                    "dictionary_flags": [
+                      "pause_after",
+                      "break_after"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
                   }
                 ],
                 "multi_word_rules": [

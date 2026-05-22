@@ -333,6 +333,13 @@ fn classify_phrase_boundary_kind(
         return match rule.output_transformation.as_str() {
             "boundary:exclamation" => PhraseBoundaryKind::Exclamation,
             "boundary:final_rising" => PhraseBoundaryKind::FinalRising,
+            "boundary:final_falling" => match boundary {
+                ProsodyBoundaryHint::PossibleSentenceEnd
+                | ProsodyBoundaryHint::FinalSentenceEnd => PhraseBoundaryKind::FinalFalling,
+                _ => PhraseBoundaryKind::PossibleFinal,
+            },
+            "boundary:minor" => PhraseBoundaryKind::MinorPhrase,
+            "boundary:major" => PhraseBoundaryKind::MajorPhrase,
             _ => PhraseBoundaryKind::None,
         };
     }
