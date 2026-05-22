@@ -1199,7 +1199,9 @@ mod tests {
         }
         // Klatt targets carry source/filter; neutral ones do not
         assert!(
-            klatt.iter().any(|t| t.source.is_some() || t.filter.is_some()),
+            klatt
+                .iter()
+                .any(|t| t.source.is_some() || t.filter.is_some()),
             "Klatt adapter should enrich at least some phones with source/filter"
         );
     }

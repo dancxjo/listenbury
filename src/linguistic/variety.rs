@@ -1,4 +1,4 @@
-use super::phonology::PhonemicInventory;
+use super::phonology::{PhonemicInventory, VarietyImplementationStatus};
 use super::rule_registry::RuleRegistry;
 
 pub use super::phonology::VarietyId;
@@ -110,11 +110,20 @@ impl EnglishVariety {
     ///
     /// Currently only [`GeneralAmerican`][EnglishVariety::GeneralAmerican] has
     /// a complete inventory. All other variants use the GA inventory with
-    /// distinct identifiers as clearly labeled stubs.
+    /// distinct identifiers plus explicit implementation-status metadata.
     pub fn phonemic_inventory(self) -> PhonemicInventory {
         RuleRegistry::builtin()
             .inventory(self.rule_id())
             .expect("built-in registry should include English variety profile")
+    }
+
+    /// Return whether this variety profile is complete, stub-derived, or
+    /// intentionally permissive.
+    ///
+    /// Add real dialect differences by updating rule/inventory data, then
+    /// upgrade this status instead of adding hardcoded special-case logic.
+    pub fn implementation_status(self) -> VarietyImplementationStatus {
+        self.phonemic_inventory().implementation_status
     }
 }
 
@@ -123,9 +132,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stub_varieties_have_distinct_ids() {
+    fn variety_profiles_have_distinct_ids_and_explicit_status() {
         let ga = EnglishVariety::GeneralAmerican.phonemic_inventory();
         let rp = EnglishVariety::ReceivedPronunciation.phonemic_inventory();
+        let scot = EnglishVariety::ScottishEnglish.phonemic_inventory();
+        let aae = EnglishVariety::AfricanAmericanEnglish.phonemic_inventory();
+        let singing = EnglishVariety::PermissiveSinging.phonemic_inventory();
+
         assert_ne!(ga.id, rp.id);
+        assert_eq!(
+            ga.implementation_status,
+            VarietyImplementationStatus::Complete
+        );
+        assert_eq!(
+            rp.implementation_status,
+            VarietyImplementationStatus::StubDerivedFrom(ga.id.clone())
+        );
+        assert_eq!(
+            scot.implementation_status,
+            VarietyImplementationStatus::StubDerivedFrom(ga.id.clone())
+        );
+        assert_eq!(
+            aae.implementation_status,
+            VarietyImplementationStatus::StubDerivedFrom(ga.id.clone())
+        );
+        assert_eq!(
+            singing.implementation_status,
+            VarietyImplementationStatus::PermissiveProfile
+        );
+        assert_eq!(ga.phonemes, rp.phonemes);
+    }
+
+    #[test]
+    fn neighboring_status_query_matches_inventory_status() {
+        assert_eq!(
+            EnglishVariety::ReceivedPronunciation.implementation_status(),
+            EnglishVariety::ReceivedPronunciation
+                .phonemic_inventory()
+                .implementation_status
+        );
     }
 }

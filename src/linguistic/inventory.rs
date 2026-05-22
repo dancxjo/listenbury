@@ -16,6 +16,16 @@ impl VarietyId {
     }
 }
 
+/// Declares whether a variety profile is fully implemented or currently
+/// a labeled derivative.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VarietyImplementationStatus {
+    Complete,
+    StubDerivedFrom(VarietyId),
+    PermissiveProfile,
+}
+
 /// Stable identifier for a phoneme within a variety's inventory.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +98,8 @@ impl PhonemeDefinition {
 pub struct PhonemicInventory {
     /// Stable identifier for this variety.
     pub id: VarietyId,
+    /// Implementation completeness metadata for this variety profile.
+    pub implementation_status: VarietyImplementationStatus,
     /// ISO 639 language code, e.g. `"en"`.
     pub language: String,
     /// Human-readable label, e.g. `"General American English"`.

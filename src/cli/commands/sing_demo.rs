@@ -23,12 +23,12 @@ use listenbury::prosody::singing::SungPhrase;
 use listenbury::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
 use listenbury::prosody::vibrato::Vibrato;
 use listenbury::time::ExactTimestamp;
+use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
 use listenbury::voice::articulator::{
     RenderPlan, SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
 };
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::default_english_phone_targets;
-use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;

@@ -4,7 +4,7 @@ use super::inventory::english_phoneme_table;
 use super::phonology::{
     Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeClass,
     PhonemeDefinition, PhonemeId, PhonemeSchema, PhonemicInventory, SourceSymbol, VarietyId,
-    feature_bundle_for_arpabet,
+    VarietyImplementationStatus, feature_bundle_for_arpabet,
 };
 use crate::prosody::phonotactics::tables::{
     illegal_single_onsets, legal_coda_clusters, legal_onset_clusters,
@@ -38,6 +38,7 @@ pub struct VarietyRuleData {
     pub id: String,
     pub language: String,
     pub label: String,
+    pub implementation_status: VarietyImplementationStatus,
     pub includes: Vec<String>,
     pub inventory: Option<String>,
     pub phonotactics: Vec<String>,
@@ -51,6 +52,7 @@ pub struct RuleProfile {
     pub id: String,
     pub language: String,
     pub label: String,
+    pub implementation_status: VarietyImplementationStatus,
     pub inventory: PhonemicInventory,
     pub illegal_single_onsets: Vec<Phone>,
     pub legal_onset_clusters: Vec<PhoneString>,
@@ -188,6 +190,7 @@ impl RuleRegistry {
 
         let inventory = PhonemicInventory {
             id: VarietyId::new(rule.id.clone()),
+            implementation_status: rule.implementation_status.clone(),
             language: rule.language.clone(),
             label: rule.label.clone(),
             phonemes: inventory_data.phonemes.clone(),
@@ -198,6 +201,7 @@ impl RuleRegistry {
             id: rule.id.clone(),
             language: rule.language.clone(),
             label: rule.label.clone(),
+            implementation_status: rule.implementation_status.clone(),
             inventory,
             illegal_single_onsets,
             legal_onset_clusters,
@@ -352,6 +356,7 @@ struct VarietyRuleSpec {
     id: &'static str,
     language: &'static str,
     label: &'static str,
+    implementation_status: VarietyImplementationStatusSpec,
     includes: &'static [&'static str],
     inventory: Option<&'static str>,
     phonotactics: &'static [&'static str],
@@ -363,6 +368,13 @@ struct VarietyRuleSpec {
 enum RulePhoneStringRows {
     Builder(fn() -> Vec<PhoneString>),
     Static(&'static [&'static [&'static str]]),
+}
+
+#[derive(Clone, Copy)]
+enum VarietyImplementationStatusSpec {
+    Complete,
+    StubDerivedFrom(&'static str),
+    PermissiveProfile,
 }
 
 impl InventorySpec {
@@ -446,12 +458,27 @@ impl VarietyRuleSpec {
             id: self.id.to_string(),
             language: self.language.to_string(),
             label: self.label.to_string(),
+            implementation_status: self.implementation_status.to_status(),
             includes: strings(self.includes),
             inventory: self.inventory.map(str::to_string),
             phonotactics: strings(self.phonotactics),
             phone_equality: self.phone_equality.map(str::to_string),
             legal_onset_additions: self.legal_onset_additions.to_phone_strings(),
             legal_coda_additions: self.legal_coda_additions.to_phone_strings(),
+        }
+    }
+}
+
+impl VarietyImplementationStatusSpec {
+    fn to_status(self) -> VarietyImplementationStatus {
+        match self {
+            VarietyImplementationStatusSpec::Complete => VarietyImplementationStatus::Complete,
+            VarietyImplementationStatusSpec::StubDerivedFrom(id) => {
+                VarietyImplementationStatus::StubDerivedFrom(VarietyId::new(id))
+            }
+            VarietyImplementationStatusSpec::PermissiveProfile => {
+                VarietyImplementationStatus::PermissiveProfile
+            }
         }
     }
 }
@@ -658,6 +685,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "en-US-GA",
         language: "en",
         label: "General American English",
+        implementation_status: VarietyImplementationStatusSpec::Complete,
         includes: &[
             "english/base_inventory",
             "english/base_onsets",
@@ -674,6 +702,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "en-US-singing",
         language: "en",
         label: "Permissive Singing Profile",
+        implementation_status: VarietyImplementationStatusSpec::PermissiveProfile,
         includes: &[
             "english/base_inventory",
             "english/base_onsets",
@@ -691,6 +720,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "en-GB-RP",
         language: "en",
         label: "Received Pronunciation (stub)",
+        implementation_status: VarietyImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
         includes: &[
             "english/base_inventory",
             "english/base_onsets",
@@ -707,6 +737,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "en-GB-ScotE",
         language: "en",
         label: "Scottish English (stub)",
+        implementation_status: VarietyImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
         includes: &[
             "english/base_inventory",
             "english/base_onsets",
@@ -723,6 +754,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "en-US-AAE",
         language: "en",
         label: "African American English (stub)",
+        implementation_status: VarietyImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
         includes: &[
             "english/base_inventory",
             "english/base_onsets",
@@ -739,6 +771,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         id: "eo",
         language: "eo",
         label: "Esperanto (sample)",
+        implementation_status: VarietyImplementationStatusSpec::Complete,
         includes: &["eo/base_inventory", "eo/base_phonotactics"],
         inventory: None,
         phonotactics: &[],
