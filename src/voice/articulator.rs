@@ -186,7 +186,9 @@ pub struct SyllableRenderSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SungBackendKind {
     Klatt,
-    Riper,
+    RiperKlattFallback,
+    /// Reserved landing zone for the future direct Riper/ONNX sung path.
+    RiperOnnxDirect,
     Piper,
 }
 
@@ -195,6 +197,8 @@ pub enum SungBackendKind {
 pub enum SungBackendDetail {
     /// Full phone timings + pitch-bearing durations/F0 where supported.
     PhoneTimed,
+    /// Phone-timed contract rendered through the Klatt fallback adapter.
+    PhoneTimedViaKlattFallback,
     /// Partial phone/prosody fidelity based on backend control surface.
     PartialPhoneProsody,
     /// Explicitly degraded to coarse text/phoneme hints.
@@ -239,7 +243,7 @@ pub enum RenderPlan {
     /// Full phone-timed targets for deterministic source/filter rendering.
     PhoneTimed(Vec<PhoneRenderTarget>),
     /// Text plus phone/prosody hints for backends with a partial control
-    /// surface, such as the Riper path.
+    /// surface, such as the future direct Riper/ONNX path.
     PartialProsody {
         text: String,
         phones: Vec<PartialProsodyPhone>,
@@ -278,7 +282,8 @@ pub struct PitchHint {
 pub fn backend_detail_expectation(kind: SungBackendKind) -> SungBackendDetail {
     match kind {
         SungBackendKind::Klatt => SungBackendDetail::PhoneTimed,
-        SungBackendKind::Riper => SungBackendDetail::PartialPhoneProsody,
+        SungBackendKind::RiperKlattFallback => SungBackendDetail::PhoneTimedViaKlattFallback,
+        SungBackendKind::RiperOnnxDirect => SungBackendDetail::PartialPhoneProsody,
         SungBackendKind::Piper => SungBackendDetail::CoarseHintsOnly,
     }
 }
@@ -291,10 +296,10 @@ pub fn render_plan_for_backend(
     targets: &HashMap<String, PhoneAcousticTarget>,
 ) -> RenderPlan {
     match kind {
-        SungBackendKind::Klatt => RenderPlan::PhoneTimed(klatt_targets_from_articulator_plan(
-            plan, amplitude, targets,
-        )),
-        SungBackendKind::Riper => partial_prosody_render_plan(plan),
+        SungBackendKind::Klatt | SungBackendKind::RiperKlattFallback => RenderPlan::PhoneTimed(
+            klatt_targets_from_articulator_plan(plan, amplitude, targets),
+        ),
+        SungBackendKind::RiperOnnxDirect => partial_prosody_render_plan(plan),
         SungBackendKind::Piper => coarse_text_render_plan(plan),
     }
 }
@@ -1108,7 +1113,11 @@ mod tests {
             SungBackendDetail::PhoneTimed
         );
         assert_eq!(
-            backend_detail_expectation(SungBackendKind::Riper),
+            backend_detail_expectation(SungBackendKind::RiperKlattFallback),
+            SungBackendDetail::PhoneTimedViaKlattFallback
+        );
+        assert_eq!(
+            backend_detail_expectation(SungBackendKind::RiperOnnxDirect),
             SungBackendDetail::PartialPhoneProsody
         );
         assert_eq!(
@@ -1134,23 +1143,30 @@ mod tests {
             vec!["h", "ɛ", "l", "l", "oʊ"]
         );
 
-        let riper = render_plan_for_backend(SungBackendKind::Riper, &plan, 0.7, &table);
+        let riper_fallback =
+            render_plan_for_backend(SungBackendKind::RiperKlattFallback, &plan, 0.7, &table);
+        let RenderPlan::PhoneTimed(targets) = riper_fallback else {
+            panic!("Riper Klatt fallback should receive a phone-timed render plan");
+        };
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "ɛ", "l", "l", "oʊ"]
+        );
+
+        let riper_direct =
+            render_plan_for_backend(SungBackendKind::RiperOnnxDirect, &plan, 0.7, &table);
         let RenderPlan::PartialProsody {
             text,
             phones,
             pitch_hints,
-        } = riper
+        } = riper_direct
         else {
-            panic!("Riper should receive a partial prosody render plan");
+            panic!("future direct Riper ONNX path should receive a partial prosody render plan");
         };
         assert_eq!(text, "hello");
-        assert_eq!(
-            phones
-                .iter()
-                .map(|phone| phone.phone.as_str())
-                .collect::<Vec<_>>(),
-            vec!["h", "ɛ", "l", "l", "oʊ"]
-        );
         assert!(
             pitch_hints
                 .iter()
