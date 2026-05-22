@@ -350,6 +350,70 @@ mod tests {
     }
 
     #[test]
+    fn representative_vowels_expose_vowel_specific_features() {
+        let cases = [
+            (
+                "IY",
+                VowelHeight::High,
+                VowelBackness::Front,
+                Roundedness::Unrounded,
+            ),
+            (
+                "AH",
+                VowelHeight::Mid,
+                VowelBackness::Central,
+                Roundedness::Unrounded,
+            ),
+            (
+                "AO",
+                VowelHeight::Low,
+                VowelBackness::Back,
+                Roundedness::Rounded,
+            ),
+            (
+                "ER",
+                VowelHeight::Rhotic,
+                VowelBackness::Central,
+                Roundedness::Unrounded,
+            ),
+            (
+                "UW",
+                VowelHeight::High,
+                VowelBackness::Back,
+                Roundedness::Rounded,
+            ),
+        ];
+
+        for (symbol, height, backness, roundedness) in cases {
+            let features = feature_bundle_for_arpabet(symbol);
+            assert_eq!(
+                features.major,
+                MajorClass::Vowel,
+                "{symbol} should be a vowel"
+            );
+            assert_eq!(
+                features.place, None,
+                "{symbol} should not use consonant place"
+            );
+            assert_eq!(
+                features.vowel_height,
+                Some(height),
+                "{symbol} height mismatch"
+            );
+            assert_eq!(
+                features.vowel_backness,
+                Some(backness),
+                "{symbol} backness mismatch"
+            );
+            assert_eq!(
+                features.roundedness,
+                Some(roundedness),
+                "{symbol} roundedness mismatch"
+            );
+        }
+    }
+
+    #[test]
     fn high_vowel_class_uses_vowel_height_not_backness_or_place() {
         for symbol in ["IH0", "IY0", "UH0", "UW0"] {
             let phoneme = phoneme_from_arpabet(symbol, "cmudict");
