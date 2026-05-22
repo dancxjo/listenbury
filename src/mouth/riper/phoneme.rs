@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::linguistic::english_us_variety;
 use crate::mouth::riper::config::PiperVoiceConfig;
 
 const PIPER_PAD: &str = "_";
@@ -194,23 +195,7 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
 }
 
 fn is_arpabet_vowel(symbol: &str) -> bool {
-    matches!(
-        symbol,
-        "AA" | "AE"
-            | "AH"
-            | "AO"
-            | "AW"
-            | "AY"
-            | "EH"
-            | "ER"
-            | "EY"
-            | "IH"
-            | "IY"
-            | "OW"
-            | "OY"
-            | "UH"
-            | "UW"
-    )
+    english_us_variety().is_arpabet_vowel(symbol)
 }
 
 #[cfg(test)]

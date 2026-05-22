@@ -1,0 +1,16 @@
+arpabet-vowels = [
+  "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER",
+  "EY", "IH", "IY", "OW", "OY", "UH", "UW",
+]
+
+nucleus-symbols = [
+  "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER",
+  "EY", "IH", "IY", "OW", "OY", "UH", "UW",
+  "a", "e", "i", "o", "u",
+  "æ", "ɑ", "ɔ", "ə", "ɛ", "ɚ", "ɪ", "ʊ", "ʌ",
+]
+
+vowel-phone-chars = [
+  "a", "e", "i", "o", "u",
+  "ɑ", "æ", "ʌ", "ɔ", "ɛ", "ɝ", "ɪ", "ʊ", "ə", "ɚ",
+]

@@ -2,6 +2,7 @@ pub mod arpabet;
 pub mod cmudict;
 pub mod environment;
 pub mod inventory;
+pub mod language_variety;
 pub mod orthography;
 pub mod phone;
 pub mod phoneme;
@@ -15,6 +16,7 @@ pub mod variety;
 
 pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
 pub use inventory::general_american_english;
+pub use language_variety::{LanguageVariety, LanguageVarietyLookupError, english_us_variety};
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use phonology::{

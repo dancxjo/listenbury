@@ -5,6 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::linguistic::english_us_variety;
 use crate::speech::canonical_plan::{
     canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_piper_timing,
 };
@@ -500,32 +501,7 @@ fn ends_with_sentence(word: &str) -> bool {
 }
 
 fn is_vowel_phone(phone: &str) -> bool {
-    let normalized = phone
-        .trim()
-        .trim_matches(|ch: char| ch.is_ascii_digit() || ch == '"' || ch == '\'')
-        .to_ascii_uppercase();
-    matches!(
-        normalized.as_str(),
-        "AA" | "AE"
-            | "AH"
-            | "AO"
-            | "AW"
-            | "AY"
-            | "EH"
-            | "ER"
-            | "EY"
-            | "IH"
-            | "IY"
-            | "OW"
-            | "OY"
-            | "UH"
-            | "UW"
-    ) || phone.chars().any(|ch| {
-        matches!(
-            ch,
-            'a' | 'e' | 'i' | 'o' | 'u' | 'ɑ' | 'æ' | 'ʌ' | 'ɔ' | 'ɛ' | 'ɝ' | 'ɪ' | 'ʊ' | 'ə' | 'ɚ'
-        )
-    })
+    english_us_variety().is_vowel_phone(phone)
 }
 
 fn escape_xml_text(value: &str) -> String {
@@ -626,5 +602,12 @@ mod tests {
         let piper = prosody_plan_to_piper_timing(&plan);
         assert_eq!(piper.phonemes[0].target_duration_ms, 162);
         assert_eq!(piper.breaks[0].after_word_index, 0);
+    }
+
+    #[test]
+    fn vowel_phone_detection_uses_en_us_variety_data() {
+        assert!(is_vowel_phone("OW1"));
+        assert!(is_vowel_phone("aʊ"));
+        assert!(!is_vowel_phone("SH"));
     }
 }

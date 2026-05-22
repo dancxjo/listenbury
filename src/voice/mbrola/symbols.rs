@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use crate::linguistic::english_us_variety;
+
 /// Voice-specific mapping from Listenbury phone symbols to MBROLA symbols.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MbrolaSymbolMap {
@@ -20,109 +22,10 @@ impl MbrolaSymbolMap {
 
     /// A conservative US-English starter map. Real voices may need overrides.
     pub fn us1_starter() -> Self {
-        Self::new([
-            ("_", "_"),
-            ("pau", "_"),
-            ("sil", "_"),
-            ("h", "h"),
-            ("l", "l"),
-            ("m", "m"),
-            ("b", "b"),
-            ("i", "i"),
-            ("iː", "i"),
-            ("ɪ", "I"),
-            ("ɛ", "E"),
-            ("æ", "{"),
-            ("ɑ", "A"),
-            ("ɡ", "g"),
-            ("ɔ", "O"),
-            ("ʊ", "U"),
-            ("u", "u"),
-            ("uː", "u"),
-            ("ʌ", "V"),
-            ("ə", "@"),
-            ("ɝ", "3"),
-            ("ɚ", "3"),
-            ("oʊ", "oU"),
-            ("aɪ", "aI"),
-            ("ɑɪ", "aI"),
-            ("eɪ", "eI"),
-            ("aʊ", "aU"),
-            ("ɔɪ", "OI"),
-            ("p", "p"),
-            ("t", "t"),
-            ("k", "k"),
-            ("d", "d"),
-            ("g", "g"),
-            ("n", "n"),
-            ("ŋ", "N"),
-            ("f", "f"),
-            ("v", "v"),
-            ("θ", "T"),
-            ("ð", "D"),
-            ("s", "s"),
-            ("z", "z"),
-            ("ʃ", "S"),
-            ("ʒ", "Z"),
-            ("r", "r"),
-            ("ɹ", "r"),
-            ("w", "w"),
-            ("j", "j"),
-            ("tʃ", "tS"),
-            ("dʒ", "dZ"),
-            ("HH", "h"),
-            ("AA", "A"),
-            ("AE", "{"),
-            ("AH", "@"),
-            ("AO", "O"),
-            ("AW", "aU"),
-            ("AY", "aI"),
-            ("EH", "E"),
-            ("ER", "3"),
-            ("EY", "eI"),
-            ("IH", "I"),
-            ("IY", "i"),
-            ("OW", "oU"),
-            ("OY", "OI"),
-            ("UH", "U"),
-            ("UW", "u"),
-            ("AH0", "@"),
-            ("AH1", "V"),
-            ("AA1", "A"),
-            ("AE1", "{"),
-            ("AO1", "O"),
-            ("EH1", "E"),
-            ("IH1", "I"),
-            ("UW1", "u"),
-            ("OW1", "oU"),
-            ("AY1", "aI"),
-            ("EY1", "eI"),
-            ("IY0", "i"),
-            ("IY1", "i"),
-            ("L", "l"),
-            ("M", "m"),
-            ("N", "n"),
-            ("NG", "N"),
-            ("B", "b"),
-            ("P", "p"),
-            ("T", "t"),
-            ("D", "d"),
-            ("K", "k"),
-            ("G", "g"),
-            ("F", "f"),
-            ("V", "v"),
-            ("TH", "T"),
-            ("DH", "D"),
-            ("S", "s"),
-            ("Z", "z"),
-            ("SH", "S"),
-            ("ZH", "Z"),
-            ("R", "r"),
-            ("W", "w"),
-            ("Y", "j"),
-            ("CH", "tS"),
-            ("JH", "dZ"),
-        ])
+        let map = english_us_variety()
+            .backend_map("mbrola-us1")
+            .expect("en-US datapack should define mbrola-us1 backend map");
+        Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
     }
 
     pub fn identity() -> Self {
@@ -134,32 +37,10 @@ impl MbrolaSymbolMap {
     /// Starter map for the `us3` voice inventory, whose diphthongs use
     /// uppercase SAMPA-style symbols like `EI`, `AI`, and `@U`.
     pub fn us3_starter() -> Self {
-        let mut map = Self::us1_starter();
-        for (from, to) in [
-            ("eɪ", "EI"),
-            ("aɪ", "AI"),
-            ("ɑɪ", "AI"),
-            ("oʊ", "@U"),
-            ("EY", "EI"),
-            ("EY1", "EI"),
-            ("EY0", "EI"),
-            ("AY", "AI"),
-            ("AY1", "AI"),
-            ("AY0", "AI"),
-            ("OW", "@U"),
-            ("OW1", "@U"),
-            ("OW0", "@U"),
-            ("ER", "r="),
-            ("ER1", "r="),
-            ("ER0", "r="),
-            ("ɝ", "r="),
-            ("ɚ", "r="),
-            ("DX", "4"),
-            ("ɾ", "4"),
-        ] {
-            map.insert(from, to);
-        }
-        map
+        let map = english_us_variety()
+            .backend_map("mbrola-us3")
+            .expect("en-US datapack should define mbrola-us3 backend map");
+        Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
     }
 
     pub fn map_phone(&self, phone: &str) -> Result<String, UnmappedPhone> {
@@ -202,6 +83,13 @@ mod tests {
         assert_eq!(map.map_phone("ER").unwrap(), "r=");
         assert_eq!(map.map_phone("ER1").unwrap(), "r=");
         assert_eq!(map.map_phone("ɝ").unwrap(), "r=");
+    }
+
+    #[test]
+    fn us1_maps_representative_phones_from_datapack() {
+        let map = MbrolaSymbolMap::us1_starter();
+        assert_eq!(map.map_phone("OW1").unwrap(), "oU");
+        assert_eq!(map.map_phone("tʃ").unwrap(), "tS");
     }
 }
 
