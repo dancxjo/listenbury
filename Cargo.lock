@@ -1313,6 +1313,7 @@ dependencies = [
  "libc",
  "llama-cpp-2",
  "llama-cpp-sys-2",
+ "midly",
  "ort",
  "owo-colors",
  "rtrb",
@@ -1415,6 +1416,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "midly"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
+dependencies = [
+ "rayon",
 ]
 
 [[package]]
