@@ -5,6 +5,10 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::speech::canonical_plan::{
+    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_piper_timing,
+};
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForcedAlignment {
@@ -272,28 +276,8 @@ pub struct PiperTimingBreak {
 }
 
 pub fn prosody_plan_to_piper_timing(plan: &ProsodyTimingPlan) -> PiperTimingPlan {
-    let mut phonemes = Vec::new();
-    let mut breaks = Vec::new();
-    for (word_index, segment) in plan.segments.iter().enumerate() {
-        for phone in &segment.phones {
-            phonemes.push(PiperTimingPhone {
-                p: phone.p.clone(),
-                source_word_index: word_index,
-                target_duration_ms: phone
-                    .pace_target_ms
-                    .unwrap_or_else(|| seconds_to_ms((phone.t1 - phone.t0).max(0.0))),
-                nucleus: phone.nucleus,
-            });
-        }
-        if let (Some(millis), Some(reason)) = (segment.break_hint_ms, segment.break_reason) {
-            breaks.push(PiperTimingBreak {
-                after_word_index: word_index,
-                millis,
-                reason,
-            });
-        }
-    }
-    PiperTimingPlan { phonemes, breaks }
+    let canonical = canonical_speech_plan_from_prosody_timing(plan);
+    canonical_speech_plan_to_piper_timing(&canonical)
 }
 
 fn segment_from_alignment(

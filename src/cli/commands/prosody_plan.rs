@@ -21,6 +21,7 @@ pub(crate) fn run_prosody_plan(command: ProsodyPlanCommand) -> Result<()> {
         praat,
         &listenbury::ProsodyTimingConfig::default(),
     );
+    let canonical = listenbury::canonical_speech_plan_from_prosody_timing(&plan);
 
     let plan_json = serde_json::to_string_pretty(&plan).context("serialize prosody timing plan")?;
     fs::write(&command.output_json, plan_json).with_context(|| {
@@ -37,8 +38,8 @@ pub(crate) fn run_prosody_plan(command: ProsodyPlanCommand) -> Result<()> {
 
     println!(
         "wrote prosody plan with {} words, {} breath groups to {}",
-        plan.segments.len(),
-        plan.breath_groups.len(),
+        canonical.segments.len(),
+        canonical.breath_groups.len(),
         command.output_json.display()
     );
     Ok(())
