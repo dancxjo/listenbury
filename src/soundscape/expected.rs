@@ -150,15 +150,15 @@ fn sample_correlation(expected: &[f32], observed: &[f32]) -> f32 {
     if expected_energy <= f32::EPSILON || observed_energy <= f32::EPSILON {
         return 0.0;
     }
-    (dot.abs() / (expected_energy.sqrt() * observed_energy.sqrt())).clamp(0.0, 1.0)
+    (dot / (expected_energy.sqrt() * observed_energy.sqrt())).clamp(-1.0, 1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use crate::audio::AudioFrame;
     use crate::soundscape::{
+        expected::{playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig},
         AttributionEvidence, SourceId, TimePoint, TimeRange,
-        expected::{ExpectedSound, ObservedSound, PlaybackMatchConfig, playback_match_evidence},
     };
     use crate::time::ExactTimestamp;
 
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn non_match_does_not_emit_playback_evidence() {
         let expected = expected_sound(4_000, 4_200, samples(64, 0.7));
-        let observed = observed_sound(4_350, 4_550, samples(64, -0.7));
+        let observed = observed_sound(4_000, 4_200, samples(64, -0.7));
 
         assert!(
             playback_match_evidence(&expected, &observed, PlaybackMatchConfig::default()).is_none()
