@@ -75,7 +75,7 @@ impl DiphoneProvider for MbrolaDiphoneProvider<'_> {
         let samples = self.database.samples_for_diphone(diphone)?;
         Ok(DiphoneLookup {
             unit: DiphoneUnit {
-                key: DiphoneKey::new(diphone.left.clone(), diphone.right.clone()),
+                key: DiphoneKey::new(diphone.left.as_str(), diphone.right.as_str()),
                 samples,
                 sample_rate_hz: self.database.sample_rate_hz,
                 halfseg_samples: diphone.halfseg_samples,

@@ -333,17 +333,16 @@ fn boundary_fallback_lookup(
     requested_left: &str,
     requested_right: &str,
 ) -> DiphoneLookup {
-    let fallback_left = unit.key.left.clone();
-    let fallback_right = unit.key.right.clone();
+    let warning = format!(
+        "used boundary fallback diphone {}-{} for requested {}-{}",
+        unit.key.left, unit.key.right, requested_left, requested_right
+    );
     DiphoneLookup {
         unit: DiphoneUnit {
             source: DiphoneUnitSource::MbrolaBoundaryFallback,
             metadata: DiphoneUnitMetadata {
                 requested_key: Some(DiphoneKey::new(requested_left, requested_right)),
-                warning: Some(format!(
-                    "used boundary fallback diphone {}-{} for requested {}-{}",
-                    fallback_left, fallback_right, requested_left, requested_right
-                )),
+                warning: Some(warning),
             },
             ..unit
         },
@@ -351,13 +350,17 @@ fn boundary_fallback_lookup(
 }
 
 fn left_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
-    let split = unit.halfseg_samples.min(unit.samples.len());
+    let split = halfseg_split(unit);
     unit.samples[..split].to_vec()
 }
 
 fn right_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
-    let split = unit.halfseg_samples.min(unit.samples.len());
+    let split = halfseg_split(unit);
     unit.samples[split..].to_vec()
+}
+
+fn halfseg_split(unit: &DiphoneUnit) -> usize {
+    unit.halfseg_samples.min(unit.samples.len())
 }
 
 fn record_diphone_unit(
@@ -607,9 +610,8 @@ fn remove_dc(samples: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::super::pho::MbrolaPhone;
-    use std::collections::BTreeMap;
-
     use anyhow::{Result, anyhow};
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -729,6 +731,8 @@ mod tests {
 
     #[test]
     fn native_renderer_records_exact_and_fallback_unit_sources() {
+        // For [a, b], edge lookups (_-a, b-_) are exact while inner lookups (a-b)
+        // use boundary fallbacks (a-_ and _-b).
         let mut provider =
             FakeDiphoneProvider::new([("_", "a", 4), ("a", "_", 4), ("_", "b", 4), ("b", "_", 4)]);
         let plan = PhoneTimedPlan::new(vec![MbrolaPhone::new("a", 60), MbrolaPhone::new("b", 60)]);
