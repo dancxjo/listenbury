@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::inventory::english_phoneme_table;
+use super::inventory::{VarietyImplementationStatus, english_phoneme_table};
 use super::phonology::{
     Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeClass,
     PhonemeDefinition, PhonemeId, PhonemeSchema, PhonemicInventory, SourceSymbol, VarietyId,
@@ -44,6 +44,7 @@ pub struct VarietyRuleData {
     pub phone_equality: Option<String>,
     pub legal_onset_additions: Vec<PhoneString>,
     pub legal_coda_additions: Vec<PhoneString>,
+    pub implementation_status: VarietyImplementationStatus,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -192,6 +193,7 @@ impl RuleRegistry {
             label: rule.label.clone(),
             phonemes: inventory_data.phonemes.clone(),
             phone_equality,
+            implementation_status: rule.implementation_status.clone(),
         };
 
         Ok(RuleProfile {
@@ -348,6 +350,32 @@ struct RuleFragmentSpec {
     legal_coda_additions: RulePhoneStringRows,
 }
 
+/// Static-lifetime analogue of [`VarietyImplementationStatus`] used in the
+/// internal `VARIETY_RULES` table.  This type exists solely to allow `'static`
+/// string literals in the table; it converts to the public
+/// [`VarietyImplementationStatus`] at registry build time via
+/// [`ImplementationStatusSpec::to_status`].  Adding a new variety entry means
+/// choosing a variant here and the runtime enum is produced automatically.
+enum ImplementationStatusSpec {
+    Complete,
+    StubDerivedFrom(&'static str),
+    PermissiveProfile,
+}
+
+impl ImplementationStatusSpec {
+    fn to_status(&self) -> VarietyImplementationStatus {
+        match self {
+            ImplementationStatusSpec::Complete => VarietyImplementationStatus::Complete,
+            ImplementationStatusSpec::StubDerivedFrom(id) => {
+                VarietyImplementationStatus::StubDerivedFrom(VarietyId::new(*id))
+            }
+            ImplementationStatusSpec::PermissiveProfile => {
+                VarietyImplementationStatus::PermissiveProfile
+            }
+        }
+    }
+}
+
 struct VarietyRuleSpec {
     id: &'static str,
     language: &'static str,
@@ -358,6 +386,7 @@ struct VarietyRuleSpec {
     phone_equality: Option<&'static str>,
     legal_onset_additions: RulePhoneStringRows,
     legal_coda_additions: RulePhoneStringRows,
+    implementation_status: ImplementationStatusSpec,
 }
 
 enum RulePhoneStringRows {
@@ -452,6 +481,7 @@ impl VarietyRuleSpec {
             phone_equality: self.phone_equality.map(str::to_string),
             legal_onset_additions: self.legal_onset_additions.to_phone_strings(),
             legal_coda_additions: self.legal_coda_additions.to_phone_strings(),
+            implementation_status: self.implementation_status.to_status(),
         }
     }
 }
@@ -669,6 +699,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::Complete,
     },
     VarietyRuleSpec {
         id: "en-US-singing",
@@ -686,6 +717,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::PermissiveProfile,
     },
     VarietyRuleSpec {
         id: "en-GB-RP",
@@ -702,6 +734,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
     },
     VarietyRuleSpec {
         id: "en-GB-ScotE",
@@ -718,6 +751,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
     },
     VarietyRuleSpec {
         id: "en-US-AAE",
@@ -734,6 +768,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::StubDerivedFrom("en-US-GA"),
     },
     VarietyRuleSpec {
         id: "eo",
@@ -745,6 +780,7 @@ static VARIETY_RULES: &[VarietyRuleSpec] = &[
         phone_equality: None,
         legal_onset_additions: RulePhoneStringRows::Static(&[]),
         legal_coda_additions: RulePhoneStringRows::Static(&[]),
+        implementation_status: ImplementationStatusSpec::Complete,
     },
 ];
 
