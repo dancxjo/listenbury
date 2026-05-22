@@ -1167,6 +1167,13 @@ mod tests {
             panic!("future direct Riper ONNX path should receive a partial prosody render plan");
         };
         assert_eq!(text, "hello");
+        assert_eq!(
+            phones
+                .iter()
+                .map(|phone| phone.phone.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "ɛ", "l", "l", "oʊ"]
+        );
         assert!(
             pitch_hints
                 .iter()
