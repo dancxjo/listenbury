@@ -32,16 +32,15 @@ pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
 pub use expected::{
-    ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
-    playback_match_evidence,
+    playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
 };
 pub use frame::SoundscapeFrame;
 pub use isolation::{
-    AudioSpan, IsolationEvaluation, NoopSourceSeparator, PlaybackCancellationSeparator,
-    SeparationMethod, SeparationRequest, SeparationResult, SourceSeparator, SuppressionTarget,
-    TrackingTarget, apply_separation_requests, evaluate_policies, self_hearing_suppression_policy,
+    apply_separation_requests, evaluate_policies, self_hearing_suppression_policy, AudioSpan,
+    IsolationEvaluation, NoopSourceSeparator, PlaybackCancellationSeparator, SeparationMethod,
+    SeparationRequest, SeparationResult, SourceSeparator, SuppressionTarget, TrackingTarget,
 };
-pub use overlap::{MixtureComponent, OverlapMixture, detect_overlaps};
+pub use overlap::{detect_overlaps, MixtureComponent, OverlapMixture};
 pub use signature::{
     FormantProfile, PitchProfile, ProsodyProfile, RateProfile, TimbreProfile, VoiceSignature,
     VoiceSignatureId, VoiceSignatureMatch, VoiceSignatureObservation,

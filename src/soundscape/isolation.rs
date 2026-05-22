@@ -44,6 +44,7 @@ pub enum SeparationMethod {
 /// Separation/effect request emitted by policy evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SeparationRequest {
+    pub source_id: SourceId,
     pub operation: SourceOperation,
     pub criterion: SourceCriterion,
     pub strength: f32,
@@ -112,7 +113,7 @@ impl SourceSeparator for PlaybackCancellationSeparator {
 
         for frame in &input.frames {
             let decision = self.mask.analyze_frame(frame);
-            confidence_sum += decision.correlation.max(0.0);
+            confidence_sum += decision.correlation.abs();
             selected_frames.push(decision.self_frame);
             residual_frames.push(decision.residual_frame);
         }
@@ -185,36 +186,42 @@ pub fn evaluate_policies(
     policies: &[IsolationPolicy],
 ) -> IsolationEvaluation {
     let mut result = IsolationEvaluation::default();
-    for source in &frame.sources {
-        for policy in policies {
-            if !matches_criterion(source, policy.criterion) {
-                continue;
-            }
-            let strength = policy.strength.clamp(0.0, 1.0);
-            match policy.operation {
-                SourceOperation::Suppress => {
+    for policy in policies {
+        let strength = policy.strength.clamp(0.0, 1.0);
+        match policy.operation {
+            SourceOperation::Suppress => {
+                for source in &frame.sources {
+                    if !matches_criterion(source, policy.criterion) {
+                        continue;
+                    }
                     result.suppressions.push(SuppressionTarget {
                         source_id: source.id,
                         strength,
                     });
                 }
-                SourceOperation::Track => {
+            }
+            SourceOperation::Track => {
+                for source in &frame.sources {
+                    if !matches_criterion(source, policy.criterion) {
+                        continue;
+                    }
                     result.tracking.push(TrackingTarget {
                         source_id: source.id,
                         strength,
                     });
                 }
-                SourceOperation::Enhance | SourceOperation::Extract => {
-                    if !result.separation_requests.iter().any(|request| {
-                        request.operation == policy.operation
-                            && request.criterion == policy.criterion
-                    }) {
-                        result.separation_requests.push(SeparationRequest {
-                            operation: policy.operation,
-                            criterion: policy.criterion,
-                            strength,
-                        });
+            }
+            SourceOperation::Enhance | SourceOperation::Extract => {
+                for source in &frame.sources {
+                    if !matches_criterion(source, policy.criterion) {
+                        continue;
                     }
+                    result.separation_requests.push(SeparationRequest {
+                        source_id: source.id,
+                        operation: policy.operation,
+                        criterion: policy.criterion,
+                        strength,
+                    });
                 }
             }
         }
@@ -333,7 +340,8 @@ mod tests {
     fn extraction_and_enhancement_policies_emit_separation_requests() {
         let range = TimeRange::new(TimePoint::from_millis(1_000), TimePoint::from_millis(1_100));
         let playback_source = SourceId::new();
-        let unknown_voice_source = SourceId::new();
+        let unknown_voice_source_1 = SourceId::new();
+        let unknown_voice_source_2 = SourceId::new();
         let frame = SoundscapeFrame {
             range,
             sources: vec![
@@ -344,10 +352,16 @@ mod tests {
                     confidence: 0.95,
                 },
                 SoundSource {
-                    id: unknown_voice_source,
+                    id: unknown_voice_source_1,
                     kind: SourceKind::Voice,
                     label: SourceLabel::UnknownVoice { ordinal: 1 },
                     confidence: 0.8,
+                },
+                SoundSource {
+                    id: unknown_voice_source_2,
+                    kind: SourceKind::Voice,
+                    label: SourceLabel::UnknownVoice { ordinal: 2 },
+                    confidence: 0.78,
                 },
             ],
             events: vec![],
@@ -372,11 +386,19 @@ mod tests {
             evaluation.separation_requests,
             vec![
                 SeparationRequest {
+                    source_id: unknown_voice_source_1,
                     operation: SourceOperation::Extract,
                     criterion: SourceCriterion::UnknownVoice,
                     strength: 0.8,
                 },
                 SeparationRequest {
+                    source_id: unknown_voice_source_2,
+                    operation: SourceOperation::Extract,
+                    criterion: SourceCriterion::UnknownVoice,
+                    strength: 0.8,
+                },
+                SeparationRequest {
+                    source_id: playback_source,
                     operation: SourceOperation::Enhance,
                     criterion: SourceCriterion::Playback,
                     strength: 0.6,
@@ -397,6 +419,7 @@ mod tests {
             }],
         };
         let requests = vec![SeparationRequest {
+            source_id: SourceId::new(),
             operation: SourceOperation::Extract,
             criterion: SourceCriterion::UnknownVoice,
             strength: 0.9,
