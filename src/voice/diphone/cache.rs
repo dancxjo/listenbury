@@ -109,6 +109,7 @@ impl DiphoneCache {
             samples,
             sample_rate_hz: meta.key.sample_rate_hz,
             halfseg_samples: meta.halfseg_samples,
+            frame_center_samples: Vec::new(),
             source: DiphoneUnitSource::CacheHit,
             metadata: DiphoneUnitMetadata {
                 requested_key: None,
@@ -225,6 +226,7 @@ mod tests {
             samples: vec![0.1, -0.2, 0.05, 0.0],
             sample_rate_hz: 22050,
             halfseg_samples: 2,
+            frame_center_samples: Vec::new(),
             source: DiphoneUnitSource::NeuralGenerated,
             metadata: DiphoneUnitMetadata::default(),
         };

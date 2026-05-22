@@ -202,6 +202,7 @@ mod tests {
             samples: vec![0.1, 0.2, 0.3],
             sample_rate_hz: 16_000,
             halfseg_samples: 1,
+            frame_center_samples: Vec::new(),
             source,
             metadata: DiphoneUnitMetadata::default(),
         }

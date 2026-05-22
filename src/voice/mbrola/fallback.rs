@@ -176,6 +176,7 @@ fn boundary_fallback_unit(
     unit.metadata = DiphoneUnitMetadata {
         requested_key: Some(DiphoneKey::new(requested_left, requested_right)),
         warning: Some(warning),
+        ..DiphoneUnitMetadata::default()
     };
     unit
 }
@@ -198,6 +199,7 @@ fn synthetic_silence_unit(
         metadata: DiphoneUnitMetadata {
             requested_key: Some(DiphoneKey::new(left, right)),
             warning: Some(warning),
+            ..DiphoneUnitMetadata::default()
         },
     }
 }

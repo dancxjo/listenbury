@@ -191,6 +191,7 @@ pub fn forge_diphone(
         samples,
         sample_rate_hz: pcm.sample_rate_hz,
         halfseg_samples,
+        frame_center_samples: Vec::new(),
         source: DiphoneUnitSource::NeuralGenerated,
         metadata: DiphoneUnitMetadata {
             requested_key: None,
