@@ -149,6 +149,9 @@ impl MbrolaSymbolMap {
             ("OW", "@U"),
             ("OW1", "@U"),
             ("OW0", "@U"),
+            ("ER", "r="),
+            ("ER1", "r="),
+            ("ER0", "r="),
             ("ɝ", "r="),
             ("ɚ", "r="),
             ("DX", "4"),
@@ -185,6 +188,20 @@ impl MbrolaSymbolMap {
 impl Default for MbrolaSymbolMap {
     fn default() -> Self {
         Self::us1_starter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn us3_maps_cmu_r_colored_vowels_to_voice_symbol() {
+        let map = MbrolaSymbolMap::us3_starter();
+
+        assert_eq!(map.map_phone("ER").unwrap(), "r=");
+        assert_eq!(map.map_phone("ER1").unwrap(), "r=");
+        assert_eq!(map.map_phone("ɝ").unwrap(), "r=");
     }
 }
 
