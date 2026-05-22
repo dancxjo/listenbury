@@ -18,8 +18,8 @@ use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, ProsodicRole, ProsodyEnvironmentFacts, ReductionStatus,
-    SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
+    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
+    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -180,6 +180,13 @@ impl PhonemeProsodyCandidate {
                     text_range: target.text_range.clone(),
                     phoneme_range: target.phoneme_range.clone(),
                     lexical_stress,
+                    orthographic_emphasis: self
+                        .sentence_analysis
+                        .tokens
+                        .iter()
+                        .find(|analysis| analysis.word_index == Some(target.word_index))
+                        .map(|analysis| analysis.orthographic_emphasis)
+                        .unwrap_or(OrthographicEmphasisKind::None),
                     prominence_class: if is_default_function_word(&target.normalized_text) {
                         ProminenceClass::Weak
                     } else {
@@ -670,8 +677,12 @@ fn pronounce_word_unit(
             }
         });
     let weak_symbols = weak_form_symbols(word, analyzed_token, environment_facts);
-    let derives_stress_from_emitted_symbols = reduced_symbols.is_some() || weak_symbols.is_some();
+    let orthographic_symbols = analyzed_token
+        .and_then(|analysis| orthographic_symbols_override(word, analysis.orthographic_emphasis));
+    let derives_stress_from_emitted_symbols =
+        reduced_symbols.is_some() || orthographic_symbols.is_some() || weak_symbols.is_some();
     let emitted_symbols = reduced_symbols
+        .or(orthographic_symbols)
         .or(weak_symbols)
         .unwrap_or_else(|| word_realization.symbols.clone());
     let stress_by_phone = if derives_stress_from_emitted_symbols {
@@ -702,6 +713,35 @@ fn pronounce_word_unit(
         stress_by_phone,
         stress_source: word_realization.stress_source,
     })
+}
+
+fn orthographic_symbols_override(
+    word: &str,
+    emphasis: OrthographicEmphasisKind,
+) -> Option<Vec<String>> {
+    match emphasis {
+        OrthographicEmphasisKind::Abbreviation => spell_token_as_letter_names(word),
+        OrthographicEmphasisKind::Acronym
+            if word.chars().filter(|ch| ch.is_ascii_alphabetic()).count() <= 3 =>
+        {
+            spell_token_as_letter_names(word)
+        }
+        _ => None,
+    }
+}
+
+fn spell_token_as_letter_names(word: &str) -> Option<Vec<String>> {
+    let mut symbols = Vec::new();
+    let mut has_letter = false;
+    for ch in word.chars() {
+        if !ch.is_ascii_alphabetic() {
+            continue;
+        }
+        has_letter = true;
+        let phones = initial_to_phones(ch.to_ascii_lowercase())?;
+        symbols.extend(phones.iter().map(|symbol| (*symbol).to_string()));
+    }
+    has_letter.then_some(symbols)
 }
 
 fn inter_word_boundary_symbol(
@@ -1024,6 +1064,12 @@ fn weak_form_symbols(
     environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<Vec<String>> {
     let analysis = analyzed_token?;
+    if matches!(
+        analysis.orthographic_emphasis,
+        OrthographicEmphasisKind::AllCapsEmphasis | OrthographicEmphasisKind::ExplicitCitationForm
+    ) {
+        return None;
+    }
     if environment_facts.is_some_and(|facts| {
         !facts.conservative
             && facts.confidence >= 0.75
@@ -1063,11 +1109,10 @@ fn realization_config_for_word(
         } else {
             crate::linguistic::environment::SpanState::Stable
         };
-        if facts
-            .lexical_flags
-            .iter()
-            .any(|fact| fact.flag == LexicalProsodyFlag::AllCapsEmphasis)
-        {
+        if matches!(
+            facts.orthographic_emphasis,
+            OrthographicEmphasisKind::AllCapsEmphasis
+        ) {
             config.prosodic_role = Some(crate::linguistic::environment::ProsodicRole::Contrastive);
         }
         if facts
@@ -1225,9 +1270,20 @@ fn is_default_function_word(word: &str) -> bool {
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
     match initial.to_ascii_lowercase() {
+        'a' => Some(&["EY"]),
+        'b' => Some(&["B", "IY"]),
+        'c' => Some(&["S", "IY"]),
+        'e' => Some(&["IY"]),
         'f' => Some(&["EH", "F"]),
+        'i' => Some(&["AY"]),
         'j' => Some(&["JH", "EY"]),
+        'k' => Some(&["K", "EY"]),
+        'n' => Some(&["EH", "N"]),
+        'o' => Some(&["OW"]),
         'r' => Some(&["AA", "R"]),
+        's' => Some(&["EH", "S"]),
+        't' => Some(&["T", "IY"]),
+        'u' => Some(&["Y", "UW"]),
         _ => None,
     }
 }
@@ -1684,6 +1740,51 @@ mod tests {
                 .any(|phones| phones[0] == "T" && phones[1].starts_with("UW")),
             "contrastive TO should remain unreduced"
         );
+    }
+
+    #[test]
+    fn suppresses_weak_for_under_all_caps_emphasis() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("FOR now").expect("phonemize");
+        let for_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "for")
+            .expect("for analysis");
+        assert_eq!(
+            for_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::AllCapsEmphasis
+        );
+        let for_symbols = symbols_for_word(&unit, "for");
+        assert!(
+            !for_symbols
+                .windows(2)
+                .any(|phones| phones[0] == "F" && phones[1] == "ER0"),
+            "all-caps emphasis should suppress weak /fər/ reduction"
+        );
+    }
+
+    #[test]
+    fn keeps_all_caps_abbreviation_out_of_contrastive_role() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("US policy changed.").expect("phonemize");
+        let us_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "us")
+            .expect("US analysis");
+        assert_eq!(
+            us_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Abbreviation
+        );
+        assert_eq!(
+            us_analysis.prosodic_role,
+            crate::mouth::riper::ProsodicRole::Content
+        );
+        let us_symbols = symbols_for_word(&unit, "us");
+        assert_eq!(us_symbols, vec!["Y", "UW", "EH", "S"]);
     }
 
     #[test]

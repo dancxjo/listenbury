@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mouth::riper::sentence_analysis::ReductionDiagnostic;
+use crate::mouth::riper::sentence_analysis::{OrthographicEmphasisKind, ReductionDiagnostic};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stress {
@@ -23,6 +23,7 @@ pub struct WordProsodyInfo {
     pub text_range: std::ops::Range<usize>,
     pub phoneme_range: std::ops::Range<usize>,
     pub lexical_stress: Vec<Stress>,
+    pub orthographic_emphasis: OrthographicEmphasisKind,
     pub prominence_class: ProminenceClass,
 }
 
@@ -161,6 +162,7 @@ pub struct PhoLikeDiagnosticEntry {
     pub pause_behavior: Option<String>,
     pub pitch_hint: Option<String>,
     pub reduction: Option<ReductionDiagnostic>,
+    pub capitalization_effect: Option<String>,
     pub realization_status: ProsodyRealizationStatus,
 }
 
