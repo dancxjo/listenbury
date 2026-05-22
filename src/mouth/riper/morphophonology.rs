@@ -648,6 +648,11 @@ fn native_morphophonology_rules() -> &'static [MorphophonologyRule] {
     RULES.get_or_init(english_native_morphophonology_rules)
 }
 
+/// Returns `true` when `ch` is an English vowel letter.
+fn is_vowel(ch: char) -> bool {
+    matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u')
+}
+
 /// Apply the spelling repairs encoded in `stem_policy` to `base` and return
 /// the full list of stem candidates to try (most specific first).
 fn stem_candidates_with_policy(base: &str, stem_policy: &StemRetranslationPolicy) -> Vec<String> {
@@ -663,7 +668,7 @@ fn stem_candidates_with_policy(base: &str, stem_policy: &StemRetranslationPolicy
                     if chars.len() >= 2 {
                         let last = chars[chars.len() - 1];
                         let prev = chars[chars.len() - 2];
-                        if last == prev && !matches!(last, 'a' | 'e' | 'i' | 'o' | 'u') {
+                        if last == prev && !is_vowel(last) {
                             candidates.push(chars[..chars.len() - 1].iter().collect());
                         }
                     }
@@ -748,7 +753,7 @@ fn analyze_ing_suffix(surface: &str) -> Option<MorphophonologyResult> {
     stress.extend(affix_phones.stress_by_phone.clone());
 
     let mut underlying = stem.symbols.clone();
-    underlying.extend(["IH0".to_string(), "NG".to_string()]);
+    underlying.extend(affix_phones.symbols.clone());
 
     let boundaries = vec![MorphemeBoundary {
         phone_index: stem.symbols.len(),
@@ -835,7 +840,7 @@ fn analyze_ly_suffix(surface: &str) -> Option<MorphophonologyResult> {
     stress.extend(affix_phones.stress_by_phone.clone());
 
     let mut underlying = stem.symbols.clone();
-    underlying.extend(["L".to_string(), "IY0".to_string()]);
+    underlying.extend(affix_phones.symbols.clone());
 
     let boundaries = vec![MorphemeBoundary {
         phone_index: stem.symbols.len(),
@@ -929,7 +934,10 @@ fn analyze_s_suffix(surface: &str) -> Option<MorphophonologyResult> {
     stress.extend(affix_phones.stress_by_phone.clone());
 
     let mut underlying = stem.symbols.clone();
-    underlying.push("Z".to_string());
+    // The underlying form is the canonical /z/ from the rule's output policy;
+    // the realized form uses the allomorph selected by s_allomorph_from_stem.
+    let canonical_affix = arpabet_str_to_phones(affix_arpabet);
+    underlying.extend(canonical_affix.symbols);
 
     let boundaries = vec![MorphemeBoundary {
         phone_index: stem.symbols.len(),
