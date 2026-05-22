@@ -2718,6 +2718,20 @@ mod tests {
     }
 
     #[test]
+    fn marks_initial_as_capitalized_name_orthography() {
+        let analysis = analyze("F. Scott Fitzgerald wrote.");
+        let initial = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "f")
+            .expect("initial token");
+        assert_eq!(
+            initial.orthographic_emphasis,
+            OrthographicEmphasisKind::CapitalizedName
+        );
+    }
+
+    #[test]
     fn ambiguous_attachment_facts_stay_conservative() {
         let analysis = analyze("I saw the man with the telescope.");
         let telescope = word_index(&analysis, "telescope");

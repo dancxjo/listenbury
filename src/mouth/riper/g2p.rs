@@ -7,12 +7,11 @@ use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
-    PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
-    realize_sequence,
+    phoneme_from_arpabet, realize_sequence, PhonemeSchema, RealizationConfig,
+    Stress as PhonologyStress,
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
-use crate::mouth::riper::LexicalProsodyFlag;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
@@ -25,7 +24,8 @@ use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
-use crate::mouth::riper::{AnalysisSource, PhonologicalStress, morphophonology};
+use crate::mouth::riper::LexicalProsodyFlag;
+use crate::mouth::riper::{morphophonology, AnalysisSource, PhonologicalStress};
 use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
@@ -1273,17 +1273,29 @@ fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
         'a' => Some(&["EY"]),
         'b' => Some(&["B", "IY"]),
         'c' => Some(&["S", "IY"]),
+        'd' => Some(&["D", "IY"]),
         'e' => Some(&["IY"]),
         'f' => Some(&["EH", "F"]),
+        'g' => Some(&["JH", "IY"]),
+        'h' => Some(&["EY", "CH"]),
         'i' => Some(&["AY"]),
         'j' => Some(&["JH", "EY"]),
         'k' => Some(&["K", "EY"]),
+        'l' => Some(&["EH", "L"]),
+        'm' => Some(&["EH", "M"]),
         'n' => Some(&["EH", "N"]),
         'o' => Some(&["OW"]),
+        'p' => Some(&["P", "IY"]),
+        'q' => Some(&["K", "Y", "UW"]),
         'r' => Some(&["AA", "R"]),
         's' => Some(&["EH", "S"]),
         't' => Some(&["T", "IY"]),
         'u' => Some(&["Y", "UW"]),
+        'v' => Some(&["V", "IY"]),
+        'w' => Some(&["D", "AH", "B", "AH", "L", "Y", "UW"]),
+        'x' => Some(&["EH", "K", "S"]),
+        'y' => Some(&["W", "AY"]),
+        'z' => Some(&["Z", "IY"]),
         _ => None,
     }
 }
@@ -1453,9 +1465,7 @@ mod tests {
         );
         assert_eq!(
             symbols_for_word(&unit, "unpunctuated"),
-            vec![
-                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"
-            ],
+            vec!["AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"],
             "expected unpunctuated to flap /t/ before the unstressed -ed vowel"
         );
         assert_eq!(
@@ -1785,6 +1795,77 @@ mod tests {
         );
         let us_symbols = symbols_for_word(&unit, "us");
         assert_eq!(us_symbols, vec!["Y", "UW", "EH", "S"]);
+    }
+
+    #[test]
+    fn uses_letter_names_for_short_all_caps_acronym() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("FBI agents.").expect("phonemize");
+        let fbi_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "fbi")
+            .expect("FBI analysis");
+        assert_eq!(
+            fbi_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Acronym
+        );
+        let fbi_symbols = symbols_for_word(&unit, "fbi");
+        assert_eq!(fbi_symbols, vec!["EH", "F", "B", "IY", "AY"]);
+    }
+
+    #[test]
+    fn leaves_longer_acronym_to_word_pronunciation_path() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("NATO policy changed.")
+            .expect("phonemize");
+        let nato_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "nato")
+            .expect("NATO analysis");
+        assert_eq!(
+            nato_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Acronym
+        );
+        let nato_symbols = symbols_for_word(&unit, "nato");
+        assert_ne!(nato_symbols, vec!["EH", "N", "EY", "T", "OW"]);
+    }
+
+    #[test]
+    fn maps_added_letter_name_phone_sequences() {
+        assert_eq!(initial_to_phones('a'), Some(&["EY"][..]));
+        assert_eq!(initial_to_phones('b'), Some(&["B", "IY"][..]));
+        assert_eq!(initial_to_phones('c'), Some(&["S", "IY"][..]));
+        assert_eq!(initial_to_phones('d'), Some(&["D", "IY"][..]));
+        assert_eq!(initial_to_phones('e'), Some(&["IY"][..]));
+        assert_eq!(initial_to_phones('f'), Some(&["EH", "F"][..]));
+        assert_eq!(initial_to_phones('g'), Some(&["JH", "IY"][..]));
+        assert_eq!(initial_to_phones('h'), Some(&["EY", "CH"][..]));
+        assert_eq!(initial_to_phones('i'), Some(&["AY"][..]));
+        assert_eq!(initial_to_phones('j'), Some(&["JH", "EY"][..]));
+        assert_eq!(initial_to_phones('k'), Some(&["K", "EY"][..]));
+        assert_eq!(initial_to_phones('l'), Some(&["EH", "L"][..]));
+        assert_eq!(initial_to_phones('m'), Some(&["EH", "M"][..]));
+        assert_eq!(initial_to_phones('n'), Some(&["EH", "N"][..]));
+        assert_eq!(initial_to_phones('o'), Some(&["OW"][..]));
+        assert_eq!(initial_to_phones('p'), Some(&["P", "IY"][..]));
+        assert_eq!(initial_to_phones('q'), Some(&["K", "Y", "UW"][..]));
+        assert_eq!(initial_to_phones('r'), Some(&["AA", "R"][..]));
+        assert_eq!(initial_to_phones('s'), Some(&["EH", "S"][..]));
+        assert_eq!(initial_to_phones('t'), Some(&["T", "IY"][..]));
+        assert_eq!(initial_to_phones('u'), Some(&["Y", "UW"][..]));
+        assert_eq!(initial_to_phones('v'), Some(&["V", "IY"][..]));
+        assert_eq!(
+            initial_to_phones('w'),
+            Some(&["D", "AH", "B", "AH", "L", "Y", "UW"][..])
+        );
+        assert_eq!(initial_to_phones('x'), Some(&["EH", "K", "S"][..]));
+        assert_eq!(initial_to_phones('y'), Some(&["W", "AY"][..]));
+        assert_eq!(initial_to_phones('z'), Some(&["Z", "IY"][..]));
     }
 
     #[test]
