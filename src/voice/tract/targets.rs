@@ -125,6 +125,7 @@ pub struct PhoneAcousticTarget {
 ///
 /// Keys are IPA symbols.  The table covers:
 /// - Core English vowels `/i ɪ e ɛ æ ə ʌ ɑ ɔ o ʊ u/`
+/// - Common English diphthongs `/aɪ ɑɪ aʊ eɪ oʊ ɔɪ/`
 /// - Sonorants `/m n ŋ l ɹ j w/`
 /// - Fricatives `/s z ʃ ʒ f v θ ð h/`
 /// - Stops `/p b t d k ɡ/`
@@ -167,6 +168,16 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
             },
             default_duration_ms: dur_ms,
         }
+    }
+
+    fn diphthong(ipa: &str, f1: f32, f2: f32, f3: f32) -> PhoneAcousticTarget {
+        let mut target = vowel(ipa, f1, f2, f3, 140);
+        target.filter = target.filter.map(|mut filter| {
+            filter.f1_bw_hz = 100.0;
+            filter.f2_bw_hz = 140.0;
+            filter
+        });
+        target
     }
 
     fn nasal(ipa: &str, f2: f32) -> PhoneAcousticTarget {
@@ -299,6 +310,23 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
         vowel("o", 360.0, 640.0, 2500.0, 90),   // hoe (monophthong)
         vowel("ʊ", 440.0, 1020.0, 2240.0, 80),  // hood
         vowel("u", 310.0, 870.0, 2250.0, 90),   // hoot
+    ] {
+        map.insert(t.ipa.clone(), t);
+    }
+
+    // --- Diphthongs ---------------------------------------------------------
+    //
+    // These are steady acoustic approximations of the vowel-to-glide movement.
+    // The phone-timed Klatt path keeps diphthongs as one nucleus phone, so the
+    // targets sit between the start vowel and offglide until the renderer grows
+    // time-varying formant trajectories.
+    for t in [
+        diphthong("aɪ", 560.0, 1650.0, 2500.0), // price, broad IPA
+        diphthong("ɑɪ", 560.0, 1500.0, 2480.0), // price, GA-flavored onset
+        diphthong("aʊ", 610.0, 1120.0, 2350.0), // mouth
+        diphthong("eɪ", 350.0, 2200.0, 2800.0), // face
+        diphthong("oʊ", 380.0, 760.0, 2380.0),  // goat
+        diphthong("ɔɪ", 500.0, 1450.0, 2450.0), // choice
     ] {
         map.insert(t.ipa.clone(), t);
     }
@@ -455,6 +483,22 @@ mod tests {
         let table = default_english_phone_targets();
         for ipa in ["i", "ɪ", "ɛ", "æ", "ə", "ʌ", "ɑ", "u"] {
             assert!(table.contains_key(ipa), "expected table to contain /{ipa}/");
+        }
+    }
+
+    #[test]
+    fn default_table_covers_common_english_diphthongs() {
+        let table = default_english_phone_targets();
+        for ipa in ["aɪ", "ɑɪ", "aʊ", "eɪ", "oʊ", "ɔɪ"] {
+            let target = table
+                .get(ipa)
+                .unwrap_or_else(|| panic!("expected table to contain /{ipa}/"));
+            assert!(target.voiced, "/{ipa}/ should be voiced");
+            assert!(target.is_vowel, "/{ipa}/ should be treated as vowelic");
+            assert!(
+                target.filter.is_some(),
+                "/{ipa}/ should have formant targets"
+            );
         }
     }
 

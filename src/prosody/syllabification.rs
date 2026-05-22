@@ -102,8 +102,9 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
     let mut prev_end = 0usize; // index of first phone not yet claimed
 
     for (syl_idx, &nuc_pos) in nucleus_indices.iter().enumerate() {
-        // Determine the nucleus span (usually just one phone, potentially a
-        // diphthong encoded as one IPA string in one Phone).
+        // Determine the nucleus span. The current syllabifier chooses a
+        // single realized phone as the nucleus anchor; adjacent phones from
+        // multi-phone realizations are assigned by the normal onset/coda pass.
         let nuc_end = nuc_pos + 1;
 
         // Consonant cluster between prev_end and nuc_pos.

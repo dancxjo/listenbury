@@ -1,4 +1,4 @@
-use super::phonology::{Phone, PhoneStatus, PhoneString, PhonemeClass, PhonemeSchema};
+use super::phonology::{PhonemeClass, PhonemeSchema, default_phone_string_for_arpabet};
 use super::rule_registry::RuleRegistry;
 
 pub use super::phonology::{PhonemeDefinition, PhonemeId, PhonemicInventory, SourceSymbol};
@@ -7,9 +7,9 @@ pub use super::phonology::{PhonemeDefinition, PhonemeId, PhonemicInventory, Sour
 ///
 /// Every phoneme is defined with:
 /// - a [`PhonemeId`] (ARPABET base as lowercase, e.g. `"ae"`)
-/// - canonical IPA from [`default_phone_for_arpabet`][crate::linguistic::phonology]
+/// - canonical IPA from the ARPABET default phone mapping
 /// - source symbols for both ARPABET and IPA schemas
-/// - a single-phone default realization
+/// - a default phone realization, including multi-phone affricates and diphthongs
 /// - broad phoneme class(es)
 pub fn general_american_english() -> PhonemicInventory {
     RuleRegistry::builtin()
@@ -66,11 +66,7 @@ pub(crate) fn english_phoneme_table() -> Vec<PhonemeDefinition> {
     rows.iter()
         .map(|(arpabet, ipa, is_vowel)| {
             let id = PhonemeId::new(arpabet.to_lowercase());
-            let phone = Phone {
-                ipa: ipa.to_string(),
-                source_symbol: Some(arpabet.to_string()),
-                status: PhoneStatus::Mapped,
-            };
+            let default_phone_string = default_phone_string_for_arpabet(arpabet, arpabet);
             let classes = if *is_vowel {
                 vec![PhonemeClass::Vowel]
             } else {
@@ -89,9 +85,7 @@ pub(crate) fn english_phoneme_table() -> Vec<PhonemeDefinition> {
                         symbol: ipa.to_string(),
                     },
                 ],
-                default_phone_string: PhoneString {
-                    phones: vec![phone],
-                },
+                default_phone_string,
                 classes,
             }
         })

@@ -276,12 +276,12 @@ impl SungSyllable {
 /// | Field | Contents |
 /// |-------|----------|
 /// | `onset`   | Onset consonant phones, e.g. `[s, t, ɹ]` |
-/// | `nucleus` | Nucleus phone(s), e.g. `[ɛ]` or `[eɪ]` for a diphthong |
+/// | `nucleus` | Nucleus phone(s), e.g. `[ɛ]` or `[e, ɪ]` for a diphthong |
 /// | `coda`    | Coda consonant phones, e.g. `[k]` |
 ///
-/// Diphthongs (`aɪ`, `eɪ`, `oʊ`, …) and affricates (`tʃ`, `dʒ`) appear as
-/// a single `Phone` whose `.ipa` is the multi-character IPA string, matching
-/// the phoneme's [`realization.ipa`][`crate::linguistic::phonology::Realization`].
+/// Diphthongs (`aɪ`, `eɪ`, `oʊ`, ...) and affricates (`tʃ`, `dʒ`) may appear
+/// as multiple `Phone` values from the phoneme's structural
+/// [`realization.phone_string`][`crate::linguistic::phonology::Realization`].
 ///
 /// The `source_span.start..source_span.end` span indexes back into the `&[Phoneme]`
 /// slice passed to the syllabifier, enabling downstream code to recover

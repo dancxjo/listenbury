@@ -94,28 +94,17 @@ impl PhoneString {
         self.phones.iter().map(|p| p.ipa.as_str()).collect()
     }
 
-    /// Build a single-phone [`PhoneString`] from one [`Phoneme`] by reading
-    /// its current [`realization.ipa`][Realization] field.
+    /// Build a [`PhoneString`] from one [`Phoneme`] by cloning its current
+    /// structural realization.
     ///
     /// For a slice of phonemes, use [`from_phoneme_slice`].
     ///
-    /// # Note — future multi-phone realizations
-    ///
-    /// Currently `Realization` stores a single IPA string.  When realizations
-    /// become proper [`PhoneString`]s (affricates, diphthongs, syllabic
-    /// consonants), this function will naturally extend to multi-phone output.
     pub fn from_realized(phoneme: &Phoneme) -> Self {
-        Self {
-            phones: vec![Phone {
-                ipa: phoneme.realization.ipa.clone(),
-                source_symbol: Some(phoneme.source_symbol.clone()),
-                status: PhoneStatus::Mapped,
-            }],
-        }
+        phoneme.realization.phone_string.clone()
     }
 
-    /// Build a [`PhoneString`] from a slice of [`Phoneme`]s by reading each
-    /// phoneme's current [`realization.ipa`][Realization] field.
+    /// Build a [`PhoneString`] from a slice of [`Phoneme`]s by expanding each
+    /// phoneme's current structural realization.
     ///
     /// This is the primary bridge from a phoneme sequence to the phone
     /// representation used by the syllabifier.
@@ -133,24 +122,22 @@ impl RealizedPhone {
     /// Build realized phone tokens from one [`Phoneme`], preserving the source
     /// phoneme metadata that would be lost in a bare [`PhoneString`].
     pub fn from_phoneme(index: usize, phoneme: &Phoneme) -> Vec<Self> {
-        vec![Self {
-            phone: Phone {
-                ipa: phoneme.realization.ipa.clone(),
-                source_symbol: Some(phoneme.source_symbol.clone()),
-                status: PhoneStatus::Mapped,
-            },
-            source_phoneme_index: index,
-            source_symbol: phoneme.source_symbol.clone(),
-            stress: phoneme.stress,
-        }]
+        phoneme
+            .realization
+            .phone_string
+            .phones
+            .iter()
+            .cloned()
+            .map(|phone| Self {
+                phone,
+                source_phoneme_index: index,
+                source_symbol: phoneme.source_symbol.clone(),
+                stress: phoneme.stress,
+            })
+            .collect()
     }
 
     /// Build realized phone tokens from a phoneme slice.
-    ///
-    /// Today each phoneme contributes one token because [`Realization`] stores
-    /// one IPA string.  When realizations grow into multi-phone outputs, this
-    /// is the bridge that should expand one phoneme into multiple tokens while
-    /// keeping source indexes and stress attached to each emitted phone.
     pub fn from_phoneme_slice(phonemes: &[Phoneme]) -> Vec<Self> {
         phonemes
             .iter()
@@ -774,6 +761,7 @@ pub enum RealizationMethod {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Realization {
+    pub phone_string: PhoneString,
     pub ipa: String,
     pub method: RealizationMethod,
     pub rule: Option<String>,
@@ -859,18 +847,16 @@ impl Default for RealizationConfig {
 
 pub fn phoneme_from_arpabet(symbol: &str, source: &str) -> Phoneme {
     let (base, stress) = split_arpabet_symbol(symbol);
-    let phone = default_phone_for_arpabet(&base, symbol);
-    let default_phone_string = PhoneString {
-        phones: vec![phone],
-    };
-    let ipa = default_phone_string.phones[0].ipa.clone();
+    let default_phone_string = default_phone_string_for_arpabet(&base, symbol);
+    let ipa = default_phone_string.to_ipa();
     Phoneme {
         symbol: base,
         source_symbol: symbol.to_string(),
         source: source.to_string(),
         stress,
-        default_phone_string,
+        default_phone_string: default_phone_string.clone(),
         realization: Realization {
+            phone_string: default_phone_string.clone(),
             ipa,
             method: RealizationMethod::Default,
             rule: None,
@@ -902,6 +888,13 @@ pub fn realize_sequence(sequence: &[Phoneme], config: &RealizationConfig) -> Vec
                 }
 
                 realized[i].realization = Realization {
+                    phone_string: PhoneString {
+                        phones: vec![Phone {
+                            ipa: rule.output_ipa.clone(),
+                            source_symbol: Some(realized[i].source_symbol.clone()),
+                            status: PhoneStatus::Mapped,
+                        }],
+                    },
                     ipa: rule.output_ipa.clone(),
                     method: RealizationMethod::AllophoneRule,
                     rule: Some(rule.id.clone()),
@@ -1254,59 +1247,66 @@ fn split_arpabet_symbol(symbol: &str) -> (String, Option<Stress>) {
     }
 }
 
-fn default_phone_for_arpabet(base: &str, source_symbol: &str) -> Phone {
-    let mapped = match base {
-        "AA" => Some("ɑ"),
-        "AE" => Some("æ"),
-        "AH" => Some("ʌ"),
-        "AO" => Some("ɔ"),
-        "AW" => Some("aʊ"),
-        "AY" => Some("aɪ"),
-        "B" => Some("b"),
-        "CH" => Some("tʃ"),
-        "D" => Some("d"),
-        "DH" => Some("ð"),
-        "EH" => Some("ɛ"),
-        "ER" => Some("ɝ"),
-        "EY" => Some("eɪ"),
-        "F" => Some("f"),
-        "G" => Some("ɡ"),
-        "HH" => Some("h"),
-        "IH" => Some("ɪ"),
-        "IY" => Some("iː"),
-        "JH" => Some("dʒ"),
-        "K" => Some("k"),
-        "L" => Some("l"),
-        "M" => Some("m"),
-        "N" => Some("n"),
-        "NG" => Some("ŋ"),
-        "OW" => Some("oʊ"),
-        "OY" => Some("ɔɪ"),
-        "P" => Some("p"),
-        "R" => Some("ɹ"),
-        "S" => Some("s"),
-        "SH" => Some("ʃ"),
-        "T" => Some("t"),
-        "TH" => Some("θ"),
-        "UH" => Some("ʊ"),
-        "UW" => Some("uː"),
-        "V" => Some("v"),
-        "W" => Some("w"),
-        "Y" => Some("j"),
-        "Z" => Some("z"),
-        "ZH" => Some("ʒ"),
+pub(crate) fn default_phone_string_for_arpabet(base: &str, source_symbol: &str) -> PhoneString {
+    let mapped: Option<&[&str]> = match base {
+        "AA" => Some(&["ɑ"]),
+        "AE" => Some(&["æ"]),
+        "AH" => Some(&["ʌ"]),
+        "AO" => Some(&["ɔ"]),
+        "AW" => Some(&["a", "ʊ"]),
+        "AY" => Some(&["a", "ɪ"]),
+        "B" => Some(&["b"]),
+        "CH" => Some(&["t", "ʃ"]),
+        "D" => Some(&["d"]),
+        "DH" => Some(&["ð"]),
+        "EH" => Some(&["ɛ"]),
+        "ER" => Some(&["ɝ"]),
+        "EY" => Some(&["e", "ɪ"]),
+        "F" => Some(&["f"]),
+        "G" => Some(&["ɡ"]),
+        "HH" => Some(&["h"]),
+        "IH" => Some(&["ɪ"]),
+        "IY" => Some(&["iː"]),
+        "JH" => Some(&["d", "ʒ"]),
+        "K" => Some(&["k"]),
+        "L" => Some(&["l"]),
+        "M" => Some(&["m"]),
+        "N" => Some(&["n"]),
+        "NG" => Some(&["ŋ"]),
+        "OW" => Some(&["o", "ʊ"]),
+        "OY" => Some(&["ɔ", "ɪ"]),
+        "P" => Some(&["p"]),
+        "R" => Some(&["ɹ"]),
+        "S" => Some(&["s"]),
+        "SH" => Some(&["ʃ"]),
+        "T" => Some(&["t"]),
+        "TH" => Some(&["θ"]),
+        "UH" => Some(&["ʊ"]),
+        "UW" => Some(&["uː"]),
+        "V" => Some(&["v"]),
+        "W" => Some(&["w"]),
+        "Y" => Some(&["j"]),
+        "Z" => Some(&["z"]),
+        "ZH" => Some(&["ʒ"]),
         _ => None,
     };
     match mapped {
-        Some(ipa) => Phone {
-            ipa: ipa.to_string(),
-            source_symbol: Some(source_symbol.to_string()),
-            status: PhoneStatus::Mapped,
+        Some(ipa_segments) => PhoneString {
+            phones: ipa_segments
+                .iter()
+                .map(|ipa| Phone {
+                    ipa: (*ipa).to_string(),
+                    source_symbol: Some(source_symbol.to_string()),
+                    status: PhoneStatus::Mapped,
+                })
+                .collect(),
         },
-        None => Phone {
-            ipa: format!("?{base}"),
-            source_symbol: Some(source_symbol.to_string()),
-            status: PhoneStatus::UnknownSymbol,
+        None => PhoneString {
+            phones: vec![Phone {
+                ipa: format!("?{base}"),
+                source_symbol: Some(source_symbol.to_string()),
+                status: PhoneStatus::UnknownSymbol,
+            }],
         },
     }
 }
@@ -1342,8 +1342,23 @@ mod tests {
         assert_eq!(phoneme.source_symbol, "IY1");
         assert_eq!(phoneme.stress, Some(Stress::Primary));
         assert_eq!(phoneme.default_phone_string.phones[0].ipa, "iː");
+        assert_eq!(phoneme.realization.phone_string.to_ipa(), "iː");
         assert_eq!(phoneme.realization.ipa, "iː");
         assert_eq!(phoneme.realization.method, RealizationMethod::Default);
+    }
+
+    #[test]
+    fn arpabet_multi_phone_defaults_are_structural() {
+        let phoneme = phoneme_from_arpabet("CH", "cmudict");
+        let segments = phoneme.default_phone_string.ipa_segments();
+
+        assert_eq!(segments, vec!["t", "ʃ"]);
+        assert_eq!(phoneme.realization.phone_string.ipa_segments(), segments);
+        assert_eq!(phoneme.realization.ipa, "tʃ");
+        assert_eq!(
+            PhoneString::from_realized(&phoneme).ipa_segments(),
+            segments
+        );
     }
 
     #[test]
@@ -1364,6 +1379,21 @@ mod tests {
         assert_eq!(realized[1].source_phoneme_index, 1);
         assert_eq!(realized[1].source_symbol, "T");
         assert_eq!(realized[1].stress, None);
+    }
+
+    #[test]
+    fn realized_phone_tokens_expand_multi_phone_phonemes() {
+        let phonemes = vec![phoneme_from_arpabet("CH", "cmudict")];
+
+        let realized = RealizedPhone::from_phoneme_slice(&phonemes);
+
+        assert_eq!(realized.len(), 2);
+        assert_eq!(realized[0].phone.ipa, "t");
+        assert_eq!(realized[0].source_phoneme_index, 0);
+        assert_eq!(realized[0].source_symbol, "CH");
+        assert_eq!(realized[1].phone.ipa, "ʃ");
+        assert_eq!(realized[1].source_phoneme_index, 0);
+        assert_eq!(realized[1].source_symbol, "CH");
     }
 
     #[test]

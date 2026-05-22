@@ -51,11 +51,20 @@ impl EnglishPhonotactics {
         // Derived dynamically from the inventory's vowel phonemes so that the
         // phonotactic profile stays in sync with the phonemic inventory and
         // duplicated vowel knowledge is avoided.
-        let nuclei: Vec<Phone> = inventory
+        let mut nuclei: Vec<Phone> = inventory
             .phonemes_of_class(PhonemeClass::Vowel)
             .into_iter()
-            .flat_map(|def| def.default_phone_string.phones.iter().cloned())
+            .flat_map(|def| {
+                def.default_phone_string
+                    .phones
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(Phone::mapped(
+                        def.default_phone_string.to_ipa(),
+                    )))
+            })
             .collect();
+        nuclei.dedup_by(|left, right| phones_equivalent(left, right, &inventory.phone_equality));
 
         Self {
             variety,
