@@ -20,12 +20,15 @@
 //!
 //! [`SpeechLikelihood`]: crate::audio::speech_likelihood::SpeechLikelihood
 
+pub mod boundary_hypotheses;
 pub mod nuclei;
 pub mod syllable_regions;
+pub mod word_regions;
 
-pub use nuclei::{
-    NucleusDetectionConfig, NucleusEvidence, VowelNucleusCandidate, detect_nuclei,
+pub use boundary_hypotheses::{
+    emit_ranked_boundary_hypotheses, generate_landmark_hypotheses, BoundaryEvidence,
+    BoundaryHypothesis, BoundaryHypothesisConfig, BoundaryKind,
 };
-pub use syllable_regions::{
-    SyllableExpansionConfig, SyllableIsland, extract_syllable_islands,
-};
+pub use nuclei::{detect_nuclei, NucleusDetectionConfig, NucleusEvidence, VowelNucleusCandidate};
+pub use syllable_regions::{extract_syllable_islands, SyllableExpansionConfig, SyllableIsland};
+pub use word_regions::{rank_word_region_hypotheses, WordRegionConfig};
