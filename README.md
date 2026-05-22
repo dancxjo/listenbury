@@ -557,6 +557,16 @@ listenbury sing --riper --mbrola
 printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt -
 ```
 
+#### Klatt refinement notes
+
+- Klatt stays on the shared `--riper --klatt` phone/prosody path and now renders from a smoothed parameter trajectory (rather than only per-phone static blobs).
+- Phone acoustic targets live in `src/voice/tract/targets.rs` (`default_english_phone_targets()`).
+- Trajectory interpolation, range clamping, and coarticulation live in:
+  - `src/voice/tract/klatt/params.rs`
+  - `src/voice/tract/klatt/trajectory.rs`
+  - `src/voice/tract/klatt/coarticulation.rs`
+- To tune/add a phone, update `default_english_phone_targets()` with source/filter defaults; trajectory and coarticulation passes will automatically consume the updated target.
+
 ### `mbrola-render`
 
 Renders a low-level MBROLA `.pho` phone plan through Listenbury's native MBROLA diphone renderer. Run `just fetch` to download the default `us3` and `en1` voice databases into `data/mbrola`.

@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::linguistic::phonology::{Phone, PhoneString};
 use crate::prosody::syllable::{SungSyllable, Syllable};
+use crate::prosody::vibrato::Vibrato;
 
 // ---------------------------------------------------------------------------
 // Synthesis parameter types
@@ -80,6 +81,8 @@ pub struct PhoneRenderTarget {
     pub f0_hz: Option<f32>,
     /// Overall amplitude (linear 0.0–1.0).
     pub amplitude: f32,
+    /// Optional vibrato modulation to apply over this phone's F0.
+    pub vibrato: Option<Vibrato>,
     /// Optional explicit glottal source parameters (overrides defaults).
     pub source: Option<GlottalSourceTarget>,
     /// Optional explicit vocal-tract filter parameters (overrides defaults).
@@ -440,7 +443,15 @@ pub fn render_targets_from_sung_syllable(
         .map(|tpr| tpr.phone.clone())
         .collect();
     let ps = PhoneString { phones };
-    phone_render_targets_from_string(&ps, f0_hz, amplitude, targets)
+    let mut rendered = phone_render_targets_from_string(&ps, f0_hz, amplitude, targets);
+    if let Some(vibrato) = syllable.vibrato {
+        for idx in syllable.nucleus.start..syllable.nucleus.end {
+            if let Some(target) = rendered.get_mut(idx) {
+                target.vibrato = Some(vibrato);
+            }
+        }
+    }
+    rendered
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +475,7 @@ fn build_render_target(
         duration_ms,
         f0_hz: effective_f0,
         amplitude,
+        vibrato: None,
         source: entry.map(|t| t.source.clone()),
         filter: entry.and_then(|t| t.filter.clone()),
     }

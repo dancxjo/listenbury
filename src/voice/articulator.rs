@@ -45,6 +45,7 @@ use crate::linguistic::variety::EnglishVariety;
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
 use crate::prosody::syllable::{FollowingBoundary, NucleusSpanError, PhoneSpan};
+use crate::prosody::vibrato::Vibrato;
 use crate::voice::coarticulation::{PhoneGesture, PhoneRole, VocalGesturePlan};
 use crate::voice::tract::{PhoneAcousticTarget, PhoneRenderTarget};
 
@@ -161,6 +162,14 @@ pub struct ArticulatorPlan {
     pub energy_curve: EnergyCurve,
     /// Per-syllable span metadata preserved for backend adapters.
     pub syllables: Vec<SyllableRenderSpan>,
+    /// Vibrato overlays for pitch-bearing gesture spans.
+    pub vibrato_spans: Vec<VibratoSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VibratoSpan {
+    pub pitch_bearing_spans: Vec<GestureSpan>,
+    pub vibrato: Vibrato,
 }
 
 /// A half-open gesture index span in an [`ArticulatorPlan`].
@@ -250,6 +259,8 @@ pub struct PhoneTimedRenderTarget {
     pub f0_hz: Option<f32>,
     /// Overall amplitude (linear 0.0–1.0).
     pub amplitude: f32,
+    /// Optional vibrato modulation for sung pitch-bearing phones.
+    pub vibrato: Option<Vibrato>,
 }
 
 /// Backend-specific render contract derived from the shared sung plan.
@@ -512,6 +523,7 @@ fn build_articulator_plan(
     let mut phone_gestures: Vec<PhoneGesture> = Vec::new();
     let mut energy_points: Vec<EnergyPoint> = Vec::new();
     let mut syllable_spans: Vec<SyllableRenderSpan> = Vec::new();
+    let mut vibrato_spans: Vec<VibratoSpan> = Vec::new();
 
     for syllable in &phrase.syllables {
         let decomposed;
@@ -589,7 +601,13 @@ fn build_articulator_plan(
             .nucleus_subspans()
             .iter()
             .map(|span| gesture_span_from_phone_span(gesture_start, *span))
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(vibrato) = syllable.vibrato {
+            vibrato_spans.push(VibratoSpan {
+                pitch_bearing_spans: pitch_bearing_spans.clone(),
+                vibrato,
+            });
+        }
         syllable_spans.push(SyllableRenderSpan {
             text: syllable.text.clone(),
             following_boundary: syllable.following_boundary,
@@ -622,6 +640,7 @@ fn build_articulator_plan(
         pitch_curve,
         energy_curve,
         syllables: syllable_spans,
+        vibrato_spans,
     })
 }
 
@@ -639,7 +658,8 @@ pub fn phone_timed_targets_from_articulator_plan(
     plan.gestures
         .gestures
         .iter()
-        .map(|gesture| {
+        .enumerate()
+        .map(|(gesture_idx, gesture)| {
             let table_entry = targets.get(gesture.phone.as_str());
             let f0_hz = if gesture.role == PhoneRole::Nucleus && gesture.is_voiced {
                 plan.pitch_curve.as_ref().map(|curve| {
@@ -649,6 +669,15 @@ pub fn phone_timed_targets_from_articulator_plan(
             } else {
                 None
             };
+            let vibrato = plan
+                .vibrato_spans
+                .iter()
+                .find(|span| {
+                    span.pitch_bearing_spans.iter().any(|pitch_span| {
+                        gesture_idx >= pitch_span.start && gesture_idx < pitch_span.end
+                    })
+                })
+                .map(|span| span.vibrato);
             PhoneTimedRenderTarget {
                 phone: Phone::new_ipa(&gesture.phone),
                 duration_ms: gesture.duration_ms,
@@ -657,6 +686,7 @@ pub fn phone_timed_targets_from_articulator_plan(
                     _ => f0_hz,
                 },
                 amplitude,
+                vibrato,
             }
         })
         .collect()
@@ -681,6 +711,7 @@ pub fn klatt_render_targets_from_phone_timed(
                 duration_ms: target.duration_ms,
                 f0_hz: target.f0_hz,
                 amplitude: target.amplitude,
+                vibrato: target.vibrato,
                 source: table_entry.map(|t| t.source.clone()),
                 filter: table_entry.and_then(|t| t.filter.clone()),
             }
@@ -782,6 +813,7 @@ mod tests {
         MidiNote, NoteArticulation, NoteDuration, NoteTarget, PitchTarget, TimePoint, Velocity,
     };
     use crate::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
+    use crate::prosody::vibrato::Vibrato;
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -1199,8 +1231,35 @@ mod tests {
         }
         // Klatt targets carry source/filter; neutral ones do not
         assert!(
-            klatt.iter().any(|t| t.source.is_some() || t.filter.is_some()),
+            klatt
+                .iter()
+                .any(|t| t.source.is_some() || t.filter.is_some()),
             "Klatt adapter should enrich at least some phones with source/filter"
+        );
+    }
+
+    #[test]
+    fn phone_timed_adapter_preserves_nucleus_vibrato() {
+        let mut phrase = SungPhrase::new();
+        let syllable = hel_syllable(true).with_vibrato(Some(Vibrato::new(
+            5.0,
+            25.0,
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+            0.0,
+        )));
+        phrase.push(syllable).expect("syllable should append");
+        let plan = articulate(&phrase);
+        let table = crate::voice::tract::default_english_phone_targets();
+        let neutral = phone_timed_targets_from_articulator_plan(&plan, 0.7, &table);
+        assert!(
+            neutral.iter().any(|target| target.vibrato.is_some()),
+            "pitch-bearing phones should retain vibrato intent in shared phone-timed targets"
+        );
+        let klatt = klatt_render_targets_from_phone_timed(&neutral, &table);
+        assert!(
+            klatt.iter().any(|target| target.vibrato.is_some()),
+            "klatt adapter should preserve vibrato metadata on enriched targets"
         );
     }
 
