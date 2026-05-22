@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -5,7 +6,11 @@ use anyhow::{Context, Result, bail};
 use crate::audio::{frame::AudioFrame, write_wav};
 use crate::time::ExactTimestamp;
 
-use super::database::{MbrolaDatabase, MbrolaDatabaseError};
+use super::database::MbrolaDatabase;
+use super::diphone_provider::{
+    DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
+    DiphoneUnitSource, MbrolaDiphoneProvider,
+};
 use super::pho::{MbrolaPitchTarget, PhoneTimedPlan, write_pho_file};
 use super::voice::MbrolaVoice;
 
@@ -26,6 +31,8 @@ pub struct RenderReport {
     pub phone_count: usize,
     pub duration_ms: u64,
     pub pho_path: Option<PathBuf>,
+    pub diphone_source_counts: BTreeMap<DiphoneUnitSource, usize>,
+    pub warnings: Vec<String>,
 }
 
 pub trait PhoneTimedRenderer {
@@ -104,7 +111,18 @@ impl PhoneTimedRenderer for MbrolaRenderer {
             .clone()
             .unwrap_or_else(|| out_wav.with_extension("pho"));
         write_pho_file(&temp_pho, plan)?;
-        let frames = self.render_phone_plan_to_frames(plan)?;
+        let mut provider = MbrolaDiphoneProvider::new(&self.database);
+        let rendered = render_native_diphone_frames_with_provider(
+            plan,
+            &mut provider,
+            self.database.sample_rate_hz,
+            self.database.mbr_period,
+        )?;
+        let NativeRenderResult {
+            frames,
+            source_counts,
+            warnings,
+        } = rendered;
         write_wav(out_wav, &frames).with_context(|| {
             format!(
                 "failed to write native MBROLA PSOLA WAV {}",
@@ -127,6 +145,8 @@ impl PhoneTimedRenderer for MbrolaRenderer {
             phone_count: plan.phones.len(),
             duration_ms: plan.total_duration_ms(),
             pho_path: Some(temp_pho),
+            diphone_source_counts: source_counts,
+            warnings,
         })
     }
 }
@@ -156,7 +176,18 @@ pub fn render_raw_pho(
 
     let plan = super::pho::read_pho_file(pho_path)?;
     let database = MbrolaDatabase::load(&voice.path)?;
-    let frames = render_native_diphone_frames(&plan, &database)?;
+    let mut provider = MbrolaDiphoneProvider::new(&database);
+    let rendered = render_native_diphone_frames_with_provider(
+        &plan,
+        &mut provider,
+        database.sample_rate_hz,
+        database.mbr_period,
+    )?;
+    let NativeRenderResult {
+        frames,
+        source_counts,
+        warnings,
+    } = rendered;
     write_wav(out_wav, &frames).with_context(|| {
         format!(
             "failed to write native MBROLA PSOLA WAV {}",
@@ -172,6 +203,8 @@ pub fn render_raw_pho(
         phone_count: plan.phones.len(),
         duration_ms: plan.total_duration_ms(),
         pho_path: Some(pho_path.to_path_buf()),
+        diphone_source_counts: source_counts,
+        warnings,
     })
 }
 
@@ -179,18 +212,47 @@ fn render_native_diphone_frames(
     plan: &PhoneTimedPlan,
     database: &MbrolaDatabase,
 ) -> Result<Vec<AudioFrame>> {
+    let mut provider = MbrolaDiphoneProvider::new(database);
+    let rendered = render_native_diphone_frames_with_provider(
+        plan,
+        &mut provider,
+        database.sample_rate_hz,
+        database.mbr_period,
+    )?;
+    Ok(rendered.frames)
+}
+
+#[derive(Debug, Default)]
+struct NativeRenderResult {
+    frames: Vec<AudioFrame>,
+    source_counts: BTreeMap<DiphoneUnitSource, usize>,
+    warnings: Vec<String>,
+}
+
+fn render_native_diphone_frames_with_provider(
+    plan: &PhoneTimedPlan,
+    provider: &mut impl DiphoneProvider,
+    sample_rate_hz: u32,
+    source_period_samples: usize,
+) -> Result<NativeRenderResult> {
     let mut samples = Vec::new();
+    let mut source_counts = BTreeMap::new();
+    let mut warnings = Vec::new();
     for (index, phone) in plan.phones.iter().enumerate() {
         if phone.symbol == "_" {
-            let silence_len = duration_samples(phone.duration_ms, database.sample_rate_hz).max(1);
+            let silence_len = duration_samples(phone.duration_ms, sample_rate_hz).max(1);
             samples.extend(std::iter::repeat_n(0.0, silence_len));
             continue;
         }
         let prev = previous_symbol(plan, index).unwrap_or("_");
         let next = next_symbol(plan, index).unwrap_or("_");
         let mut unit = Vec::new();
-        unit.extend(diphone_right_half(database, prev, &phone.symbol)?);
-        unit.extend(diphone_left_half(database, &phone.symbol, next)?);
+        let right = diphone_right_half(provider, prev, &phone.symbol)?;
+        record_diphone_unit(&mut source_counts, &mut warnings, &right.unit);
+        unit.extend(right_half_samples(&right.unit));
+        let left = diphone_left_half(provider, &phone.symbol, next)?;
+        record_diphone_unit(&mut source_counts, &mut warnings, &left.unit);
+        unit.extend(left_half_samples(&left.unit));
         if unit.is_empty() {
             return Err(anyhow::anyhow!(
                 "MBROLA diphone material for phone `{}` was empty",
@@ -202,17 +264,21 @@ fn render_native_diphone_frames(
             &unit,
             phone.duration_ms,
             &phone.pitch_targets,
-            database.sample_rate_hz,
-            database.mbr_period,
+            sample_rate_hz,
+            source_period_samples,
         ));
     }
-    Ok(vec![AudioFrame {
-        captured_at: ExactTimestamp::now(),
-        sample_rate_hz: database.sample_rate_hz,
-        channels: 1,
-        samples,
-        voice_signatures: Vec::new(),
-    }])
+    Ok(NativeRenderResult {
+        frames: vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz,
+            channels: 1,
+            samples,
+            voice_signatures: Vec::new(),
+        }],
+        source_counts,
+        warnings,
+    })
 }
 
 fn previous_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
@@ -230,38 +296,87 @@ fn next_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
         .or(Some("_"))
 }
 
-fn diphone_left_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
-    let diphone = database.diphone(left, right).or_else(|| {
+fn diphone_left_half(
+    provider: &mut impl DiphoneProvider,
+    left: &str,
+    right: &str,
+) -> Result<DiphoneLookup> {
+    provider.get_diphone(left, right).or_else(|error| {
         if left != "_" && right != "_" {
-            database.diphone(left, "_")
+            provider
+                .get_diphone(left, "_")
+                .map(|lookup| boundary_fallback_lookup(lookup.unit, left, right))
         } else {
-            None
+            Err(error)
         }
-    });
-    let diphone = diphone.ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
-        left: left.to_string(),
-        right: right.to_string(),
-    })?;
-    let samples = database.samples_for_diphone(diphone)?;
-    let split = diphone.halfseg_samples.min(samples.len());
-    Ok(samples[..split].to_vec())
+    })
 }
 
-fn diphone_right_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
-    let diphone = database.diphone(left, right).or_else(|| {
+fn diphone_right_half(
+    provider: &mut impl DiphoneProvider,
+    left: &str,
+    right: &str,
+) -> Result<DiphoneLookup> {
+    provider.get_diphone(left, right).or_else(|error| {
         if left != "_" && right != "_" {
-            database.diphone("_", right)
+            provider
+                .get_diphone("_", right)
+                .map(|lookup| boundary_fallback_lookup(lookup.unit, left, right))
         } else {
-            None
+            Err(error)
         }
-    });
-    let diphone = diphone.ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
-        left: left.to_string(),
-        right: right.to_string(),
-    })?;
-    let samples = database.samples_for_diphone(diphone)?;
-    let split = diphone.halfseg_samples.min(samples.len());
-    Ok(samples[split..].to_vec())
+    })
+}
+
+fn boundary_fallback_lookup(
+    unit: DiphoneUnit,
+    requested_left: &str,
+    requested_right: &str,
+) -> DiphoneLookup {
+    let warning = format!(
+        "used boundary fallback diphone {}-{} for requested {}-{}",
+        unit.key.left, unit.key.right, requested_left, requested_right
+    );
+    DiphoneLookup {
+        unit: DiphoneUnit {
+            source: DiphoneUnitSource::MbrolaBoundaryFallback,
+            metadata: DiphoneUnitMetadata {
+                requested_key: Some(DiphoneKey::new(requested_left, requested_right)),
+                warning: Some(warning),
+            },
+            ..unit
+        },
+    }
+}
+
+fn left_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
+    let split = halfseg_split(unit);
+    unit.samples[..split].to_vec()
+}
+
+fn right_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
+    let split = halfseg_split(unit);
+    unit.samples[split..].to_vec()
+}
+
+fn halfseg_split(unit: &DiphoneUnit) -> usize {
+    unit.halfseg_samples.min(unit.samples.len())
+}
+
+fn record_diphone_unit(
+    source_counts: &mut BTreeMap<DiphoneUnitSource, usize>,
+    warnings: &mut Vec<String>,
+    unit: &DiphoneUnit,
+) {
+    *source_counts.entry(unit.source).or_insert(0) += 1;
+    if unit.source != DiphoneUnitSource::MbrolaExact {
+        warnings.push(
+            unit.metadata
+                .warning
+                .clone()
+                .unwrap_or_else(|| format!("non-exact diphone source used: {:?}", unit.source)),
+        );
+    }
 }
 
 fn duration_samples(duration_ms: u32, sample_rate_hz: u32) -> usize {
@@ -495,6 +610,9 @@ fn remove_dc(samples: &mut [f32]) {
 #[cfg(test)]
 mod tests {
     use super::super::pho::MbrolaPhone;
+    use anyhow::{Result, anyhow};
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -586,11 +704,60 @@ mod tests {
             MbrolaPhone::new("_", 120),
         ]);
 
-        let frames = render_native_diphone_frames(&plan, &database).expect("render h-j fallback");
+        let mut provider = MbrolaDiphoneProvider::new(&database);
+        let rendered = render_native_diphone_frames_with_provider(
+            &plan,
+            &mut provider,
+            database.sample_rate_hz,
+            database.mbr_period,
+        )
+        .expect("render h-j fallback");
 
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].sample_rate_hz, 16_000);
-        assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.001));
+        assert_eq!(rendered.frames.len(), 1);
+        assert_eq!(rendered.frames[0].sample_rate_hz, 16_000);
+        assert!(
+            rendered.frames[0]
+                .samples
+                .iter()
+                .any(|sample| sample.abs() > 0.001)
+        );
+        assert!(
+            rendered
+                .source_counts
+                .contains_key(&DiphoneUnitSource::MbrolaBoundaryFallback)
+        );
+        assert!(!rendered.warnings.is_empty());
+    }
+
+    #[test]
+    fn native_renderer_records_exact_and_fallback_unit_sources() {
+        // For [a, b], edge lookups (_-a, b-_) are exact while inner lookups (a-b)
+        // use boundary fallbacks (a-_ and _-b).
+        let mut provider =
+            FakeDiphoneProvider::new([("_", "a", 4), ("a", "_", 4), ("_", "b", 4), ("b", "_", 4)]);
+        let plan = PhoneTimedPlan::new(vec![MbrolaPhone::new("a", 60), MbrolaPhone::new("b", 60)]);
+
+        let rendered = render_native_diphone_frames_with_provider(&plan, &mut provider, 16_000, 80)
+            .expect("render with fallback-aware provider");
+
+        assert_eq!(rendered.frames.len(), 1);
+        assert_eq!(
+            rendered.source_counts.get(&DiphoneUnitSource::MbrolaExact),
+            Some(&2)
+        );
+        assert_eq!(
+            rendered
+                .source_counts
+                .get(&DiphoneUnitSource::MbrolaBoundaryFallback),
+            Some(&2)
+        );
+        assert_eq!(rendered.warnings.len(), 2);
+        assert!(
+            rendered
+                .warnings
+                .iter()
+                .all(|warning| warning.contains("boundary fallback diphone"))
+        );
     }
 
     fn sine(hz: f32, len: usize, sample_rate_hz: u32) -> Vec<f32> {
@@ -607,5 +774,40 @@ mod tests {
             .windows(2)
             .filter(|pair| (pair[0] < 0.0 && pair[1] >= 0.0) || (pair[0] >= 0.0 && pair[1] < 0.0))
             .count()
+    }
+
+    #[derive(Default)]
+    struct FakeDiphoneProvider {
+        units: BTreeMap<(String, String), DiphoneUnit>,
+    }
+
+    impl FakeDiphoneProvider {
+        fn new<const N: usize>(entries: [(&str, &str, usize); N]) -> Self {
+            let mut units = BTreeMap::new();
+            for (left, right, halfseg_samples) in entries {
+                units.insert(
+                    (left.to_string(), right.to_string()),
+                    DiphoneUnit {
+                        key: DiphoneKey::new(left, right),
+                        samples: vec![0.05, 0.1, 0.2, 0.15, -0.1, -0.05, 0.02, 0.01],
+                        sample_rate_hz: 16_000,
+                        halfseg_samples,
+                        source: DiphoneUnitSource::MbrolaExact,
+                        metadata: DiphoneUnitMetadata::default(),
+                    },
+                );
+            }
+            Self { units }
+        }
+    }
+
+    impl DiphoneProvider for FakeDiphoneProvider {
+        fn get_diphone(&mut self, left: &str, right: &str) -> Result<DiphoneLookup> {
+            self.units
+                .get(&(left.to_string(), right.to_string()))
+                .cloned()
+                .map(|unit| DiphoneLookup { unit })
+                .ok_or_else(|| anyhow!("missing fake diphone {}-{}", left, right))
+        }
     }
 }
