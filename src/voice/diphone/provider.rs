@@ -108,8 +108,8 @@ impl DiphoneProvider for NeuralDiphoneProvider {
             halfseg_samples: forged.unit.halfseg_samples,
             segmentation_confidence: forged.segmentation_confidence,
             sample_count: forged.unit.samples.len(),
-            extraction_start_sample: 0,
-            extraction_end_sample: forged.unit.samples.len(),
+            extraction_start_sample: forged.segmentation.source_start_sample,
+            extraction_end_sample: forged.segmentation.source_end_sample,
             model_license: "unknown".to_string(),
             provenance_note: concat!(
                 "Generated locally from a Piper ONNX model. ",
@@ -264,5 +264,88 @@ mod tests {
             FallbackDiphoneProvider::new(MapProvider(primary), MapProvider(secondary));
         let lookup = provider.get_diphone("p", "ae").expect("should succeed");
         assert_eq!(lookup.unit.source, DiphoneUnitSource::MbrolaExact);
+    }
+
+    // ── Cache-backed forge round-trip (no ONNX needed) ────────────────────────
+
+    /// Verify that a unit forged via `forge_from_samples` can be stored in the
+    /// cache and retrieved as a cache hit with matching samples and metadata.
+    #[test]
+    fn cache_backed_forge_roundtrip_without_onnx() {
+        use crate::voice::diphone::cache::{CacheEntryMetadata, CacheKey, DiphoneCache};
+        use crate::voice::diphone::forge::{
+            CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, NORMALIZATION_VERSION,
+            ForgeSettings, build_carrier_sequence, forge_from_samples,
+        };
+
+        let dir = std::env::temp_dir().join(format!(
+            "listenbury_provider_test_roundtrip_{}",
+            std::process::id()
+        ));
+        // Ensure cleanup on test exit.
+        struct CleanupGuard(std::path::PathBuf);
+        impl Drop for CleanupGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _guard = CleanupGuard(dir.clone());
+        let cache = DiphoneCache::open(&dir).expect("open cache");
+
+        let key = CacheKey {
+            model_fingerprint: "test_model".to_string(),
+            config_fingerprint: "test_config".to_string(),
+            speaker_id: String::new(),
+            left: "p".to_string(),
+            right: "ae".to_string(),
+            carrier_strategy_version: CARRIER_STRATEGY_VERSION.to_string(),
+            forge_settings_version: FORGE_SETTINGS_VERSION.to_string(),
+            sample_rate_hz: 22050,
+            normalization_version: NORMALIZATION_VERSION.to_string(),
+        };
+
+        // Forge without ONNX
+        let synthetic_pcm: Vec<f32> =
+            (0..512).map(|i| (i as f32 * 0.05_f32).sin()).collect();
+        let carrier = build_carrier_sequence("p", "ae");
+        let forged = forge_from_samples(
+            "p",
+            "ae",
+            &synthetic_pcm,
+            22050,
+            &carrier,
+            "test_model",
+            "test_config",
+            &ForgeSettings::default(),
+        )
+        .expect("forge_from_samples should succeed");
+
+        // Should be a cache miss before storing
+        assert!(cache.get(&key).is_none(), "should be a miss before storing");
+
+        let meta = CacheEntryMetadata {
+            key: key.clone(),
+            generated_at: "2026-01-01T00:00:00Z".to_string(),
+            carrier_sequence: forged.carrier_sequence.clone(),
+            halfseg_samples: forged.unit.halfseg_samples,
+            segmentation_confidence: forged.segmentation_confidence,
+            sample_count: forged.unit.samples.len(),
+            extraction_start_sample: forged.segmentation.source_start_sample,
+            extraction_end_sample: forged.segmentation.source_end_sample,
+            model_license: "unknown".to_string(),
+            provenance_note: "test".to_string(),
+        };
+        cache
+            .store(&key, &forged.unit, meta)
+            .expect("cache store should succeed");
+
+        // Should be a cache hit after storing
+        let retrieved = cache.get(&key).expect("should be a cache hit after storing");
+        assert_eq!(retrieved.samples, forged.unit.samples);
+        assert_eq!(retrieved.halfseg_samples, forged.unit.halfseg_samples);
+        assert_eq!(retrieved.source, DiphoneUnitSource::CacheHit);
+        assert_eq!(retrieved.key.left, "p");
+        assert_eq!(retrieved.key.right, "ae");
+        assert_eq!(retrieved.sample_rate_hz, 22050);
     }
 }

@@ -31,9 +31,11 @@ pub mod provider;
 
 pub use cache::{CacheEntryMetadata, CacheKey, CacheLookup, DiphoneCache};
 pub use forge::{
-    CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, ForgeSettings, NORMALIZATION_VERSION,
-    PhoneClass,
+    CARRIER_STRATEGY_VERSION, CarrierSequence, FORGE_SETTINGS_VERSION, ForgeSettings,
+    ForgedUnit, NORMALIZATION_VERSION, PhoneClass, SegmentationReport, build_carrier_sequence,
+    forge_from_samples,
 };
+pub use normalize::NormalizationReport;
 pub use provider::FallbackDiphoneProvider;
 
 #[cfg(feature = "tts-riper")]

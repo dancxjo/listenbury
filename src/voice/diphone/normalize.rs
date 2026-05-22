@@ -4,6 +4,19 @@
 //! These are applied to raw PCM extracted from neural synthesis before the
 //! unit is stored in the diphone cache.
 
+/// Report describing what normalization operations were applied to a diphone unit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NormalizationReport {
+    /// DC offset that was removed (mean before removal).
+    pub dc_offset_removed: f32,
+    /// Number of samples used for each boundary fade.
+    pub fade_samples_applied: usize,
+    /// RMS level before normalization.
+    pub rms_before: Option<f32>,
+    /// RMS level after normalization (target).
+    pub rms_after: Option<f32>,
+}
+
 /// Remove the mean (DC offset) from `samples` in place.
 pub fn remove_dc_offset(samples: &mut [f32]) {
     if samples.is_empty() {
@@ -60,10 +73,30 @@ pub fn normalize_rms(samples: &mut [f32], target_rms: f32) {
 /// 1. Remove DC offset.
 /// 2. Apply short boundary fades (32 samples by default).
 /// 3. Normalize RMS to 0.1.
-pub fn normalize_diphone(samples: &mut Vec<f32>) {
+///
+/// Returns a [`NormalizationReport`] describing what was applied.
+pub fn normalize_diphone(samples: &mut Vec<f32>) -> NormalizationReport {
+    let dc_offset = if samples.is_empty() {
+        0.0
+    } else {
+        samples.iter().sum::<f32>() / samples.len() as f32
+    };
     remove_dc_offset(samples);
-    apply_boundary_fades(samples, 32);
+
+    const FADE: usize = 32;
+    let actual_fade = FADE.min(samples.len() / 2);
+    apply_boundary_fades(samples, FADE);
+
+    let rms_before = rms(samples);
     normalize_rms(samples, 0.1);
+    let rms_after = rms(samples);
+
+    NormalizationReport {
+        dc_offset_removed: dc_offset,
+        fade_samples_applied: actual_fade,
+        rms_before,
+        rms_after,
+    }
 }
 
 #[cfg(test)]
@@ -127,5 +160,21 @@ mod tests {
         normalize_diphone(&mut samples);
         let mean: f32 = samples.iter().sum::<f32>() / samples.len() as f32;
         assert!(mean.abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_diphone_report_has_dc_offset() {
+        let mut samples = vec![2.0_f32; 64];
+        let report = normalize_diphone(&mut samples);
+        assert!((report.dc_offset_removed - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_diphone_report_rms_after_near_target() {
+        let mut samples: Vec<f32> = (0..128).map(|i| (i as f32 * 0.05).sin()).collect();
+        let report = normalize_diphone(&mut samples);
+        if let Some(rms_after) = report.rms_after {
+            assert!((rms_after - 0.1).abs() < 1e-4, "rms_after should be ~0.1, got {rms_after}");
+        }
     }
 }

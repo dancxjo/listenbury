@@ -22,12 +22,11 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::voice::mbrola::diphone_provider::{
     DiphoneKey, DiphoneUnit, DiphoneUnitMetadata, DiphoneUnitSource, ForgeProvenance,
 };
 
-use super::normalize::normalize_diphone;
+use super::normalize::{NormalizationReport, normalize_diphone};
 
 /// Version tag for the carrier-selection strategy.
 ///
@@ -42,6 +41,12 @@ pub const FORGE_SETTINGS_VERSION: &str = "v1";
 
 /// Version tag for the normalization algorithm.
 pub const NORMALIZATION_VERSION: &str = "v1";
+
+/// An ordered list of phoneme symbols fed to the neural model as a carrier context.
+///
+/// The carrier wraps the target diphone pair with vowel padding to ensure stable
+/// synthesis of boundary material.  Typical shape: `[_, vowel, left, right, vowel, _]`.
+pub type CarrierSequence = Vec<String>;
 
 /// Broad phoneme class used to select a carrier context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,12 +111,57 @@ impl Default for ForgeSettings {
     }
 }
 
-/// A forged diphone unit with its segmentation metadata.
+/// Report from the diphone boundary segmentation step.
+///
+/// Provides an honest account of what the segmentation heuristic found so
+/// downstream consumers (renderers, cache writers, CLI tools) can make
+/// informed decisions about unit quality.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentationReport {
+    /// Confidence score in [0.0, 1.0].
+    ///
+    /// Below 0.5 indicates unreliable boundary detection; the unit should be
+    /// used with caution or regenerated with different carrier parameters.
+    pub confidence: f32,
+    /// Human-readable warnings produced during segmentation (empty if clean).
+    pub warnings: Vec<String>,
+    /// Start sample (inclusive) of the extracted window within the full carrier output.
+    pub source_start_sample: usize,
+    /// End sample (exclusive) of the extracted window within the full carrier output.
+    pub source_end_sample: usize,
+    /// Estimated join/half-segment point within the *extracted* window (not carrier).
+    pub halfseg_samples: usize,
+}
+
+/// A forged diphone unit with attached segmentation and normalization reports.
 #[derive(Debug)]
 pub struct ForgedUnit {
     pub unit: DiphoneUnit,
-    pub carrier_sequence: Vec<String>,
+    pub carrier_sequence: CarrierSequence,
+    pub segmentation: SegmentationReport,
+    pub normalization: NormalizationReport,
+    /// Convenience accessor: segmentation confidence (same as `segmentation.confidence`).
     pub segmentation_confidence: f32,
+}
+
+/// Build the carrier phoneme sequence for the given `(left, right)` diphone.
+///
+/// The sequence has the shape `[_, vowel, left, right, vowel, _]` where the
+/// vowel is chosen based on the phone class of `left`.  This is intentionally
+/// conservative: all classes currently use schwa, but the function is
+/// structured so phone-class-specific carriers can be added.
+///
+/// This function is pure (no synthesis) and is fully testable without ONNX.
+pub fn build_carrier_sequence(left: &str, right: &str) -> CarrierSequence {
+    let carrier = PhoneClass::of(left).neutral_carrier();
+    vec![
+        "_".into(),
+        carrier.into(),
+        left.into(),
+        right.into(),
+        carrier.into(),
+        "_".into(),
+    ]
 }
 
 /// Synthesize a diphone `(left, right)` from the Riper backend.
@@ -132,15 +182,9 @@ pub fn forge_diphone(
     right: &str,
     settings: &ForgeSettings,
 ) -> Result<ForgedUnit> {
-    let carrier = PhoneClass::of(left).neutral_carrier();
-    let carrier_sequence: Vec<String> = vec![
-        "_".into(),
-        carrier.into(),
-        left.into(),
-        right.into(),
-        carrier.into(),
-        "_".into(),
-    ];
+    use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
+
+    let carrier_sequence = build_carrier_sequence(left, right);
 
     let phonemes: Vec<PiperPhoneme> = carrier_sequence
         .iter()
@@ -170,24 +214,70 @@ pub fn forge_diphone(
     let model_fingerprint = fingerprint_path(backend.model_path());
     let config_fingerprint = fingerprint_config(backend.config());
 
-    let (samples, halfseg_samples, confidence) =
-        segment_diphone(&pcm.samples, left, right, settings);
+    forge_from_samples(
+        left,
+        right,
+        &pcm.samples,
+        pcm.sample_rate_hz,
+        &carrier_sequence,
+        &model_fingerprint,
+        &config_fingerprint,
+        settings,
+    )
+}
 
-    let mut samples = samples;
-    normalize_diphone(&mut samples);
+/// Forge a diphone unit from pre-synthesized PCM samples.
+///
+/// This is the core extraction pipeline: it runs segmentation, normalization,
+/// and assembles the [`ForgedUnit`].  Because it accepts raw PCM it is fully
+/// testable without a real ONNX model.
+///
+/// # Arguments
+///
+/// * `left`, `right` – phone symbols for the diphone key.
+/// * `samples` – raw PCM from the carrier synthesis (f32 normalized to [-1, 1]).
+/// * `sample_rate_hz` – sample rate of the synthesis output.
+/// * `carrier_sequence` – the carrier symbol list that produced `samples`.
+/// * `model_fingerprint` – hex fingerprint of the source model (use empty string for tests).
+/// * `config_fingerprint` – hex fingerprint of the voice config (use empty string for tests).
+/// * `settings` – forge settings.
+pub fn forge_from_samples(
+    left: &str,
+    right: &str,
+    samples: &[f32],
+    sample_rate_hz: u32,
+    carrier_sequence: &[String],
+    model_fingerprint: &str,
+    config_fingerprint: &str,
+    settings: &ForgeSettings,
+) -> Result<ForgedUnit> {
+    if samples.len() < settings.min_samples {
+        bail!(
+            "input has only {} samples for diphone {left}-{right}; expected at least {}",
+            samples.len(),
+            settings.min_samples
+        );
+    }
+
+    let (mut extracted, seg_report) = segment_diphone(samples, left, right, settings);
+
+    let norm_report = normalize_diphone(&mut extracted);
+
+    let confidence = seg_report.confidence;
+    let halfseg_samples = seg_report.halfseg_samples;
 
     let provenance = ForgeProvenance {
-        model_fingerprint,
-        config_fingerprint,
-        carrier_sequence: carrier_sequence.clone(),
+        model_fingerprint: model_fingerprint.to_string(),
+        config_fingerprint: config_fingerprint.to_string(),
+        carrier_sequence: carrier_sequence.to_vec(),
         segmentation_confidence: confidence,
         generated_at: now_iso8601(),
     };
 
     let unit = DiphoneUnit {
         key: DiphoneKey::new(left, right),
-        samples,
-        sample_rate_hz: pcm.sample_rate_hz,
+        samples: extracted,
+        sample_rate_hz,
         halfseg_samples,
         frame_center_samples: Vec::new(),
         source: DiphoneUnitSource::NeuralGenerated,
@@ -206,14 +296,16 @@ pub fn forge_diphone(
 
     Ok(ForgedUnit {
         unit,
-        carrier_sequence,
+        carrier_sequence: carrier_sequence.to_vec(),
         segmentation_confidence: confidence,
+        segmentation: seg_report,
+        normalization: norm_report,
     })
 }
 
 /// Segment the target diphone region from a synthesized carrier waveform.
 ///
-/// Returns `(samples, halfseg_samples, confidence)`.
+/// Returns `(extracted_samples, SegmentationReport)`.
 ///
 /// The segmentation is based on proportional position:  the carrier has the
 /// shape `[_ carrier left right carrier _]` so we expect the target
@@ -224,7 +316,7 @@ fn segment_diphone(
     _left: &str,
     _right: &str,
     settings: &ForgeSettings,
-) -> (Vec<f32>, usize, f32) {
+) -> (Vec<f32>, SegmentationReport) {
     let total = all_samples.len();
     // Guard: skip the leading and trailing `guard_fraction` of the signal.
     let guard = ((total as f32 * settings.guard_fraction) as usize).max(1);
@@ -235,7 +327,18 @@ fn segment_diphone(
     if window.len() < settings.min_samples {
         // Fallback: use the whole signal centre
         let half = total / 2;
-        return (all_samples.to_vec(), half, 0.3);
+        let report = SegmentationReport {
+            confidence: 0.3,
+            warnings: vec![format!(
+                "window too short ({} < {}); fell back to full signal",
+                window.len(),
+                settings.min_samples
+            )],
+            source_start_sample: 0,
+            source_end_sample: total,
+            halfseg_samples: half,
+        };
+        return (all_samples.to_vec(), report);
     }
 
     // Estimate the join midpoint as the energy minimum within the window.
@@ -244,7 +347,22 @@ fn segment_diphone(
     // Confidence: ratio of the energy drop at the midpoint vs average energy.
     let confidence = energy_confidence(window, midpoint_in_window, 8);
 
-    (window.to_vec(), midpoint_in_window, confidence)
+    let mut warnings = Vec::new();
+    if confidence < 0.5 {
+        warnings.push(format!(
+            "low boundary confidence {confidence:.2}; segmentation heuristic may be unreliable"
+        ));
+    }
+
+    let report = SegmentationReport {
+        confidence,
+        warnings,
+        source_start_sample: window_start,
+        source_end_sample: window_end,
+        halfseg_samples: midpoint_in_window,
+    };
+
+    (window.to_vec(), report)
 }
 
 /// Find the index of minimum local energy (using a small frame) in `samples`.
@@ -382,13 +500,38 @@ mod tests {
     }
 
     #[test]
+    fn build_carrier_sequence_has_correct_shape() {
+        let seq = build_carrier_sequence("p", "ae");
+        assert_eq!(seq.len(), 6);
+        assert_eq!(seq[0], "_");
+        assert_eq!(seq[2], "p");
+        assert_eq!(seq[3], "ae");
+        assert_eq!(seq[5], "_");
+    }
+
+    #[test]
+    fn build_carrier_sequence_uses_schwa_for_stops() {
+        let seq = build_carrier_sequence("p", "ae");
+        assert_eq!(seq[1], "ə");
+        assert_eq!(seq[4], "ə");
+    }
+
+    #[test]
+    fn build_carrier_sequence_uses_schwa_for_fricatives() {
+        let seq = build_carrier_sequence("s", "i");
+        assert_eq!(seq[1], "ə");
+        assert_eq!(seq[4], "ə");
+    }
+
+    #[test]
     fn segment_diphone_returns_non_empty() {
         let samples: Vec<f32> = (0..256).map(|i| (i as f32 * 0.1).sin()).collect();
         let settings = ForgeSettings::default();
-        let (extracted, halfseg, confidence) = segment_diphone(&samples, "p", "ae", &settings);
+        let (extracted, report) = segment_diphone(&samples, "p", "ae", &settings);
         assert!(!extracted.is_empty());
-        assert!(halfseg <= extracted.len());
-        assert!(confidence >= 0.0 && confidence <= 1.0);
+        assert!(report.halfseg_samples <= extracted.len());
+        assert!(report.confidence >= 0.0 && report.confidence <= 1.0);
+        assert!(report.source_end_sample > report.source_start_sample);
     }
 
     #[test]
@@ -399,9 +542,127 @@ mod tests {
             min_samples: 64,
             ..Default::default()
         };
-        let (extracted, _halfseg, confidence) = segment_diphone(&samples, "h", "@", &settings);
+        let (extracted, report) = segment_diphone(&samples, "h", "@", &settings);
         assert!(!extracted.is_empty());
-        assert!(confidence < 0.5);
+        assert!(report.confidence < 0.5);
+        assert!(!report.warnings.is_empty());
+    }
+
+    #[test]
+    fn forge_from_samples_produces_valid_unit() {
+        // Test the full pipeline without ONNX using synthetic PCM.
+        let samples: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05).sin()).collect();
+        let carrier = build_carrier_sequence("p", "ae");
+        let result = forge_from_samples(
+            "p",
+            "ae",
+            &samples,
+            22050,
+            &carrier,
+            "test_model_fp",
+            "test_config_fp",
+            &ForgeSettings::default(),
+        );
+        let forged = result.expect("forge_from_samples should succeed");
+        assert_eq!(forged.unit.key.left, "p");
+        assert_eq!(forged.unit.key.right, "ae");
+        assert_eq!(forged.unit.sample_rate_hz, 22050);
+        assert_eq!(forged.unit.source, DiphoneUnitSource::NeuralGenerated);
+        assert!(!forged.unit.samples.is_empty());
+        assert!(forged.unit.halfseg_samples <= forged.unit.samples.len());
+        assert!(forged.segmentation.confidence >= 0.0);
+        assert!(forged.segmentation.source_end_sample > forged.segmentation.source_start_sample);
+    }
+
+    #[test]
+    fn forge_from_samples_rejects_too_short() {
+        let samples = vec![0.0_f32; 8];
+        let carrier = build_carrier_sequence("p", "ae");
+        let result = forge_from_samples(
+            "p",
+            "ae",
+            &samples,
+            22050,
+            &carrier,
+            "",
+            "",
+            &ForgeSettings {
+                min_samples: 64,
+                ..Default::default()
+            },
+        );
+        assert!(result.is_err(), "should reject too-short input");
+    }
+
+    #[test]
+    fn forge_from_samples_rejects_all_silence() {
+        // All-silence input → energy_confidence returns 0.0 (below threshold)
+        let samples = vec![0.0_f32; 512];
+        let carrier = build_carrier_sequence("p", "ae");
+        let forged = forge_from_samples(
+            "p",
+            "ae",
+            &samples,
+            22050,
+            &carrier,
+            "",
+            "",
+            &ForgeSettings::default(),
+        )
+        .expect("pipeline itself succeeds");
+        // All-silence → confidence should be 0; warning should be set on unit
+        assert_eq!(forged.segmentation.confidence, 0.0);
+        assert!(forged.unit.metadata.warning.is_some());
+    }
+
+    #[test]
+    fn forge_from_samples_unit_has_provenance() {
+        let samples: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05).sin()).collect();
+        let carrier = build_carrier_sequence("h", "@");
+        let forged = forge_from_samples(
+            "h",
+            "@",
+            &samples,
+            22050,
+            &carrier,
+            "myfp",
+            "mycfp",
+            &ForgeSettings::default(),
+        )
+        .expect("forge should succeed");
+        let prov = forged
+            .unit
+            .metadata
+            .forge_provenance
+            .expect("provenance must be set");
+        assert_eq!(prov.model_fingerprint, "myfp");
+        assert_eq!(prov.config_fingerprint, "mycfp");
+        assert_eq!(prov.carrier_sequence, carrier);
+        assert!(!prov.generated_at.is_empty());
+    }
+
+    #[test]
+    fn forge_from_samples_normalization_removes_dc() {
+        // Build samples with a significant DC offset
+        let samples: Vec<f32> = (0..512).map(|i| 2.0 + (i as f32 * 0.05).sin()).collect();
+        let carrier = build_carrier_sequence("m", "ae");
+        let forged = forge_from_samples(
+            "m",
+            "ae",
+            &samples,
+            22050,
+            &carrier,
+            "",
+            "",
+            &ForgeSettings::default(),
+        )
+        .expect("forge should succeed");
+        // DC offset should have been reported
+        assert!(forged.normalization.dc_offset_removed.abs() > 0.5);
+        // Final mean should be near zero
+        let mean: f32 =
+            forged.unit.samples.iter().sum::<f32>() / forged.unit.samples.len() as f32;
+        assert!(mean.abs() < 0.05, "mean should be near zero after DC removal, got {mean}");
     }
 
     #[test]
