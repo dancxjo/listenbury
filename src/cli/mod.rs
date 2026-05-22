@@ -309,6 +309,8 @@ pub(crate) struct SayCommand {
     pub(crate) output_wav: Option<PathBuf>,
     #[arg(long)]
     pub(crate) riper: bool,
+    #[arg(long)]
+    pub(crate) klatt: bool,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
 }
@@ -712,6 +714,7 @@ mod tests {
         assert!(command.piper_voice.is_none());
         assert!(command.output_wav.is_none());
         assert!(!command.riper);
+        assert!(!command.klatt);
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -732,6 +735,7 @@ mod tests {
         };
         assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
         assert!(!command.riper);
+        assert!(!command.klatt);
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -744,6 +748,7 @@ mod tests {
             panic!("expected say command");
         };
         assert!(command.riper);
+        assert!(!command.klatt);
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -756,7 +761,34 @@ mod tests {
             panic!("expected say command");
         };
         assert!(!command.riper);
+        assert!(!command.klatt);
         assert_eq!(command.words, ["hello", "there", "--riper"]);
+    }
+
+    #[test]
+    fn say_accepts_klatt_flag_before_text() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--klatt", "hello", "there"])
+            .expect("say should parse Klatt mode before text");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(!command.riper);
+        assert!(command.klatt);
+        assert_eq!(command.words, ["hello", "there"]);
+    }
+
+    #[test]
+    fn say_accepts_riper_and_klatt_flags_together() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "--klatt", "hello"])
+            .expect("say should parse combined riper/klatt flags");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.riper);
+        assert!(command.klatt);
+        assert_eq!(command.words, ["hello"]);
     }
 
     #[test]

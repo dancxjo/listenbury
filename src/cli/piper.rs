@@ -13,6 +13,9 @@ use listenbury::audio::read_wav_as_whisper_frames;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::audio::streaming_prosody::StreamingProsodyAnalyzer;
 use listenbury::audio::write_wav;
+#[cfg(test)]
+use listenbury::audio::write_wav_bytes;
+use listenbury::linguistic::phonology::{Phone, PhoneString};
 #[cfg(feature = "tts-riper")]
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "tts-riper")]
@@ -30,6 +33,11 @@ use listenbury::mouth::riper::{
 use listenbury::mouth::tts::TextToSpeech;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
+use listenbury::time::ExactTimestamp;
+use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
+use listenbury::voice::tract::targets::{
+    default_english_phone_targets, phone_render_targets_from_string,
+};
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "tts-riper")]
 use std::io::Write;
@@ -38,8 +46,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
+
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
+    if should_use_klatt_backend(&piper_args) {
+        let frames = synthesize_klatt_for_say(&piper_args.text)?;
+        if let Some(output_path) = piper_args.output_wav {
+            write_say_wav(&output_path, &frames)?;
+        } else {
+            play_say_audio(&frames)?;
+        }
+        return Ok(());
+    }
+
     #[cfg(not(feature = "tts-riper"))]
     if piper_args.riper {
         anyhow::bail!("listenbury say --riper requires the `tts-riper` feature");
@@ -764,18 +784,23 @@ struct SayArgs {
     piper_voice: Option<PathBuf>,
     output_wav: Option<PathBuf>,
     riper: bool,
+    klatt: bool,
     text: String,
 }
 
 impl SayArgs {
     fn from_command(command: SayCommand) -> Result<Self> {
         let mut riper = command.riper;
+        let mut klatt = command.klatt;
         let mut words = command
             .words
             .into_iter()
             .filter_map(|word| {
                 if word == "--riper" {
                     riper = true;
+                    None
+                } else if word == "--klatt" {
+                    klatt = true;
                     None
                 } else {
                     Some(word)
@@ -794,14 +819,112 @@ impl SayArgs {
         }
 
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
+        anyhow::ensure!(
+            !klatt || piper_bin.is_none(),
+            "listenbury say: cannot use --piper-bin with --klatt"
+        );
+        anyhow::ensure!(
+            !klatt || piper_voice.is_none(),
+            "listenbury say: cannot use --model-path/--piper-voice with --klatt"
+        );
 
         Ok(Self {
             piper_bin,
             piper_voice,
             output_wav: command.output_wav,
             riper,
+            klatt,
             text: words.join(" "),
         })
+    }
+}
+
+fn should_use_klatt_backend(args: &SayArgs) -> bool {
+    args.klatt
+}
+
+fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
+    let phone_string = klatt_phone_string_for_text(text)?;
+    let config = KlattRenderConfig::default();
+    let target_table = default_english_phone_targets();
+    let targets = phone_render_targets_from_string(&phone_string, Some(150.0), 0.7, &target_table);
+    let missing_phones: Vec<String> = phone_string
+        .phones
+        .iter()
+        .map(|phone| phone.ipa.as_str())
+        .filter(|ipa| !target_table.contains_key(*ipa))
+        .map(str::to_string)
+        .collect();
+    anyhow::ensure!(
+        missing_phones.is_empty(),
+        "listenbury say --klatt cannot render phone(s): {}",
+        missing_phones.join(", ")
+    );
+
+    let pcm = render_phone_string(&targets, &config);
+    anyhow::ensure!(
+        !pcm.is_empty(),
+        "listenbury say --klatt produced no audio for `{text}`"
+    );
+    Ok(vec![AudioFrame {
+        captured_at: ExactTimestamp::now(),
+        sample_rate_hz: config.sample_rate,
+        channels: 1,
+        samples: pcm,
+        voice_signatures: Vec::new(),
+    }])
+}
+
+fn klatt_phone_string_for_text(text: &str) -> Result<PhoneString> {
+    let mut phones = Vec::new();
+    let mut unknown_words = Vec::new();
+    for token in text.split_whitespace() {
+        let word = token
+            .trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+            .to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+
+        let Some(word_phones) = klatt_word_phones(word.as_str()) else {
+            unknown_words.push(word);
+            continue;
+        };
+        phones.extend(word_phones.iter().copied().map(Phone::new_ipa));
+    }
+
+    anyhow::ensure!(
+        !phones.is_empty(),
+        "listenbury say --klatt could not find any speakable words in `{text}`"
+    );
+    if !unknown_words.is_empty() {
+        unknown_words.sort_unstable();
+        unknown_words.dedup();
+        anyhow::bail!(
+            "listenbury say --klatt does not yet know word(s): {}. Supported words: {}",
+            unknown_words.join(", "),
+            KLATT_SUPPORTED_WORDS.join(", ")
+        );
+    }
+
+    Ok(PhoneString { phones })
+}
+
+fn klatt_word_phones(word: &str) -> Option<&'static [&'static str]> {
+    const HELLO: [&str; 5] = ["h", "ɛ", "l", "o", "ʊ"];
+    const MY: [&str; 3] = ["m", "ɑ", "ɪ"];
+    const BABY: [&str; 5] = ["b", "e", "ɪ", "b", "i"];
+    const DARLING: [&str; 6] = ["d", "ɑ", "ɹ", "l", "ɪ", "ŋ"];
+    const RAGTIME: [&str; 7] = ["ɹ", "æ", "ɡ", "t", "ɑ", "ɪ", "m"];
+    const GAL: [&str; 3] = ["ɡ", "æ", "l"];
+    match word {
+        "hello" => Some(&HELLO),
+        "my" => Some(&MY),
+        "baby" => Some(&BABY),
+        "darling" => Some(&DARLING),
+        "ragtime" => Some(&RAGTIME),
+        "gal" => Some(&GAL),
+        _ => None,
     }
 }
 
@@ -1038,6 +1161,7 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             riper: false,
+            klatt: false,
             words: vec!["hello".to_string()],
         })
         .expect("single word should be text");
@@ -1054,6 +1178,7 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             riper: false,
+            klatt: false,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "hello".to_string(),
@@ -1076,6 +1201,7 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             riper: false,
+            klatt: false,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "voice.onnx".to_string(),
@@ -1099,6 +1225,7 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             riper: false,
+            klatt: false,
             words: vec![
                 "hello".to_string(),
                 "there".to_string(),
@@ -1108,7 +1235,63 @@ mod tests {
         .expect("trailing Riper flag should be accepted");
 
         assert!(args.riper);
+        assert!(!args.klatt);
         assert_eq!(args.text, "hello there");
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_klatt_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            klatt: false,
+            words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
+        })
+        .expect("trailing Klatt flag should be accepted");
+
+        assert!(!args.riper);
+        assert!(args.klatt);
+        assert_eq!(args.text, "hello my");
+    }
+
+    #[test]
+    fn say_args_accepts_riper_and_klatt_together() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: true,
+            klatt: true,
+            words: vec!["hello".to_string()],
+        })
+        .expect("riper+klatt should parse, with klatt taking synthesis path");
+        assert!(args.riper);
+        assert!(args.klatt);
+        assert!(should_use_klatt_backend(&args));
+    }
+
+    #[test]
+    fn klatt_phrase_renders_non_empty_audio_and_wav_bytes() {
+        let frames =
+            synthesize_klatt_for_say("Hello, my baby. Hello, my darling. Hello, my ragtime gal.")
+                .expect("klatt phrase should synthesize");
+        assert_eq!(frames.len(), 1);
+        assert!(!frames[0].samples.is_empty());
+        let wav = write_wav_bytes(&frames).expect("frames should serialize as WAV");
+        assert!(wav.len() > 44, "WAV payload should include audio data");
+    }
+
+    #[test]
+    fn klatt_phrase_unknown_word_reports_clear_error() {
+        let error = synthesize_klatt_for_say("Hello unknown")
+            .expect_err("unknown words should produce a clear error");
+        assert!(
+            error
+                .to_string()
+                .contains("does not yet know word(s): unknown")
+        );
     }
 
     #[test]
