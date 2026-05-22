@@ -408,6 +408,14 @@ mod tests {
         targets.remove(0)
     }
 
+    fn targets_for_ipa_sequence(ipa: &[&str], f0_hz: Option<f32>) -> Vec<PhoneRenderTarget> {
+        let table = default_english_phone_targets();
+        let ps = PhoneString {
+            phones: ipa.iter().map(|symbol| Phone::new_ipa(*symbol)).collect(),
+        };
+        phone_render_targets_from_string(&ps, f0_hz, 0.75, &table)
+    }
+
     #[test]
     fn render_vowel_produces_non_empty_pcm_with_correct_duration() {
         let config = KlattRenderConfig::default();
@@ -541,5 +549,47 @@ mod tests {
         assert_eq!(pcm.len(), expected);
         let rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / pcm.len() as f32).sqrt();
         assert!(rms > 0.001, "should have energy with explicit filter");
+    }
+
+    #[test]
+    fn consonant_heavy_demo_sequences_render_without_flat_sections() {
+        let config = KlattRenderConfig::default();
+        let demos: [&[&str]; 5] = [
+            &[
+                "p", "æ", "t", "t", "ʊ", "k", "k", "eɪ", "t", "s", "b", "l", "æ", "k", "b", "æ",
+                "ɡ",
+            ], // Pat took Kate's black bag.
+            &[
+                "s", "u", "s", "ɔ", "s", "ɪ", "k", "s", "θ", "ɪ", "n", "f", "ɪ", "ʃ",
+            ], // Sue saw six thin fish.
+            &[
+                "dʒ", "ʌ", "dʒ", "dʒ", "ɔ", "ɹ", "dʒ", "tʃ", "oʊ", "z", "tʃ", "i", "p", "ʃ", "u",
+                "z",
+            ], // Judge George chose cheap shoes.
+            &[
+                "m", "ɛ", "n", "i", "m", "ɛ", "n", "n", "eɪ", "m", "d", "n", "i", "n", "ə", "n",
+                "u", "m", "i",
+            ], // Many men named Nina knew me.
+            &[
+                "ɹ", "ɛ", "d", "l", "ɛ", "ð", "ɚ", "j", "ɛ", "l", "oʊ", "l", "ɛ", "ð", "ɚ",
+            ], // Red leather, yellow leather.
+        ];
+
+        for demo in demos {
+            let targets = targets_for_ipa_sequence(demo, Some(170.0));
+            let pcm = render_phone_string(&targets, &config);
+            assert!(!pcm.is_empty(), "demo render should produce audio");
+            let (min, max) = pcm
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(mn, mx), &sample| {
+                    (mn.min(sample), mx.max(sample))
+                });
+            let mean_abs = pcm.iter().map(|sample| sample.abs()).sum::<f32>() / pcm.len() as f32;
+            assert!(max - min > 0.03, "demo render should not be flat-lined");
+            assert!(
+                mean_abs > 0.002,
+                "demo render should keep consonant-heavy energy regions"
+            );
+        }
     }
 }

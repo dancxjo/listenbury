@@ -132,6 +132,7 @@ pub struct PhoneAcousticTarget {
 /// - Sonorants `/m n ŋ l ɹ j w/`
 /// - Fricatives `/s z ʃ ʒ f v θ ð h/`
 /// - Stops `/p b t d k ɡ/`
+/// - Affricates `/tʃ dʒ/`
 ///
 /// Formant values are representative General-American targets.  They are
 /// deliberately approximate — the goal is testable synthesis, not perfect
@@ -298,6 +299,38 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
         }
     }
 
+    fn affricate(ipa: &str, voiced: bool) -> PhoneAcousticTarget {
+        PhoneAcousticTarget {
+            ipa: ipa.to_string(),
+            voiced,
+            is_vowel: false,
+            is_fricative: true,
+            is_stop: true,
+            is_nasal: false,
+            is_approximant: false,
+            filter: Some(VocalTractFilterTarget {
+                f1_hz: 420.0,
+                f1_bw_hz: 220.0,
+                f1_amp_db: -10.0,
+                f2_hz: 2500.0,
+                f2_bw_hz: 520.0,
+                f2_amp_db: -4.0,
+                f3_hz: 3400.0,
+                f3_bw_hz: 620.0,
+                f3_amp_db: -5.0,
+                f4_hz: None,
+                f4_bw_hz: None,
+                f4_amp_db: None,
+            }),
+            source: GlottalSourceTarget {
+                breathiness: if voiced { 0.55 } else { 0.98 },
+                open_quotient: if voiced { 0.5 } else { 0.0 },
+                spectral_tilt_db_per_octave: -3.0,
+            },
+            default_duration_ms: 85,
+        }
+    }
+
     // --- Vowels (General American targets) ----------------------------------
 
     for t in [
@@ -373,6 +406,8 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
         stop("d", true),
         stop("k", false),
         stop("ɡ", true),
+        affricate("tʃ", false),
+        affricate("dʒ", true),
     ] {
         map.insert(t.ipa.clone(), t);
     }
@@ -517,7 +552,7 @@ mod tests {
     #[test]
     fn default_table_covers_core_consonants() {
         let table = default_english_phone_targets();
-        for ipa in ["m", "n", "ŋ", "s", "z", "p", "b", "t", "d", "k"] {
+        for ipa in ["m", "n", "ŋ", "s", "z", "p", "b", "t", "d", "k", "tʃ", "dʒ"] {
             assert!(table.contains_key(ipa), "expected table to contain /{ipa}/");
         }
     }
