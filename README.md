@@ -552,6 +552,7 @@ Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Wit
 ```bash
 listenbury say "Testing one two three."
 listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
+printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt -
 ```
 
 ### `riper-compare`

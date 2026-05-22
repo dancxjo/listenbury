@@ -1,5 +1,5 @@
 #[cfg(feature = "audio-cpal")]
-use crate::cli::commands::play_audio_frames;
+use crate::cli::commands::{play_audio_frame_stream, play_audio_frames};
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use crate::cli::model_paths::resolve_whisper_model;
@@ -39,17 +39,25 @@ use listenbury::voice::tract::targets::{
     default_english_phone_targets, phone_render_targets_from_string,
 };
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "audio-cpal")]
+use std::io::BufRead;
 #[cfg(feature = "tts-riper")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "tts-riper")]
 use std::process::{Command, Stdio};
+#[cfg(feature = "audio-cpal")]
+use std::thread;
 use std::time::{Duration, Instant};
 
 const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
+    if piper_args.stdin_stream {
+        return run_say_stdin_stream(piper_args);
+    }
+
     if should_use_klatt_backend(&piper_args) {
         let frames = synthesize_klatt_for_say(&piper_args.text)?;
         if let Some(output_path) = piper_args.output_wav {
@@ -78,6 +86,90 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
         play_say_audio(&frames)?;
     }
 
+    Ok(())
+}
+
+fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
+    anyhow::ensure!(
+        piper_args.output_wav.is_none(),
+        "listenbury say - streams to speaker playback; omit --output-wav"
+    );
+
+    #[cfg(not(feature = "audio-cpal"))]
+    {
+        let _ = piper_args;
+        anyhow::bail!("listenbury say - needs the `audio-cpal` feature for speaker playback");
+    }
+
+    #[cfg(feature = "audio-cpal")]
+    {
+        let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<AudioFrame>>(8);
+        let playback = thread::spawn(move || play_audio_frame_stream(frame_rx, "Piper stdin TTS"));
+
+        let synthesis_result = if should_use_klatt_backend(&piper_args) {
+            stream_klatt_stdin_to_frames(frame_tx)
+        } else {
+            stream_piper_stdin_to_frames(piper_args, frame_tx)
+        };
+
+        let playback_result = playback
+            .join()
+            .map_err(|_| anyhow::anyhow!("Piper stdin playback thread panicked"))?;
+        if synthesis_result.is_err() {
+            synthesis_result
+        } else {
+            playback_result?;
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "audio-cpal")]
+fn stream_klatt_stdin_to_frames(
+    frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+) -> Result<()> {
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let text = line.context("failed to read stdin for listenbury say -")?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let frames = synthesize_klatt_for_say(text)?;
+        frame_tx
+            .send(frames)
+            .context("failed to send Klatt stdin audio to playback")?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
+fn stream_piper_stdin_to_frames(
+    piper_args: SayArgs,
+    frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+) -> Result<()> {
+    #[cfg(not(feature = "tts-riper"))]
+    if piper_args.riper {
+        anyhow::bail!(
+            "listenbury say --riper requires the `tts-riper` feature (--klatt is only available with --riper)"
+        );
+    }
+
+    let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
+    let mut tts = say_tts_for_args(&piper_args, piper_voice)?;
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let text = line.context("failed to read stdin for listenbury say -")?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text.to_string())))?;
+        let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+        frame_tx
+            .send(frames)
+            .context("failed to send Piper stdin audio to playback")?;
+    }
     Ok(())
 }
 
@@ -787,6 +879,7 @@ struct SayArgs {
     output_wav: Option<PathBuf>,
     riper: bool,
     klatt: bool,
+    stdin_stream: bool,
     text: String,
 }
 
@@ -825,6 +918,7 @@ impl SayArgs {
             !klatt || riper,
             "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
         );
+        let stdin_stream = words.len() == 1 && words[0] == "-";
 
         Ok(Self {
             piper_bin,
@@ -832,7 +926,12 @@ impl SayArgs {
             output_wav: command.output_wav,
             riper,
             klatt,
-            text: words.join(" "),
+            stdin_stream,
+            text: if stdin_stream {
+                String::new()
+            } else {
+                words.join(" ")
+            },
         })
     }
 }
@@ -874,6 +973,169 @@ fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
 }
 
 fn klatt_phone_string_for_text(text: &str) -> Result<PhoneString> {
+    #[cfg(feature = "tts-riper")]
+    {
+        return klatt_phone_string_from_riper(text);
+    }
+
+    #[cfg(not(feature = "tts-riper"))]
+    {
+        return klatt_phone_string_from_demo_lexicon(text);
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn klatt_phone_string_from_riper(text: &str) -> Result<PhoneString> {
+    let unit = SimpleEnglishG2p::default()
+        .phonemize_unit(text)
+        .with_context(|| format!("listenbury say --klatt could not phonemize `{text}`"))?;
+    let mut phones = Vec::new();
+    let mut unsupported_symbols = Vec::new();
+
+    for phoneme in &unit.phonemes.phonemes {
+        match klatt_ipa_segments_for_riper_symbol(&phoneme.0) {
+            Some(segments) => phones.extend(segments.iter().copied().map(Phone::new_ipa)),
+            None => unsupported_symbols.push(phoneme.0.clone()),
+        }
+    }
+
+    anyhow::ensure!(
+        !phones.is_empty(),
+        "listenbury say --klatt could not find any speakable phones in `{text}`"
+    );
+    if !unsupported_symbols.is_empty() {
+        unsupported_symbols.sort_unstable();
+        unsupported_symbols.dedup();
+        anyhow::bail!(
+            "listenbury say --klatt cannot convert Riper phoneme(s) for Klatt: {}",
+            unsupported_symbols.join(", ")
+        );
+    }
+
+    Ok(PhoneString { phones })
+}
+
+#[cfg(feature = "tts-riper")]
+fn klatt_ipa_segments_for_riper_symbol(symbol: &str) -> Option<&'static [&'static str]> {
+    let stress = symbol.chars().next_back();
+    let base = symbol
+        .strip_suffix(['0', '1', '2'])
+        .filter(|base| is_riper_vowel_symbol(base))
+        .unwrap_or(symbol);
+
+    Some(match (symbol, base) {
+        (" " | "|", _) => &[],
+        ("AH0", _) => &["ə"],
+        ("AH1" | "AH2", _) => &["ʌ"],
+        (_, "AA") => &["ɑ"],
+        (_, "AE") => &["æ"],
+        (_, "AH") => {
+            if matches!(stress, Some('0')) {
+                &["ə"]
+            } else {
+                &["ʌ"]
+            }
+        }
+        (_, "AO") => &["ɔ"],
+        (_, "AW") => &["ɑ", "ʊ"],
+        (_, "AY") => &["ɑ", "ɪ"],
+        (_, "B") => &["b"],
+        (_, "CH") => &["t", "ʃ"],
+        (_, "D") => &["d"],
+        (_, "DH") => &["ð"],
+        (_, "DX") => &["d"],
+        (_, "EH") => &["ɛ"],
+        (_, "ER") => &["ə", "ɹ"],
+        (_, "EY") => &["e", "ɪ"],
+        (_, "F") => &["f"],
+        (_, "G") => &["ɡ"],
+        (_, "HH") => &["h"],
+        (_, "IH") => &["ɪ"],
+        (_, "IY") => &["i"],
+        (_, "JH") => &["d", "ʒ"],
+        (_, "K") => &["k"],
+        (_, "L") => &["l"],
+        (_, "M") => &["m"],
+        (_, "N") => &["n"],
+        (_, "NG") => &["ŋ"],
+        (_, "OW") => &["o", "ʊ"],
+        (_, "OY") => &["ɔ", "ɪ"],
+        (_, "P") => &["p"],
+        (_, "R") => &["ɹ"],
+        (_, "S") => &["s"],
+        (_, "SH") => &["ʃ"],
+        (_, "T") => &["t"],
+        (_, "TH") => &["θ"],
+        (_, "TS") => &["t", "s"],
+        (_, "UH") => &["ʊ"],
+        (_, "UW") => &["u"],
+        (_, "V") => &["v"],
+        (_, "W") => &["w"],
+        (_, "Y") => &["j"],
+        (_, "Z") => &["z"],
+        (_, "ZH") => &["ʒ"],
+        (_, "i") => &["i"],
+        (_, "ɪ") => &["ɪ"],
+        (_, "e") => &["e"],
+        (_, "ɛ") => &["ɛ"],
+        (_, "æ") => &["æ"],
+        (_, "ə") => &["ə"],
+        (_, "ʌ") => &["ʌ"],
+        (_, "ɑ") => &["ɑ"],
+        (_, "ɔ") => &["ɔ"],
+        (_, "o") => &["o"],
+        (_, "ʊ") => &["ʊ"],
+        (_, "u") => &["u"],
+        (_, "m") => &["m"],
+        (_, "n") => &["n"],
+        (_, "ŋ") => &["ŋ"],
+        (_, "l") => &["l"],
+        (_, "ɹ") => &["ɹ"],
+        (_, "j") => &["j"],
+        (_, "w") => &["w"],
+        (_, "s") => &["s"],
+        (_, "z") => &["z"],
+        (_, "ʃ") => &["ʃ"],
+        (_, "ʒ") => &["ʒ"],
+        (_, "f") => &["f"],
+        (_, "v") => &["v"],
+        (_, "θ") => &["θ"],
+        (_, "ð") => &["ð"],
+        (_, "h") => &["h"],
+        (_, "p") => &["p"],
+        (_, "b") => &["b"],
+        (_, "t") => &["t"],
+        (_, "d") => &["d"],
+        (_, "k") => &["k"],
+        (_, "ɡ") => &["ɡ"],
+        (_, "ɾ") => &["d"],
+        _ => return None,
+    })
+}
+
+#[cfg(feature = "tts-riper")]
+fn is_riper_vowel_symbol(symbol: &str) -> bool {
+    matches!(
+        symbol,
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
+    )
+}
+
+#[cfg(not(feature = "tts-riper"))]
+fn klatt_phone_string_from_demo_lexicon(text: &str) -> Result<PhoneString> {
     let mut phones = Vec::new();
     let mut unknown_words = Vec::new();
     for token in text.split_whitespace() {
@@ -1271,6 +1533,24 @@ mod tests {
     }
 
     #[test]
+    fn say_args_treats_dash_as_stdin_stream() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: true,
+            klatt: true,
+            words: vec!["-".to_string()],
+        })
+        .expect("dash should select stdin streaming");
+
+        assert!(args.stdin_stream);
+        assert!(args.riper);
+        assert!(args.klatt);
+        assert!(args.text.is_empty());
+    }
+
+    #[test]
     fn klatt_phrase_renders_non_empty_audio_and_wav_bytes() {
         let frames =
             synthesize_klatt_for_say("Hello, my baby. Hello, my darling. Hello, my ragtime gal.")
@@ -1283,13 +1563,34 @@ mod tests {
 
     #[test]
     fn klatt_phrase_unknown_word_reports_clear_error() {
-        let error = synthesize_klatt_for_say("Hello unknown")
-            .expect_err("unknown words should produce a clear error");
+        let error = synthesize_klatt_for_say("Hello 💥")
+            .expect_err("unsupported text should produce a clear error");
         assert!(
             error
                 .to_string()
-                .contains("does not yet know word(s): unknown")
+                .contains("could not phonemize")
         );
+    }
+
+    #[test]
+    #[cfg(feature = "tts-riper")]
+    fn klatt_uses_riper_pronunciation_for_mixed_prose() {
+        let frames = synthesize_klatt_for_say(
+            "MBROLA was created by Thierry Dutoit. It's a speech synthesizer based on the concatenation of diphones.",
+        )
+        .expect("Klatt should synthesize prose via Riper pronunciation machinery");
+        assert_eq!(frames.len(), 1);
+        assert!(!frames[0].samples.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "tts-riper")]
+    fn klatt_riper_phone_bridge_splits_diphthongs_and_affricates() {
+        let phone_string = klatt_phone_string_for_text("Okay, Charlie.")
+            .expect("Riper phones should convert to Klatt render phones");
+        let ipas = phone_string.ipa_segments();
+        assert!(ipas.windows(2).any(|phones| phones == ["o", "ʊ"]));
+        assert!(ipas.windows(2).any(|phones| phones == ["t", "ʃ"]));
     }
 
     #[test]

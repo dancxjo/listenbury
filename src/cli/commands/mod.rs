@@ -19,7 +19,7 @@ mod web;
 pub(crate) use breath_transcribe::run_breath_transcribe;
 pub(crate) use continue_generation::run_continue;
 #[cfg(feature = "audio-cpal")]
-pub(crate) use cpal_diag::{play_audio_frames, prepare_audio_playback};
+pub(crate) use cpal_diag::{play_audio_frame_stream, play_audio_frames, prepare_audio_playback};
 pub(crate) use cpal_diag::{run_play_wav, run_record_wav};
 pub(crate) use demos::{run_demo_vad, run_fake_turn};
 pub(crate) use dogfood_two::run_dogfood_two;

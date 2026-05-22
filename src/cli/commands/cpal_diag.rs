@@ -14,8 +14,10 @@ use listenbury::audio::{read_wav_frames, write_wav};
 #[cfg(feature = "audio-cpal")]
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "audio-cpal")]
+use std::collections::VecDeque;
+#[cfg(feature = "audio-cpal")]
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 #[cfg(feature = "audio-cpal")]
@@ -213,6 +215,32 @@ where
 }
 
 #[cfg(feature = "audio-cpal")]
+fn build_output_queue_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_queue: Arc<Mutex<VecDeque<f32>>>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample + FromSample<f32>,
+{
+    device
+        .build_output_stream(
+            config,
+            move |output: &mut [T], _| {
+                let mut queue = sample_queue.lock().expect("audio sample queue poisoned");
+                for out in output.iter_mut() {
+                    let sample = queue.pop_front().unwrap_or(0.0);
+                    *out = T::from_sample(sample);
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("failed to build streaming output stream")
+}
+
+#[cfg(feature = "audio-cpal")]
 pub(crate) struct PreparedAudioPlayback {
     device: cpal::Device,
     stream_config: cpal::StreamConfig,
@@ -333,6 +361,73 @@ impl PreparedAudioPlayback {
             sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
         }
     }
+
+    fn build_queue_stream(&self, sample_queue: Arc<Mutex<VecDeque<f32>>>) -> Result<cpal::Stream> {
+        let err_fn = |err| eprintln!("output stream error: {err}");
+        match self.sample_format {
+            cpal::SampleFormat::F32 => build_output_queue_stream::<f32>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::F64 => build_output_queue_stream::<f64>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::I8 => build_output_queue_stream::<i8>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::I16 => build_output_queue_stream::<i16>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::I32 => build_output_queue_stream::<i32>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::I64 => build_output_queue_stream::<i64>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::U8 => build_output_queue_stream::<u8>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::U16 => build_output_queue_stream::<u16>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::U32 => build_output_queue_stream::<u32>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            cpal::SampleFormat::U64 => build_output_queue_stream::<u64>(
+                &self.device,
+                &self.stream_config,
+                sample_queue,
+                err_fn,
+            ),
+            sample_format => anyhow::bail!("unsupported output sample format: {sample_format:?}"),
+        }
+    }
 }
 
 #[cfg(feature = "audio-cpal")]
@@ -406,6 +501,54 @@ pub(crate) fn prepare_audio_playback(
 }
 
 #[cfg(feature = "audio-cpal")]
+fn convert_frames_for_output(
+    frames: &[AudioFrame],
+    source: &str,
+    target_sample_rate_hz: u32,
+    target_channels: u16,
+) -> Result<Vec<f32>> {
+    let Some(first_frame) = frames.first() else {
+        return Ok(Vec::new());
+    };
+    let sample_rate = first_frame.sample_rate_hz;
+    let channels = first_frame.channels;
+    anyhow::ensure!(
+        sample_rate > 0,
+        "audio from {source} has invalid sample rate"
+    );
+    anyhow::ensure!(
+        channels > 0,
+        "audio from {source} has invalid channel count"
+    );
+
+    let total_samples: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+    let mut audio_samples = Vec::with_capacity(total_samples);
+    for frame in frames {
+        anyhow::ensure!(
+            frame.sample_rate_hz == sample_rate,
+            "audio from {source} changed sample rate mid-stream ({} -> {})",
+            sample_rate,
+            frame.sample_rate_hz
+        );
+        anyhow::ensure!(
+            frame.channels == channels,
+            "audio from {source} changed channel count mid-stream ({} -> {})",
+            channels,
+            frame.channels
+        );
+        audio_samples.extend_from_slice(&frame.samples);
+    }
+
+    Ok(convert_audio_samples(
+        &audio_samples,
+        sample_rate,
+        channels,
+        target_sample_rate_hz,
+        target_channels,
+    ))
+}
+
+#[cfg(feature = "audio-cpal")]
 pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<()> {
     let playback = prepare_audio_playback(frames, source)?;
     let playback_cursor = Arc::new(AtomicUsize::new(0));
@@ -423,6 +566,60 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
     drop(stream);
 
     let audio_duration = playback.duration();
+    println!(
+        "Played with {}: {} Hz, {} channel(s), {:.2}s from {source}",
+        playback.device_name,
+        playback.sample_rate_hz,
+        playback.channels,
+        audio_duration.as_secs_f64(),
+    );
+
+    Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
+pub(crate) fn play_audio_frame_stream(
+    frame_rx: crossbeam_channel::Receiver<Vec<AudioFrame>>,
+    source: &str,
+) -> Result<()> {
+    let first_frames = frame_rx
+        .recv()
+        .with_context(|| format!("no audio frames available for playback from {source}"))?;
+    let playback = prepare_audio_playback(&first_frames, source)?;
+    let sample_queue = Arc::new(Mutex::new(VecDeque::from(
+        playback.samples.as_ref().clone(),
+    )));
+    let stream = playback.build_queue_stream(Arc::clone(&sample_queue))?;
+    stream
+        .play()
+        .with_context(|| format!("failed to start playback on {}", playback.device_name))?;
+
+    let mut total_samples = playback.sample_count();
+    for frames in frame_rx {
+        let samples =
+            convert_frames_for_output(&frames, source, playback.sample_rate_hz, playback.channels)?;
+        if samples.is_empty() {
+            continue;
+        }
+        total_samples += samples.len();
+        sample_queue
+            .lock()
+            .expect("audio sample queue poisoned")
+            .extend(samples);
+    }
+
+    while !sample_queue
+        .lock()
+        .expect("audio sample queue poisoned")
+        .is_empty()
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(20));
+    drop(stream);
+
+    let audio_duration =
+        playback_duration(total_samples, playback.sample_rate_hz, playback.channels);
     println!(
         "Played with {}: {} Hz, {} channel(s), {:.2}s from {source}",
         playback.device_name,
