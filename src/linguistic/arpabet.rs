@@ -1,4 +1,6 @@
-use crate::linguistic::inventory::{FeatureBundle, MajorClass, Manner, Place, Voicing};
+use crate::linguistic::inventory::{
+    FeatureBundle, MajorClass, Manner, Place, Roundedness, Voicing, VowelBackness, VowelHeight,
+};
 use crate::linguistic::phone::{Phone, PhoneStatus, PhoneString, Stress};
 use crate::linguistic::phoneme::Phoneme;
 use crate::linguistic::realization::{Realization, RealizationMethod};
@@ -27,10 +29,61 @@ pub fn phoneme_from_arpabet(symbol: &str, source: &str) -> Phoneme {
 }
 pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
     match base {
-        "AA" | "AO" => vowel_features(Place::Glottal),
-        "AE" | "EH" | "ER" | "EY" | "IH" | "IY" | "AY" | "OY" => vowel_features(Place::Palatal),
-        "AH" => vowel_features(Place::Glottal),
-        "AW" | "OW" | "UH" | "UW" => vowel_features(Place::Velar),
+        "AA" => vowel_features(
+            VowelHeight::Low,
+            VowelBackness::Back,
+            Roundedness::Unrounded,
+        ),
+        "AE" | "AY" => vowel_features(
+            VowelHeight::Low,
+            VowelBackness::Front,
+            Roundedness::Unrounded,
+        ),
+        "AH" => vowel_features(
+            VowelHeight::Mid,
+            VowelBackness::Central,
+            Roundedness::Unrounded,
+        ),
+        "AO" => vowel_features(
+            VowelHeight::Low,
+            VowelBackness::Back,
+            Roundedness::Rounded,
+        ),
+        "AW" => vowel_features(
+            VowelHeight::Low,
+            VowelBackness::Central,
+            Roundedness::Unrounded,
+        ),
+        "EH" | "EY" => vowel_features(
+            VowelHeight::Mid,
+            VowelBackness::Front,
+            Roundedness::Unrounded,
+        ),
+        "ER" => vowel_features(
+            VowelHeight::Rhotic,
+            VowelBackness::Central,
+            Roundedness::Unrounded,
+        ),
+        "IH" | "IY" => vowel_features(
+            VowelHeight::High,
+            VowelBackness::Front,
+            Roundedness::Unrounded,
+        ),
+        "OW" => vowel_features(
+            VowelHeight::Mid,
+            VowelBackness::Back,
+            Roundedness::Rounded,
+        ),
+        "OY" => vowel_features(
+            VowelHeight::Mid,
+            VowelBackness::Back,
+            Roundedness::Rounded,
+        ),
+        "UH" | "UW" => vowel_features(
+            VowelHeight::High,
+            VowelBackness::Back,
+            Roundedness::Rounded,
+        ),
         "P" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiceless),
         "B" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiced),
         "M" => consonant_features(Place::Bilabial, Manner::Nasal, Voicing::Voiced),
@@ -57,6 +110,9 @@ pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
         _ => FeatureBundle {
             major: MajorClass::Consonant,
             place: None,
+            vowel_height: None,
+            vowel_backness: None,
+            roundedness: None,
             manner: None,
             voicing: None,
             syllabic: false,
@@ -64,10 +120,17 @@ pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
     }
 }
 
-fn vowel_features(place: Place) -> FeatureBundle {
+fn vowel_features(
+    height: VowelHeight,
+    backness: VowelBackness,
+    roundedness: Roundedness,
+) -> FeatureBundle {
     FeatureBundle {
         major: MajorClass::Vowel,
-        place: Some(place),
+        place: None,
+        vowel_height: Some(height),
+        vowel_backness: Some(backness),
+        roundedness: Some(roundedness),
         manner: Some(Manner::Vowel),
         voicing: Some(Voicing::Voiced),
         syllabic: true,
@@ -78,6 +141,9 @@ fn consonant_features(place: Place, manner: Manner, voicing: Voicing) -> Feature
     FeatureBundle {
         major: MajorClass::Consonant,
         place: Some(place),
+        vowel_height: None,
+        vowel_backness: None,
+        roundedness: None,
         manner: Some(manner),
         voicing: Some(voicing),
         syllabic: false,

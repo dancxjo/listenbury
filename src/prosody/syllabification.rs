@@ -44,7 +44,9 @@
 //! ```
 
 use crate::linguistic::phoneme::PhonemeTextUnit;
-use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, RealizedPhone, Stress};
+use crate::linguistic::phonology::{
+    Phone, PhoneDecompositionPolicy, PhoneString, Phoneme, RealizedPhone, Stress,
+};
 use crate::prosody::phonotactics::{PermissiveProfile, PhonotacticProfile};
 use crate::prosody::syllable::{DiagnosticKind, SourceSpan, Syllable, SyllableDiagnostic};
 use std::ops::Range;
@@ -88,12 +90,29 @@ impl Default for SyllabificationOptions {
 /// entire sequence is returned as a single degenerate syllable with an empty
 /// nucleus.
 pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Vec<Syllable> {
+    syllabify_with_decomposition_policy(phonemes, profile, PhoneDecompositionPolicy::KeepPhonemic)
+}
+
+/// Syllabify a sequence of [`Phoneme`]s using an explicit phone decomposition
+/// policy.
+///
+/// [`PhoneDecompositionPolicy::KeepPhonemic`] is the safest default for
+/// phonological syllable structure: broad phones such as `/oʊ/` and `/tʃ/`
+/// stay intact while the syllabifier chooses nuclei, onsets, and codas.
+/// Singing and acoustic renderers can opt into decomposition after syllable
+/// structure has been established, or call this function when they explicitly
+/// need syllabification over decomposed phone tokens.
+pub fn syllabify_with_decomposition_policy<P: PhonotacticProfile>(
+    phonemes: &[Phoneme],
+    profile: &P,
+    policy: PhoneDecompositionPolicy,
+) -> Vec<Syllable> {
     if phonemes.is_empty() {
         return vec![];
     }
 
     // Derive realized phone tokens from phoneme realizations.
-    let realized_phones = RealizedPhone::from_phoneme_slice(phonemes);
+    let realized_phones = RealizedPhone::from_phoneme_slice_with_policy(phonemes, policy);
 
     // Find all nucleus spans.
     let nucleus_spans = nucleus_spans(&realized_phones, profile);
@@ -596,6 +615,28 @@ mod tests {
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].nucleus.to_ipa(), "aʊ");
         assert_eq!(syllables_to_ipa(&s), "ˈaʊ");
+    }
+
+    #[test]
+    fn syllabify_defaults_to_broad_phonemic_phones() {
+        let mut phoneme = phoneme_from_arpabet("OW1", "test");
+        phoneme.realization.phone_string = PhoneString {
+            phones: vec![Phone::new_ipa("o"), Phone::new_ipa("ʊ")],
+        };
+
+        let s = syllabify(&[phoneme.clone()], &ga());
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].nucleus.ipa_segments(), vec!["oʊ"]);
+        assert_eq!(syllables_to_ipa(&s), "ˈoʊ");
+
+        let decomposed = syllabify_with_decomposition_policy(
+            &[phoneme],
+            &ga(),
+            PhoneDecompositionPolicy::SplitForSinging,
+        );
+        assert_eq!(decomposed.len(), 1);
+        assert_eq!(decomposed[0].nucleus.ipa_segments(), vec!["o", "ʊ"]);
+        assert_eq!(syllables_to_ipa(&decomposed), "ˈoʊ");
     }
 
     // ── Edge cases ───────────────────────────────────────────────────────────

@@ -1,10 +1,8 @@
 //! MBROLA-compatible phone-timed rendering.
 //!
-//! This module treats MBROLA as a renderer behind an explicit phone timing
-//! contract. The first implementation shells out to an installed `mbrola`
-//! voice database. The current native diphone path validates the phone-timed
-//! contract and emits a simple WAV while the real database decoder is being
-//! reverse engineered.
+//! This module treats MBROLA voice databases as native phone-timed renderers:
+//! `.pho` phone durations and pitch targets drive diphone selection, duration
+//! control, and TD-PSOLA overlap-add synthesis.
 
 pub mod database;
 pub mod pho;

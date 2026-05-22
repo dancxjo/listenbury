@@ -218,6 +218,30 @@ pub enum Place {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum VowelHeight {
+    High,
+    Mid,
+    Low,
+    Rhotic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VowelBackness {
+    Front,
+    Central,
+    Back,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Roundedness {
+    Rounded,
+    Unrounded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Manner {
     Stop,
     Nasal,
@@ -240,6 +264,9 @@ pub enum Voicing {
 pub struct FeatureBundle {
     pub major: MajorClass,
     pub place: Option<Place>,
+    pub vowel_height: Option<VowelHeight>,
+    pub vowel_backness: Option<VowelBackness>,
+    pub roundedness: Option<Roundedness>,
     pub manner: Option<Manner>,
     pub voicing: Option<Voicing>,
     pub syllabic: bool,
@@ -250,6 +277,9 @@ impl FeatureBundle {
         FeatureBundle {
             major: MajorClass::Consonant,
             place: None,
+            vowel_height: None,
+            vowel_backness: None,
+            roundedness: None,
             manner: None,
             voicing: None,
             syllabic: false,
@@ -337,7 +367,7 @@ impl FeatureBundle {
     }
 
     pub fn is_high_vowel(self) -> bool {
-        self.major == MajorClass::Vowel && matches!(self.place, Some(Place::Palatal | Place::Velar))
+        self.major == MajorClass::Vowel && self.vowel_height == Some(VowelHeight::High)
     }
 }
 
