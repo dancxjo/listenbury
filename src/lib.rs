@@ -14,6 +14,7 @@ pub mod playback_check;
 pub mod prosody;
 pub mod runtime;
 pub mod runtime_event;
+pub mod segmentation;
 pub mod soundscape;
 pub mod span;
 pub mod speculative;
@@ -76,6 +77,10 @@ pub use soundscape::{
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
     SpanRevision, SpanState, Text, TextId,
+};
+pub use segmentation::{
+    NucleusDetectionConfig, NucleusEvidence, SyllableExpansionConfig, SyllableIsland,
+    VowelNucleusCandidate, detect_nuclei, extract_syllable_islands,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 pub use speech::prosody_timing::{
