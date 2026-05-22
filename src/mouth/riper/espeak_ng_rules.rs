@@ -736,23 +736,71 @@ pub struct BoundaryProsodyRule {
 // Conversion: PunctuationProsodyRule → BoundaryProsodyRule
 // ---------------------------------------------------------------------------
 
-/// Derive the [`BoundaryKind`] and [`PitchDirection`] from an
-/// `output_transformation` string such as `"boundary:exclamation"`.
-fn structured_boundary_output(
-    output: &str,
-) -> (BoundaryKind, Option<PitchDirection>, Option<f32>, StressEffect) {
+/// Intermediate result of parsing an `output_transformation` string into
+/// structured prosody effect fields.  Used only inside
+/// [`structured_boundary_output`] to avoid returning a raw 4-tuple.
+struct ParsedBoundaryOutput {
+    boundary_kind: BoundaryKind,
+    pitch_direction: Option<PitchDirection>,
+    pitch_range_factor: Option<f32>,
+    stress_effect: StressEffect,
+}
+
+/// Derive the structured prosody effect fields from an `output_transformation`
+/// string such as `"boundary:exclamation"`.
+fn structured_boundary_output(output: &str) -> ParsedBoundaryOutput {
     if let Some(label) = output.strip_prefix("boundary:") {
         match label {
-            "none" => (BoundaryKind::None, None, None, StressEffect::Neutral),
-            "minor" => (BoundaryKind::Minor, Some(PitchDirection::Level), None, StressEffect::Neutral),
-            "major" => (BoundaryKind::Major, Some(PitchDirection::Level), None, StressEffect::ClauseFinalStress),
-            "final_falling" => (BoundaryKind::Major, Some(PitchDirection::FinalFalling), None, StressEffect::ClauseFinalStress),
-            "final_rising" => (BoundaryKind::Major, Some(PitchDirection::FinalRising), None, StressEffect::ClauseFinalStress),
-            "exclamation" => (BoundaryKind::Major, Some(PitchDirection::Exclamation), Some(1.25), StressEffect::ClauseFinalStress),
-            _ => (BoundaryKind::Major, None, None, StressEffect::Neutral),
+            "none" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::None,
+                pitch_direction: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
+            "minor" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Minor,
+                pitch_direction: Some(PitchDirection::Level),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
+            "major" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::Level),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "final_falling" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "final_rising" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalRising),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "exclamation" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::Exclamation),
+                pitch_range_factor: Some(1.25),
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            _ => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
         }
     } else {
-        (BoundaryKind::Major, None, None, StressEffect::Neutral)
+        ParsedBoundaryOutput {
+            boundary_kind: BoundaryKind::Major,
+            pitch_direction: None,
+            pitch_range_factor: None,
+            stress_effect: StressEffect::Neutral,
+        }
     }
 }
 
@@ -780,26 +828,30 @@ fn suppressible_by_for_punctuation(match_pattern: &str) -> Vec<SuppressibleBy> {
 /// Unlike [`convert_punctuation_prosody_rule`] which produces an
 /// [`ImportedEnvironmentRule`] with a string `contour` field, this function
 /// produces fully typed output that does not depend on string parsing downstream.
+///
+/// `match_pattern` is expected to be a single Unicode scalar value (punctuation
+/// character).  If it is empty the pattern falls back to
+/// [`BoundaryPattern::AnyMajorBoundary`].
 pub fn convert_to_boundary_prosody_rule(rule: &PunctuationProsodyRule) -> BoundaryProsodyRule {
     let confidence = confidence_from_seed(rule.confidence);
-    let pattern_char = rule.match_pattern.chars().next();
-    let boundary_pattern = match pattern_char {
+    // match_pattern is always a single punctuation character in the seed data.
+    // chars().next() safely handles the empty-string edge case without panicking.
+    let boundary_pattern = match rule.match_pattern.chars().next() {
         Some(ch) => BoundaryPattern::Punctuation(ch),
         None => BoundaryPattern::AnyMajorBoundary,
     };
-    let (boundary_kind, pitch_direction, pitch_range_factor, stress_effect) =
-        structured_boundary_output(&rule.output_transformation);
+    let parsed = structured_boundary_output(&rule.output_transformation);
     let suppressible_by = suppressible_by_for_punctuation(&rule.match_pattern);
 
     BoundaryProsodyRule {
         id: rule.rule_id.clone(),
         boundary_pattern,
         output: BoundaryProsodyEffect {
-            boundary_kind,
-            pitch_direction,
+            boundary_kind: parsed.boundary_kind,
+            pitch_direction: parsed.pitch_direction,
             pause_delta_ms: None,
-            pitch_range_factor,
-            stress_effect,
+            pitch_range_factor: parsed.pitch_range_factor,
+            stress_effect: parsed.stress_effect,
             suppressible_by,
         },
         priority: rule.priority,
