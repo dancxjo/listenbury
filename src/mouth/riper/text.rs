@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::mouth::riper::espeak_ng_rules::english_punctuation_rule;
+use crate::linguistic::language_pack_rules::english_punctuation_rule;
 use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 
 const MAX_VOCATIVE_WORDS: usize = 3;

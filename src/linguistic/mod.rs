@@ -2,6 +2,9 @@ pub mod arpabet;
 pub mod cmudict;
 pub mod environment;
 pub mod inventory;
+pub mod language_pack;
+#[cfg(feature = "tts-riper")]
+pub mod language_pack_rules;
 pub mod language_variety;
 pub mod orthography;
 pub mod phone;
@@ -16,6 +19,7 @@ pub mod variety;
 
 pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
 pub use inventory::general_american_english;
+pub use language_pack::{LanguagePack, english_us_language_pack};
 pub use language_variety::{LanguageVariety, LanguageVarietyLookupError, english_us_variety};
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};

@@ -3,7 +3,6 @@ pub mod backend;
 pub mod config;
 pub mod echo;
 pub mod encoder;
-pub mod espeak_ng_rules;
 pub mod evidence;
 pub mod g2p;
 pub mod morphophonology;
@@ -14,6 +13,19 @@ pub mod prosody_planner;
 pub mod sentence_analysis;
 pub mod text;
 
+pub use crate::linguistic::language_pack_rules::{
+    EspeakNgSeedRuleTable, ImportedEnvironmentRule, LexicalProsodyFlag, LexicalProsodyFlagFact,
+    LinguisticVarieties, LinguisticVarietyRuleTable, MatchedWordSpan, MorphophonologyOutput,
+    MorphophonologyRule, MultiWordPronunciationRule, MultiWordRuleMatch, MultiWordRuleOutput,
+    MultiWordSeedRule, PhonemeMappingRule, PronunciationOverrideRule, PunctuationProsodyRule,
+    RuleContextConstraint, RuleOutput, RuleProvenance, SpellingRepairHint, StemRetranslationPolicy,
+    StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule, convert_multi_word_rule,
+    convert_punctuation_prosody_rule, convert_weak_form_rule, english_imported_multi_word_rules,
+    english_imported_punctuation_rules, english_imported_weak_form_rules,
+    english_lexical_flag_facts_for_rule, english_native_morphophonology_rules,
+    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
+    match_multi_word_rule, rule_matches_context,
+};
 #[cfg(feature = "tts-riper")]
 pub use backend::{PiperModelContract, RiperBackend, RiperPcm};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
@@ -22,20 +34,6 @@ pub use echo::{
     EchoProsodyPlan, EchoWordProsodyObservation,
 };
 pub use encoder::PiperEncoder;
-pub use espeak_ng_rules::{
-    EspeakNgSeedRuleTable, ImportedEnvironmentRule, LexicalProsodyFlag, LexicalProsodyFlagFact,
-    LinguisticVarieties, LinguisticVarietyRuleTable, MatchedWordSpan, MultiWordPronunciationRule,
-    MultiWordRuleMatch, MultiWordRuleOutput, MultiWordSeedRule, MorphophonologyOutput,
-    MorphophonologyRule, PhonemeMappingRule, PronunciationOverrideRule, PunctuationProsodyRule,
-    RuleContextConstraint, RuleOutput, RuleProvenance, SpellingRepairHint, StressRule,
-    StemRetranslationPolicy, ToRuleDescriptor, VoiceVariantRule, WeakFormRule,
-    convert_multi_word_rule, convert_punctuation_prosody_rule, convert_weak_form_rule,
-    english_imported_multi_word_rules, english_imported_punctuation_rules,
-    english_imported_weak_form_rules, english_lexical_flag_facts_for_rule,
-    english_native_morphophonology_rules,
-    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
-    match_multi_word_rule, rule_matches_context,
-};
 pub use evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimId, ClaimKind, ClaimValue,
     ConflictEntry, ResolvedAnalysis, SpanState, claim_from_environment_match, next_claim_id,

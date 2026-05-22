@@ -2,11 +2,11 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use super::espeak_ng_rules::{
+use crate::linguistic::cmudict::{self, CmuPhoneme, Stress as CmuStress};
+use crate::linguistic::language_pack_rules::{
     MorphophonologyOutput, MorphophonologyRule, RuleProvenance, SpellingRepairHint,
     StemRetranslationPolicy, english_native_morphophonology_rules,
 };
-use crate::linguistic::cmudict::{self, CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::pronounce::OrthographyToPhonemes;
 use crate::linguistic::sound_it_out::{SoundItOutPronouncer, SoundItOutRules};
@@ -692,10 +692,7 @@ fn stem_candidates_with_policy(base: &str, stem_policy: &StemRetranslationPolicy
 /// the conventions used by the rest of this module.
 fn arpabet_str_to_phones(arpabet: &str) -> WordPronunciation {
     let raw_symbols: Vec<&str> = arpabet.split_whitespace().collect();
-    let symbols: Vec<String> = raw_symbols
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+    let symbols: Vec<String> = raw_symbols.iter().map(|s| (*s).to_string()).collect();
     let stress_by_phone: Vec<Option<PhonologicalStress>> = raw_symbols
         .iter()
         .map(|s| {
@@ -1668,7 +1665,10 @@ mod tests {
         ));
         // Phonology should end with L IY0.
         assert!(
-            result.pronunciation.symbols.ends_with(&["L".to_string(), "IY0".to_string()]),
+            result
+                .pronunciation
+                .symbols
+                .ends_with(&["L".to_string(), "IY0".to_string()]),
             "expected -ly phones at end: {:?}",
             result.pronunciation.symbols
         );
@@ -1678,7 +1678,10 @@ mod tests {
             .stress_by_phone
             .iter()
             .any(|s| *s == Some(PhonologicalStress::Primary));
-        assert!(has_primary, "primary stress from stem must survive in derived form");
+        assert!(
+            has_primary,
+            "primary stress from stem must survive in derived form"
+        );
     }
 
     /// `"thriftily"` is not in CMUdict; the `-ly` rule must resolve stem
@@ -1741,7 +1744,10 @@ mod tests {
             .stress_by_phone
             .iter()
             .any(|s| *s == Some(PhonologicalStress::Primary));
-        assert!(has_primary, "primary stress from stem must survive in -ing derived form");
+        assert!(
+            has_primary,
+            "primary stress from stem must survive in -ing derived form"
+        );
         // Provenance must carry eSpeak attribution.
         assert!(
             result
@@ -1764,7 +1770,11 @@ mod tests {
             .find(|m| m.surface == "-ing")
             .expect("-ing morpheme must be present");
         assert!(
-            ing_morpheme.features.tags.iter().any(|t| t == "progressive" || t == "gerund"),
+            ing_morpheme
+                .features
+                .tags
+                .iter()
+                .any(|t| t == "progressive" || t == "gerund"),
             "expected progressive/gerund tag on -ing morpheme"
         );
     }
