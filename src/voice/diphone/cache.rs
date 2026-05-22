@@ -175,9 +175,13 @@ impl DiphoneCache {
                 meta.extraction_end_sample
             );
         }
-        if meta.extraction_end_sample < meta.extraction_start_sample + samples.len() {
+        if meta
+            .extraction_end_sample
+            .saturating_sub(meta.extraction_start_sample)
+            != samples.len()
+        {
             anyhow::bail!(
-                "extraction range too short for {}: start={}, end={}, sample_count={}",
+                "extraction range mismatch for {}: start={}, end={}, sample_count={}",
                 stem,
                 meta.extraction_start_sample,
                 meta.extraction_end_sample,

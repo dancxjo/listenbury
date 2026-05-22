@@ -311,7 +311,8 @@ pub fn fingerprint_path(path: &Path) -> String {
         Ok(meta) => {
             // Cheaper fallback for very large models.
             hasher.update(path.to_string_lossy().as_bytes());
-            hasher.update(meta.len().to_le_bytes());
+            let model_len_bytes: [u8; 8] = meta.len().to_le_bytes();
+            hasher.update(model_len_bytes);
             if let Ok(modified) = meta.modified()
                 && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
             {
