@@ -8,6 +8,15 @@ use crate::segmentation::boundary_hypotheses::{
 use crate::segmentation::nuclei::NucleusEvidence;
 use crate::segmentation::syllable_regions::SyllableIsland;
 
+const WORD_SPEECH_WEIGHT: f32 = 0.35;
+const WORD_VOICED_WEIGHT: f32 = 0.30;
+const WORD_FORMANT_WEIGHT: f32 = 0.25;
+const WORD_ISLAND_WEIGHT: f32 = 0.10;
+const WORD_NOISE_PENALTY: f32 = 0.35;
+const NOISE_DEMOTION_FACTOR: f32 = 0.45;
+const NOISE_EVENT_MAX_CONFIDENCE: f32 = 0.45;
+const SILENCE_SPEECH_THRESHOLD: f32 = 0.12;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WordRegionConfig {
@@ -104,11 +113,11 @@ pub fn rank_word_region_hypotheses(
                 .iter()
                 .any(|item| matches!(item, NucleusEvidence::VowelLike));
 
-            let raw_confidence = ((speech_peak * 0.35)
-                + (voiced_peak * 0.30)
-                + (formant_peak * 0.25)
-                + (island.confidence * 0.10)
-                - (noise_mean * 0.35))
+            let raw_confidence = ((speech_peak * WORD_SPEECH_WEIGHT)
+                + (voiced_peak * WORD_VOICED_WEIGHT)
+                + (formant_peak * WORD_FORMANT_WEIGHT)
+                + (island.confidence * WORD_ISLAND_WEIGHT)
+                - (noise_mean * WORD_NOISE_PENALTY))
                 .clamp(0.0, 1.0);
 
             let speechlike = speech_peak >= config.min_speech_confidence
@@ -124,7 +133,8 @@ pub fn rank_word_region_hypotheses(
                 evidence.push(BoundaryEvidence::NoiseRejected);
                 (
                     BoundaryKind::NoiseEvent,
-                    (raw_confidence * 0.45).clamp(0.0, 0.45),
+                    (raw_confidence * NOISE_DEMOTION_FACTOR)
+                        .clamp(0.0, NOISE_EVENT_MAX_CONFIDENCE),
                 )
             };
 
@@ -180,7 +190,7 @@ fn has_silence_gap_around(
         .map(|(_, l)| l.speech_confidence)
         .unwrap_or(0.0);
 
-    before < 0.12 || after < 0.12
+    before < SILENCE_SPEECH_THRESHOLD || after < SILENCE_SPEECH_THRESHOLD
 }
 
 #[cfg(test)]

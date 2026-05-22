@@ -7,6 +7,8 @@ use crate::segmentation::nuclei::{NucleusEvidence, VowelNucleusCandidate};
 use crate::segmentation::syllable_regions::SyllableIsland;
 use crate::segmentation::word_regions::{rank_word_region_hypotheses, WordRegionConfig};
 
+const ENERGY_CONFIDENCE_SCALE: f32 = 8.0;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoundaryKind {
@@ -317,7 +319,7 @@ fn span_energy_confidence(
         if frame.frame_end_ms < start_ms || frame.frame_start_ms > end_ms {
             continue;
         }
-        total += (frame.rms_energy * 8.0).clamp(0.0, 1.0);
+        total += (frame.rms_energy * ENERGY_CONFIDENCE_SCALE).clamp(0.0, 1.0);
         count += 1;
     }
 
