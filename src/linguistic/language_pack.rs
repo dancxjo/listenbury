@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::linguistic::PhonemicInventory;
 use crate::linguistic::inventory::general_american_english;
+use crate::linguistic::PhonemicInventory;
 
 static EN_US_PACK: OnceLock<LanguagePack> = OnceLock::new();
 
@@ -49,6 +49,8 @@ const LANGUAGE_PACK_SOURCE_INVENTORY_PATH: &str =
 ///
 /// Schema intent is documented in
 /// [`docs/architecture/language-pack-source-inventory.md`](../../docs/architecture/language-pack-source-inventory.md).
+// `Eq` is intentionally omitted because `PhonemicInventory` currently derives
+// `PartialEq` but not `Eq`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LanguagePack {
     pub manifest: LanguagePackManifest,
@@ -159,6 +161,8 @@ pub struct PunctuationRulesSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Split across multiple files in `normalization/`, so this is assembled from
+/// separately-deserialized sections in `load_english_us_pack`.
 pub struct NormalizationTables {
     pub numbers: NormalizationSection,
     pub letters: NormalizationSection,
@@ -173,6 +177,8 @@ pub struct NormalizationSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Validated backend map registry. Construct through `from_maps` so required
+/// renderer map keys are always present.
 pub struct BackendMapRegistry {
     maps: BTreeMap<String, BTreeMap<String, String>>,
 }
@@ -383,7 +389,7 @@ fn load_english_us_pack() -> Result<LanguagePack, LanguagePackDataError> {
         return Err(LanguagePackDataError::InvalidSection {
             path: EN_US_PHONOLOGY_PATH,
             section: "phonology.arpabet_vowels",
-            reason: "every arpabet vowel must also be listed in nucleus-symbols".to_string(),
+            reason: "every arpabet vowel must also be listed in nucleus_symbols".to_string(),
         });
     }
     if phonology.arpabet_vowels.is_empty() {
