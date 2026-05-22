@@ -70,8 +70,8 @@ fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
         halfseg_samples: forged.unit.halfseg_samples,
         segmentation_confidence: forged.segmentation_confidence,
         sample_count: forged.unit.samples.len(),
-        extraction_start_sample: 0,
-        extraction_end_sample: forged.unit.samples.len(),
+        extraction_start_sample: forged.segmentation.source_start_sample,
+        extraction_end_sample: forged.segmentation.source_end_sample,
         model_license: "unknown".to_string(),
         provenance_note: concat!(
             "Generated locally from a Piper ONNX model. ",
@@ -202,8 +202,8 @@ fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
                         halfseg_samples: forged.unit.halfseg_samples,
                         segmentation_confidence: forged.segmentation_confidence,
                         sample_count: forged.unit.samples.len(),
-                        extraction_start_sample: 0,
-                        extraction_end_sample: forged.unit.samples.len(),
+                        extraction_start_sample: forged.segmentation.source_start_sample,
+                        extraction_end_sample: forged.segmentation.source_end_sample,
                         model_license: "unknown".to_string(),
                         provenance_note: concat!(
                             "Generated locally from a Piper ONNX model. ",

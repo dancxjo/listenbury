@@ -395,6 +395,14 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -3.0,
             },
             default_duration_ms: 85,
+            frication_level: if voiced { 0.5 } else { 0.7 },
+            aspiration_level: if voiced { 0.05 } else { 0.3 },
+            burst_hz_hint: Some(if voiced { 2400.0 } else { 3400.0 }),
+            closure_ms_hint: Some(40),
+            release_ms_hint: Some(20),
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.8,
         }
     }
 
@@ -473,12 +481,6 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
         stop("d", true, 3000.0),
         stop("k", false, 1900.0),
         stop("ɡ", true, 1900.0),
-        stop("p", false),
-        stop("b", true),
-        stop("t", false),
-        stop("d", true),
-        stop("k", false),
-        stop("ɡ", true),
         affricate("tʃ", false),
         affricate("dʒ", true),
     ] {
