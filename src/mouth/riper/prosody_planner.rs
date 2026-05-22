@@ -1508,7 +1508,10 @@ mod tests {
 
         for fixture in [
             "Thank you, Dave.",
+            "Dave, thank you.",
             "Listen, professor, this matters.",
+            "Listen, Dave, this matters.",
+            "Hey, Dave, listen.",
             "You see, interlocutor, the system has revealed itself.",
         ] {
             let candidate = tracker.ingest_text(fixture).expect("candidate");

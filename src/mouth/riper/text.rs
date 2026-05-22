@@ -6,6 +6,11 @@ use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 
 const MAX_VOCATIVE_WORDS: usize = 3;
 const COMMON_VOCATIVE_NOUNS: &[&str] = &[
+    "mr",
+    "mrs",
+    "ms",
+    "miss",
+    "dr",
     "professor",
     "interlocutor",
     "sir",
@@ -388,13 +393,25 @@ fn detect_vocative(trimmed: &str, trim_offset: usize) -> VocativeDetection {
         keep_commas.insert(last_comma);
     }
 
+    if let Some(first_comma) = comma_offsets.first().copied()
+        && trimmed[first_comma + 1..]
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic())
+        && let Some(vocative_span) = detect_initial_addressee_span(&trimmed[..first_comma])
+    {
+        let start = trim_offset + vocative_span.start;
+        let end = trim_offset + vocative_span.end;
+        spans.push(start..end);
+        keep_commas.insert(first_comma);
+    }
+
     for window in comma_offsets.windows(2) {
         let [left_comma, right_comma] = [window[0], window[1]];
         if !has_discourse_cue(&trimmed[..left_comma]) {
             continue;
         }
         if let Some(vocative_span) =
-            detect_addressee_span(&trimmed[left_comma + 1..right_comma], true)
+            detect_addressee_span(&trimmed[left_comma + 1..right_comma], false)
         {
             let start = trim_offset + left_comma + 1 + vocative_span.start;
             let end = trim_offset + left_comma + 1 + vocative_span.end;
@@ -449,12 +466,10 @@ fn detect_addressee_span(
                 .to_ascii_lowercase()
         })
         .collect::<Vec<_>>();
-    if lower_words.iter().any(|word| {
-        matches!(
-            word.as_str(),
-            "who" | "which" | "that" | "where" | "when" | "unfortunately" | "however"
-        )
-    }) {
+    if lower_words
+        .iter()
+        .any(|word| is_addressee_blocked_word(word))
+    {
         return None;
     }
     let has_capitalized = words.iter().any(|word| {
@@ -474,6 +489,38 @@ fn detect_addressee_span(
     Some(span_start..span_end)
 }
 
+fn detect_initial_addressee_span(segment: &str) -> Option<std::ops::Range<usize>> {
+    let span = detect_addressee_span(segment, false)?;
+    let trimmed = &segment[span.clone()];
+    let words = trimmed
+        .split_ascii_whitespace()
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let lower_words = words
+        .iter()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .collect::<Vec<_>>();
+    if lower_words
+        .iter()
+        .any(|word| is_initial_vocative_blocked_word(word))
+    {
+        return None;
+    }
+
+    let has_vocative_noun = lower_words
+        .iter()
+        .any(|word| is_likely_vocative_noun(word.as_str()));
+    let looks_like_proper_name = !trimmed.contains('.') && words.iter().all(|word| {
+        word.chars()
+            .find(|ch| ch.is_ascii_alphabetic())
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+    });
+    (has_vocative_noun || looks_like_proper_name).then_some(span)
+}
+
 fn has_discourse_cue(prefix: &str) -> bool {
     let words = prefix
         .split_ascii_whitespace()
@@ -488,12 +535,85 @@ fn has_discourse_cue(prefix: &str) -> bool {
     }
     matches!(
         words.last().map(String::as_str),
-        Some("listen" | "look" | "see")
+        Some(
+            "listen" | "look" | "see" | "hey" | "hello" | "hi" | "well" | "ok" | "okay" | "yes"
+                | "no"
+        )
     ) || matches!(words.as_slice(), [.., prev, last] if prev == "you" && last == "see")
 }
 
 fn is_likely_vocative_noun(word: &str) -> bool {
     COMMON_VOCATIVE_NOUNS.contains(&word)
+}
+
+fn is_addressee_blocked_word(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "an"
+            | "the"
+            | "this"
+            | "that"
+            | "these"
+            | "those"
+            | "i"
+            | "we"
+            | "you"
+            | "he"
+            | "she"
+            | "it"
+            | "they"
+            | "who"
+            | "which"
+            | "where"
+            | "when"
+            | "unfortunately"
+            | "however"
+    )
+}
+
+fn is_initial_vocative_blocked_word(word: &str) -> bool {
+    if is_addressee_blocked_word(word) {
+        return true;
+    }
+    matches!(
+        word,
+        "well"
+            | "now"
+            | "then"
+            | "so"
+            | "yes"
+            | "no"
+            | "ok"
+            | "okay"
+            | "please"
+            | "thanks"
+            | "thank"
+            | "hey"
+            | "hello"
+            | "hi"
+            | "listen"
+            | "look"
+            | "see"
+            | "monday"
+            | "tuesday"
+            | "wednesday"
+            | "thursday"
+            | "friday"
+            | "saturday"
+            | "sunday"
+            | "january"
+            | "february"
+            | "march"
+            | "april"
+            | "may"
+            | "june"
+            | "july"
+            | "august"
+            | "september"
+            | "october"
+            | "november"
+            | "december"
+    )
 }
 
 fn is_quote_or_bracket(ch: char) -> bool {
@@ -724,6 +844,21 @@ mod tests {
     }
 
     #[test]
+    fn detects_initial_vocative_and_suppresses_direct_address_comma() {
+        for fixture in ["Dave, thank you.", "Friends, listen closely."] {
+            let normalized = TextNormalizer.normalize(fixture).expect("normalize");
+            assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::Vocative);
+            assert!(
+                !normalized
+                    .tokens
+                    .iter()
+                    .any(|token| matches!(token, NormalizedToken::PhraseBreak)),
+                "initial direct-address comma should not become a hard phrase break: {fixture}"
+            );
+        }
+    }
+
+    #[test]
     fn detects_comma_surrounded_vocative_with_discourse_cues() {
         let listen = TextNormalizer
             .normalize("Listen, professor, this matters.")
@@ -731,6 +866,28 @@ mod tests {
         assert_eq!(listen.boundary_kind, PhraseBoundaryKind::Vocative);
         assert!(
             !listen
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
+
+        let capitalized_name = TextNormalizer
+            .normalize("Listen, Dave, this matters.")
+            .expect("normalize");
+        assert_eq!(capitalized_name.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            !capitalized_name
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
+
+        let greeting = TextNormalizer
+            .normalize("Hey, Dave, listen.")
+            .expect("normalize");
+        assert_eq!(greeting.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            !greeting
                 .tokens
                 .iter()
                 .any(|token| matches!(token, NormalizedToken::PhraseBreak))
@@ -745,6 +902,21 @@ mod tests {
                 .iter()
                 .any(|token| matches!(token, NormalizedToken::PhraseBreak))
         );
+    }
+
+    #[test]
+    fn keeps_discourse_and_temporal_leading_commas_as_phrase_breaks() {
+        for fixture in ["Well, this matters.", "Monday, we leave."] {
+            let normalized = TextNormalizer.normalize(fixture).expect("normalize");
+            assert_ne!(normalized.boundary_kind, PhraseBoundaryKind::Vocative);
+            assert!(
+                normalized
+                    .tokens
+                    .iter()
+                    .any(|token| matches!(token, NormalizedToken::PhraseBreak)),
+                "non-vocative leading comma should remain a phrase break: {fixture}"
+            );
+        }
     }
 
     #[test]

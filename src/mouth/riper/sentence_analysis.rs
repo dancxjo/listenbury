@@ -693,12 +693,24 @@ fn build_link_parses(
             })
             .collect::<Vec<_>>();
         if let Some(&first_target) = targets.first() {
-            let anchor = first_target.saturating_sub(1);
+            let last_target = targets.last().copied().unwrap_or(first_target);
+            let (link_left, link_right, boundary_left, boundary_right) = if first_target == 0 {
+                let anchor = (last_target + 1 < words.len()).then_some(last_target + 1);
+                (
+                    first_target,
+                    anchor.unwrap_or(last_target),
+                    Some(last_target),
+                    anchor,
+                )
+            } else {
+                let anchor = first_target - 1;
+                (anchor, first_target, Some(anchor), Some(first_target))
+            };
             push_link(
                 &mut links,
                 SyntacticLink {
-                    left: anchor,
-                    right: first_target,
+                    left: link_left,
+                    right: link_right,
                     kind: SyntacticLinkKind::Vocative,
                     confidence: VOCATIVE_LINK_CONFIDENCE,
                     source: SyntacticLinkSource::HeuristicGrammarIsland,
@@ -722,8 +734,8 @@ fn build_link_parses(
             ));
             claims.push(AnalysisClaim::new(
                 AnalysisTarget::Boundary {
-                    left_word: Some(anchor),
-                    right_word: Some(first_target),
+                    left_word: boundary_left,
+                    right_word: boundary_right,
                 },
                 ClaimKind::BoundaryKind,
                 ClaimValue::BoundaryKind("VocativeCommaPauseSuppressed".to_string()),
@@ -2055,10 +2067,55 @@ mod tests {
     }
 
     #[test]
+    fn fixture_links_initial_direct_address_boundary() {
+        let analysis = analyze("Dave, thank you.");
+        let parse = analysis.link_parses.first().expect("link parse");
+        let dave = word_index(&analysis, "dave");
+        let thank = word_index(&analysis, "thank");
+        assert!(has_link(parse, dave, thank, SyntacticLinkKind::Vocative));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::VocativeBoundary
+                && claim.target == AnalysisTarget::WordIndex(dave)
+        }));
+        assert!(parse.claims.iter().any(|claim| {
+            claim.kind == ClaimKind::BoundaryKind
+                && claim.target
+                    == (AnalysisTarget::Boundary {
+                        left_word: Some(dave),
+                        right_word: Some(thank),
+                    })
+                && claim.value
+                    == ClaimValue::BoundaryKind("VocativeCommaPauseSuppressed".to_string())
+        }));
+    }
+
+    #[test]
     fn detects_vocative_span_boundaries() {
         let spans = detect_vocative_spans("Thank you, Dave.");
         assert_eq!(spans.len(), 1);
         assert_eq!("Dave", &"Thank you, Dave."[spans[0].clone()]);
+
+        let initial_spans = detect_vocative_spans("Dave, thank you.");
+        assert_eq!(initial_spans.len(), 1);
+        assert_eq!("Dave", &"Dave, thank you."[initial_spans[0].clone()]);
+
+        let medial_spans = detect_vocative_spans("Listen, Dave, this matters.");
+        assert_eq!(medial_spans.len(), 1);
+        assert_eq!(
+            "Dave",
+            &"Listen, Dave, this matters."[medial_spans[0].clone()]
+        );
+
+        let greeting_spans = detect_vocative_spans("Hello, Dave.");
+        assert_eq!(greeting_spans.len(), 1);
+        assert_eq!("Dave", &"Hello, Dave."[greeting_spans[0].clone()]);
+
+        let greeting_pair_spans = detect_vocative_spans("Hey, Dave, listen.");
+        assert_eq!(greeting_pair_spans.len(), 1);
+        assert_eq!(
+            "Dave",
+            &"Hey, Dave, listen."[greeting_pair_spans[0].clone()]
+        );
     }
 
     #[test]
