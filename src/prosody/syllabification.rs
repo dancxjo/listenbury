@@ -117,6 +117,9 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
             split_mop(&cluster, profile, &phones[cluster_range.start..nuc_pos])
         };
 
+        // Source span for this syllable: onset_start..nuc_end.
+        let onset_start = nuc_pos - onset_phones.len();
+
         // Coda from previous syllable = coda_phones (everything that MOP
         // couldn't assign to the current onset).
         // But for syllable _construction_ we need to patch the previous
@@ -126,13 +129,12 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
             prev.coda = PhoneString {
                 phones: coda_phones.clone(),
             };
+            prev.source_span.end = onset_start;
         }
         // Leading consonants before the first nucleus are always onset
         // material. MOP is only used between nuclei, where a coda can be
         // assigned to a preceding syllable.
 
-        // Source span for this syllable: onset_start..nuc_end.
-        let onset_start = nuc_pos - onset_phones.len();
         let source_start = if syl_idx == 0 { 0 } else { onset_start };
 
         let stress = phonemes[nuc_pos].stress;
@@ -468,6 +470,20 @@ mod tests {
             assert!(syl.source_span.start <= syl.source_span.end);
             assert!(syl.source_span.end <= len);
         }
+    }
+
+    #[test]
+    fn extra_first_syllable_source_span_is_0_to_2() {
+        let s = syllabify(&seq(&["EH1", "K", "S", "T", "R", "AH0"]), &ga());
+
+        assert_eq!(s[0].source_span, SourceSpan { start: 0, end: 2 });
+    }
+
+    #[test]
+    fn atlas_first_syllable_source_span_includes_t_coda() {
+        let s = syllabify(&seq(&["AE1", "T", "L", "AH0", "S"]), &ga());
+
+        assert_eq!(s[0].source_span, SourceSpan { start: 0, end: 2 });
     }
 
     // ── Diagnostics ──────────────────────────────────────────────────────────
