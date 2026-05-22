@@ -4,6 +4,8 @@ This document inventories useful data families in eSpeak-ng and related speech-s
 
 It is deliberately **not** a plan to copy eSpeak-ng's rule model or build an eSpeak compatibility layer. eSpeak-ng is source material: a field notebook of useful linguistic and acoustic observations. Listenbury should restate the underlying behaviors in its own language-pack concepts and code.
 
+Current first-pass schema/loader implementation: `src/linguistic/language_pack.rs`.
+
 ## Core principle
 
 ```text
