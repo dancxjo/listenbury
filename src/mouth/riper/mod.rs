@@ -72,7 +72,7 @@ pub use sentence_analysis::{
     ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
     ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic, ReductionStatus,
     SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind, SyntacticLinkParse,
-    SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex,
+    SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex, WordSyntaxFacts,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,
