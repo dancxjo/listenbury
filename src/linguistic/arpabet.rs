@@ -44,11 +44,7 @@ pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
             VowelBackness::Central,
             Roundedness::Unrounded,
         ),
-        "AO" => vowel_features(
-            VowelHeight::Low,
-            VowelBackness::Back,
-            Roundedness::Rounded,
-        ),
+        "AO" => vowel_features(VowelHeight::Low, VowelBackness::Back, Roundedness::Rounded),
         "AW" => vowel_features(
             VowelHeight::Low,
             VowelBackness::Central,
@@ -69,21 +65,9 @@ pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
             VowelBackness::Front,
             Roundedness::Unrounded,
         ),
-        "OW" => vowel_features(
-            VowelHeight::Mid,
-            VowelBackness::Back,
-            Roundedness::Rounded,
-        ),
-        "OY" => vowel_features(
-            VowelHeight::Mid,
-            VowelBackness::Back,
-            Roundedness::Rounded,
-        ),
-        "UH" | "UW" => vowel_features(
-            VowelHeight::High,
-            VowelBackness::Back,
-            Roundedness::Rounded,
-        ),
+        "OW" => vowel_features(VowelHeight::Mid, VowelBackness::Back, Roundedness::Rounded),
+        "OY" => vowel_features(VowelHeight::Mid, VowelBackness::Back, Roundedness::Rounded),
+        "UH" | "UW" => vowel_features(VowelHeight::High, VowelBackness::Back, Roundedness::Rounded),
         "P" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiceless),
         "B" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiced),
         "M" => consonant_features(Place::Bilabial, Manner::Nasal, Voicing::Voiced),

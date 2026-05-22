@@ -330,6 +330,43 @@ mod tests {
     }
 
     #[test]
+    fn vowel_features_do_not_overload_consonant_place() {
+        let front_low_vowel = feature_bundle_for_arpabet("AE");
+        let palatal_consonant = feature_bundle_for_arpabet("Y");
+
+        assert_eq!(front_low_vowel.major, MajorClass::Vowel);
+        assert_eq!(front_low_vowel.place, None);
+        assert_eq!(front_low_vowel.vowel_height, Some(VowelHeight::Low));
+        assert_eq!(front_low_vowel.vowel_backness, Some(VowelBackness::Front));
+        assert_eq!(front_low_vowel.roundedness, Some(Roundedness::Unrounded));
+
+        assert_eq!(palatal_consonant.major, MajorClass::Consonant);
+        assert_eq!(palatal_consonant.place, Some(Place::Palatal));
+        assert_eq!(palatal_consonant.vowel_height, None);
+        assert_eq!(palatal_consonant.vowel_backness, None);
+        assert_eq!(palatal_consonant.roundedness, None);
+    }
+
+    #[test]
+    fn high_vowel_class_uses_vowel_height_not_backness_or_place() {
+        for symbol in ["IH0", "IY0", "UH0", "UW0"] {
+            let phoneme = phoneme_from_arpabet(symbol, "cmudict");
+            assert!(
+                phoneme_class_matches(PhonemeClass::HighVowel, &phoneme),
+                "{symbol} should be a high vowel"
+            );
+        }
+
+        for symbol in ["AE0", "EH0", "ER0", "EY0", "AY0", "OY0", "AW0", "OW0"] {
+            let phoneme = phoneme_from_arpabet(symbol, "cmudict");
+            assert!(
+                !phoneme_class_matches(PhonemeClass::HighVowel, &phoneme),
+                "{symbol} should not be a high vowel"
+            );
+        }
+    }
+
+    #[test]
     fn commitment_follows_span_state() {
         let seq = vec![
             phoneme_from_arpabet("AE1", "cmudict"),
