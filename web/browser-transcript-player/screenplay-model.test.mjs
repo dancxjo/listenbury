@@ -139,11 +139,6 @@ test("consecutive utterances by the same speaker are consolidated", () => {
   assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
   assert.equal(dialogueBeats[0].turnIds, undefined);
   assert.equal((episode.screenplayBody.match(/\nUNKNOWN VOICE #1\n/g) ?? []).length, 1);
-    ["USER", "PETE"],
-  );
-  assert.equal(dialogueBeats[0].text, "First user thought. Second user thought.");
-  assert.equal(dialogueBeats[0].turnIds, undefined);
-  assert.equal((episode.screenplayBody.match(/\nUSER\n/g) ?? []).length, 1);
 });
 
 test("episodes assemble into chapters and manuscript structure", () => {
@@ -342,4 +337,120 @@ test("unknown voice ordinals are stable and speaker cues stay voice-oriented", (
   assert.ok(cues.includes("PETE"));
   assert.ok(!cues.includes("USER"));
   assert.ok(!cues.includes("ASSISTANT"));
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// source_attributed_transcript event tests (issue: source-attributed transcript
+// events for timeline and screenplay views)
+// ──────────────────────────────────────────────────────────────────────────────
+
+test("source_attributed_transcript: known Pete voice renders PETE VOICE cue with text", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
+    text: "I'm going to make the timing model...",
+    source_label: { NamedVoice: "Pete" },
+    transcript_confidence: 0.92,
+    attribution_confidence: 0.95,
+    overlap: null,
+  }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 200, { text: "Understood." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
+
+  assert.ok(voiceBeat, "voice beat should exist");
+  assert.equal(voiceBeat.role, "PETE VOICE");
+  assert.equal(voiceBeat.text, "I'm going to make the timing model...");
+  assert.ok(!episode.screenplayBody.includes("USER"), "USER cue must not appear");
+  assert.ok(!episode.screenplayBody.includes("ASSISTANT"), "ASSISTANT cue must not appear");
+});
+
+test("source_attributed_transcript: unknown voice renders UNKNOWN VOICE #N cue", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
+    text: "wait, what?",
+    source_label: { UnknownVoice: { ordinal: 1 } },
+    transcript_confidence: 0.85,
+    attribution_confidence: 0.72,
+    overlap: null,
+  }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
+
+  assert.ok(voiceBeat, "voice beat should exist");
+  assert.equal(voiceBeat.role, "UNKNOWN VOICE #1");
+  assert.equal(voiceBeat.text, "wait, what?");
+});
+
+test("source_attributed_transcript: background voice with low confidence renders [indistinct]", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
+    text: "",
+    source_label: { BackgroundVoice: { ordinal: 2 } },
+    transcript_confidence: 0.25,
+    attribution_confidence: 0.60,
+    overlap: null,
+  }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
+
+  assert.ok(voiceBeat, "voice beat should exist for indistinct background voice");
+  assert.equal(voiceBeat.role, "BACKGROUND VOICE #2");
+  assert.equal(voiceBeat.text, "[indistinct]");
+});
+
+test("source_attributed_transcript: overlapped source renders as indistinct even with text", () => {
+  const session = createNarrativeSession();
+  // Even with text and high transcript_confidence, overlap forces [indistinct]
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
+    text: "something audible",
+    source_label: { UnknownVoice: { ordinal: 1 } },
+    transcript_confidence: 0.80,
+    attribution_confidence: 0.55,
+    overlap: "mixture-id-abc123",
+  }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
+
+  assert.ok(voiceBeat, "voice beat should exist for overlapped source");
+  assert.equal(voiceBeat.text, "[indistinct]", "overlap should override text with [indistinct]");
+});
+
+test("source_attributed_transcript: multiple sources in same session produce distinct cues", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
+    text: "I'm going to make the timing model...",
+    source_label: { NamedVoice: "Pete" },
+    transcript_confidence: 0.92,
+    attribution_confidence: 0.95,
+    overlap: null,
+  }));
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 2, 200, {
+    text: "wait, what?",
+    source_label: { UnknownVoice: { ordinal: 1 } },
+    transcript_confidence: 0.85,
+    attribution_confidence: 0.70,
+    overlap: null,
+  }));
+  reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 3, 300, {
+    text: "",
+    source_label: { BackgroundVoice: { ordinal: 2 } },
+    transcript_confidence: 0.20,
+    attribution_confidence: 0.50,
+    overlap: null,
+  }));
+  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 400, { text: "Noted." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const voiceBeats = episode.scenes.flatMap((s) => s.beats).filter((b) => b.kind === "voice_dialogue");
+  const roles = voiceBeats.map((b) => b.role);
+
+  assert.ok(roles.includes("PETE VOICE"), "Pete voice should appear");
+  assert.ok(roles.includes("UNKNOWN VOICE #1"), "Unknown voice should appear");
+  assert.ok(roles.includes("BACKGROUND VOICE #2"), "Background voice should appear");
+  assert.ok(!roles.includes("USER"), "USER cue must not appear");
+  assert.ok(!roles.includes("ASSISTANT"), "ASSISTANT cue must not appear");
 });

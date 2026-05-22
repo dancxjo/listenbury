@@ -159,6 +159,11 @@ export function reduceNarrativeEvent(session, event) {
     return;
   }
 
+  if (sourceEvent.kind === "source_attributed_transcript") {
+    applySourceAttributedTranscript(session, turn, sourceEvent);
+    return;
+  }
+
   if (sourceEvent.kind === "tts_timed_word_stream_revision") {
     applyTtsWordStreamRevision(turn, sourceEvent);
     return;
@@ -385,7 +390,7 @@ function maybeCaptureVoiceCue(session, turn, event) {
 }
 
 function isHumanDialogueEvent(kind) {
-  return ["transcript_candidate", "asr_timed_word_stream", "transcript"].includes(kind);
+  return ["transcript_candidate", "asr_timed_word_stream", "transcript", "source_attributed_transcript"].includes(kind);
 }
 
 function resolveVoiceCue(session, event) {
@@ -445,6 +450,100 @@ function nextUnknownVoiceCue(session, key) {
     session.unknownVoiceOrdinalByKey.set(stableKey, session.nextUnknownVoiceOrdinal++);
   }
   return `${UNKNOWN_VOICE_PREFIX}${session.unknownVoiceOrdinalByKey.get(stableKey)}`;
+}
+
+/**
+ * Derive a screenplay character-cue string from a `source_label` field as
+ * serialised by the Rust `SourceLabel` enum.
+ *
+ * The Rust serialisation produces one of:
+ *   { "NamedVoice": "Pete" }
+ *   { "UnknownVoice": { "ordinal": 1 } }
+ *   { "BackgroundVoice": { "ordinal": 2 } }
+ *   { "Playback": "Television" }
+ *   "RoomNoise"
+ *   { "Custom": "Television Voice" }
+ * …or a plain string for simple variants.
+ */
+function cueFromSourceLabel(label) {
+  if (!label) {
+    return null;
+  }
+  if (typeof label === "string") {
+    const up = label.toUpperCase();
+    if (up === "ROOMNOISE" || up === "ROOM_NOISE") {
+      return "ROOM NOISE";
+    }
+    return up;
+  }
+  if (typeof label === "object") {
+    if (label.NamedVoice) {
+      return `${label.NamedVoice.trim().toUpperCase()} VOICE`;
+    }
+    if (label.UnknownVoice && typeof label.UnknownVoice.ordinal === "number") {
+      return `${UNKNOWN_VOICE_PREFIX}${label.UnknownVoice.ordinal}`;
+    }
+    if (label.BackgroundVoice && typeof label.BackgroundVoice.ordinal === "number") {
+      return `BACKGROUND VOICE #${label.BackgroundVoice.ordinal}`;
+    }
+    if (label.Playback) {
+      return `${label.Playback.trim().toUpperCase()} PLAYBACK`;
+    }
+    if (label.Custom) {
+      return label.Custom.trim().toUpperCase();
+    }
+  }
+  return null;
+}
+
+/**
+ * Apply a `source_attributed_transcript` event to the current turn.
+ *
+ * The event shape mirrors the Rust `SourceAttributedTranscript` struct:
+ *   {
+ *     kind: "source_attributed_transcript",
+ *     text: string,
+ *     source_label: SourceLabel,   // serialised Rust enum
+ *     transcript_confidence: number,
+ *     attribution_confidence: number,
+ *     overlap: AcousticMixtureId | null,
+ *     range: { start: { millis: number }, end: { millis: number } },
+ *   }
+ *
+ * The `source_label` drives the character cue; `text` populates the
+ * transcript dialogue; low `transcript_confidence` or a present `overlap`
+ * renders the text as `[indistinct]`.
+ */
+function applySourceAttributedTranscript(session, turn, event) {
+  const label = event.source_label ?? event.artifact?.source_label;
+  const cue = cueFromSourceLabel(label);
+  if (cue) {
+    turn.userVoiceCue = cue;
+  } else {
+    turn.userVoiceCue ??= nextUnknownVoiceCue(session, "unattributed-human");
+  }
+
+  const rawText = textContent(event.text);
+  const transcriptConfidence = typeof event.transcript_confidence === "number"
+    ? event.transcript_confidence
+    : 1.0;
+  const isOverlapped = event.overlap != null;
+  const isIndistinct = transcriptConfidence < 0.4 || isOverlapped;
+  const resolvedText = isIndistinct ? "[indistinct]" : rawText;
+
+  if (!resolvedText) {
+    return;
+  }
+
+  const deleted = deletedTextBetween(currentUserText(turn), resolvedText);
+  if (deleted.length) {
+    turn.flags.revised = true;
+  }
+  recordDeletedText(turn.userDeleted, deleted, event.elapsed_ms);
+  turn.userFinal = resolvedText;
+  turn.userStable = resolvedText;
+  turn.userUnstable = "";
+  turn.userCandidateText = resolvedText;
 }
 
 function resolveTurnVoiceCue(turn) {
