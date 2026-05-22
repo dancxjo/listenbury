@@ -22,11 +22,12 @@ pub mod vocal_plausibility;
 
 pub use articulator::{
     ArticulationError, ArticulatorPlan, EnergyCurve, EnergyPoint, GestureSpan, PartialProsodyPhone,
-    PitchHint, RenderPlan, SungBackendDetail, SungBackendKind, SyllableRenderSpan, articulate,
-    articulate_with_decomposition_policy, articulate_with_inventory,
-    articulate_with_inventory_and_decomposition_policy, backend_detail_expectation,
-    coarse_text_render_plan, is_phone_voiced, klatt_targets_from_articulator_plan,
-    partial_prosody_render_plan, render_plan_for_backend,
+    PhoneTimedRenderTarget, PitchHint, RenderPlan, SungBackendDetail, SungBackendKind,
+    SyllableRenderSpan, articulate, articulate_with_decomposition_policy,
+    articulate_with_inventory, articulate_with_inventory_and_decomposition_policy,
+    backend_detail_expectation, coarse_text_render_plan, is_phone_voiced,
+    klatt_render_targets_from_phone_timed, partial_prosody_render_plan, render_plan_for_backend,
+    phone_timed_targets_from_articulator_plan,
     try_articulate_with_inventory_and_decomposition_policy,
 };
 pub use coarticulation::{

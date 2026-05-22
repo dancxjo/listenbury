@@ -233,6 +233,25 @@ impl fmt::Display for ArticulationError {
 
 impl Error for ArticulationError {}
 
+/// Backend-neutral phone-timed render target carrying shared timing, pitch,
+/// and amplitude intent — without any renderer-specific source/filter details.
+///
+/// This is the shared substrate consumed by all phone-timed backends (Klatt,
+/// MBROLA, …).  Backends that need additional acoustic parameters (e.g. Klatt
+/// formant/source tables) must enrich this through their own adapter step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneTimedRenderTarget {
+    /// The phone to render.
+    pub phone: crate::linguistic::phonology::Phone,
+    /// Requested duration in milliseconds.
+    pub duration_ms: u64,
+    /// Fundamental frequency in Hz.  `None` for unvoiced phones.
+    pub f0_hz: Option<f32>,
+    /// Overall amplitude (linear 0.0–1.0).
+    pub amplitude: f32,
+}
+
 /// Backend-specific render contract derived from the shared sung plan.
 ///
 /// The variants intentionally encode the amount of detail a backend may
@@ -241,8 +260,12 @@ impl Error for ArticulationError {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RenderPlan {
-    /// Full phone-timed targets for deterministic source/filter rendering.
-    PhoneTimed(Vec<PhoneRenderTarget>),
+    /// Backend-neutral phone-timed targets carrying shared timing/pitch intent.
+    ///
+    /// Backends that require additional renderer-specific parameters (e.g.
+    /// Klatt source/filter tables) must adapt these through a dedicated adapter
+    /// step, such as [`klatt_render_targets_from_phone_timed`].
+    PhoneTimed(Vec<PhoneTimedRenderTarget>),
     /// Text plus phone/prosody hints for backends with a partial control
     /// surface, such as the future direct Riper/ONNX path.
     PartialProsody {
@@ -299,7 +322,7 @@ pub fn render_plan_for_backend(
 ) -> RenderPlan {
     match kind {
         SungBackendKind::Klatt | SungBackendKind::Mbrola | SungBackendKind::RiperKlattFallback => {
-            RenderPlan::PhoneTimed(klatt_targets_from_articulator_plan(
+            RenderPlan::PhoneTimed(phone_timed_targets_from_articulator_plan(
                 plan, amplitude, targets,
             ))
         }
@@ -602,15 +625,17 @@ fn build_articulator_plan(
     })
 }
 
-/// Build Klatt phone render targets from the shared sung plan.
+/// Build a backend-neutral phone-timed sung plan from the shared articulator plan.
 ///
 /// This adapter preserves per-phone durations from the shared plan and samples
-/// F0 only for voiced nucleus phones.
-pub fn klatt_targets_from_articulator_plan(
+/// F0 only for voiced nucleus phones.  The resulting targets carry no
+/// Klatt-specific source/filter fields; backends that need them must pass the
+/// neutral targets through [`klatt_render_targets_from_phone_timed`].
+pub fn phone_timed_targets_from_articulator_plan(
     plan: &ArticulatorPlan,
     amplitude: f32,
     targets: &HashMap<String, PhoneAcousticTarget>,
-) -> Vec<PhoneRenderTarget> {
+) -> Vec<PhoneTimedRenderTarget> {
     plan.gestures
         .gestures
         .iter()
@@ -624,7 +649,7 @@ pub fn klatt_targets_from_articulator_plan(
             } else {
                 None
             };
-            PhoneRenderTarget {
+            PhoneTimedRenderTarget {
                 phone: Phone::new_ipa(&gesture.phone),
                 duration_ms: gesture.duration_ms,
                 f0_hz: match table_entry {
@@ -632,11 +657,59 @@ pub fn klatt_targets_from_articulator_plan(
                     _ => f0_hz,
                 },
                 amplitude,
+            }
+        })
+        .collect()
+}
+
+/// Enrich backend-neutral [`PhoneTimedRenderTarget`]s with Klatt-specific
+/// source and filter parameters from the acoustic target table.
+///
+/// This is the Klatt adapter step: it takes a slice of shared phone-timed
+/// targets and produces [`PhoneRenderTarget`]s ready for
+/// [`crate::voice::tract::render_phone_string`].
+pub fn klatt_render_targets_from_phone_timed(
+    neutral: &[PhoneTimedRenderTarget],
+    acoustic_table: &HashMap<String, PhoneAcousticTarget>,
+) -> Vec<PhoneRenderTarget> {
+    neutral
+        .iter()
+        .map(|target| {
+            let table_entry = acoustic_table.get(target.phone.ipa.as_str());
+            PhoneRenderTarget {
+                phone: target.phone.clone(),
+                duration_ms: target.duration_ms,
+                f0_hz: target.f0_hz,
+                amplitude: target.amplitude,
                 source: table_entry.map(|t| t.source.clone()),
                 filter: table_entry.and_then(|t| t.filter.clone()),
             }
         })
         .collect()
+}
+
+/// Build Klatt phone render targets from the shared sung plan.
+///
+/// # Deprecation note
+///
+/// Prefer [`phone_timed_targets_from_articulator_plan`] to build the
+/// backend-neutral plan, then pass the result through
+/// [`klatt_render_targets_from_phone_timed`] for the Klatt adapter step.
+/// This combined helper is retained for call-sites that still want the old
+/// single-call convenience.
+#[deprecated(
+    since = "0.1.0",
+    note = "use phone_timed_targets_from_articulator_plan + klatt_render_targets_from_phone_timed"
+)]
+pub fn klatt_targets_from_articulator_plan(
+    plan: &ArticulatorPlan,
+    amplitude: f32,
+    targets: &HashMap<String, PhoneAcousticTarget>,
+) -> Vec<PhoneRenderTarget> {
+    klatt_render_targets_from_phone_timed(
+        &phone_timed_targets_from_articulator_plan(plan, amplitude, targets),
+        targets,
+    )
 }
 
 fn role_for_index(idx: usize, onset: PhoneSpan, nucleus: PhoneSpan, _coda: PhoneSpan) -> PhoneRole {
@@ -1100,14 +1173,35 @@ mod tests {
     }
 
     #[test]
-    fn klatt_adapter_keeps_unvoiced_phone_unpitched() {
+    fn phone_timed_adapter_keeps_unvoiced_phone_unpitched() {
         let plan = articulate(&hello_phrase(true));
         let table = crate::voice::tract::default_english_phone_targets();
-        let targets = klatt_targets_from_articulator_plan(&plan, 0.7, &table);
+        let targets = phone_timed_targets_from_articulator_plan(&plan, 0.7, &table);
         assert_eq!(targets[0].phone.ipa, "h");
         assert!(targets[0].f0_hz.is_none(), "unvoiced /h/ must not get F0");
         assert_eq!(targets[1].phone.ipa, "ɛ");
         assert!(targets[1].f0_hz.is_some(), "nucleus vowel should carry F0");
+    }
+
+    #[test]
+    fn klatt_adapter_enriches_neutral_targets_with_source_filter() {
+        let plan = articulate(&hello_phrase(true));
+        let table = crate::voice::tract::default_english_phone_targets();
+        let neutral = phone_timed_targets_from_articulator_plan(&plan, 0.7, &table);
+        let klatt = klatt_render_targets_from_phone_timed(&neutral, &table);
+        // Neutral and Klatt targets have the same phone/duration/f0/amplitude
+        assert_eq!(neutral.len(), klatt.len());
+        for (n, k) in neutral.iter().zip(klatt.iter()) {
+            assert_eq!(n.phone.ipa, k.phone.ipa);
+            assert_eq!(n.duration_ms, k.duration_ms);
+            assert_eq!(n.f0_hz, k.f0_hz);
+            assert_eq!(n.amplitude, k.amplitude);
+        }
+        // Klatt targets carry source/filter; neutral ones do not
+        assert!(
+            klatt.iter().any(|t| t.source.is_some() || t.filter.is_some()),
+            "Klatt adapter should enrich at least some phones with source/filter"
+        );
     }
 
     #[test]

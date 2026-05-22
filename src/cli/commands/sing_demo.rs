@@ -28,6 +28,7 @@ use listenbury::voice::articulator::{
 };
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::default_english_phone_targets;
+use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
@@ -66,14 +67,14 @@ fn default_output_wav_path(backend: SingDemoBackendOption) -> PathBuf {
 fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
     let config = KlattRenderConfig::default();
     let target_table = default_english_phone_targets();
-    let RenderPlan::PhoneTimed(targets) = plan else {
+    let RenderPlan::PhoneTimed(neutral_targets) = plan else {
         anyhow::bail!("Klatt backend requires a phone-timed render plan");
     };
     anyhow::ensure!(
-        !targets.is_empty(),
+        !neutral_targets.is_empty(),
         "listenbury dev sing-demo --backend klatt produced an empty phone target plan"
     );
-    let missing_phones: Vec<String> = targets
+    let missing_phones: Vec<String> = neutral_targets
         .iter()
         .map(|target| target.phone.ipa.as_str())
         .filter(|ipa| !target_table.contains_key(*ipa))
@@ -85,7 +86,8 @@ fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
         missing_phones.join(", ")
     );
 
-    let pcm = render_phone_string(&targets, &config);
+    let klatt_targets = klatt_render_targets_from_phone_timed(&neutral_targets, &target_table);
+    let pcm = render_phone_string(&klatt_targets, &config);
     anyhow::ensure!(
         !pcm.is_empty(),
         "listenbury dev sing-demo --backend klatt produced no audio"
