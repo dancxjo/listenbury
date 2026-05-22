@@ -200,11 +200,14 @@ mod tests {
     fn deterministic_noise(len: usize) -> Vec<f32> {
         const LCG_A: u32 = 1_664_525;
         const LCG_C: u32 = 1_013_904_223;
-        let mut state: u32 = 0xA5A5_17F3;
+        const LCG_SEED: u32 = 0xA5A5_17F3;
+        const PRECISION_SHIFT: u32 = 8;
+        let mut state: u32 = LCG_SEED;
         (0..len)
             .map(|_| {
                 state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
-                let unit = ((state >> 8) as f32) / ((u32::MAX >> 8) as f32);
+                let unit = ((state >> PRECISION_SHIFT) as f32)
+                    / ((u32::MAX >> PRECISION_SHIFT) as f32);
                 (unit * 2.0 - 1.0) * 0.20
             })
             .collect()
