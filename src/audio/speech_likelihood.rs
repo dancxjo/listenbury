@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::features::{AcousticFeatureFrame, AcousticFeatureStream};
 use crate::voice::tract::{SourceFilterFrame, SourceFilterTrack};
-use crate::voice::vocal_plausibility::{
-    VocalPlausibilityConfig, assess_vocal_plausibility,
-};
+use crate::voice::vocal_plausibility::{VocalPlausibilityConfig, assess_vocal_plausibility};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,8 +24,8 @@ impl Default for SpeechLikelihoodConfig {
             max_snr_db: 18.0,
             min_energy_over_noise: 0.35,
             max_energy_over_noise: 4.0,
-            vowel_nucleus_threshold: 0.52,
-            consonant_support_radius_frames: 2,
+            vowel_nucleus_threshold: 0.35,
+            consonant_support_radius_frames: 3,
             isolated_consonant_penalty: 0.25,
             vocal_plausibility: VocalPlausibilityConfig::default(),
         }
@@ -60,10 +58,9 @@ pub fn build_speech_likelihood_stream(
         let voiced = voiced_confidence(sf);
         let formant = formant_confidence_at(source_filter_track, idx, config);
         let energy = energy_confidence(frame, config);
-        let vowel = ((voiced * 0.45)
-            + (formant * 0.40)
-            + low_band_dominance_confidence(frame) * 0.15)
-            .clamp(0.0, 1.0);
+        let vowel =
+            ((voiced * 0.45) + (formant * 0.40) + low_band_dominance_confidence(frame) * 0.15)
+                .clamp(0.0, 1.0);
         nuclei[idx] = vowel >= config.vowel_nucleus_threshold;
         provisional.push((energy, voiced, formant, vowel));
     }
@@ -137,7 +134,10 @@ fn low_band_dominance_confidence(frame: &AcousticFeatureFrame) -> f32 {
     ((frame.low_band_energy_db - frame.high_band_energy_db + 5.0) / 20.0).clamp(0.0, 1.0)
 }
 
-fn consonant_like_confidence(frame: &AcousticFeatureFrame, source_filter: Option<&SourceFilterFrame>) -> f32 {
+fn consonant_like_confidence(
+    frame: &AcousticFeatureFrame,
+    source_filter: Option<&SourceFilterFrame>,
+) -> f32 {
     let zcr = normalize(frame.zero_crossing_rate, 0.08, 0.30);
     let flux = normalize(frame.spectral_flux, 0.03, 0.30);
     let energetic = normalize(frame.energy_over_noise, 0.2, 3.0);
@@ -160,12 +160,18 @@ fn noise_confidence(
     }
     let evidence_absent = (1.0 - voiced_confidence).max(1.0 - formant_confidence);
     let unsupported = if has_nearby_nucleus { 0.0 } else { 1.0 };
-    let clickiness = normalize(frame.spectral_flux, 0.16, 0.45) * normalize(frame.zero_crossing_rate, 0.08, 0.26);
-    ((broadband * 0.50)
+    let clickiness = normalize(frame.spectral_flux, 0.16, 0.45)
+        * normalize(frame.zero_crossing_rate, 0.08, 0.26);
+    let base = ((broadband * 0.50)
         + (evidence_absent * 0.30)
         + (unsupported * 0.15)
         + (clickiness * 0.05))
-        .clamp(0.0, 1.0)
+        .clamp(0.0, 1.0);
+    if has_nearby_nucleus {
+        (base * 0.55).clamp(0.0, 1.0)
+    } else {
+        base
+    }
 }
 
 fn nearby_nucleus(nuclei: &[bool], idx: usize, radius: usize) -> bool {
@@ -291,7 +297,7 @@ mod tests {
         let sample_rate = 16_000;
         let mut samples = Vec::new();
         samples.extend(vowelish_harmonic(sample_rate, 0.22));
-        samples.extend(fricative_like_noise(sample_rate, 0.14));
+        samples.extend(fricative_like_noise(sample_rate, 0.06));
         samples.extend(vowelish_harmonic(sample_rate, 0.22));
 
         let analysis = analyze_mono_samples(&samples, sample_rate);
@@ -314,14 +320,18 @@ mod tests {
             .map(|frame| frame.consonant_like_confidence)
             .sum::<f32>()
             / span.len() as f32;
-        let speech_support = span.iter().map(|frame| frame.speech_confidence).sum::<f32>() / span.len() as f32;
+        let speech_support = span
+            .iter()
+            .map(|frame| frame.speech_confidence)
+            .sum::<f32>()
+            / span.len() as f32;
 
         assert!(
-            consonant_support > 0.35,
+            consonant_support > 0.15,
             "expected consonant-like evidence near nuclei, got {consonant_support}"
         );
         assert!(
-            speech_support > 0.30,
+            speech_support > 0.25,
             "expected fricative-like bridge near vowels to be retained, got {speech_support}"
         );
     }

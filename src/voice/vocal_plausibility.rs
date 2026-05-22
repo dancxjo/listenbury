@@ -61,10 +61,9 @@ pub fn assess_vocal_plausibility(
     let spacing_confidence = formant_spacing_confidence(&frame.filter, config);
     let trajectory_confidence =
         formant_trajectory_confidence(frame, prev_frame, next_frame, config.max_formant_delta_hz);
-    let plausibility = (formant_confidence * 0.35
-        + spacing_confidence * 0.45
-        + trajectory_confidence * 0.20)
-        .clamp(0.0, 1.0);
+    let plausibility =
+        (formant_confidence * 0.35 + spacing_confidence * 0.45 + trajectory_confidence * 0.20)
+            .clamp(0.0, 1.0);
     VocalPlausibility {
         formant_confidence,
         spacing_confidence,
@@ -85,7 +84,10 @@ fn mean_formant_confidence(filter: &VocalTractFilterEstimate) -> f32 {
     (confidences.iter().sum::<f32>() / confidences.len() as f32).clamp(0.0, 1.0)
 }
 
-fn formant_spacing_confidence(filter: &VocalTractFilterEstimate, config: &VocalPlausibilityConfig) -> f32 {
+fn formant_spacing_confidence(
+    filter: &VocalTractFilterEstimate,
+    config: &VocalPlausibilityConfig,
+) -> f32 {
     let (f1, f2, f3) = match (&filter.f1, &filter.f2, &filter.f3) {
         (Some(f1), Some(f2), Some(f3)) => (f1.frequency_hz, f2.frequency_hz, f3.frequency_hz),
         _ => return 0.0,
@@ -116,30 +118,27 @@ fn formant_trajectory_confidence(
 ) -> f32 {
     let max_delta_hz = max_delta_hz.max(1.0);
     let mut smoothness = Vec::new();
-    for (get_formant, present) in [
-        (
-            |f: &SourceFilterFrame| f.filter.f1.as_ref().map(|x| x.frequency_hz),
-            frame.filter.f1.is_some(),
-        ),
-        (
-            |f: &SourceFilterFrame| f.filter.f2.as_ref().map(|x| x.frequency_hz),
-            frame.filter.f2.is_some(),
-        ),
-        (
-            |f: &SourceFilterFrame| f.filter.f3.as_ref().map(|x| x.frequency_hz),
-            frame.filter.f3.is_some(),
-        ),
-    ] {
-        if !present {
-            continue;
-        }
-        if let (Some(cur), Some(prev)) = (get_formant(frame), prev_frame.and_then(get_formant)) {
-            smoothness.push(1.0 - ((cur - prev).abs() / max_delta_hz).clamp(0.0, 1.0));
-        }
-        if let (Some(cur), Some(next)) = (get_formant(frame), next_frame.and_then(get_formant)) {
-            smoothness.push(1.0 - ((cur - next).abs() / max_delta_hz).clamp(0.0, 1.0));
-        }
-    }
+    push_formant_smoothness(
+        &mut smoothness,
+        frame.filter.f1.as_ref().map(|f| f.frequency_hz),
+        prev_frame.and_then(|f| f.filter.f1.as_ref().map(|x| x.frequency_hz)),
+        next_frame.and_then(|f| f.filter.f1.as_ref().map(|x| x.frequency_hz)),
+        max_delta_hz,
+    );
+    push_formant_smoothness(
+        &mut smoothness,
+        frame.filter.f2.as_ref().map(|f| f.frequency_hz),
+        prev_frame.and_then(|f| f.filter.f2.as_ref().map(|x| x.frequency_hz)),
+        next_frame.and_then(|f| f.filter.f2.as_ref().map(|x| x.frequency_hz)),
+        max_delta_hz,
+    );
+    push_formant_smoothness(
+        &mut smoothness,
+        frame.filter.f3.as_ref().map(|f| f.frequency_hz),
+        prev_frame.and_then(|f| f.filter.f3.as_ref().map(|x| x.frequency_hz)),
+        next_frame.and_then(|f| f.filter.f3.as_ref().map(|x| x.frequency_hz)),
+        max_delta_hz,
+    );
     if smoothness.is_empty() {
         0.5
     } else {
@@ -147,10 +146,30 @@ fn formant_trajectory_confidence(
     }
 }
 
+fn push_formant_smoothness(
+    smoothness: &mut Vec<f32>,
+    current: Option<f32>,
+    previous: Option<f32>,
+    next: Option<f32>,
+    max_delta_hz: f32,
+) {
+    let Some(cur) = current else {
+        return;
+    };
+    if let Some(prev) = previous {
+        smoothness.push(1.0 - ((cur - prev).abs() / max_delta_hz).clamp(0.0, 1.0));
+    }
+    if let Some(next) = next {
+        smoothness.push(1.0 - ((cur - next).abs() / max_delta_hz).clamp(0.0, 1.0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::voice::tract::{FormantEstimation, GlottalSourceEstimate, NoiseEstimate, VoicingEstimate};
+    use crate::voice::tract::{
+        FormantEstimation, GlottalSourceEstimate, NoiseEstimate, VoicingEstimate,
+    };
 
     fn frame(f1: f32, f2: f32, f3: f32, confidence: f32) -> SourceFilterFrame {
         SourceFilterFrame {
@@ -192,7 +211,8 @@ mod tests {
         let implausible = frame(500.0, 640.0, 760.0, 0.9);
 
         let plausible_score = assess_vocal_plausibility(&plausible, None, None, &cfg).plausibility;
-        let implausible_score = assess_vocal_plausibility(&implausible, None, None, &cfg).plausibility;
+        let implausible_score =
+            assess_vocal_plausibility(&implausible, None, None, &cfg).plausibility;
 
         assert!(
             plausible_score > implausible_score,
@@ -207,8 +227,10 @@ mod tests {
         let smooth = frame(530.0, 1_490.0, 2_440.0, 0.9);
         let jumpy = frame(940.0, 2_520.0, 3_920.0, 0.9);
 
-        let smooth_score = assess_vocal_plausibility(&smooth, Some(&prev), None, &cfg).trajectory_confidence;
-        let jumpy_score = assess_vocal_plausibility(&jumpy, Some(&prev), None, &cfg).trajectory_confidence;
+        let smooth_score =
+            assess_vocal_plausibility(&smooth, Some(&prev), None, &cfg).trajectory_confidence;
+        let jumpy_score =
+            assess_vocal_plausibility(&jumpy, Some(&prev), None, &cfg).trajectory_confidence;
 
         assert!(
             smooth_score > jumpy_score,
