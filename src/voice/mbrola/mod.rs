@@ -14,7 +14,7 @@ pub mod voice;
 pub use database::{MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone};
 pub use diphone_provider::{
     DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
-    DiphoneUnitSource, MbrolaDiphoneProvider,
+    DiphoneUnitSource, ForgeProvenance, MbrolaDiphoneProvider,
 };
 pub use pho::{
     MbrolaPhoParseError, MbrolaPhone, MbrolaPitchTarget, PhoneTimedPlan, phone_timed_plan_to_pho,

@@ -343,6 +343,7 @@ fn boundary_fallback_lookup(
             metadata: DiphoneUnitMetadata {
                 requested_key: Some(DiphoneKey::new(requested_left, requested_right)),
                 warning: Some(warning),
+                forge_provenance: None,
             },
             ..unit
         },
