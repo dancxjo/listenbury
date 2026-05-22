@@ -12,6 +12,7 @@ use crate::linguistic::phonology::{
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
+use crate::mouth::riper::LexicalProsodyFlag;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
@@ -646,10 +647,17 @@ fn pronounce_word_unit(
     environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<PronouncedWordUnit> {
     let word_realization = word_to_phones_with_metadata(word)?;
+    let has_unstressed_imported_flag = environment_facts.is_some_and(|facts| {
+        facts
+            .lexical_flags
+            .iter()
+            .any(|fact| fact.flag == LexicalProsodyFlag::Unstressed)
+    });
     let reduced_symbols = analyzed_token
         .and_then(|analysis| analysis.reduction_diagnostic.as_ref())
         .and_then(|diagnostic| {
-            if matches!(diagnostic.status, ReductionStatus::Applied) {
+            if matches!(diagnostic.status, ReductionStatus::Applied) && has_unstressed_imported_flag
+            {
                 Some(
                     diagnostic
                         .realized
@@ -1055,6 +1063,25 @@ fn realization_config_for_word(
         } else {
             crate::linguistic::environment::SpanState::Stable
         };
+        if facts
+            .lexical_flags
+            .iter()
+            .any(|fact| fact.flag == LexicalProsodyFlag::AllCapsEmphasis)
+        {
+            config.prosodic_role = Some(crate::linguistic::environment::ProsodicRole::Contrastive);
+        }
+        if facts
+            .lexical_flags
+            .iter()
+            .any(|fact| fact.flag == LexicalProsodyFlag::ClauseFinalStress)
+            && matches!(
+                config.phrase_boundary,
+                Some(crate::linguistic::environment::PhraseBoundaryKind::None)
+            )
+        {
+            config.phrase_boundary =
+                Some(crate::linguistic::environment::PhraseBoundaryKind::Major);
+        }
     }
     config
 }
@@ -1558,6 +1585,38 @@ mod tests {
                 "expected reduced /tə/ phones in `{text}`"
             );
         }
+    }
+
+    #[test]
+    fn unstressed_imported_flag_controls_to_reduction_realization() {
+        let normalized = TextNormalizer
+            .normalize("I want to go.")
+            .expect("text normalization");
+        let analysis = HeuristicSentenceAnalyzer.analyze("I want to go.", &normalized);
+        let to_token = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "to")
+            .expect("to token");
+        let facts = analysis
+            .prosody_environment_facts_for_word(to_token.word_index.expect("word index"))
+            .expect("to facts");
+        assert!(facts.lexical_flags.iter().any(|fact| {
+            fact.flag == crate::mouth::riper::LexicalProsodyFlag::Unstressed
+                && fact.source_rule_id == "weak_form_to_before_verb"
+        }));
+
+        let reduced = pronounce_word_unit("to", Some(to_token), Some(&facts)).expect("reduced");
+        let mut without_flags = facts.clone();
+        without_flags.lexical_flags.clear();
+        let strong =
+            pronounce_word_unit("to", Some(to_token), Some(&without_flags)).expect("strong form");
+
+        let reduced_symbols: Vec<&str> =
+            reduced.surface_symbols.iter().map(String::as_str).collect();
+        let strong_symbols: Vec<&str> = strong.surface_symbols.iter().map(String::as_str).collect();
+        assert_eq!(reduced_symbols, vec!["T", "AH0"]);
+        assert_eq!(strong_symbols, vec!["T", "UW"]);
     }
 
     #[test]

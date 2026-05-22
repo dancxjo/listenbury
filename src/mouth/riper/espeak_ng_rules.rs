@@ -16,6 +16,30 @@ pub struct RuleProvenance {
     pub imported_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LexicalProsodyFlag {
+    Unstressed,
+    PauseBefore,
+    PauseAfter,
+    BreakAfter,
+    ClauseFinalStress,
+    Abbreviation,
+    CapitalSensitive,
+    AllCapsEmphasis,
+    LikelyVerbContext,
+    LikelyNounContext,
+    LikelyPastContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LexicalProsodyFlagFact {
+    pub source_rule_id: String,
+    pub flag: LexicalProsodyFlag,
+    pub confidence: f32,
+    pub provenance: RuleProvenance,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleContextConstraint {
     pub previous_words: Vec<String>,
@@ -34,6 +58,8 @@ pub struct WeakFormRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -45,6 +71,8 @@ pub struct StressRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -57,6 +85,8 @@ pub struct PronunciationOverrideRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -68,6 +98,8 @@ pub struct PunctuationProsodyRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -79,6 +111,8 @@ pub struct VoiceVariantRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -90,6 +124,8 @@ pub struct PhonemeMappingRule {
     pub output_transformation: String,
     pub confidence: u8,
     pub priority: i32,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
     pub provenance: RuleProvenance,
 }
 
@@ -119,11 +155,12 @@ pub struct EspeakNgSeedRuleTable {
     pub linguistic_varieties: LinguisticVarieties,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToRuleDescriptor {
     pub rule_id: String,
     pub citation_form: String,
     pub output_transformation: String,
+    pub lexical_flags: Vec<LexicalProsodyFlagFact>,
     pub provenance: RuleProvenance,
 }
 
@@ -181,10 +218,12 @@ pub fn english_to_rule_descriptor(rule_id: &str) -> Option<ToRuleDescriptor> {
         .iter()
         .find(|rule| rule.rule_id == rule_id)
     {
+        let lexical_flags = lexical_flag_facts_for_weak_form_rule(rule);
         return Some(ToRuleDescriptor {
             rule_id: rule.rule_id.clone(),
             citation_form: rule.citation_form.clone(),
             output_transformation: rule.output_transformation.clone(),
+            lexical_flags,
             provenance: rule.provenance.clone(),
         });
     }
@@ -196,8 +235,42 @@ pub fn english_to_rule_descriptor(rule_id: &str) -> Option<ToRuleDescriptor> {
             rule_id: rule.rule_id.clone(),
             citation_form: rule.citation_form.clone(),
             output_transformation: rule.output_transformation.clone(),
+            lexical_flags: lexical_flag_facts_for_pronunciation_override_rule(rule),
             provenance: rule.provenance.clone(),
         })
+}
+
+pub fn english_lexical_flag_facts_for_rule(rule_id: &str) -> Vec<LexicalProsodyFlagFact> {
+    let variety = english_seed_variety();
+    if let Some(rule) = variety
+        .weak_form_rules
+        .iter()
+        .find(|rule| rule.rule_id == rule_id)
+    {
+        return lexical_flag_facts_for_weak_form_rule(rule);
+    }
+    if let Some(rule) = variety
+        .stress_rules
+        .iter()
+        .find(|rule| rule.rule_id == rule_id)
+    {
+        return lexical_flag_facts_for_stress_rule(rule);
+    }
+    if let Some(rule) = variety
+        .pronunciation_override_rules
+        .iter()
+        .find(|rule| rule.rule_id == rule_id)
+    {
+        return lexical_flag_facts_for_pronunciation_override_rule(rule);
+    }
+    if let Some(rule) = variety
+        .punctuation_prosody_rules
+        .iter()
+        .find(|rule| rule.rule_id == rule_id)
+    {
+        return lexical_flag_facts_for_punctuation_rule(rule);
+    }
+    Vec::new()
 }
 
 pub fn english_punctuation_rule(
@@ -247,6 +320,8 @@ pub struct ImportedEnvironmentRule {
     pub priority: i32,
     /// Normalised confidence in `[0, 1]`.
     pub confidence: f32,
+    /// Native lexical/prosody dictionary flags associated with this rule.
+    pub lexical_flags: Vec<LexicalProsodyFlagFact>,
     /// Phonological/prosodic conditions that must hold for the rule to fire.
     pub pattern: ling_env::EnvironmentPattern,
     /// What the rule produces when it fires.
@@ -283,9 +358,7 @@ fn arpabet_to_phone_string(arpabet_str: &str) -> PhoneString {
 /// Expected format: `"boundary:<label>"` where `<label>` is a lower-case contour
 /// name such as `"exclamation"` or `"final_rising"`.  Any unrecognised payload
 /// maps to [`ling_env::PhraseBoundaryKind::Major`].
-fn parse_boundary_output(
-    output: &str,
-) -> (ling_env::PhraseBoundaryKind, Option<String>) {
+fn parse_boundary_output(output: &str) -> (ling_env::PhraseBoundaryKind, Option<String>) {
     if let Some(label) = output.strip_prefix("boundary:") {
         let boundary = match label {
             "none" => ling_env::PhraseBoundaryKind::None,
@@ -302,6 +375,127 @@ fn parse_boundary_output(
 /// Divide by this factor to normalise them to the [0.0, 1.0] range expected by
 /// [`ImportedEnvironmentRule::confidence`].
 const CONFIDENCE_SCALE_FACTOR: f32 = 100.0;
+
+fn confidence_from_seed(raw: u8) -> f32 {
+    raw as f32 / CONFIDENCE_SCALE_FACTOR
+}
+
+fn push_flag_once(flags: &mut Vec<LexicalProsodyFlag>, flag: LexicalProsodyFlag) {
+    if !flags.contains(&flag) {
+        flags.push(flag);
+    }
+}
+
+fn contextual_flags(context: &RuleContextConstraint) -> Vec<LexicalProsodyFlag> {
+    let mut flags = Vec::new();
+    if context.disallow_all_caps {
+        push_flag_once(&mut flags, LexicalProsodyFlag::CapitalSensitive);
+    }
+    if !context.allow_phrase_final {
+        push_flag_once(&mut flags, LexicalProsodyFlag::ClauseFinalStress);
+    }
+    if context.next_pos.iter().any(|pos| pos == "verb") {
+        push_flag_once(&mut flags, LexicalProsodyFlag::LikelyVerbContext);
+    }
+    if context
+        .next_pos
+        .iter()
+        .any(|pos| matches!(pos.as_str(), "noun" | "pronoun"))
+    {
+        push_flag_once(&mut flags, LexicalProsodyFlag::LikelyNounContext);
+    }
+    if context.next_pos.iter().any(|pos| pos == "past") {
+        push_flag_once(&mut flags, LexicalProsodyFlag::LikelyPastContext);
+    }
+    flags
+}
+
+fn lexical_flag_facts(
+    rule_id: &str,
+    confidence: f32,
+    provenance: &RuleProvenance,
+    mut flags: Vec<LexicalProsodyFlag>,
+) -> Vec<LexicalProsodyFlagFact> {
+    flags.sort_unstable_by_key(|flag| *flag as u8);
+    flags.dedup();
+    flags
+        .into_iter()
+        .map(|flag| LexicalProsodyFlagFact {
+            source_rule_id: rule_id.to_string(),
+            flag,
+            confidence,
+            provenance: provenance.clone(),
+        })
+        .collect()
+}
+
+fn lexical_flag_facts_for_weak_form_rule(rule: &WeakFormRule) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    push_flag_once(&mut flags, LexicalProsodyFlag::Unstressed);
+    flags.extend(contextual_flags(&rule.context));
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
+
+fn lexical_flag_facts_for_stress_rule(rule: &StressRule) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    if rule
+        .output_transformation
+        .eq_ignore_ascii_case("unstressed")
+    {
+        push_flag_once(&mut flags, LexicalProsodyFlag::Unstressed);
+    }
+    flags.extend(contextual_flags(&rule.context));
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
+
+fn lexical_flag_facts_for_pronunciation_override_rule(
+    rule: &PronunciationOverrideRule,
+) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    flags.extend(contextual_flags(&rule.context));
+    if rule
+        .match_pattern
+        .chars()
+        .any(|ch| ch.is_ascii_alphabetic() && ch.is_ascii_uppercase())
+        && rule
+            .match_pattern
+            .chars()
+            .all(|ch| !ch.is_ascii_alphabetic() || ch.is_ascii_uppercase())
+    {
+        push_flag_once(&mut flags, LexicalProsodyFlag::AllCapsEmphasis);
+    }
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
+
+fn lexical_flag_facts_for_punctuation_rule(
+    rule: &PunctuationProsodyRule,
+) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    push_flag_once(&mut flags, LexicalProsodyFlag::PauseAfter);
+    push_flag_once(&mut flags, LexicalProsodyFlag::BreakAfter);
+    flags.extend(contextual_flags(&rule.context));
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Public conversion functions
@@ -323,7 +517,7 @@ pub fn convert_weak_form_rule(
     variety: &str,
 ) -> ImportedEnvironmentRule {
     let output_phones = arpabet_to_phone_string(&rule.output_transformation);
-    let confidence = rule.confidence as f32 / CONFIDENCE_SCALE_FACTOR;
+    let confidence = confidence_from_seed(rule.confidence);
 
     // Prosodic role: weak form words are always function words in weak position.
     // Note: the seed rule's `next_pos` constraint ("fire when the next word is a
@@ -331,9 +525,9 @@ pub fn convert_weak_form_rule(
     // *current* word — the native engine does not yet model "next-word POS"
     // directly.  The `ProsodicRole::FunctionWeak` predicate captures the same
     // semantic intent: "to" before a verb is always a weakly-stressed function word.
-    let contains: Vec<ling_env::ContextPredicate> = vec![
-        ling_env::ContextPredicate::ProsodicRole(ling_env::ProsodicRole::FunctionWeak),
-    ];
+    let contains: Vec<ling_env::ContextPredicate> = vec![ling_env::ContextPredicate::ProsodicRole(
+        ling_env::ProsodicRole::FunctionWeak,
+    )];
 
     // Build a target pattern from the citation form's base ARPAbet symbols.
     let citation_symbols: Vec<String> = rule
@@ -352,6 +546,7 @@ pub fn convert_weak_form_rule(
         provenance: rule.provenance.clone(),
         priority: rule.priority,
         confidence,
+        lexical_flags: lexical_flag_facts_for_weak_form_rule(rule),
         pattern: ling_env::EnvironmentPattern {
             target,
             left: Vec::new(),
@@ -381,7 +576,7 @@ pub fn convert_punctuation_prosody_rule(
     language: &str,
     variety: &str,
 ) -> ImportedEnvironmentRule {
-    let confidence = rule.confidence as f32 / CONFIDENCE_SCALE_FACTOR;
+    let confidence = confidence_from_seed(rule.confidence);
     let (boundary, contour) = parse_boundary_output(&rule.output_transformation);
 
     ImportedEnvironmentRule {
@@ -389,6 +584,7 @@ pub fn convert_punctuation_prosody_rule(
         provenance: rule.provenance.clone(),
         priority: rule.priority,
         confidence,
+        lexical_flags: lexical_flag_facts_for_punctuation_rule(rule),
         pattern: ling_env::EnvironmentPattern {
             target: ling_env::TargetPattern::Symbol(rule.match_pattern.clone()),
             left: Vec::new(),
@@ -515,6 +711,12 @@ mod tests {
         assert_eq!(weak.output_transformation, "T AH0");
         assert_eq!(weak.provenance.source, "espeak-ng-derived");
         assert!(
+            weak.lexical_flags
+                .iter()
+                .any(|fact| fact.flag == LexicalProsodyFlag::Unstressed),
+            "weak-form descriptor should expose imported unstressed flag facts"
+        );
+        assert!(
             weak.provenance.source_file.contains("en_rules"),
             "expected source file metadata"
         );
@@ -538,6 +740,13 @@ mod tests {
 
         assert_eq!(native.id, "weak_form_to_before_verb");
         assert_eq!(native.provenance.source, "espeak-ng-derived");
+        assert!(
+            native
+                .lexical_flags
+                .iter()
+                .any(|fact| fact.flag == LexicalProsodyFlag::Unstressed),
+            "weak-form conversion should preserve unstressed dictionary flag"
+        );
         assert!(
             native.provenance.source_file.contains("en_rules"),
             "provenance source file should survive conversion"
@@ -667,10 +876,41 @@ mod tests {
             matches!(&native.output, RuleOutput::ProsodyBoundary { .. }),
             "punctuation output must be a ProsodyBoundary"
         );
+        assert!(
+            native
+                .lexical_flags
+                .iter()
+                .any(|fact| fact.flag == LexicalProsodyFlag::BreakAfter),
+            "punctuation conversion should preserve break-after dictionary flag"
+        );
         if let RuleOutput::ProsodyBoundary { boundary, contour } = &native.output {
             assert_eq!(*boundary, ling_env::PhraseBoundaryKind::Major);
             assert_eq!(contour.as_deref(), Some("exclamation"));
         }
+    }
+
+    #[test]
+    fn english_rule_flag_lookup_covers_multiple_native_flag_kinds() {
+        let mut flags = english_lexical_flag_facts_for_rule("weak_form_to_before_verb")
+            .into_iter()
+            .map(|fact| fact.flag)
+            .collect::<Vec<_>>();
+        flags.extend(
+            english_lexical_flag_facts_for_rule("strong_to_contrastive_uppercase")
+                .into_iter()
+                .map(|fact| fact.flag),
+        );
+        flags.extend(
+            english_lexical_flag_facts_for_rule("punctuation_exclamation_boundary")
+                .into_iter()
+                .map(|fact| fact.flag),
+        );
+        flags.sort_unstable_by_key(|flag| *flag as u8);
+        flags.dedup();
+        assert!(
+            flags.len() >= 5,
+            "expected at least five distinct native lexical/prosody flags from imported rules"
+        );
     }
 
     #[test]
@@ -708,7 +948,10 @@ mod tests {
     #[test]
     fn bulk_english_weak_form_rules_are_non_empty_and_all_have_provenance() {
         let rules = english_imported_weak_form_rules();
-        assert!(!rules.is_empty(), "should have at least one English weak form rule");
+        assert!(
+            !rules.is_empty(),
+            "should have at least one English weak form rule"
+        );
         for rule in &rules {
             assert_eq!(
                 rule.provenance.source, "espeak-ng-derived",
