@@ -117,6 +117,24 @@ impl RollingVoiceCountEstimator {
         )
     }
 
+    /// Convenience method to consume an [`OverlapMixture`] directly.
+    ///
+    /// Extracts the [`SourceHypothesis`] from each component and feeds them
+    /// into [`Self::update`], using the mixture's own `range`.  This lets
+    /// the voice-count estimator consume the output of [`detect_overlaps`]
+    /// without any manual unpacking.
+    pub fn update_from_overlap(
+        &mut self,
+        mixture: &crate::soundscape::OverlapMixture,
+    ) -> (VoiceActivityFrame, VoiceCount) {
+        let hypotheses = mixture
+            .components
+            .iter()
+            .map(|c| c.source_hypothesis.clone())
+            .collect();
+        self.update(mixture.range, hypotheses)
+    }
+
     fn evict_stale(&mut self, frame_range: TimeRange) {
         let recent_cutoff = frame_range
             .end
