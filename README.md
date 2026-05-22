@@ -547,11 +547,11 @@ listenbury transcribe input.wav
 
 ### `say`
 
-Synthesizes and plays speech using Piper (`--riper` optional) or Klatt (`--klatt`).
+Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt.
 
 ```bash
 listenbury say "Testing one two three."
-listenbury say --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
+listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
 ```
 
 ### `riper-compare`
