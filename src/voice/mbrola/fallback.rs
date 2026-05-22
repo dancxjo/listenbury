@@ -6,8 +6,7 @@
 //! surface every non-exact substitution in a render report.
 
 use super::diphone_provider::{
-    DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
-    DiphoneUnitSource,
+    DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata, DiphoneUnitSource,
 };
 
 /// Describes why a particular diphone unit was chosen.
@@ -95,8 +94,7 @@ pub fn resolve_right_half(
     }
 
     // 3. Synthetic silence
-    let silence =
-        synthetic_silence_unit(left, phone, sample_rate_hz, period_samples);
+    let silence = synthetic_silence_unit(left, phone, sample_rate_hz, period_samples);
     FallbackResult {
         lookup: DiphoneLookup { unit: silence },
         reason: FallbackReason::SyntheticSilence,
@@ -139,8 +137,7 @@ pub fn resolve_left_half(
     }
 
     // 3. Synthetic silence
-    let silence =
-        synthetic_silence_unit(phone, right, sample_rate_hz, period_samples);
+    let silence = synthetic_silence_unit(phone, right, sample_rate_hz, period_samples);
     FallbackResult {
         lookup: DiphoneLookup { unit: silence },
         reason: FallbackReason::SyntheticSilence,
@@ -148,7 +145,11 @@ pub fn resolve_left_half(
 }
 
 /// Build a warning message for any non-exact fallback result.
-pub fn fallback_warning(requested_left: &str, requested_right: &str, reason: &FallbackReason) -> Option<String> {
+pub fn fallback_warning(
+    requested_left: &str,
+    requested_right: &str,
+    reason: &FallbackReason,
+) -> Option<String> {
     if reason.is_exact() {
         return None;
     }
@@ -192,6 +193,7 @@ fn synthetic_silence_unit(
         samples: vec![0.0_f32; silence_len],
         sample_rate_hz,
         halfseg_samples: silence_len / 2,
+        frame_center_samples: Vec::new(),
         source: DiphoneUnitSource::SyntheticSilence,
         metadata: DiphoneUnitMetadata {
             requested_key: Some(DiphoneKey::new(left, right)),
@@ -202,8 +204,8 @@ fn synthetic_silence_unit(
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
     use anyhow::anyhow;
+    use anyhow::Result;
     use std::collections::BTreeMap;
 
     use super::*;
@@ -222,6 +224,7 @@ mod tests {
                     samples: vec![0.1_f32; 8],
                     sample_rate_hz: 16_000,
                     halfseg_samples: halfseg,
+                    frame_center_samples: vec![2, 6],
                     source: DiphoneUnitSource::MbrolaExact,
                     metadata: DiphoneUnitMetadata::default(),
                 },
@@ -264,7 +267,10 @@ mod tests {
         let mut p = MapProvider::default();
         let result = resolve_right_half(&mut p, "a", "b", 16_000, 80);
         assert_eq!(result.reason, FallbackReason::SyntheticSilence);
-        assert_eq!(result.lookup.unit.source, DiphoneUnitSource::SyntheticSilence);
+        assert_eq!(
+            result.lookup.unit.source,
+            DiphoneUnitSource::SyntheticSilence
+        );
         assert!(!result.lookup.unit.samples.is_empty());
     }
 

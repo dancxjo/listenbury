@@ -193,17 +193,14 @@ fn apply_crossfade(buf: &mut [f32], join_idx: usize, radius: usize) {
         .iter_mut()
         .enumerate()
     {
-        let t = (i + 1) as f32 / (right_range + 1) as f32; // 0 < t < 1
+        let t = (i + 1) as f32 / (right_range + 1) as f32;
         // gain goes from 1 → 0 as i increases (approaching join)
         let gain = (std::f32::consts::FRAC_PI_2 * (1.0 - t)).cos();
         *sample *= gain;
     }
 
     // Apply fade-in on left side: first `left_range` samples after join
-    for (i, sample) in buf[join_idx.min(buf_len)..fade_end]
-        .iter_mut()
-        .enumerate()
-    {
+    for (i, sample) in buf[join_idx.min(buf_len)..fade_end].iter_mut().enumerate() {
         let t = (i + 1) as f32 / (left_range + 1) as f32;
         // gain goes from 0 → 1 as i increases (moving away from join)
         let gain = (std::f32::consts::FRAC_PI_2 * t).sin();
@@ -283,6 +280,7 @@ mod tests {
             samples,
             sample_rate_hz: 16_000,
             halfseg_samples: halfseg,
+            frame_center_samples: vec![2, 6],
             source: DiphoneUnitSource::MbrolaExact,
             metadata: DiphoneUnitMetadata::default(),
         }
@@ -303,10 +301,7 @@ mod tests {
         let right = vec![0.1_f32; 6];
         let left = vec![0.2_f32; 4];
         let (_, report) = assemble_unit(&right, &left, 0, false);
-        assert_eq!(
-            report.join_point,
-            Some(JoinPoint { sample_index: 6 })
-        );
+        assert_eq!(report.join_point, Some(JoinPoint { sample_index: 6 }));
     }
 
     #[test]

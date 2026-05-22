@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 use crate::audio::{frame::AudioFrame, write_wav};
 use crate::time::ExactTimestamp;
@@ -9,7 +9,7 @@ use crate::time::ExactTimestamp;
 use super::database::MbrolaDatabase;
 use super::diphone_provider::{DiphoneProvider, DiphoneUnitSource, MbrolaDiphoneProvider};
 use super::fallback::{fallback_warning, resolve_left_half, resolve_right_half};
-use super::pho::{MbrolaPitchTarget, PhoneTimedPlan, write_pho_file};
+use super::pho::{write_pho_file, MbrolaPitchTarget, PhoneTimedPlan};
 use super::units::{assemble_unit, left_half_samples, right_half_samples};
 use super::voice::MbrolaVoice;
 
@@ -249,24 +249,32 @@ fn render_native_diphone_frames_with_provider(
         let prev = previous_symbol(plan, index).unwrap_or("_");
         let next = next_symbol(plan, index).unwrap_or("_");
 
-        let right_result = resolve_right_half(provider, prev, &phone.symbol, sample_rate_hz, source_period_samples);
-        let left_result = resolve_left_half(provider, &phone.symbol, next, sample_rate_hz, source_period_samples);
+        let right_result = resolve_right_half(
+            provider,
+            prev,
+            &phone.symbol,
+            sample_rate_hz,
+            source_period_samples,
+        );
+        let left_result = resolve_left_half(
+            provider,
+            &phone.symbol,
+            next,
+            sample_rate_hz,
+            source_period_samples,
+        );
 
         for result in [&right_result, &left_result] {
             *source_counts.entry(result.lookup.unit.source).or_insert(0) += 1;
             // Prefer the embedded metadata warning (more specific, includes actual unit used),
             // fall back to the generic fallback description for sources without embedded warnings.
-            let warning = result
-                .lookup
-                .unit
-                .metadata
-                .warning
-                .clone()
-                .or_else(|| fallback_warning(
+            let warning = result.lookup.unit.metadata.warning.clone().or_else(|| {
+                fallback_warning(
                     result.lookup.unit.key.left.as_str(),
                     result.lookup.unit.key.right.as_str(),
                     &result.reason,
-                ));
+                )
+            });
             if let Some(w) = warning {
                 if !warnings.contains(&w) {
                     warnings.push(w);
@@ -274,10 +282,14 @@ fn render_native_diphone_frames_with_provider(
             }
         }
 
-        let right_half = right_half_samples(&right_result.lookup.unit).to_vec();
-        let left_half = left_half_samples(&left_result.lookup.unit).to_vec();
+        let right_unit = &right_result.lookup.unit;
+        let left_unit = &left_result.lookup.unit;
+        let right_half = right_half_samples(right_unit).to_vec();
+        let left_half = left_half_samples(left_unit).to_vec();
+        let frame_centers = stitched_frame_centers(right_unit, &right_half, left_unit);
 
-        let (unit, _assembly_report) = assemble_unit(&right_half, &left_half, CROSSFADE_SAMPLES, true);
+        let (unit, _assembly_report) =
+            assemble_unit(&right_half, &left_half, CROSSFADE_SAMPLES, true);
 
         if unit.is_empty() {
             return Err(anyhow::anyhow!(
@@ -287,6 +299,7 @@ fn render_native_diphone_frames_with_provider(
         }
         samples.extend(psola_synthesize(
             &unit,
+            &frame_centers,
             phone.duration_ms,
             &phone.pitch_targets,
             sample_rate_hz,
@@ -321,6 +334,48 @@ fn next_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
         .or(Some("_"))
 }
 
+fn stitched_frame_centers(
+    right_unit: &super::diphone_provider::DiphoneUnit,
+    right_half: &[f32],
+    left_unit: &super::diphone_provider::DiphoneUnit,
+) -> Vec<usize> {
+    let mut centers = half_frame_centers(right_unit, Half::Right);
+    let right_len = right_half.len();
+    centers.extend(
+        half_frame_centers(left_unit, Half::Left)
+            .into_iter()
+            .map(|center| center + right_len),
+    );
+    centers.sort_unstable();
+    centers.dedup();
+    centers
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Half {
+    Left,
+    Right,
+}
+
+fn half_frame_centers(unit: &super::diphone_provider::DiphoneUnit, half: Half) -> Vec<usize> {
+    let split = unit.halfseg_samples.min(unit.samples.len());
+    match half {
+        Half::Left => unit
+            .frame_center_samples
+            .iter()
+            .copied()
+            .filter(|center| *center < split)
+            .collect(),
+        Half::Right => unit
+            .frame_center_samples
+            .iter()
+            .copied()
+            .filter(|center| *center >= split)
+            .map(|center| center - split)
+            .collect(),
+    }
+}
+
 fn duration_samples(duration_ms: u32, sample_rate_hz: u32) -> usize {
     (u64::from(duration_ms) * u64::from(sample_rate_hz) / 1000) as usize
 }
@@ -349,6 +404,7 @@ fn resample_linear(input: &[f32], output_len: usize) -> Vec<f32> {
 
 fn psola_synthesize(
     input: &[f32],
+    source_frame_centers: &[usize],
     duration_ms: u32,
     pitch_targets: &[MbrolaPitchTarget],
     sample_rate_hz: u32,
@@ -361,7 +417,8 @@ fn psola_synthesize(
 
     let source_period_samples = source_period_samples.max(1);
     let grain_len = (source_period_samples * 2).max(4);
-    let source_marks = pitch_marks_for_len(input.len(), source_period_samples);
+    let source_marks =
+        usable_frame_centers(input.len(), source_frame_centers, source_period_samples);
     if input.len() < grain_len || source_marks.len() < MIN_PSOLA_GRAINS {
         return resample_linear(input, output_len);
     }
@@ -405,18 +462,36 @@ fn psola_synthesize(
     output
 }
 
+fn usable_frame_centers(sample_len: usize, source_centers: &[usize], period: usize) -> Vec<usize> {
+    let half_grain = period.max(1);
+    let mut centers = source_centers
+        .iter()
+        .copied()
+        .filter(|center| {
+            center.saturating_sub(half_grain) < sample_len && center + half_grain <= sample_len
+        })
+        .collect::<Vec<_>>();
+    centers.sort_unstable();
+    centers.dedup();
+    if centers.len() >= MIN_PSOLA_GRAINS {
+        return centers;
+    }
+    pitch_marks_for_len(sample_len, period)
+}
+
 fn pitch_marks_for_len(sample_len: usize, period: usize) -> Vec<usize> {
     if sample_len == 0 {
         return Vec::new();
     }
     let mut marks = Vec::new();
-    let mut center = period / 2;
-    while center < sample_len {
+    let period = period.max(1);
+    let mut center = period;
+    while center + period <= sample_len {
         marks.push(center);
         center += period;
     }
-    if marks.last().copied() != Some(sample_len - 1) {
-        marks.push(sample_len - 1);
+    if marks.is_empty() {
+        marks.push(sample_len / 2);
     }
     marks
 }
@@ -545,7 +620,7 @@ mod tests {
         DiphoneKey, DiphoneLookup, DiphoneUnit, DiphoneUnitMetadata, DiphoneUnitSource,
     };
     use super::super::pho::MbrolaPhone;
-    use anyhow::{Result, anyhow};
+    use anyhow::{anyhow, Result};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -554,7 +629,7 @@ mod tests {
     #[test]
     fn psola_synthesize_matches_requested_duration() {
         let input = sine(220.0, 1600, 16_000);
-        let output = psola_synthesize(&input, 250, &[], 16_000, 80);
+        let output = psola_synthesize(&input, &[], 250, &[], 16_000, 80);
 
         assert_eq!(output.len(), 4000);
         assert!(output.iter().any(|sample| sample.abs() > 0.01));
@@ -565,6 +640,7 @@ mod tests {
         let input = sine(180.0, 3200, 16_000);
         let low = psola_synthesize(
             &input,
+            &[],
             200,
             &[MbrolaPitchTarget {
                 percent: 0,
@@ -575,6 +651,7 @@ mod tests {
         );
         let high = psola_synthesize(
             &input,
+            &[],
             200,
             &[MbrolaPitchTarget {
                 percent: 0,
@@ -605,6 +682,15 @@ mod tests {
         );
 
         assert!((curve.hz_at(50, 101) - 150.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn psola_prefers_database_frame_centers_when_available() {
+        assert_eq!(
+            usable_frame_centers(320, &[80, 160, 240], 80),
+            vec![80, 160, 240]
+        );
+        assert_eq!(usable_frame_centers(320, &[10], 80), vec![80, 160, 240]);
     }
 
     #[test]
@@ -651,17 +737,13 @@ mod tests {
 
         assert_eq!(rendered.frames.len(), 1);
         assert_eq!(rendered.frames[0].sample_rate_hz, 16_000);
-        assert!(
-            rendered.frames[0]
-                .samples
-                .iter()
-                .any(|sample| sample.abs() > 0.001)
-        );
-        assert!(
-            rendered
-                .source_counts
-                .contains_key(&DiphoneUnitSource::MbrolaBoundaryFallback)
-        );
+        assert!(rendered.frames[0]
+            .samples
+            .iter()
+            .any(|sample| sample.abs() > 0.001));
+        assert!(rendered
+            .source_counts
+            .contains_key(&DiphoneUnitSource::MbrolaBoundaryFallback));
         assert!(!rendered.warnings.is_empty());
     }
 
@@ -688,12 +770,10 @@ mod tests {
             Some(&2)
         );
         assert_eq!(rendered.warnings.len(), 2);
-        assert!(
-            rendered
-                .warnings
-                .iter()
-                .all(|warning| warning.contains("boundary fallback diphone"))
-        );
+        assert!(rendered
+            .warnings
+            .iter()
+            .all(|warning| warning.contains("boundary fallback diphone")));
     }
 
     fn sine(hz: f32, len: usize, sample_rate_hz: u32) -> Vec<f32> {
@@ -728,6 +808,7 @@ mod tests {
                         samples: vec![0.05, 0.1, 0.2, 0.15, -0.1, -0.05, 0.02, 0.01],
                         sample_rate_hz: 16_000,
                         halfseg_samples,
+                        frame_center_samples: vec![2, 6],
                         source: DiphoneUnitSource::MbrolaExact,
                         metadata: DiphoneUnitMetadata::default(),
                     },
