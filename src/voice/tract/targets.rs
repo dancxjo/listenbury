@@ -18,7 +18,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::linguistic::phonology::{Phone, PhoneString};
+use crate::linguistic::phonology::{
+    FeatureBundle, MajorClass, Manner, Phone, PhoneString, PhonemicInventory, Place, Roundedness,
+    Voicing, VowelBackness, VowelHeight, general_american_english,
+};
 use crate::prosody::syllable::{SungSyllable, Syllable};
 use crate::prosody::vibrato::Vibrato;
 
@@ -118,6 +121,30 @@ pub struct PhoneAcousticTarget {
     pub source: GlottalSourceTarget,
     /// Default duration in milliseconds.
     pub default_duration_ms: u64,
+    /// Frication/noise amount for this phone (0.0-1.0).
+    #[serde(default)]
+    pub frication_level: f32,
+    /// Aspiration amount for this phone (0.0-1.0).
+    #[serde(default)]
+    pub aspiration_level: f32,
+    /// Optional burst spectral center hint in Hz for stops/affricates.
+    #[serde(default)]
+    pub burst_hz_hint: Option<f32>,
+    /// Optional closure duration hint in milliseconds for stops/affricates.
+    #[serde(default)]
+    pub closure_ms_hint: Option<u64>,
+    /// Optional release duration hint in milliseconds for stops/affricates.
+    #[serde(default)]
+    pub release_ms_hint: Option<u64>,
+    /// Optional nasal pole frequency hint in Hz.
+    #[serde(default)]
+    pub nasal_pole_hz: Option<f32>,
+    /// Optional nasal zero frequency hint in Hz.
+    #[serde(default)]
+    pub nasal_zero_hz: Option<f32>,
+    /// Coarticulation resistance / transition stiffness (0.0-1.0).
+    #[serde(default)]
+    pub transition_stiffness: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +198,14 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -6.0,
             },
             default_duration_ms: dur_ms,
+            frication_level: 0.0,
+            aspiration_level: 0.05,
+            burst_hz_hint: None,
+            closure_ms_hint: None,
+            release_ms_hint: None,
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.35,
         }
     }
 
@@ -213,6 +248,14 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -9.0,
             },
             default_duration_ms: 70,
+            frication_level: 0.0,
+            aspiration_level: 0.0,
+            burst_hz_hint: None,
+            closure_ms_hint: None,
+            release_ms_hint: None,
+            nasal_pole_hz: Some(300.0),
+            nasal_zero_hz: Some(900.0),
+            transition_stiffness: 0.55,
         }
     }
 
@@ -245,6 +288,14 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -6.0,
             },
             default_duration_ms: 80,
+            frication_level: 0.0,
+            aspiration_level: 0.03,
+            burst_hz_hint: None,
+            closure_ms_hint: None,
+            release_ms_hint: None,
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.6,
         }
     }
 
@@ -277,10 +328,18 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -3.0,
             },
             default_duration_ms: 70,
+            frication_level: if voiced { 0.7 } else { 0.95 },
+            aspiration_level: if voiced { 0.2 } else { 0.5 },
+            burst_hz_hint: None,
+            closure_ms_hint: None,
+            release_ms_hint: None,
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.7,
         }
     }
 
-    fn stop(ipa: &str, voiced: bool) -> PhoneAcousticTarget {
+    fn stop(ipa: &str, voiced: bool, burst_hz: f32) -> PhoneAcousticTarget {
         PhoneAcousticTarget {
             ipa: ipa.to_string(),
             voiced,
@@ -296,6 +355,14 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
                 spectral_tilt_db_per_octave: -3.0,
             },
             default_duration_ms: 60,
+            frication_level: 0.0,
+            aspiration_level: if voiced { 0.05 } else { 0.4 },
+            burst_hz_hint: Some(burst_hz),
+            closure_ms_hint: Some(45),
+            release_ms_hint: Some(15),
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.85,
         }
     }
 
@@ -400,6 +467,12 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
     // --- Stops / affricates (burst + transition placeholder) ----------------
 
     for t in [
+        stop("p", false, 900.0),
+        stop("b", true, 900.0),
+        stop("t", false, 3000.0),
+        stop("d", true, 3000.0),
+        stop("k", false, 1900.0),
+        stop("ɡ", true, 1900.0),
         stop("p", false),
         stop("b", true),
         stop("t", false),
@@ -413,6 +486,348 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
     }
 
     map
+}
+
+fn stop_burst_hint(place: Option<Place>) -> f32 {
+    match place {
+        Some(Place::Bilabial | Place::Labiodental) => 900.0,
+        Some(Place::Dental | Place::Alveolar | Place::Postalveolar) => 3000.0,
+        Some(Place::Palatal | Place::Velar) => 1900.0,
+        Some(Place::Glottal) | None => 1600.0,
+    }
+}
+
+const MIN_VOWEL_F2_HZ: f32 = 500.0;
+const MIN_VOWEL_F3_HZ: f32 = 1300.0;
+
+fn fricative_noise_center(place: Option<Place>) -> f32 {
+    match place {
+        Some(Place::Bilabial | Place::Labiodental) => 1300.0,
+        Some(Place::Dental) => 1800.0,
+        Some(Place::Alveolar | Place::Postalveolar) => 4200.0,
+        Some(Place::Palatal) => 3200.0,
+        Some(Place::Velar) => 2200.0,
+        Some(Place::Glottal) | None => 1600.0,
+    }
+}
+
+fn consonant_formant_anchor(place: Option<Place>) -> (f32, f32, f32) {
+    match place {
+        Some(Place::Bilabial | Place::Labiodental) => (360.0, 1100.0, 2400.0),
+        Some(Place::Dental | Place::Alveolar | Place::Postalveolar) => (380.0, 1700.0, 2600.0),
+        Some(Place::Palatal) => (320.0, 2100.0, 2800.0),
+        Some(Place::Velar) => (340.0, 1500.0, 2500.0),
+        Some(Place::Glottal) | None => (400.0, 1600.0, 2500.0),
+    }
+}
+
+fn vowel_formants_from_features(features: &FeatureBundle) -> (f32, f32, f32) {
+    let mut f1: f32 = match features.vowel_height {
+        Some(VowelHeight::High) => 320.0,
+        Some(VowelHeight::Mid) => 500.0,
+        Some(VowelHeight::Low) => 700.0,
+        Some(VowelHeight::Rhotic) => 460.0,
+        None => 520.0,
+    };
+    let mut f2: f32 = match features.vowel_backness {
+        Some(VowelBackness::Front) => 2150.0,
+        Some(VowelBackness::Central) => 1500.0,
+        Some(VowelBackness::Back) => 950.0,
+        None => 1500.0,
+    };
+    let mut f3: f32 = if features.vowel_height == Some(VowelHeight::Rhotic) {
+        1750.0
+    } else {
+        2600.0
+    };
+
+    if features.roundedness == Some(Roundedness::Rounded) {
+        f2 -= 180.0;
+        f3 -= 220.0;
+        f1 -= 20.0;
+    }
+
+    // Keep feature-derived vowels inside a physically plausible region so
+    // extreme feature combinations cannot collapse resonances.
+    (f1, f2.max(MIN_VOWEL_F2_HZ), f3.max(MIN_VOWEL_F3_HZ))
+}
+
+/// Derive a Klatt acoustic target from structured phonological features.
+pub fn klatt_targets_from_features(
+    phone: &Phone,
+    features: &FeatureBundle,
+    _variety: &PhonemicInventory,
+) -> PhoneAcousticTarget {
+    if features.major == MajorClass::Vowel || features.syllabic {
+        let (f1, f2, f3) = vowel_formants_from_features(features);
+        return PhoneAcousticTarget {
+            ipa: phone.ipa.clone(),
+            voiced: true,
+            is_vowel: true,
+            is_fricative: false,
+            is_stop: false,
+            is_nasal: false,
+            is_approximant: false,
+            filter: Some(VocalTractFilterTarget {
+                f1_hz: f1,
+                f1_bw_hz: 80.0,
+                f1_amp_db: 0.0,
+                f2_hz: f2,
+                f2_bw_hz: 100.0,
+                f2_amp_db: -3.0,
+                f3_hz: f3,
+                f3_bw_hz: 150.0,
+                f3_amp_db: -6.0,
+                f4_hz: Some(3500.0),
+                f4_bw_hz: Some(200.0),
+                f4_amp_db: Some(-9.0),
+            }),
+            source: GlottalSourceTarget {
+                breathiness: 0.05,
+                open_quotient: 0.5,
+                spectral_tilt_db_per_octave: -6.0,
+            },
+            default_duration_ms: if features.vowel_height == Some(VowelHeight::Rhotic) {
+                110
+            } else {
+                90
+            },
+            frication_level: 0.0,
+            aspiration_level: 0.05,
+            burst_hz_hint: None,
+            closure_ms_hint: None,
+            release_ms_hint: None,
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.35,
+        };
+    }
+
+    let voiced = !matches!(features.voicing, Some(Voicing::Voiceless));
+    // Unknown consonant manner defaults to stop-like behavior so unknown
+    // symbols remain bounded (no accidental broadband frication) and can still
+    // carry conservative closure/release hints.
+    let manner = features.manner.unwrap_or(Manner::Stop);
+
+    match manner {
+        Manner::Nasal => {
+            let (_, f2, _) = consonant_formant_anchor(features.place);
+            PhoneAcousticTarget {
+                ipa: phone.ipa.clone(),
+                voiced: true,
+                is_vowel: false,
+                is_fricative: false,
+                is_stop: false,
+                is_nasal: true,
+                is_approximant: false,
+                filter: Some(VocalTractFilterTarget {
+                    f1_hz: 280.0,
+                    f1_bw_hz: 100.0,
+                    f1_amp_db: -6.0,
+                    f2_hz: f2,
+                    f2_bw_hz: 150.0,
+                    f2_amp_db: -9.0,
+                    f3_hz: 2500.0,
+                    f3_bw_hz: 200.0,
+                    f3_amp_db: -12.0,
+                    f4_hz: None,
+                    f4_bw_hz: None,
+                    f4_amp_db: None,
+                }),
+                source: GlottalSourceTarget {
+                    breathiness: 0.0,
+                    open_quotient: 0.5,
+                    spectral_tilt_db_per_octave: -9.0,
+                },
+                default_duration_ms: 70,
+                frication_level: 0.0,
+                aspiration_level: 0.0,
+                burst_hz_hint: None,
+                closure_ms_hint: None,
+                release_ms_hint: None,
+                nasal_pole_hz: Some(300.0),
+                nasal_zero_hz: Some(900.0),
+                transition_stiffness: 0.55,
+            }
+        }
+        Manner::Fricative | Manner::Affricate => {
+            let noise_center = fricative_noise_center(features.place);
+            PhoneAcousticTarget {
+                ipa: phone.ipa.clone(),
+                voiced,
+                is_vowel: false,
+                is_fricative: true,
+                is_stop: manner == Manner::Affricate,
+                is_nasal: false,
+                is_approximant: false,
+                filter: Some(VocalTractFilterTarget {
+                    f1_hz: 400.0,
+                    f1_bw_hz: 200.0,
+                    f1_amp_db: -12.0,
+                    f2_hz: noise_center,
+                    f2_bw_hz: 500.0,
+                    f2_amp_db: -6.0,
+                    f3_hz: (noise_center + 1200.0).max(2600.0),
+                    f3_bw_hz: 600.0,
+                    f3_amp_db: -6.0,
+                    f4_hz: None,
+                    f4_bw_hz: None,
+                    f4_amp_db: None,
+                }),
+                source: GlottalSourceTarget {
+                    breathiness: if voiced { 0.3 } else { 0.95 },
+                    open_quotient: if voiced { 0.5 } else { 0.0 },
+                    spectral_tilt_db_per_octave: -3.0,
+                },
+                default_duration_ms: if manner == Manner::Affricate { 85 } else { 70 },
+                frication_level: if voiced { 0.7 } else { 0.95 },
+                aspiration_level: if voiced { 0.2 } else { 0.5 },
+                burst_hz_hint: if manner == Manner::Affricate {
+                    Some(stop_burst_hint(features.place))
+                } else {
+                    None
+                },
+                closure_ms_hint: if manner == Manner::Affricate {
+                    Some(35)
+                } else {
+                    None
+                },
+                release_ms_hint: if manner == Manner::Affricate {
+                    Some(20)
+                } else {
+                    None
+                },
+                nasal_pole_hz: None,
+                nasal_zero_hz: None,
+                transition_stiffness: 0.75,
+            }
+        }
+        Manner::Liquid | Manner::Glide => {
+            let (f1, f2, mut f3) = consonant_formant_anchor(features.place);
+            if features.place == Some(Place::Postalveolar) {
+                f3 = 1700.0;
+            }
+            PhoneAcousticTarget {
+                ipa: phone.ipa.clone(),
+                voiced: true,
+                is_vowel: false,
+                is_fricative: false,
+                is_stop: false,
+                is_nasal: false,
+                is_approximant: true,
+                filter: Some(VocalTractFilterTarget {
+                    f1_hz: f1,
+                    f1_bw_hz: 100.0,
+                    f1_amp_db: -3.0,
+                    f2_hz: f2,
+                    f2_bw_hz: 120.0,
+                    f2_amp_db: -3.0,
+                    f3_hz: f3,
+                    f3_bw_hz: 200.0,
+                    f3_amp_db: -6.0,
+                    f4_hz: None,
+                    f4_bw_hz: None,
+                    f4_amp_db: None,
+                }),
+                source: GlottalSourceTarget {
+                    breathiness: 0.05,
+                    open_quotient: 0.5,
+                    spectral_tilt_db_per_octave: -6.0,
+                },
+                default_duration_ms: 80,
+                frication_level: 0.0,
+                aspiration_level: 0.03,
+                burst_hz_hint: None,
+                closure_ms_hint: None,
+                release_ms_hint: None,
+                nasal_pole_hz: None,
+                nasal_zero_hz: None,
+                transition_stiffness: 0.65,
+            }
+        }
+        Manner::Stop => PhoneAcousticTarget {
+            ipa: phone.ipa.clone(),
+            voiced,
+            is_vowel: false,
+            is_fricative: false,
+            is_stop: true,
+            is_nasal: false,
+            is_approximant: false,
+            filter: None,
+            source: GlottalSourceTarget {
+                breathiness: if voiced { 0.1 } else { 0.85 },
+                open_quotient: if voiced { 0.5 } else { 0.0 },
+                spectral_tilt_db_per_octave: -3.0,
+            },
+            default_duration_ms: 60,
+            frication_level: 0.0,
+            aspiration_level: if voiced { 0.05 } else { 0.4 },
+            burst_hz_hint: Some(stop_burst_hint(features.place)),
+            closure_ms_hint: Some(45),
+            release_ms_hint: Some(15),
+            nasal_pole_hz: None,
+            nasal_zero_hz: None,
+            transition_stiffness: 0.85,
+        },
+        Manner::Vowel => {
+            let (f1, f2, f3) = vowel_formants_from_features(features);
+            PhoneAcousticTarget {
+                ipa: phone.ipa.clone(),
+                voiced: true,
+                is_vowel: true,
+                is_fricative: false,
+                is_stop: false,
+                is_nasal: false,
+                is_approximant: false,
+                filter: Some(VocalTractFilterTarget {
+                    f1_hz: f1,
+                    f1_bw_hz: 80.0,
+                    f1_amp_db: 0.0,
+                    f2_hz: f2,
+                    f2_bw_hz: 100.0,
+                    f2_amp_db: -3.0,
+                    f3_hz: f3,
+                    f3_bw_hz: 150.0,
+                    f3_amp_db: -6.0,
+                    f4_hz: Some(3500.0),
+                    f4_bw_hz: Some(200.0),
+                    f4_amp_db: Some(-9.0),
+                }),
+                source: GlottalSourceTarget {
+                    breathiness: 0.05,
+                    open_quotient: 0.5,
+                    spectral_tilt_db_per_octave: -6.0,
+                },
+                default_duration_ms: 90,
+                frication_level: 0.0,
+                aspiration_level: 0.05,
+                burst_hz_hint: None,
+                closure_ms_hint: None,
+                release_ms_hint: None,
+                nasal_pole_hz: None,
+                nasal_zero_hz: None,
+                transition_stiffness: 0.35,
+            }
+        }
+    }
+}
+
+fn merge_feature_target_with_symbol_override(
+    mut base: PhoneAcousticTarget,
+    symbol_override: &PhoneAcousticTarget,
+) -> PhoneAcousticTarget {
+    base.filter = symbol_override.filter.clone();
+    base.source = symbol_override.source.clone();
+    base.default_duration_ms = symbol_override.default_duration_ms;
+    base.frication_level = symbol_override.frication_level;
+    base.aspiration_level = symbol_override.aspiration_level;
+    base.burst_hz_hint = symbol_override.burst_hz_hint;
+    base.closure_ms_hint = symbol_override.closure_ms_hint;
+    base.release_ms_hint = symbol_override.release_ms_hint;
+    base.nasal_pole_hz = symbol_override.nasal_pole_hz;
+    base.nasal_zero_hz = symbol_override.nasal_zero_hz;
+    base.transition_stiffness = symbol_override.transition_stiffness;
+    base
 }
 
 // ---------------------------------------------------------------------------
@@ -431,10 +846,29 @@ pub fn phone_render_targets_from_string(
     amplitude: f32,
     targets: &HashMap<String, PhoneAcousticTarget>,
 ) -> Vec<PhoneRenderTarget> {
+    let inventory = general_american_english();
+    phone_render_targets_from_string_with_inventory(
+        phone_string,
+        f0_hz,
+        amplitude,
+        targets,
+        &inventory,
+    )
+}
+
+/// Build a list of [`PhoneRenderTarget`] from a [`PhoneString`] using a
+/// specific phonemic inventory for feature derivation.
+pub fn phone_render_targets_from_string_with_inventory(
+    phone_string: &PhoneString,
+    f0_hz: Option<f32>,
+    amplitude: f32,
+    targets: &HashMap<String, PhoneAcousticTarget>,
+    inventory: &PhonemicInventory,
+) -> Vec<PhoneRenderTarget> {
     phone_string
         .phones
         .iter()
-        .map(|phone| build_render_target(phone, f0_hz, amplitude, targets))
+        .map(|phone| build_render_target(phone, f0_hz, amplitude, targets, inventory))
         .collect()
 }
 
@@ -498,21 +932,23 @@ fn build_render_target(
     f0_hz: Option<f32>,
     amplitude: f32,
     targets: &HashMap<String, PhoneAcousticTarget>,
+    inventory: &PhonemicInventory,
 ) -> PhoneRenderTarget {
-    let entry = targets.get(phone.ipa.as_str());
-    let effective_f0 = match entry {
-        Some(t) if !t.voiced => None,
-        _ => f0_hz,
-    };
-    let duration_ms = entry.map(|t| t.default_duration_ms).unwrap_or(80);
+    let features = inventory.features_for_phone(phone);
+    let mut target = klatt_targets_from_features(phone, &features, inventory);
+    if let Some(symbol_override) = targets.get(phone.ipa.as_str()) {
+        target = merge_feature_target_with_symbol_override(target, symbol_override);
+    }
+    let effective_f0 = if target.voiced { f0_hz } else { None };
+    let duration_ms = target.default_duration_ms;
     PhoneRenderTarget {
         phone: phone.clone(),
         duration_ms,
         f0_hz: effective_f0,
         amplitude,
         vibrato: None,
-        source: entry.map(|t| t.source.clone()),
-        filter: entry.and_then(|t| t.filter.clone()),
+        source: Some(target.source),
+        filter: target.filter,
     }
 }
 
@@ -524,6 +960,11 @@ fn build_render_target(
 mod tests {
     use super::*;
     use crate::linguistic::phonology::Phone;
+
+    fn target_from_features(phone_ipa: &str, features: FeatureBundle) -> PhoneAcousticTarget {
+        let inventory = general_american_english();
+        klatt_targets_from_features(&Phone::new_ipa(phone_ipa), &features, &inventory)
+    }
 
     #[test]
     fn default_table_covers_core_vowels() {
@@ -645,5 +1086,210 @@ mod tests {
         let json = serde_json::to_string(&targets[0]).unwrap();
         let back: PhoneRenderTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(targets[0], back);
+    }
+
+    #[test]
+    fn vowel_height_backness_and_rounding_shift_formants() {
+        let high_front_unrounded = target_from_features(
+            "u_test_1",
+            FeatureBundle {
+                major: MajorClass::Vowel,
+                place: None,
+                vowel_height: Some(VowelHeight::High),
+                vowel_backness: Some(VowelBackness::Front),
+                roundedness: Some(Roundedness::Unrounded),
+                manner: Some(Manner::Vowel),
+                voicing: Some(Voicing::Voiced),
+                syllabic: true,
+            },
+        );
+        let low_back_rounded = target_from_features(
+            "u_test_2",
+            FeatureBundle {
+                major: MajorClass::Vowel,
+                place: None,
+                vowel_height: Some(VowelHeight::Low),
+                vowel_backness: Some(VowelBackness::Back),
+                roundedness: Some(Roundedness::Rounded),
+                manner: Some(Manner::Vowel),
+                voicing: Some(Voicing::Voiced),
+                syllabic: true,
+            },
+        );
+
+        let high_filter = high_front_unrounded.filter.unwrap();
+        let low_filter = low_back_rounded.filter.unwrap();
+        assert!(
+            low_filter.f1_hz > high_filter.f1_hz,
+            "low vowels should raise F1"
+        );
+        assert!(
+            low_filter.f2_hz < high_filter.f2_hz,
+            "back rounded vowels should lower F2"
+        );
+        assert!(
+            low_filter.f3_hz < high_filter.f3_hz,
+            "rounding should lower F3"
+        );
+    }
+
+    #[test]
+    fn rhotic_vowels_lower_f3() {
+        let non_rhotic = target_from_features(
+            "v_test_1",
+            FeatureBundle {
+                major: MajorClass::Vowel,
+                place: None,
+                vowel_height: Some(VowelHeight::Mid),
+                vowel_backness: Some(VowelBackness::Central),
+                roundedness: Some(Roundedness::Unrounded),
+                manner: Some(Manner::Vowel),
+                voicing: Some(Voicing::Voiced),
+                syllabic: true,
+            },
+        );
+        let rhotic = target_from_features(
+            "v_test_2",
+            FeatureBundle {
+                major: MajorClass::Vowel,
+                place: None,
+                vowel_height: Some(VowelHeight::Rhotic),
+                vowel_backness: Some(VowelBackness::Central),
+                roundedness: Some(Roundedness::Unrounded),
+                manner: Some(Manner::Vowel),
+                voicing: Some(Voicing::Voiced),
+                syllabic: true,
+            },
+        );
+        assert!(
+            rhotic.filter.unwrap().f3_hz < non_rhotic.filter.unwrap().f3_hz,
+            "rhotic vowels should lower F3"
+        );
+    }
+
+    #[test]
+    fn voiced_and_voiceless_consonants_change_source_behavior() {
+        let voiced = target_from_features(
+            "cons_v",
+            FeatureBundle {
+                major: MajorClass::Consonant,
+                place: Some(Place::Alveolar),
+                vowel_height: None,
+                vowel_backness: None,
+                roundedness: None,
+                manner: Some(Manner::Fricative),
+                voicing: Some(Voicing::Voiced),
+                syllabic: false,
+            },
+        );
+        let voiceless = target_from_features(
+            "cons_vl",
+            FeatureBundle {
+                voicing: Some(Voicing::Voiceless),
+                ..FeatureBundle {
+                    major: MajorClass::Consonant,
+                    place: Some(Place::Alveolar),
+                    vowel_height: None,
+                    vowel_backness: None,
+                    roundedness: None,
+                    manner: Some(Manner::Fricative),
+                    voicing: Some(Voicing::Voiced),
+                    syllabic: false,
+                }
+            },
+        );
+        assert!(voiced.voiced);
+        assert!(!voiceless.voiced);
+        assert!(
+            voiced.source.open_quotient > voiceless.source.open_quotient,
+            "voiceless fricatives should reduce periodic source"
+        );
+        assert!(
+            voiced.source.breathiness < voiceless.source.breathiness,
+            "voiceless fricatives should increase aspiration/noise"
+        );
+    }
+
+    #[test]
+    fn stops_emit_closure_release_and_burst_hints() {
+        let stop = target_from_features(
+            "stop_t",
+            FeatureBundle {
+                major: MajorClass::Consonant,
+                place: Some(Place::Alveolar),
+                vowel_height: None,
+                vowel_backness: None,
+                roundedness: None,
+                manner: Some(Manner::Stop),
+                voicing: Some(Voicing::Voiceless),
+                syllabic: false,
+            },
+        );
+        assert!(stop.is_stop);
+        assert!(stop.closure_ms_hint.is_some());
+        assert!(stop.release_ms_hint.is_some());
+        assert!(stop.burst_hz_hint.is_some());
+    }
+
+    #[test]
+    fn nasals_emit_nasal_coloring_hints() {
+        let nasal = target_from_features(
+            "nasal_n",
+            FeatureBundle {
+                major: MajorClass::Consonant,
+                place: Some(Place::Alveolar),
+                vowel_height: None,
+                vowel_backness: None,
+                roundedness: None,
+                manner: Some(Manner::Nasal),
+                voicing: Some(Voicing::Voiced),
+                syllabic: false,
+            },
+        );
+        assert!(nasal.is_nasal);
+        assert!(nasal.nasal_pole_hz.is_some());
+        assert!(nasal.nasal_zero_hz.is_some());
+    }
+
+    #[test]
+    fn same_features_are_stable_across_symbol_spellings() {
+        let features = FeatureBundle {
+            major: MajorClass::Consonant,
+            place: Some(Place::Labiodental),
+            vowel_height: None,
+            vowel_backness: None,
+            roundedness: None,
+            manner: Some(Manner::Fricative),
+            voicing: Some(Voicing::Voiceless),
+            syllabic: false,
+        };
+        let a = target_from_features("spell_a", features);
+        let b = target_from_features("spell_b", features);
+        assert_eq!(a.voiced, b.voiced);
+        assert_eq!(a.frication_level, b.frication_level);
+        assert_eq!(a.transition_stiffness, b.transition_stiffness);
+        assert_eq!(a.filter, b.filter);
+        assert_eq!(a.source, b.source);
+    }
+
+    #[test]
+    fn symbol_override_can_tune_targets_without_changing_feature_logic() {
+        let default_table = default_english_phone_targets();
+        let mut tuned_table = default_table.clone();
+        let original = default_table.get("i").unwrap().clone();
+        let mut tuned = original.clone();
+        tuned.transition_stiffness = original.transition_stiffness + 0.2;
+        tuned.default_duration_ms = original.default_duration_ms + 25;
+        tuned_table.insert("i".to_string(), tuned);
+
+        let ps = PhoneString {
+            phones: vec![Phone::new_ipa("i")],
+        };
+        let baseline = phone_render_targets_from_string(&ps, Some(150.0), 0.7, &default_table);
+        let tuned_render = phone_render_targets_from_string(&ps, Some(150.0), 0.7, &tuned_table);
+
+        assert_eq!(baseline[0].filter, tuned_render[0].filter);
+        assert_eq!(baseline[0].source, tuned_render[0].source);
+        assert_ne!(baseline[0].duration_ms, tuned_render[0].duration_ms);
     }
 }
