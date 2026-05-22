@@ -81,6 +81,10 @@ enum DevCommand {
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
     DogfoodTwo(DogfoodTwoCommand),
+    #[command(
+        about = "Print a JSON debug snapshot of the soundscape: sources, hypotheses, voice counts, and overlaps"
+    )]
+    SoundscapeDebug(SoundscapeDebugCommand),
     SpeechCache {
         #[command(subcommand)]
         command: SpeechCacheCommand,
@@ -525,6 +529,20 @@ pub(crate) struct SpeechCachePrewarmCommand {
     pub(crate) listenbury_home: Option<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct SoundscapeDebugCommand {
+    /// Print a built-in sample debug view demonstrating the output format.
+    #[arg(long)]
+    pub(crate) sample: bool,
+    /// Path to a JSON file containing a soundscape debug input
+    /// (`frame`, `voice_count`, `hypotheses`, `transcripts`).
+    #[arg(long)]
+    pub(crate) input: Option<PathBuf>,
+    /// Pretty-print the JSON output (default: compact).
+    #[arg(long)]
+    pub(crate) pretty: bool,
+}
+
 pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
     let Some(command) = cli.command else {
@@ -577,6 +595,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
             run_live_session(LiveSessionConfig::from_listen_command(cmd))
         }
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
+        DevCommand::SoundscapeDebug(cmd) => commands::run_soundscape_debug(cmd),
         DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
     }
 }

@@ -1,0 +1,51 @@
+{
+  "range": "12.000..15.000",
+  "voice_count": {
+    "active_now": 2,
+    "recently_heard": 3,
+    "known": 1,
+    "unknown": 2,
+    "confidence": 0.74
+  },
+  "sources": [
+    {
+      "label": "_PETE VOICE_",
+      "kind": "KnownSelfVoice",
+      "confidence": 0.96
+    },
+    {
+      "label": "_UNKNOWN VOICE #1_",
+      "kind": "Voice",
+      "confidence": 0.68
+    }
+  ],
+  "overlaps": [],
+  "hypotheses": [
+    {
+      "kind": "KnownSelfVoice",
+      "range": "12.000..13.500",
+      "confidence": 0.96,
+      "evidence": [
+        "MatchesExpectedPlayback(0.94)",
+        "MatchesVoiceSignature(0.91)"
+      ]
+    },
+    {
+      "kind": "Voice",
+      "range": "14.000..15.000",
+      "confidence": 0.68,
+      "evidence": [
+        "PitchContinuity(0.65)"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "label": "_UNKNOWN VOICE #1_",
+      "text": "wait, what?",
+      "transcript_confidence": 0.71,
+      "attribution_confidence": 0.62,
+      "overlapped": false
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 
 pub mod attribution;
 pub mod criteria;
+pub mod debug;
 pub mod event;
 pub mod expected;
 pub mod frame;
@@ -24,6 +25,7 @@ pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
 };
 pub use criteria::{IsolationPolicy, SourceCriterion, SourceOperation};
+pub use debug::{DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, SoundscapeDebugView};
 pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
