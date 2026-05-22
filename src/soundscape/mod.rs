@@ -12,6 +12,7 @@ pub mod expected;
 pub mod frame;
 pub mod isolation;
 pub mod overlap;
+pub mod pipeline;
 pub mod signature;
 pub mod source;
 pub mod time;
@@ -32,7 +33,8 @@ pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
 pub use expected::{
-    playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
+    playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig,
+    TranscriptHypothesis,
 };
 pub use frame::SoundscapeFrame;
 pub use isolation::{
@@ -41,6 +43,7 @@ pub use isolation::{
     SeparationRequest, SeparationResult, SourceSeparator, SuppressionTarget, TrackingTarget,
 };
 pub use overlap::{detect_overlaps, MixtureComponent, OverlapMixture};
+pub use pipeline::SoundscapePipelineAdapter;
 pub use signature::{
     FormantProfile, PitchProfile, ProsodyProfile, RateProfile, TimbreProfile, VoiceSignature,
     VoiceSignatureId, VoiceSignatureMatch, VoiceSignatureObservation,
