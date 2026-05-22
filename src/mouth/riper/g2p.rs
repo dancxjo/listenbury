@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::linguistic::english_us_variety;
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
@@ -918,38 +919,7 @@ fn word_text(sentence_analysis: &SentenceAnalysis, word_index: usize) -> Option<
 }
 
 fn is_nucleus_symbol(symbol: &str) -> bool {
-    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
-    matches!(
-        base,
-        "AA" | "AE"
-            | "AH"
-            | "AO"
-            | "AW"
-            | "AY"
-            | "EH"
-            | "ER"
-            | "EY"
-            | "IH"
-            | "IY"
-            | "OW"
-            | "OY"
-            | "UH"
-            | "UW"
-            | "a"
-            | "e"
-            | "i"
-            | "o"
-            | "u"
-            | "æ"
-            | "ɑ"
-            | "ɔ"
-            | "ə"
-            | "ɛ"
-            | "ɚ"
-            | "ɪ"
-            | "ʊ"
-            | "ʌ"
-    )
+    english_us_variety().is_nucleus_symbol(symbol)
 }
 
 fn stress_from_phonological(stress: Option<PhonologicalStress>) -> Option<LexicalStressLevel> {
