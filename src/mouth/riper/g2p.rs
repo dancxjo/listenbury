@@ -17,8 +17,8 @@ use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, ProsodicRole, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
-    SyntacticLinkKind,
+    HeuristicSentenceAnalyzer, ProsodicRole, ProsodyEnvironmentFacts, ReductionStatus,
+    SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -254,8 +254,11 @@ impl SimpleEnglishG2p {
                         .tokens
                         .iter()
                         .find(|analysis| analysis.word_index == Some(word_index));
-                    let pronounced_word = pronounce_word_unit(word, analyzed_token)
-                        .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
+                    let environment_facts =
+                        sentence_analysis.prosody_environment_facts_for_word(word_index);
+                    let pronounced_word =
+                        pronounce_word_unit(word, analyzed_token, environment_facts.as_ref())
+                            .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
                     let start = symbols.len();
                     symbols.extend(pronounced_word.surface_symbols.iter().cloned());
                     let end = symbols.len();
@@ -640,6 +643,7 @@ fn word_to_phones(word: &str) -> Option<Vec<String>> {
 fn pronounce_word_unit(
     word: &str,
     analyzed_token: Option<&crate::mouth::riper::TokenAnalysis>,
+    environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<PronouncedWordUnit> {
     let word_realization = word_to_phones_with_metadata(word)?;
     let reduced_symbols = analyzed_token
@@ -657,7 +661,7 @@ fn pronounce_word_unit(
                 None
             }
         });
-    let weak_symbols = weak_form_symbols(word, analyzed_token);
+    let weak_symbols = weak_form_symbols(word, analyzed_token, environment_facts);
     let derives_stress_from_emitted_symbols = reduced_symbols.is_some() || weak_symbols.is_some();
     let emitted_symbols = reduced_symbols
         .or(weak_symbols)
@@ -671,7 +675,9 @@ fn pronounce_word_unit(
         word_realization.stress_by_phone.clone()
     };
 
-    let phonemes = realize_emitted_phonemes(&emitted_symbols, &stress_by_phone);
+    let realization_config = realization_config_for_word(environment_facts);
+    let phonemes =
+        realize_emitted_phonemes(&emitted_symbols, &stress_by_phone, &realization_config);
     debug_assert_eq!(phonemes.len(), stress_by_phone.len());
     let realization = PhoneString::from_phoneme_slice(&phonemes);
     debug_assert!(!realization.phones.is_empty());
@@ -856,7 +862,7 @@ fn best_syntax_guided_breath_boundary(
 }
 
 fn crosses_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
-    sentence_analysis.link_parses.first().is_some_and(|parse| {
+    sentence_analysis.link_parses.iter().any(|parse| {
         parse.links.iter().any(|link| {
             let (left, right) = if link.left <= link.right {
                 (link.left, link.right)
@@ -892,12 +898,15 @@ fn breath_boundary_penalty(boundary: usize, sentence_analysis: &SentenceAnalysis
     if ends_tight_syntactic_link(boundary, sentence_analysis) {
         penalty = penalty.saturating_sub(8);
     }
+    if has_link_boundary_claim(boundary, sentence_analysis) {
+        penalty = penalty.saturating_sub(6);
+    }
 
     penalty
 }
 
 fn ends_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
-    sentence_analysis.link_parses.first().is_some_and(|parse| {
+    sentence_analysis.link_parses.iter().any(|parse| {
         parse.links.iter().any(|link| {
             link.right == boundary
                 && matches!(
@@ -905,6 +914,27 @@ fn ends_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalys
                     SyntacticLinkKind::Determiner
                         | SyntacticLinkKind::Modifier
                         | SyntacticLinkKind::NounCompound
+                )
+        })
+    })
+}
+
+fn has_link_boundary_claim(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
+    sentence_analysis.link_parses.first().is_some_and(|parse| {
+        parse.claims.iter().any(|claim| {
+            claim.confidence >= 0.7
+                && matches!(
+                    (&claim.target, &claim.value),
+                    (
+                        crate::mouth::riper::AnalysisTarget::Boundary {
+                            left_word: Some(left_word),
+                            ..
+                        },
+                        crate::mouth::riper::ClaimValue::BoundaryKind(
+                            boundary_kind
+                        )
+                    ) if *left_word == boundary
+                        && matches!(boundary_kind.as_str(), "Coordination" | "PrepositionalPhrase")
                 )
         })
     })
@@ -934,6 +964,7 @@ fn stress_from_phonological(stress: Option<PhonologicalStress>) -> Option<Lexica
 fn realize_emitted_phonemes(
     symbols: &[String],
     stress_by_phone: &[Option<LexicalStressLevel>],
+    config: &RealizationConfig,
 ) -> Vec<Phoneme> {
     let phonemes = symbols
         .iter()
@@ -951,13 +982,7 @@ fn realize_emitted_phonemes(
         })
         .collect::<Vec<_>>();
 
-    realize_sequence(
-        &phonemes,
-        &RealizationConfig {
-            enable_allophone_rules: true,
-            ..RealizationConfig::default()
-        },
-    )
+    realize_sequence(&phonemes, config)
 }
 
 fn phonology_stress_from_lexical(stress: LexicalStressLevel) -> PhonologyStress {
@@ -988,14 +1013,137 @@ fn stress_level_from_symbol(symbol: &str) -> Option<LexicalStressLevel> {
 fn weak_form_symbols(
     word: &str,
     analyzed_token: Option<&crate::mouth::riper::TokenAnalysis>,
+    environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<Vec<String>> {
     let analysis = analyzed_token?;
+    if environment_facts.is_some_and(|facts| {
+        !facts.conservative
+            && facts.confidence >= 0.75
+            && matches!(
+                facts.prosodic_role,
+                ProsodicRole::Contrastive | ProsodicRole::Focus
+            )
+    }) {
+        return None;
+    }
     if !matches!(analysis.prosodic_role, ProsodicRole::FunctionWeak) {
         return None;
     }
     match word {
         "for" => Some(vec!["F".to_string(), "ER0".to_string()]),
         _ => None,
+    }
+}
+
+fn realization_config_for_word(
+    environment_facts: Option<&ProsodyEnvironmentFacts>,
+) -> RealizationConfig {
+    let mut config = RealizationConfig {
+        enable_allophone_rules: true,
+        ..RealizationConfig::default()
+    };
+    if let Some(facts) = environment_facts {
+        config.part_of_speech = Some(map_pos_to_linguistic(facts.pos));
+        config.prosodic_role = Some(map_prosodic_role_to_linguistic(facts.prosodic_role));
+        config.phrase_boundary = Some(map_phrase_boundary_to_linguistic(
+            facts.phrase_boundary_after,
+        ));
+        config.confidence = facts.confidence;
+        config.careful_style = facts.conservative || facts.confidence < 0.65;
+        config.span_state = if facts.confidence < 0.55 {
+            crate::linguistic::environment::SpanState::Candidate
+        } else {
+            crate::linguistic::environment::SpanState::Stable
+        };
+    }
+    config
+}
+
+fn map_pos_to_linguistic(
+    pos: crate::mouth::riper::PartOfSpeech,
+) -> crate::linguistic::environment::PartOfSpeech {
+    match pos {
+        crate::mouth::riper::PartOfSpeech::Noun => {
+            crate::linguistic::environment::PartOfSpeech::Noun
+        }
+        crate::mouth::riper::PartOfSpeech::Verb => {
+            crate::linguistic::environment::PartOfSpeech::Verb
+        }
+        crate::mouth::riper::PartOfSpeech::Auxiliary => {
+            crate::linguistic::environment::PartOfSpeech::Auxiliary
+        }
+        crate::mouth::riper::PartOfSpeech::Determiner => {
+            crate::linguistic::environment::PartOfSpeech::Determiner
+        }
+        crate::mouth::riper::PartOfSpeech::Preposition => {
+            crate::linguistic::environment::PartOfSpeech::Preposition
+        }
+        crate::mouth::riper::PartOfSpeech::Pronoun => {
+            crate::linguistic::environment::PartOfSpeech::Pronoun
+        }
+        crate::mouth::riper::PartOfSpeech::Adverb => {
+            crate::linguistic::environment::PartOfSpeech::Adverb
+        }
+        crate::mouth::riper::PartOfSpeech::Adjective => {
+            crate::linguistic::environment::PartOfSpeech::Adjective
+        }
+        crate::mouth::riper::PartOfSpeech::Conjunction => {
+            crate::linguistic::environment::PartOfSpeech::Conjunction
+        }
+        crate::mouth::riper::PartOfSpeech::Particle => {
+            crate::linguistic::environment::PartOfSpeech::Particle
+        }
+        crate::mouth::riper::PartOfSpeech::ProperName => {
+            crate::linguistic::environment::PartOfSpeech::ProperName
+        }
+        crate::mouth::riper::PartOfSpeech::Unknown => {
+            crate::linguistic::environment::PartOfSpeech::Unknown
+        }
+    }
+}
+
+fn map_prosodic_role_to_linguistic(
+    role: crate::mouth::riper::ProsodicRole,
+) -> crate::linguistic::environment::ProsodicRole {
+    match role {
+        crate::mouth::riper::ProsodicRole::Content => {
+            crate::linguistic::environment::ProsodicRole::Content
+        }
+        crate::mouth::riper::ProsodicRole::FunctionWeak => {
+            crate::linguistic::environment::ProsodicRole::FunctionWeak
+        }
+        crate::mouth::riper::ProsodicRole::FunctionStrong => {
+            crate::linguistic::environment::ProsodicRole::FunctionStrong
+        }
+        crate::mouth::riper::ProsodicRole::Contrastive => {
+            crate::linguistic::environment::ProsodicRole::Contrastive
+        }
+        crate::mouth::riper::ProsodicRole::Focus => {
+            crate::linguistic::environment::ProsodicRole::Focus
+        }
+        crate::mouth::riper::ProsodicRole::DirectAddress => {
+            crate::linguistic::environment::ProsodicRole::DirectAddress
+        }
+    }
+}
+
+fn map_phrase_boundary_to_linguistic(
+    boundary: PhraseBoundaryKind,
+) -> crate::linguistic::environment::PhraseBoundaryKind {
+    match boundary {
+        PhraseBoundaryKind::None | PhraseBoundaryKind::Word => {
+            crate::linguistic::environment::PhraseBoundaryKind::None
+        }
+        PhraseBoundaryKind::MinorPhrase
+        | PhraseBoundaryKind::Parenthetical
+        | PhraseBoundaryKind::Vocative => crate::linguistic::environment::PhraseBoundaryKind::Minor,
+        PhraseBoundaryKind::MajorPhrase
+        | PhraseBoundaryKind::PossibleFinal
+        | PhraseBoundaryKind::FinalFalling
+        | PhraseBoundaryKind::FinalRising
+        | PhraseBoundaryKind::Exclamation => {
+            crate::linguistic::environment::PhraseBoundaryKind::Major
+        }
     }
 }
 
@@ -1480,6 +1628,19 @@ mod tests {
     }
 
     #[test]
+    fn suppresses_weak_for_in_link_derived_contrast_pair() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("not for but from").expect("phonemize");
+        let for_symbols = symbols_for_word(&unit, "for");
+        assert!(
+            !for_symbols
+                .windows(2)
+                .any(|phones| phones[0] == "F" && phones[1] == "ER0"),
+            "contrastive `for` should suppress weak /fər/ reduction"
+        );
+    }
+
+    #[test]
     fn keeps_citation_or_prepositional_to_strong() {
         let g2p = SimpleEnglishG2p::default();
         let to_be = g2p
@@ -1571,7 +1732,7 @@ mod tests {
         let normalized = g2p.normalizer.normalize("for me").expect("normalize");
         let analysis = HeuristicSentenceAnalyzer.analyze("for me", &normalized);
         let for_token = analysis.tokens.iter().find(|token| token.text == "for");
-        let pronounced = pronounce_word_unit("for", for_token).expect("pronounce weak form");
+        let pronounced = pronounce_word_unit("for", for_token, None).expect("pronounce weak form");
 
         assert_eq!(pronounced.surface_symbols, vec!["F", "ER0"]);
         assert_eq!(
@@ -1590,7 +1751,7 @@ mod tests {
 
     #[test]
     fn allophone_realization_uses_shared_structural_layer() {
-        let pronounced = pronounce_word_unit("bottle", None).expect("pronounce bottle");
+        let pronounced = pronounce_word_unit("bottle", None, None).expect("pronounce bottle");
         assert_eq!(
             pronounced.surface_symbols,
             vec!["B", "AA", "DX", "AH0", "L"]
