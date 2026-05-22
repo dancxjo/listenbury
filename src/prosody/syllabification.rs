@@ -42,11 +42,40 @@
 //! assert_eq!(syllables_to_ipa(&syllables), "ˈɛk.stɹʌ");
 //! ```
 
+use crate::linguistic::phoneme::PhonemeTextUnit;
 use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, RealizedPhone, Stress};
-use crate::prosody::phonotactics::PhonotacticProfile;
+use crate::prosody::phonotactics::{PermissiveProfile, PhonotacticProfile};
 use crate::prosody::syllable::{DiagnosticKind, SourceSpan, Syllable, SyllableDiagnostic};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
+
+/// Controls how boundary-aware text syllabification treats word edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyllabificationOptions {
+    /// When true, [`PhonemeTextUnit::WordBoundary`] does not force a syllable
+    /// break, allowing phrase-level resyllabification across words.
+    pub allow_cross_word_resyllabification: bool,
+}
+
+impl SyllabificationOptions {
+    pub fn word_local() -> Self {
+        Self {
+            allow_cross_word_resyllabification: false,
+        }
+    }
+
+    pub fn cross_word() -> Self {
+        Self {
+            allow_cross_word_resyllabification: true,
+        }
+    }
+}
+
+impl Default for SyllabificationOptions {
+    fn default() -> Self {
+        Self::word_local()
+    }
+}
 
 /// Syllabify a sequence of [`Phoneme`]s using the given [`PhonotacticProfile`].
 ///
@@ -114,7 +143,7 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
             .map(|token| &token.phone)
             .collect();
 
-        let (onset_phones, coda_phones, mut diagnostics) = if syl_idx == 0 {
+        let (onset_phones, coda_phones, diagnostics) = if syl_idx == 0 {
             let diagnostics = initial_onset_diagnostics(&cluster, profile);
             let onset_phones = phones_from_tokens(&realized_phones[cluster_range.clone()]);
             (onset_phones, vec![], diagnostics)
@@ -152,20 +181,6 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
 
         let stress = realized_phones[nuc_pos].stress;
 
-        // Check if this syllable's onset decision was variety-specific.
-        if !diagnostics.is_empty() {
-            if let Some(d) = diagnostics.last_mut() {
-                if matches!(
-                    d.kind,
-                    DiagnosticKind::RejectedOnset | DiagnosticKind::LegalOnset
-                ) {
-                    // Mark as variety-specific if the decision differs from a
-                    // permissive profile (not implemented here; placeholder).
-                    // Future: compare against PermissiveProfile verdict.
-                }
-            }
-        }
-
         syllables.push(Syllable {
             onset: PhoneString {
                 phones: onset_phones,
@@ -198,6 +213,93 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
     last.source_span.end = phonemes.len();
 
     syllables
+}
+
+/// Syllabify boundary-aware phoneme text units.
+///
+/// Word boundaries are respected by default. Set
+/// [`SyllabificationOptions::allow_cross_word_resyllabification`] to allow
+/// syllables to be formed across word boundaries within a phrase; phrase
+/// boundaries always break the current syllabification group.
+pub fn syllabify_text_units<P: PhonotacticProfile>(
+    units: &[PhonemeTextUnit],
+    profile: &P,
+    options: SyllabificationOptions,
+) -> Vec<Syllable> {
+    if options.allow_cross_word_resyllabification {
+        syllabify_cross_word_text_units(units, profile)
+    } else {
+        syllabify_word_local_text_units(units, profile)
+    }
+}
+
+fn syllabify_word_local_text_units<P: PhonotacticProfile>(
+    units: &[PhonemeTextUnit],
+    profile: &P,
+) -> Vec<Syllable> {
+    let mut syllables = Vec::new();
+    let mut flat_offset = 0usize;
+
+    for unit in units {
+        if let PhonemeTextUnit::Word { phonemes, .. } = unit {
+            let mut word_syllables = syllabify(&phonemes.phonemes, profile);
+            shift_source_spans(&mut word_syllables, flat_offset);
+            syllables.extend(word_syllables);
+            flat_offset += phonemes.phonemes.len();
+        }
+    }
+
+    syllables
+}
+
+fn syllabify_cross_word_text_units<P: PhonotacticProfile>(
+    units: &[PhonemeTextUnit],
+    profile: &P,
+) -> Vec<Syllable> {
+    let mut syllables = Vec::new();
+    let mut phrase_phonemes = Vec::new();
+    let mut phrase_start = 0usize;
+    let mut flat_offset = 0usize;
+
+    for unit in units {
+        match unit {
+            PhonemeTextUnit::Word { phonemes, .. } => {
+                phrase_phonemes.extend(phonemes.phonemes.iter().cloned());
+                flat_offset += phonemes.phonemes.len();
+            }
+            PhonemeTextUnit::WordBoundary => {}
+            PhonemeTextUnit::PhraseBoundary => {
+                flush_phrase_syllables(&mut syllables, &mut phrase_phonemes, phrase_start, profile);
+                phrase_start = flat_offset;
+            }
+        }
+    }
+
+    flush_phrase_syllables(&mut syllables, &mut phrase_phonemes, phrase_start, profile);
+    syllables
+}
+
+fn flush_phrase_syllables<P: PhonotacticProfile>(
+    syllables: &mut Vec<Syllable>,
+    phrase_phonemes: &mut Vec<Phoneme>,
+    phrase_start: usize,
+    profile: &P,
+) {
+    if phrase_phonemes.is_empty() {
+        return;
+    }
+
+    let mut phrase_syllables = syllabify(phrase_phonemes, profile);
+    shift_source_spans(&mut phrase_syllables, phrase_start);
+    syllables.extend(phrase_syllables);
+    phrase_phonemes.clear();
+}
+
+fn shift_source_spans(syllables: &mut [Syllable], offset: usize) {
+    for syllable in syllables {
+        syllable.source_span.start += offset;
+        syllable.source_span.end += offset;
+    }
 }
 
 /// Render a syllable sequence as an IPA transcription string.
@@ -266,6 +368,7 @@ fn split_mop<P: PhonotacticProfile>(
     }
 
     let mut diagnostics = Vec::new();
+    diagnostics.extend(variety_specific_onset_diagnostics(cluster, profile));
 
     // Try the full cluster first, then progressively trim from the left.
     for split in 0..=cluster.len() {
@@ -314,11 +417,53 @@ fn initial_onset_diagnostics<P: PhonotacticProfile>(
     }
 
     let verdict = profile.onset_verdict(cluster);
+    let mut diagnostics = variety_specific_onset_diagnostics(cluster, profile);
     if verdict.is_legal {
-        vec![]
+        diagnostics
     } else {
-        vec![verdict.as_diagnostic()]
+        diagnostics.push(verdict.as_diagnostic());
+        diagnostics
     }
+}
+
+fn variety_specific_onset_diagnostics<P: PhonotacticProfile>(
+    cluster: &[&Phone],
+    profile: &P,
+) -> Vec<SyllableDiagnostic> {
+    if cluster.is_empty() {
+        return vec![];
+    }
+
+    let active = profile.onset_verdict(cluster);
+    let baseline = PermissiveProfile.onset_verdict(cluster);
+    if active.is_legal == baseline.is_legal {
+        return vec![];
+    }
+
+    let cluster_ipa = phones_to_ipa(cluster);
+    let active_decision = if active.is_legal {
+        "accepted"
+    } else {
+        "rejected"
+    };
+    let baseline_decision = if baseline.is_legal {
+        "accepted"
+    } else {
+        "rejected"
+    };
+
+    vec![SyllableDiagnostic::new(
+        DiagnosticKind::VarietySpecific,
+        format!(
+            "{} {active_decision} /{cluster_ipa}/; {} {baseline_decision} it",
+            profile.variety_name(),
+            PermissiveProfile.variety_name()
+        ),
+    )]
+}
+
+fn phones_to_ipa(phones: &[&Phone]) -> String {
+    phones.iter().map(|phone| phone.ipa.as_str()).collect()
 }
 
 fn phones_from_tokens(tokens: &[RealizedPhone]) -> Vec<Phone> {
@@ -346,6 +491,8 @@ fn source_end_for_token(tokens: &[RealizedPhone], token_index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linguistic::orthography::OrthographicWord;
+    use crate::linguistic::phoneme::PhonemeSeq;
     use crate::linguistic::phonology::phoneme_from_arpabet;
     use crate::prosody::phonotactics::{EnglishPhonotactics, EnglishVariety, PermissiveProfile};
 
@@ -531,5 +678,55 @@ mod tests {
             !all_diags.is_empty(),
             "expected diagnostics for atlas syllabification"
         );
+    }
+
+    #[test]
+    fn variety_specific_diagnostic_marks_profile_difference() {
+        let s = syllabify(&seq(&["AE1", "T", "L", "AH0", "S"]), &ga());
+        let all_diags: Vec<_> = s.iter().flat_map(|syl| &syl.diagnostics).collect();
+
+        assert!(all_diags.iter().any(|diag| {
+            diag.kind == DiagnosticKind::VarietySpecific
+                && diag.message.contains("General American")
+                && diag.message.contains("/tl/")
+                && diag.message.contains("Permissive")
+        }));
+    }
+
+    #[test]
+    fn text_unit_syllabification_respects_word_boundaries_by_default() {
+        let units = vec![
+            word_unit("at", &["AE1", "T"]),
+            PhonemeTextUnit::WordBoundary,
+            word_unit("las", &["L", "AH0", "S"]),
+        ];
+
+        let s = syllabify_text_units(&units, &singing(), SyllabificationOptions::default());
+
+        assert_eq!(syllables_to_ipa(&s), "ˈæt.lʌs");
+        assert_eq!(s[0].source_span, SourceSpan { start: 0, end: 2 });
+        assert_eq!(s[1].source_span, SourceSpan { start: 2, end: 5 });
+    }
+
+    #[test]
+    fn text_unit_syllabification_can_cross_word_boundaries() {
+        let units = vec![
+            word_unit("at", &["AE1", "T"]),
+            PhonemeTextUnit::WordBoundary,
+            word_unit("las", &["L", "AH0", "S"]),
+        ];
+
+        let s = syllabify_text_units(&units, &singing(), SyllabificationOptions::cross_word());
+
+        assert_eq!(syllables_to_ipa(&s), "ˈæ.tlʌs");
+        assert_eq!(s[0].source_span, SourceSpan { start: 0, end: 1 });
+        assert_eq!(s[1].source_span, SourceSpan { start: 1, end: 5 });
+    }
+
+    fn word_unit(orthography: &str, symbols: &[&str]) -> PhonemeTextUnit {
+        PhonemeTextUnit::Word {
+            orthography: OrthographicWord::new(orthography),
+            phonemes: PhonemeSeq::new(seq(symbols)),
+        }
     }
 }

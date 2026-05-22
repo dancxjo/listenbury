@@ -103,47 +103,15 @@ impl Default for RuleRegistry {
 
 impl RuleRegistry {
     pub fn builtin() -> Self {
-        let mut inventories = HashMap::new();
-        inventories.insert(
-            "english/base_inventory".into(),
-            InventoryData {
-                phonemes: english_phoneme_table(),
-            },
-        );
-        inventories.insert(
-            "eo/base_inventory".into(),
-            InventoryData {
-                phonemes: esperanto_phonemes(),
-            },
-        );
+        let inventories = INVENTORIES
+            .iter()
+            .map(|spec| (spec.id.to_string(), spec.to_data()))
+            .collect();
 
-        let mut phonotactics = HashMap::new();
-        phonotactics.insert(
-            "english/base_onsets".into(),
-            PhonotacticData {
-                illegal_single_onsets: illegal_single_onsets(),
-                legal_onset_clusters: legal_onset_clusters(),
-                legal_coda_clusters: vec![],
-            },
-        );
-        phonotactics.insert(
-            "english/base_codas".into(),
-            PhonotacticData {
-                illegal_single_onsets: vec![],
-                legal_onset_clusters: vec![],
-                legal_coda_clusters: legal_coda_clusters(),
-            },
-        );
-        phonotactics.insert(
-            "eo/base_phonotactics".into(),
-            PhonotacticData {
-                illegal_single_onsets: vec![],
-                // Intentionally tiny proof-of-shape sample for this ticket; not
-                // a full Esperanto phonotactic model.
-                legal_onset_clusters: vec![phone_string(&["p", "l"]), phone_string(&["p", "r"])],
-                legal_coda_clusters: vec![],
-            },
-        );
+        let phonotactics = PHONOTACTIC_PACKS
+            .iter()
+            .map(|spec| (spec.id.to_string(), spec.to_data()))
+            .collect();
 
         let mut phone_equality = HashMap::new();
         phone_equality.insert("default".into(), PhoneEqualityOptions::default());
@@ -157,218 +125,15 @@ impl RuleRegistry {
             },
         );
 
-        let mut fragments = HashMap::new();
-        fragments.insert(
-            "english/base_inventory".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: Some("english/base_inventory".into()),
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/base_onsets".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec!["english/base_onsets".into()],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/base_codas".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec!["english/base_codas".into()],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/rhotic".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/non_rhotic".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/yod_dropping".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "english/permissive_singing".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: Some("english/permissive_singing".into()),
-                legal_onset_additions: permissive_singing_onset_additions(),
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "eo/base_inventory".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: Some("eo/base_inventory".into()),
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        fragments.insert(
-            "eo/base_phonotactics".into(),
-            RuleFragment {
-                includes: vec![],
-                inventory: None,
-                phonotactics: vec!["eo/base_phonotactics".into()],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
+        let fragments = RULE_FRAGMENTS
+            .iter()
+            .map(|spec| (spec.id.to_string(), spec.to_fragment()))
+            .collect();
 
-        let mut rules = HashMap::new();
-        rules.insert(
-            "en-US-GA".into(),
-            VarietyRuleData {
-                id: "en-US-GA".into(),
-                language: "en".into(),
-                label: "General American English".into(),
-                includes: vec![
-                    "english/base_inventory".into(),
-                    "english/base_onsets".into(),
-                    "english/base_codas".into(),
-                    "english/rhotic".into(),
-                ],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        rules.insert(
-            "en-US-singing".into(),
-            VarietyRuleData {
-                id: "en-US-singing".into(),
-                language: "en".into(),
-                label: "Permissive Singing Profile".into(),
-                includes: vec![
-                    "english/base_inventory".into(),
-                    "english/base_onsets".into(),
-                    "english/base_codas".into(),
-                    "english/rhotic".into(),
-                    "english/permissive_singing".into(),
-                ],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        rules.insert(
-            "en-GB-RP".into(),
-            VarietyRuleData {
-                id: "en-GB-RP".into(),
-                language: "en".into(),
-                label: "Received Pronunciation (stub)".into(),
-                includes: vec![
-                    "english/base_inventory".into(),
-                    "english/base_onsets".into(),
-                    "english/base_codas".into(),
-                    "english/non_rhotic".into(),
-                ],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        rules.insert(
-            "en-GB-ScotE".into(),
-            VarietyRuleData {
-                id: "en-GB-ScotE".into(),
-                language: "en".into(),
-                label: "Scottish English (stub)".into(),
-                includes: vec![
-                    "english/base_inventory".into(),
-                    "english/base_onsets".into(),
-                    "english/base_codas".into(),
-                    "english/rhotic".into(),
-                ],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        rules.insert(
-            "en-US-AAE".into(),
-            VarietyRuleData {
-                id: "en-US-AAE".into(),
-                language: "en".into(),
-                label: "African American English (stub)".into(),
-                includes: vec![
-                    "english/base_inventory".into(),
-                    "english/base_onsets".into(),
-                    "english/base_codas".into(),
-                    "english/rhotic".into(),
-                ],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
-        rules.insert(
-            "eo".into(),
-            VarietyRuleData {
-                id: "eo".into(),
-                language: "eo".into(),
-                label: "Esperanto (sample)".into(),
-                includes: vec!["eo/base_inventory".into(), "eo/base_phonotactics".into()],
-                inventory: None,
-                phonotactics: vec![],
-                phone_equality: None,
-                legal_onset_additions: vec![],
-                legal_coda_additions: vec![],
-            },
-        );
+        let rules = VARIETY_RULES
+            .iter()
+            .map(|spec| (spec.id.to_string(), spec.to_rule()))
+            .collect();
 
         Self {
             inventories,
@@ -545,57 +310,449 @@ fn phone_string(symbols: &[&str]) -> PhoneString {
     }
 }
 
-fn esperanto_phonemes() -> Vec<PhonemeDefinition> {
-    // (phoneme_symbol, ipa, is_vowel)
-    // Intentionally minimal sample inventory proving non-English registry
-    // shape; this is not a complete Esperanto phoneme list.
-    let rows: &[(&str, &str, bool)] = &[
-        ("A", "a", true),
-        ("E", "e", true),
-        ("I", "i", true),
-        ("O", "o", true),
-        ("U", "u", true),
-        ("P", "p", false),
-        ("L", "l", false),
-        ("R", "r", false),
-        ("S", "s", false),
-        ("N", "n", false),
-        ("M", "m", false),
-        ("T", "t", false),
-        ("K", "k", false),
-    ];
+struct InventorySpec {
+    id: &'static str,
+    source: InventorySource,
+}
 
-    rows.iter()
-        .map(|(symbol, ipa, is_vowel)| {
-            let id = PhonemeId::new(symbol.to_lowercase());
-            let classes = if *is_vowel {
-                vec![PhonemeClass::Vowel]
-            } else {
-                vec![PhonemeClass::Consonant]
-            };
-            PhonemeDefinition {
-                id,
-                ipa: ipa.to_string(),
-                source_symbols: vec![
-                    SourceSymbol {
-                        schema: PhonemeSchema::Ipa,
-                        symbol: ipa.to_string(),
-                    },
-                    SourceSymbol {
-                        schema: PhonemeSchema::Arpabet,
-                        symbol: symbol.to_string(),
-                    },
-                ],
-                default_phone_string: PhoneString {
-                    phones: vec![Phone {
-                        ipa: ipa.to_string(),
-                        source_symbol: Some(symbol.to_string()),
-                        status: PhoneStatus::Mapped,
-                    }],
+enum InventorySource {
+    Builder(fn() -> Vec<PhonemeDefinition>),
+    Rows(&'static [PhonemeRowSpec]),
+}
+
+struct PhonemeRowSpec {
+    symbol: &'static str,
+    ipa: &'static str,
+    classes: &'static [PhonemeClass],
+}
+
+struct PhonotacticSpec {
+    id: &'static str,
+    illegal_single_onsets: PhonotacticRows,
+    legal_onset_clusters: PhonotacticRows,
+    legal_coda_clusters: PhonotacticRows,
+}
+
+enum PhonotacticRows {
+    Builder(fn() -> Vec<PhoneString>),
+    Static(&'static [&'static [&'static str]]),
+}
+
+struct RuleFragmentSpec {
+    id: &'static str,
+    includes: &'static [&'static str],
+    inventory: Option<&'static str>,
+    phonotactics: &'static [&'static str],
+    phone_equality: Option<&'static str>,
+    legal_onset_additions: RulePhoneStringRows,
+    legal_coda_additions: RulePhoneStringRows,
+}
+
+struct VarietyRuleSpec {
+    id: &'static str,
+    language: &'static str,
+    label: &'static str,
+    includes: &'static [&'static str],
+    inventory: Option<&'static str>,
+    phonotactics: &'static [&'static str],
+    phone_equality: Option<&'static str>,
+    legal_onset_additions: RulePhoneStringRows,
+    legal_coda_additions: RulePhoneStringRows,
+}
+
+enum RulePhoneStringRows {
+    Builder(fn() -> Vec<PhoneString>),
+    Static(&'static [&'static [&'static str]]),
+}
+
+impl InventorySpec {
+    fn to_data(&self) -> InventoryData {
+        let phonemes = match &self.source {
+            InventorySource::Builder(builder) => builder(),
+            InventorySource::Rows(rows) => rows.iter().map(PhonemeRowSpec::to_definition).collect(),
+        };
+        InventoryData { phonemes }
+    }
+}
+
+impl PhonemeRowSpec {
+    fn to_definition(&self) -> PhonemeDefinition {
+        PhonemeDefinition {
+            id: PhonemeId::new(self.symbol.to_lowercase()),
+            ipa: self.ipa.to_string(),
+            source_symbols: vec![
+                SourceSymbol {
+                    schema: PhonemeSchema::Ipa,
+                    symbol: self.ipa.to_string(),
                 },
-                classes,
-                features: feature_bundle_for_arpabet(symbol),
-            }
+                SourceSymbol {
+                    schema: PhonemeSchema::Arpabet,
+                    symbol: self.symbol.to_string(),
+                },
+            ],
+            default_phone_string: PhoneString {
+                phones: vec![Phone {
+                    ipa: self.ipa.to_string(),
+                    source_symbol: Some(self.symbol.to_string()),
+                    status: PhoneStatus::Mapped,
+                }],
+            },
+            classes: self.classes.to_vec(),
+            features: feature_bundle_for_arpabet(self.symbol),
+        }
+    }
+}
+
+impl PhonotacticSpec {
+    fn to_data(&self) -> PhonotacticData {
+        PhonotacticData {
+            illegal_single_onsets: self
+                .illegal_single_onsets
+                .to_phone_strings()
+                .into_iter()
+                .flat_map(|phone_string| phone_string.phones)
+                .collect(),
+            legal_onset_clusters: self.legal_onset_clusters.to_phone_strings(),
+            legal_coda_clusters: self.legal_coda_clusters.to_phone_strings(),
+        }
+    }
+}
+
+impl PhonotacticRows {
+    fn to_phone_strings(&self) -> Vec<PhoneString> {
+        match self {
+            PhonotacticRows::Builder(builder) => builder(),
+            PhonotacticRows::Static(rows) => rows.iter().map(|row| phone_string(row)).collect(),
+        }
+    }
+}
+
+impl RuleFragmentSpec {
+    fn to_fragment(&self) -> RuleFragment {
+        RuleFragment {
+            includes: strings(self.includes),
+            inventory: self.inventory.map(str::to_string),
+            phonotactics: strings(self.phonotactics),
+            phone_equality: self.phone_equality.map(str::to_string),
+            legal_onset_additions: self.legal_onset_additions.to_phone_strings(),
+            legal_coda_additions: self.legal_coda_additions.to_phone_strings(),
+        }
+    }
+}
+
+impl VarietyRuleSpec {
+    fn to_rule(&self) -> VarietyRuleData {
+        VarietyRuleData {
+            id: self.id.to_string(),
+            language: self.language.to_string(),
+            label: self.label.to_string(),
+            includes: strings(self.includes),
+            inventory: self.inventory.map(str::to_string),
+            phonotactics: strings(self.phonotactics),
+            phone_equality: self.phone_equality.map(str::to_string),
+            legal_onset_additions: self.legal_onset_additions.to_phone_strings(),
+            legal_coda_additions: self.legal_coda_additions.to_phone_strings(),
+        }
+    }
+}
+
+impl RulePhoneStringRows {
+    fn to_phone_strings(&self) -> Vec<PhoneString> {
+        match self {
+            RulePhoneStringRows::Builder(builder) => builder(),
+            RulePhoneStringRows::Static(rows) => rows.iter().map(|row| phone_string(row)).collect(),
+        }
+    }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
+}
+
+static INVENTORIES: &[InventorySpec] = &[
+    InventorySpec {
+        id: "english/base_inventory",
+        source: InventorySource::Builder(english_phoneme_table),
+    },
+    InventorySpec {
+        id: "eo/base_inventory",
+        source: InventorySource::Rows(ESPERANTO_PHONEMES),
+    },
+];
+
+static ESPERANTO_PHONEMES: &[PhonemeRowSpec] = &[
+    PhonemeRowSpec {
+        symbol: "A",
+        ipa: "a",
+        classes: &[PhonemeClass::Vowel],
+    },
+    PhonemeRowSpec {
+        symbol: "E",
+        ipa: "e",
+        classes: &[PhonemeClass::Vowel],
+    },
+    PhonemeRowSpec {
+        symbol: "I",
+        ipa: "i",
+        classes: &[PhonemeClass::Vowel],
+    },
+    PhonemeRowSpec {
+        symbol: "O",
+        ipa: "o",
+        classes: &[PhonemeClass::Vowel],
+    },
+    PhonemeRowSpec {
+        symbol: "U",
+        ipa: "u",
+        classes: &[PhonemeClass::Vowel],
+    },
+    PhonemeRowSpec {
+        symbol: "P",
+        ipa: "p",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "L",
+        ipa: "l",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "R",
+        ipa: "r",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "S",
+        ipa: "s",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "N",
+        ipa: "n",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "M",
+        ipa: "m",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "T",
+        ipa: "t",
+        classes: &[PhonemeClass::Consonant],
+    },
+    PhonemeRowSpec {
+        symbol: "K",
+        ipa: "k",
+        classes: &[PhonemeClass::Consonant],
+    },
+];
+
+static PHONOTACTIC_PACKS: &[PhonotacticSpec] = &[
+    PhonotacticSpec {
+        id: "english/base_onsets",
+        illegal_single_onsets: PhonotacticRows::Builder(illegal_single_onsets_as_strings),
+        legal_onset_clusters: PhonotacticRows::Builder(legal_onset_clusters),
+        legal_coda_clusters: PhonotacticRows::Static(&[]),
+    },
+    PhonotacticSpec {
+        id: "english/base_codas",
+        illegal_single_onsets: PhonotacticRows::Static(&[]),
+        legal_onset_clusters: PhonotacticRows::Static(&[]),
+        legal_coda_clusters: PhonotacticRows::Builder(legal_coda_clusters),
+    },
+    PhonotacticSpec {
+        id: "eo/base_phonotactics",
+        illegal_single_onsets: PhonotacticRows::Static(&[]),
+        legal_onset_clusters: PhonotacticRows::Static(&[&["p", "l"], &["p", "r"]]),
+        legal_coda_clusters: PhonotacticRows::Static(&[]),
+    },
+];
+
+static RULE_FRAGMENTS: &[RuleFragmentSpec] = &[
+    RuleFragmentSpec {
+        id: "english/base_inventory",
+        includes: &[],
+        inventory: Some("english/base_inventory"),
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/base_onsets",
+        includes: &[],
+        inventory: None,
+        phonotactics: &["english/base_onsets"],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/base_codas",
+        includes: &[],
+        inventory: None,
+        phonotactics: &["english/base_codas"],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/rhotic",
+        includes: &[],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/non_rhotic",
+        includes: &[],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/yod_dropping",
+        includes: &[],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "english/permissive_singing",
+        includes: &[],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: Some("english/permissive_singing"),
+        legal_onset_additions: RulePhoneStringRows::Builder(permissive_singing_onset_additions),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "eo/base_inventory",
+        includes: &[],
+        inventory: Some("eo/base_inventory"),
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    RuleFragmentSpec {
+        id: "eo/base_phonotactics",
+        includes: &[],
+        inventory: None,
+        phonotactics: &["eo/base_phonotactics"],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+];
+
+static VARIETY_RULES: &[VarietyRuleSpec] = &[
+    VarietyRuleSpec {
+        id: "en-US-GA",
+        language: "en",
+        label: "General American English",
+        includes: &[
+            "english/base_inventory",
+            "english/base_onsets",
+            "english/base_codas",
+            "english/rhotic",
+        ],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    VarietyRuleSpec {
+        id: "en-US-singing",
+        language: "en",
+        label: "Permissive Singing Profile",
+        includes: &[
+            "english/base_inventory",
+            "english/base_onsets",
+            "english/base_codas",
+            "english/rhotic",
+            "english/permissive_singing",
+        ],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    VarietyRuleSpec {
+        id: "en-GB-RP",
+        language: "en",
+        label: "Received Pronunciation (stub)",
+        includes: &[
+            "english/base_inventory",
+            "english/base_onsets",
+            "english/base_codas",
+            "english/non_rhotic",
+        ],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    VarietyRuleSpec {
+        id: "en-GB-ScotE",
+        language: "en",
+        label: "Scottish English (stub)",
+        includes: &[
+            "english/base_inventory",
+            "english/base_onsets",
+            "english/base_codas",
+            "english/rhotic",
+        ],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    VarietyRuleSpec {
+        id: "en-US-AAE",
+        language: "en",
+        label: "African American English (stub)",
+        includes: &[
+            "english/base_inventory",
+            "english/base_onsets",
+            "english/base_codas",
+            "english/rhotic",
+        ],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+    VarietyRuleSpec {
+        id: "eo",
+        language: "eo",
+        label: "Esperanto (sample)",
+        includes: &["eo/base_inventory", "eo/base_phonotactics"],
+        inventory: None,
+        phonotactics: &[],
+        phone_equality: None,
+        legal_onset_additions: RulePhoneStringRows::Static(&[]),
+        legal_coda_additions: RulePhoneStringRows::Static(&[]),
+    },
+];
+
+fn illegal_single_onsets_as_strings() -> Vec<PhoneString> {
+    illegal_single_onsets()
+        .into_iter()
+        .map(|phone| PhoneString {
+            phones: vec![phone],
         })
         .collect()
 }

@@ -1,9 +1,13 @@
+pub mod arpabet;
 pub mod cmudict;
+pub mod environment;
 pub mod inventory;
 pub mod orthography;
+pub mod phone;
 pub mod phoneme;
 pub mod phonology;
 pub mod pronounce;
+pub mod realization;
 pub mod rule_registry;
 pub mod service;
 pub mod sound_it_out;
