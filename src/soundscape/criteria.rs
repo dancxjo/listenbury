@@ -50,4 +50,20 @@ impl IsolationPolicy {
             strength,
         }
     }
+
+    pub fn enhance(criterion: SourceCriterion, strength: f32) -> Self {
+        Self {
+            operation: SourceOperation::Enhance,
+            criterion,
+            strength,
+        }
+    }
+
+    pub fn extract(criterion: SourceCriterion, strength: f32) -> Self {
+        Self {
+            operation: SourceOperation::Extract,
+            criterion,
+            strength,
+        }
+    }
 }
