@@ -456,6 +456,9 @@ fn stop_burst_hint(place: Option<Place>) -> f32 {
     }
 }
 
+const MIN_VOWEL_F2_HZ: f32 = 500.0;
+const MIN_VOWEL_F3_HZ: f32 = 1300.0;
+
 fn fricative_noise_center(place: Option<Place>) -> f32 {
     match place {
         Some(Place::Bilabial | Place::Labiodental) => 1300.0,
@@ -503,7 +506,9 @@ fn vowel_formants_from_features(features: &FeatureBundle) -> (f32, f32, f32) {
         f1 -= 20.0;
     }
 
-    (f1, f2.max(500.0), f3.max(1300.0))
+    // Keep feature-derived vowels inside a physically plausible region so
+    // extreme feature combinations cannot collapse resonances.
+    (f1, f2.max(MIN_VOWEL_F2_HZ), f3.max(MIN_VOWEL_F3_HZ))
 }
 
 /// Derive a Klatt acoustic target from structured phonological features.
@@ -558,6 +563,9 @@ pub fn klatt_targets_from_features(
     }
 
     let voiced = !matches!(features.voicing, Some(Voicing::Voiceless));
+    // Unknown consonant manner defaults to stop-like behavior so unknown
+    // symbols remain bounded (no accidental broadband frication) and can still
+    // carry conservative closure/release hints.
     let manner = features.manner.unwrap_or(Manner::Stop);
 
     match manner {
@@ -696,7 +704,7 @@ pub fn klatt_targets_from_features(
                 transition_stiffness: 0.65,
             }
         }
-        Manner::Stop | Manner::Vowel => PhoneAcousticTarget {
+        Manner::Stop => PhoneAcousticTarget {
             ipa: phone.ipa.clone(),
             voiced,
             is_vowel: false,
@@ -720,6 +728,46 @@ pub fn klatt_targets_from_features(
             nasal_zero_hz: None,
             transition_stiffness: 0.85,
         },
+        Manner::Vowel => {
+            let (f1, f2, f3) = vowel_formants_from_features(features);
+            PhoneAcousticTarget {
+                ipa: phone.ipa.clone(),
+                voiced: true,
+                is_vowel: true,
+                is_fricative: false,
+                is_stop: false,
+                is_nasal: false,
+                is_approximant: false,
+                filter: Some(VocalTractFilterTarget {
+                    f1_hz: f1,
+                    f1_bw_hz: 80.0,
+                    f1_amp_db: 0.0,
+                    f2_hz: f2,
+                    f2_bw_hz: 100.0,
+                    f2_amp_db: -3.0,
+                    f3_hz: f3,
+                    f3_bw_hz: 150.0,
+                    f3_amp_db: -6.0,
+                    f4_hz: Some(3500.0),
+                    f4_bw_hz: Some(200.0),
+                    f4_amp_db: Some(-9.0),
+                }),
+                source: GlottalSourceTarget {
+                    breathiness: 0.05,
+                    open_quotient: 0.5,
+                    spectral_tilt_db_per_octave: -6.0,
+                },
+                default_duration_ms: 90,
+                frication_level: 0.0,
+                aspiration_level: 0.05,
+                burst_hz_hint: None,
+                closure_ms_hint: None,
+                release_ms_hint: None,
+                nasal_pole_hz: None,
+                nasal_zero_hz: None,
+                transition_stiffness: 0.35,
+            }
+        }
     }
 }
 

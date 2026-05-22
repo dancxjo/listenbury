@@ -29,11 +29,11 @@ pub(crate) fn apply_neighbor_influence(targets: &[PhoneRenderTarget]) -> Vec<Pho
             continue;
         };
 
-        if is_vowel_features(features)
+        let is_vowel = is_vowel_features(features)
             || fallback_table
                 .get(phone.ipa.as_str())
-                .is_some_and(|target| target.is_vowel)
-        {
+                .is_some_and(|target| target.is_vowel);
+        if is_vowel {
             let left_bias = left_phone
                 .as_ref()
                 .map(|candidate| inventory.features_for_phone(candidate))
@@ -78,6 +78,8 @@ fn consonant_f2_bias_from_features(features: FeatureBundle) -> Option<f32> {
     if features.major != MajorClass::Consonant {
         return None;
     }
+    // Coarse place-driven F2 tendencies:
+    // palatal/coronal pull F2 up; dorsal/labial pull it down.
     Some(match features.place {
         Some(Place::Palatal) => 150.0,
         Some(Place::Velar) => -160.0,
