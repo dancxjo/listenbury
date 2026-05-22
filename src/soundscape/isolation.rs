@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::soundscape::{
-    IsolationPolicy, SoundscapeFrame, SourceCriterion, SourceId, SourceKind, SourceLabel,
-    SourceOperation,
+    IsolationPolicy, SoundSource, SoundscapeFrame, SourceCriterion, SourceId, SourceKind,
+    SourceLabel, SourceOperation,
 };
 
 /// A source selected for destructive filtering.
@@ -30,8 +30,8 @@ pub struct IsolationEvaluation {
 }
 
 /// Transitional policy shim for self-hearing suppression.
-pub fn self_hearing_suppression_policy(pete_voice_source_id: SourceId) -> IsolationPolicy {
-    IsolationPolicy::suppress(SourceCriterion::KnownSource(pete_voice_source_id), 1.0)
+pub fn self_hearing_suppression_policy(source_id: SourceId) -> IsolationPolicy {
+    IsolationPolicy::suppress(SourceCriterion::KnownSource(source_id), 1.0)
 }
 
 /// Evaluate source-isolation policies against one soundscape frame.
@@ -68,7 +68,7 @@ pub fn evaluate_policies(
     result
 }
 
-fn matches_criterion(source: &crate::soundscape::SoundSource, criterion: SourceCriterion) -> bool {
+fn matches_criterion(source: &SoundSource, criterion: SourceCriterion) -> bool {
     match criterion {
         SourceCriterion::KnownSource(source_id) => source.id == source_id,
         SourceCriterion::NotKnownSource(source_id) => source.id != source_id,
@@ -105,7 +105,7 @@ mod tests {
     };
 
     #[test]
-    fn pete_playback_suppression_and_unknown_voice_tracking_share_policy_machinery() {
+    fn suppresses_playback_and_tracks_unknown_voice() {
         let range = TimeRange::new(TimePoint::from_millis(1_000), TimePoint::from_millis(1_100));
         let pete_playback_source = SourceId::new();
         let unknown_voice_source = SourceId::new();
