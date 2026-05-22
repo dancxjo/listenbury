@@ -23,10 +23,13 @@ pub use echo::{
 };
 pub use encoder::PiperEncoder;
 pub use espeak_ng_rules::{
-    EspeakNgSeedRuleTable, LinguisticVarieties, LinguisticVarietyRuleTable, PhonemeMappingRule,
-    PronunciationOverrideRule, PunctuationProsodyRule, RuleContextConstraint, RuleProvenance,
-    StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule, export_rule_table_to_json,
-    import_rule_table_from_str, load_seed_rule_table,
+    EspeakNgSeedRuleTable, ImportedEnvironmentRule, LinguisticVarieties,
+    LinguisticVarietyRuleTable, PhonemeMappingRule, PronunciationOverrideRule,
+    PunctuationProsodyRule, RuleContextConstraint, RuleOutput, RuleProvenance, StressRule,
+    ToRuleDescriptor, VoiceVariantRule, WeakFormRule, convert_punctuation_prosody_rule,
+    convert_weak_form_rule, english_imported_punctuation_rules, english_imported_weak_form_rules,
+    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
+    rule_matches_context,
 };
 pub use evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimId, ClaimKind, ClaimValue,
