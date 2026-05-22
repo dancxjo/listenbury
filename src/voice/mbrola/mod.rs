@@ -6,11 +6,13 @@
 //! contract and emits a simple WAV while the real database decoder is being
 //! reverse engineered.
 
+pub mod database;
 pub mod pho;
 pub mod render;
 pub mod symbols;
 pub mod voice;
 
+pub use database::{MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone};
 pub use pho::{
     MbrolaPhoParseError, MbrolaPhone, MbrolaPitchTarget, PhoneTimedPlan, phone_timed_plan_to_pho,
     prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,

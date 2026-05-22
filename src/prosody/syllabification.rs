@@ -11,8 +11,9 @@
 //!
 //! 1. Derive realized phone tokens from phonemes, preserving the source phoneme
 //!    index and stress for each emitted phone.
-//! 2. Scan for nucleus positions (phones where [`PhonotacticProfile::is_nucleus`]
-//!    returns `true`).
+//! 2. Scan for nucleus spans (phones where [`PhonotacticProfile::is_nucleus`]
+//!    returns `true`), coalescing adjacent nucleus phones from the same source
+//!    phoneme so structural diphthongs remain one syllable nucleus.
 //! 3. For each inter-nuclear consonant cluster, apply the **Maximum Onset
 //!    Principle**: try to assign the entire cluster to the following syllable's
 //!    onset; if the profile rejects it, trim one phone from the left and retry
@@ -46,6 +47,7 @@ use crate::linguistic::phoneme::PhonemeTextUnit;
 use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, RealizedPhone, Stress};
 use crate::prosody::phonotactics::{PermissiveProfile, PhonotacticProfile};
 use crate::prosody::syllable::{DiagnosticKind, SourceSpan, Syllable, SyllableDiagnostic};
+use std::ops::Range;
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -93,15 +95,10 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
     // Derive realized phone tokens from phoneme realizations.
     let realized_phones = RealizedPhone::from_phoneme_slice(phonemes);
 
-    // Find all nucleus positions.
-    let nucleus_indices: Vec<usize> = realized_phones
-        .iter()
-        .enumerate()
-        .filter(|(_, ph)| profile.is_nucleus(&ph.phone))
-        .map(|(i, _)| i)
-        .collect();
+    // Find all nucleus spans.
+    let nucleus_spans = nucleus_spans(&realized_phones, profile);
 
-    if nucleus_indices.is_empty() {
+    if nucleus_spans.is_empty() {
         // No vowel found: return a single degenerate syllable.
         let all = PhoneString {
             phones: phones_from_tokens(&realized_phones),
@@ -123,18 +120,16 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         }];
     }
 
-    // Build syllables by iterating over nuclei.
+    // Build syllables by iterating over nucleus spans.
     //
     // We track `prev_coda_start`: the index of the first unassigned phone
     // after the previous syllable's nucleus (or 0 for the first syllable).
-    let mut syllables: Vec<Syllable> = Vec::with_capacity(nucleus_indices.len());
+    let mut syllables: Vec<Syllable> = Vec::with_capacity(nucleus_spans.len());
     let mut prev_end = 0usize; // index of first phone not yet claimed
 
-    for (syl_idx, &nuc_pos) in nucleus_indices.iter().enumerate() {
-        // Determine the nucleus span. The current syllabifier chooses a
-        // single realized phone as the nucleus anchor; adjacent phones from
-        // multi-phone realizations are assigned by the normal onset/coda pass.
-        let nuc_end = nuc_pos + 1;
+    for (syl_idx, nucleus_span) in nucleus_spans.iter().enumerate() {
+        let nuc_pos = nucleus_span.start;
+        let nuc_end = nucleus_span.end;
 
         // Consonant cluster between prev_end and nuc_pos.
         let cluster_range = prev_end..nuc_pos;
@@ -186,7 +181,7 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
                 phones: onset_phones,
             },
             nucleus: PhoneString {
-                phones: phones_from_tokens(&realized_phones[nuc_pos..nuc_end]),
+                phones: phones_from_tokens(&realized_phones[nucleus_span.clone()]),
             },
             coda: PhoneString::empty(), // filled in by next iteration
             source_span: SourceSpan {
@@ -470,6 +465,36 @@ fn phones_from_tokens(tokens: &[RealizedPhone]) -> Vec<Phone> {
     tokens.iter().map(|token| token.phone.clone()).collect()
 }
 
+fn nucleus_spans<P: PhonotacticProfile>(
+    tokens: &[RealizedPhone],
+    profile: &P,
+) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    let mut i = 0usize;
+
+    while i < tokens.len() {
+        if !profile.is_nucleus(&tokens[i].phone) {
+            i += 1;
+            continue;
+        }
+
+        let source_phoneme_index = tokens[i].source_phoneme_index;
+        let start = i;
+        i += 1;
+
+        while i < tokens.len()
+            && tokens[i].source_phoneme_index == source_phoneme_index
+            && profile.is_nucleus(&tokens[i].phone)
+        {
+            i += 1;
+        }
+
+        spans.push(start..i);
+    }
+
+    spans
+}
+
 fn source_start_for_token(tokens: &[RealizedPhone], token_index: usize) -> usize {
     tokens
         .get(token_index)
@@ -564,6 +589,15 @@ mod tests {
         assert_eq!(syllables_to_ipa(&s), "ʌ");
     }
 
+    #[test]
+    fn diphthong_stress_marker_appears_once() {
+        let s = syllabify(&seq(&["AW1"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].nucleus.to_ipa(), "aʊ");
+        assert_eq!(syllables_to_ipa(&s), "ˈaʊ");
+    }
+
     // ── Edge cases ───────────────────────────────────────────────────────────
 
     #[test]
@@ -577,6 +611,47 @@ mod tests {
         let s = syllabify(&seq(&["AE1"]), &ga());
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].nucleus.to_ipa(), "æ");
+    }
+
+    #[test]
+    fn now_syllabifies_as_one_syllable_n_aw() {
+        let s = syllabify(&seq(&["N", "AW1"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.to_ipa(), "n");
+        assert_eq!(s[0].nucleus.to_ipa(), "aʊ");
+        assert_eq!(s[0].coda.to_ipa(), "");
+        assert_eq!(syllables_to_ipa(&s), "ˈnaʊ");
+    }
+
+    #[test]
+    fn say_syllabifies_as_one_syllable_s_ey() {
+        let s = syllabify(&seq(&["S", "EY1"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.to_ipa(), "s");
+        assert_eq!(s[0].nucleus.to_ipa(), "eɪ");
+        assert_eq!(s[0].coda.to_ipa(), "");
+        assert_eq!(syllables_to_ipa(&s), "ˈseɪ");
+    }
+
+    #[test]
+    fn boy_syllabifies_as_one_syllable_b_oy() {
+        let s = syllabify(&seq(&["B", "OY1"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.to_ipa(), "b");
+        assert_eq!(s[0].nucleus.to_ipa(), "ɔɪ");
+        assert_eq!(s[0].coda.to_ipa(), "");
+        assert_eq!(syllables_to_ipa(&s), "ˈbɔɪ");
+    }
+
+    #[test]
+    fn adjacent_vowel_phonemes_remain_separate_syllables() {
+        let s = syllabify(&seq(&["AH0", "IY0"]), &ga());
+
+        assert_eq!(s.len(), 2);
+        assert_eq!(syllables_to_ipa(&s), "ʌ.iː");
     }
 
     #[test]

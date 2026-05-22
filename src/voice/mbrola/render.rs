@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use crate::audio::{frame::AudioFrame, write_wav};
 use crate::time::ExactTimestamp;
 
+use super::database::{MbrolaDatabase, MbrolaDatabaseError};
 use super::pho::{PhoneTimedPlan, write_pho_file};
 use super::voice::MbrolaVoice;
 
@@ -32,11 +33,14 @@ pub trait PhoneTimedRenderer {
 #[derive(Debug, Clone)]
 pub struct MbrolaRenderer {
     config: MbrolaRendererConfig,
+    database: MbrolaDatabase,
 }
 
 impl MbrolaRenderer {
     pub fn new(config: MbrolaRendererConfig) -> Self {
-        Self { config }
+        let database = MbrolaDatabase::load(&config.voice.path)
+            .expect("MBROLA database should load after MbrolaVoice validation");
+        Self { config, database }
     }
 
     pub fn from_voice_path(
@@ -64,10 +68,7 @@ impl MbrolaRenderer {
         if plan.phones.is_empty() {
             bail!("cannot render an empty MBROLA phone plan");
         }
-        Ok(render_native_probe_frames(
-            plan,
-            self.config.voice.sample_rate.unwrap_or(16_000),
-        ))
+        render_native_probe_frames(plan, &self.database)
     }
 }
 
@@ -152,7 +153,8 @@ pub fn render_raw_pho(
     }
 
     let plan = super::pho::read_pho_file(pho_path)?;
-    let frames = render_native_probe_frames(&plan, voice.sample_rate.unwrap_or(16_000));
+    let database = MbrolaDatabase::load(&voice.path)?;
+    let frames = render_native_probe_frames(&plan, &database)?;
     write_wav(out_wav, &frames).with_context(|| {
         format!(
             "failed to write native MBROLA probe WAV {}",
@@ -171,40 +173,114 @@ pub fn render_raw_pho(
     })
 }
 
-fn render_native_probe_frames(plan: &PhoneTimedPlan, sample_rate_hz: u32) -> Vec<AudioFrame> {
+fn render_native_probe_frames(
+    plan: &PhoneTimedPlan,
+    database: &MbrolaDatabase,
+) -> Result<Vec<AudioFrame>> {
     let mut samples = Vec::new();
-    let mut phase = 0.0_f32;
-    for phone in &plan.phones {
-        let sample_count =
-            (u64::from(phone.duration_ms) * u64::from(sample_rate_hz) / 1000) as usize;
-        let f0 = phone
-            .pitch_targets
-            .first()
-            .map(|target| target.hz)
-            .unwrap_or(120.0)
-            .max(40.0);
-        let voiced = !phone.pitch_targets.is_empty() && phone.symbol != "_";
-        for idx in 0..sample_count {
-            let t = if sample_count > 0 {
-                idx as f32 / sample_count as f32
-            } else {
-                0.0
-            };
-            let envelope = (t.min(1.0 - t) * 10.0).clamp(0.0, 1.0);
-            let sample = if voiced {
-                phase += std::f32::consts::TAU * f0 / sample_rate_hz as f32;
-                phase.sin() * 0.18 * envelope
-            } else {
-                0.0
-            };
-            samples.push(sample);
+    for (index, phone) in plan.phones.iter().enumerate() {
+        if phone.symbol == "_" {
+            let silence_len = duration_samples(phone.duration_ms, database.sample_rate_hz).max(1);
+            samples.extend(std::iter::repeat_n(0.0, silence_len));
+            continue;
         }
+        let prev = previous_symbol(plan, index).unwrap_or("_");
+        let next = next_symbol(plan, index).unwrap_or("_");
+        let mut unit = Vec::new();
+        unit.extend(diphone_right_half(database, prev, &phone.symbol)?);
+        unit.extend(diphone_left_half(database, &phone.symbol, next)?);
+        if unit.is_empty() {
+            return Err(anyhow::anyhow!(
+                "MBROLA diphone material for phone `{}` was empty",
+                phone.symbol
+            ));
+        }
+        remove_dc(&mut unit);
+        let target_len = duration_samples(phone.duration_ms, database.sample_rate_hz).max(1);
+        samples.extend(resample_linear(&unit, target_len));
     }
-    vec![AudioFrame {
+    Ok(vec![AudioFrame {
         captured_at: ExactTimestamp::now(),
-        sample_rate_hz,
+        sample_rate_hz: database.sample_rate_hz,
         channels: 1,
         samples,
         voice_signatures: Vec::new(),
-    }]
+    }])
+}
+
+fn previous_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
+    index
+        .checked_sub(1)
+        .and_then(|previous| plan.phones.get(previous))
+        .map(|phone| phone.symbol.as_str())
+        .or(Some("_"))
+}
+
+fn next_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
+    plan.phones
+        .get(index + 1)
+        .map(|phone| phone.symbol.as_str())
+        .or(Some("_"))
+}
+
+fn diphone_left_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
+    let diphone =
+        database
+            .diphone(left, right)
+            .ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
+                left: left.to_string(),
+                right: right.to_string(),
+            })?;
+    let samples = database.samples_for_diphone(diphone)?;
+    let split = diphone.halfseg_samples.min(samples.len());
+    Ok(samples[..split].to_vec())
+}
+
+fn diphone_right_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
+    let diphone =
+        database
+            .diphone(left, right)
+            .ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
+                left: left.to_string(),
+                right: right.to_string(),
+            })?;
+    let samples = database.samples_for_diphone(diphone)?;
+    let split = diphone.halfseg_samples.min(samples.len());
+    Ok(samples[split..].to_vec())
+}
+
+fn duration_samples(duration_ms: u32, sample_rate_hz: u32) -> usize {
+    (u64::from(duration_ms) * u64::from(sample_rate_hz) / 1000) as usize
+}
+
+fn resample_linear(input: &[f32], output_len: usize) -> Vec<f32> {
+    if input.is_empty() || output_len == 0 {
+        return Vec::new();
+    }
+    if input.len() == output_len {
+        return input.to_vec();
+    }
+    if output_len == 1 {
+        return vec![input[0]];
+    }
+    let scale = (input.len() - 1) as f32 / (output_len - 1) as f32;
+    (0..output_len)
+        .map(|idx| {
+            let pos = idx as f32 * scale;
+            let left = pos.floor() as usize;
+            let right = (left + 1).min(input.len() - 1);
+            let frac = pos - left as f32;
+            input[left] * (1.0 - frac) + input[right] * frac
+        })
+        .collect()
+}
+
+fn remove_dc(samples: &mut [f32]) {
+    if samples.is_empty() {
+        return;
+    }
+    let mean = samples.iter().sum::<f32>() / samples.len() as f32;
+    for sample in samples {
+        *sample = (*sample - mean).clamp(-1.0, 1.0);
+    }
 }
