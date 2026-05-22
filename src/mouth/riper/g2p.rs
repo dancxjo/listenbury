@@ -3,10 +3,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::linguistic::orthography::OrthographicWord;
+use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
     PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
-    realize_sequence_as_schema,
+    realize_sequence,
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
@@ -248,63 +249,36 @@ impl SimpleEnglishG2p {
         {
             match token {
                 NormalizedToken::Word(word) => {
-                    let word_realization = word_to_phones_with_metadata(word)
-                        .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
                     let analyzed_token = sentence_analysis
                         .tokens
                         .iter()
                         .find(|analysis| analysis.word_index == Some(word_index));
-                    let reduced_symbols = analyzed_token
-                        .and_then(|analysis| analysis.reduction_diagnostic.as_ref())
-                        .and_then(|diagnostic| {
-                            if matches!(diagnostic.status, ReductionStatus::Applied) {
-                                Some(
-                                    diagnostic
-                                        .realized
-                                        .split_ascii_whitespace()
-                                        .map(str::to_string)
-                                        .collect::<Vec<_>>(),
-                                )
-                            } else {
-                                None
-                            }
-                        });
-                    let weak_symbols = weak_form_symbols(word, analyzed_token);
-                    let derives_stress_from_emitted_symbols =
-                        reduced_symbols.is_some() || weak_symbols.is_some();
-                    let emitted_symbols = reduced_symbols
-                        .or(weak_symbols)
-                        .unwrap_or_else(|| word_realization.symbols.clone());
-                    let emitted_stress_by_phone = if derives_stress_from_emitted_symbols {
-                        emitted_symbols
-                            .iter()
-                            .map(|symbol| stress_level_from_symbol(symbol))
-                            .collect::<Vec<_>>()
-                    } else {
-                        word_realization.stress_by_phone.clone()
-                    };
-                    let surface_symbols =
-                        realize_emitted_symbols(&emitted_symbols, &emitted_stress_by_phone);
+                    let pronounced_word = pronounce_word_unit(word, analyzed_token)
+                        .ok_or_else(|| G2pError::UnsupportedWord { word: word.clone() })?;
                     let start = symbols.len();
-                    symbols.extend(surface_symbols.iter().cloned());
+                    symbols.extend(pronounced_word.surface_symbols.iter().cloned());
                     let end = symbols.len();
                     phoneme_to_word.extend(std::iter::repeat_n(Some(word_index), end - start));
                     word_targets.push(WordProsodyTarget {
                         word_index,
                         text_range: token_span.clone(),
                         phoneme_range: start..end,
-                        normalized_text: word.clone(),
+                        normalized_text: pronounced_word.orthography.clone(),
                     });
-                    lexical_stress.extend(emitted_stress_by_phone.iter().enumerate().filter_map(
-                        |(offset, stress)| {
-                            stress.map(|stress| LexicalStressTarget {
-                                word_index,
-                                phoneme_index: start + offset,
-                                stress,
-                                source: word_realization.stress_source,
-                            })
-                        },
-                    ));
+                    lexical_stress.extend(
+                        pronounced_word
+                            .stress_by_phone
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(offset, stress)| {
+                                stress.map(|stress| LexicalStressTarget {
+                                    word_index,
+                                    phoneme_index: start + offset,
+                                    stress,
+                                    source: pronounced_word.stress_source,
+                                })
+                            }),
+                    );
                     emitted_pronounceable += 1;
                     word_index += 1;
                     if emitted_pronounceable < pronounceable_count {
@@ -628,6 +602,16 @@ struct WordPhoneRealization {
     stress_source: LexicalStressSource,
 }
 
+#[derive(Debug, Clone)]
+struct PronouncedWordUnit {
+    orthography: String,
+    phonemes: Vec<Phoneme>,
+    realization: PhoneString,
+    surface_symbols: Vec<String>,
+    stress_by_phone: Vec<Option<LexicalStressLevel>>,
+    stress_source: LexicalStressSource,
+}
+
 fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
     let resolved = morphophonology::analyze_word(word);
     Some(WordPhoneRealization {
@@ -650,6 +634,59 @@ fn word_to_phones_with_metadata(word: &str) -> Option<WordPhoneRealization> {
 
 fn word_to_phones(word: &str) -> Option<Vec<String>> {
     word_to_phones_with_metadata(word).map(|realization| realization.symbols)
+}
+
+fn pronounce_word_unit(
+    word: &str,
+    analyzed_token: Option<&crate::mouth::riper::TokenAnalysis>,
+) -> Option<PronouncedWordUnit> {
+    let word_realization = word_to_phones_with_metadata(word)?;
+    let reduced_symbols = analyzed_token
+        .and_then(|analysis| analysis.reduction_diagnostic.as_ref())
+        .and_then(|diagnostic| {
+            if matches!(diagnostic.status, ReductionStatus::Applied) {
+                Some(
+                    diagnostic
+                        .realized
+                        .split_ascii_whitespace()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            }
+        });
+    let weak_symbols = weak_form_symbols(word, analyzed_token);
+    let derives_stress_from_emitted_symbols = reduced_symbols.is_some() || weak_symbols.is_some();
+    let emitted_symbols = reduced_symbols
+        .or(weak_symbols)
+        .unwrap_or_else(|| word_realization.symbols.clone());
+    let stress_by_phone = if derives_stress_from_emitted_symbols {
+        emitted_symbols
+            .iter()
+            .map(|symbol| stress_level_from_symbol(symbol))
+            .collect::<Vec<_>>()
+    } else {
+        word_realization.stress_by_phone.clone()
+    };
+
+    let phonemes = realize_emitted_phonemes(&emitted_symbols, &stress_by_phone);
+    debug_assert_eq!(phonemes.len(), stress_by_phone.len());
+    let realization = PhoneString::from_phoneme_slice(&phonemes);
+    debug_assert!(!realization.phones.is_empty());
+    let surface_symbols = phonemes
+        .iter()
+        .flat_map(|phoneme| phoneme.symbols_in_schema(PhonemeSchema::ArpabetSurface))
+        .collect();
+
+    Some(PronouncedWordUnit {
+        orthography: word.to_string(),
+        phonemes,
+        realization,
+        surface_symbols,
+        stress_by_phone,
+        stress_source: word_realization.stress_source,
+    })
 }
 
 fn inter_word_boundary_symbol(
@@ -924,10 +961,10 @@ fn stress_from_phonological(stress: Option<PhonologicalStress>) -> Option<Lexica
     }
 }
 
-fn realize_emitted_symbols(
+fn realize_emitted_phonemes(
     symbols: &[String],
     stress_by_phone: &[Option<LexicalStressLevel>],
-) -> Vec<String> {
+) -> Vec<Phoneme> {
     let phonemes = symbols
         .iter()
         .enumerate()
@@ -944,13 +981,12 @@ fn realize_emitted_symbols(
         })
         .collect::<Vec<_>>();
 
-    realize_sequence_as_schema(
+    realize_sequence(
         &phonemes,
         &RealizationConfig {
             enable_allophone_rules: true,
             ..RealizationConfig::default()
         },
-        PhonemeSchema::ArpabetSurface,
     )
 }
 
@@ -1054,6 +1090,7 @@ fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linguistic::phonology::RealizationMethod;
 
     fn symbols(sequence: &PiperPhonemeSequence) -> Vec<String> {
         sequence.phonemes.iter().map(|p| p.0.clone()).collect()
@@ -1556,6 +1593,45 @@ mod tests {
             confirmed_diag.status,
             crate::mouth::riper::ReductionStatus::Applied
         );
+    }
+
+    #[test]
+    fn weak_form_pronunciation_flows_through_structural_phonemes() {
+        let g2p = SimpleEnglishG2p::default();
+        let normalized = g2p.normalizer.normalize("for me").expect("normalize");
+        let analysis = HeuristicSentenceAnalyzer.analyze("for me", &normalized);
+        let for_token = analysis.tokens.iter().find(|token| token.text == "for");
+        let pronounced = pronounce_word_unit("for", for_token).expect("pronounce weak form");
+
+        assert_eq!(pronounced.surface_symbols, vec!["F", "ER0"]);
+        assert_eq!(
+            pronounced
+                .phonemes
+                .iter()
+                .map(|phoneme| phoneme.source_symbol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["F", "ER0"]
+        );
+        assert_eq!(
+            pronounced.realization.to_ipa(),
+            PhoneString::from_phoneme_slice(&pronounced.phonemes).to_ipa()
+        );
+    }
+
+    #[test]
+    fn allophone_realization_uses_shared_structural_layer() {
+        let pronounced = pronounce_word_unit("bottle", None).expect("pronounce bottle");
+        assert_eq!(
+            pronounced.surface_symbols,
+            vec!["B", "AA", "DX", "AH0", "L"]
+        );
+        let flap = pronounced
+            .phonemes
+            .iter()
+            .find(|phoneme| phoneme.source_symbol == "T")
+            .expect("expected source /T/ phoneme");
+        assert_eq!(flap.realization.method, RealizationMethod::AllophoneRule);
+        assert_eq!(flap.realization.ipa, "ɾ");
     }
 
     #[test]
