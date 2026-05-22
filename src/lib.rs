@@ -60,14 +60,16 @@ pub use mouth::read_aloud::{
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
-    AcousticContribution, AcousticMixture, AcousticMixtureId, AttributionEvidence, ClusterId,
-    DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent,
-    EventId, IsolationEvaluation, IsolationPolicy, MixtureComponent, MixtureId, OverlapMixture,
-    SoundEvent, SoundEventKind, SoundSource, Soundscape, SoundscapeContext, SoundscapeDebugView,
-    SoundscapeFrame, SoundscapeId, SourceAttributedTranscript, SourceAttributor, SourceCriterion,
-    SourceHypothesis, SourceId, SourceKind, SourceLabel, SourceOperation, SuppressionTarget,
-    TimePoint, TimeRange, TrackingTarget, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
-    VoiceRoleInSpan, detect_overlaps, evaluate_policies, self_hearing_suppression_policy,
+    AcousticContribution, AcousticMixture, AcousticMixtureId, AttributionEvidence, AudioSpan,
+    ClusterId, DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, EventId,
+    IsolationEvaluation, IsolationPolicy, MixtureComponent, MixtureId, NoopSourceSeparator,
+    OverlapMixture, PlaybackCancellationSeparator, SeparationMethod, SeparationRequest,
+    SeparationResult, SoundEvent, SoundEventKind, SoundSource, Soundscape, SoundscapeContext,
+    SoundscapeDebugView, SoundscapeFrame, SoundscapeId, SourceAttributedTranscript,
+    SourceAttributor, SourceCriterion, SourceHypothesis, SourceId, SourceKind, SourceLabel,
+    SourceOperation, SourceSeparator, SuppressionTarget, TimePoint, TimeRange, TrackingTarget,
+    Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel, VoiceRoleInSpan,
+    apply_separation_requests, detect_overlaps, evaluate_policies, self_hearing_suppression_policy,
 };
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,

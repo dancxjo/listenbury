@@ -25,20 +25,23 @@ pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
 };
 pub use criteria::{IsolationPolicy, SourceCriterion, SourceOperation};
-pub use debug::{DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, SoundscapeDebugView};
+pub use debug::{
+    DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, SoundscapeDebugView,
+};
 pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
 pub use expected::{
-    playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig,
-    TranscriptHypothesis,
+    ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
+    playback_match_evidence,
 };
 pub use frame::SoundscapeFrame;
 pub use isolation::{
-    evaluate_policies, self_hearing_suppression_policy, IsolationEvaluation, SuppressionTarget,
-    TrackingTarget,
+    AudioSpan, IsolationEvaluation, NoopSourceSeparator, PlaybackCancellationSeparator,
+    SeparationMethod, SeparationRequest, SeparationResult, SourceSeparator, SuppressionTarget,
+    TrackingTarget, apply_separation_requests, evaluate_policies, self_hearing_suppression_policy,
 };
-pub use overlap::{detect_overlaps, MixtureComponent, OverlapMixture};
+pub use overlap::{MixtureComponent, OverlapMixture, detect_overlaps};
 pub use signature::{
     FormantProfile, PitchProfile, ProsodyProfile, RateProfile, TimbreProfile, VoiceSignature,
     VoiceSignatureId, VoiceSignatureMatch, VoiceSignatureObservation,
