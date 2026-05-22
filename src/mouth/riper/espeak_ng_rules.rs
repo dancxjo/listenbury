@@ -302,6 +302,173 @@ pub fn english_punctuation_rule(
 }
 
 // ---------------------------------------------------------------------------
+// Morphophonology rule types
+// ---------------------------------------------------------------------------
+
+/// A spelling repair that must be applied to a stripped surface form before
+/// looking up the stem in the lexicon.
+///
+/// These three repairs encode the eSpeak rule-file wisdom about how English
+/// orthography mutates at suffix boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpellingRepairHint {
+    /// Restore a trailing `e` that was dropped before the suffix
+    /// (e.g. `"liked"` → stem candidate `"like"` before `-ed` lookup).
+    RestoreTrailingE,
+    /// Undo consonant doubling at the suffix boundary
+    /// (e.g. `"running"` → stem candidate `"run"` before `-ing` lookup).
+    RemoveDoubledConsonant,
+    /// Reverse a `y` → `i` change at the stem/suffix boundary
+    /// (e.g. `"happily"` → stem candidate `"happy"` before `-ly` lookup).
+    IToY,
+}
+
+/// Describes how to extract and look up the stem once the surface affix has
+/// been stripped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StemRetranslationPolicy {
+    /// Strip the affix and look up the bare stem directly.
+    DirectStripAndLookup,
+    /// Try the listed spelling repairs (in order) as additional stem
+    /// candidates before falling back to the bare form.
+    SpellingRepair(Vec<SpellingRepairHint>),
+}
+
+/// Specifies what this morphophonology rule contributes to the output once
+/// the stem pronunciation has been resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MorphophonologyOutput {
+    /// Append a space-separated ARPAbet phone string to the stem's phones.
+    AppendArpabet(String),
+    /// Preserve the stem's pronunciation without appending anything.
+    /// Used for prefix-only rules where the prefix phones are prepended
+    /// externally.
+    PreserveStemPronunciation,
+}
+
+/// A native morphophonology rule encoding eSpeak-style affix and
+/// retranslation behaviour.
+///
+/// These rules represent the linguistic knowledge that eSpeak's rule files
+/// encode (prefix/suffix removal, spelling repairs, POS hints) in a structured
+/// format that any downstream component can inspect without re-parsing
+/// eSpeak's proprietary rule syntax.
+///
+/// A rule carries full [`RuleProvenance`] so diagnostics can always trace
+/// where a particular pronunciation decision originated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MorphophonologyRule {
+    /// Unique stable identifier for this rule.
+    pub id: String,
+    /// The orthographic affix string (e.g. `"ed"`, `"ing"`, `"un"`).
+    pub affix: String,
+    /// Whether the affix is a prefix or a suffix.
+    pub morpheme_kind: ling_env::MorphemeKind,
+    /// How to derive the stem form for pronunciation lookup.
+    pub stem_policy: StemRetranslationPolicy,
+    /// What the rule produces once the stem is resolved.
+    pub output_policy: MorphophonologyOutput,
+    /// Where this rule's knowledge was originally encoded.
+    pub provenance: RuleProvenance,
+}
+
+fn espeak_provenance() -> RuleProvenance {
+    RuleProvenance {
+        source: "espeak-ng-derived".to_string(),
+        source_file: "dictsource/en_rules".to_string(),
+        source_license: "GPL-3.0-or-later".to_string(),
+        imported_at: "2026-05-21T00:23:41Z".to_string(),
+    }
+}
+
+/// Return the bundled set of English native morphophonology rules derived
+/// from eSpeak affix and retranslation wisdom.
+///
+/// These rules cover the most productive English suffixes (`-ed`, `-ing`,
+/// `-s`, `-ly`) and common prefixes (`un-`, `re-`, `di-`).  Every rule
+/// carries [`RuleProvenance`] so callers can surface attribution in
+/// diagnostics.
+pub fn english_native_morphophonology_rules() -> Vec<MorphophonologyRule> {
+    let prov = espeak_provenance();
+    vec![
+        // --- Suffixes ---
+        MorphophonologyRule {
+            id: "suffix_ed_attachment".to_string(),
+            affix: "ed".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::RestoreTrailingE,
+                SpellingRepairHint::RemoveDoubledConsonant,
+                SpellingRepairHint::IToY,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet(
+                "IH0 D".to_string(), // underlying /ɪd/; allomorph selected at realisation
+            ),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_ing_attachment".to_string(),
+            affix: "ing".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::RestoreTrailingE,
+                SpellingRepairHint::RemoveDoubledConsonant,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet("IH0 NG".to_string()),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_s_attachment".to_string(),
+            affix: "s".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::AppendArpabet(
+                "Z".to_string(), // underlying /z/; allomorph selected at realisation
+            ),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_ly_attachment".to_string(),
+            affix: "ly".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::IToY,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet("L IY0".to_string()),
+            provenance: prov.clone(),
+        },
+        // --- Prefixes ---
+        MorphophonologyRule {
+            id: "prefix_un_attachment".to_string(),
+            affix: "un".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "prefix_re_attachment".to_string(),
+            affix: "re".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "prefix_di_attachment".to_string(),
+            affix: "di".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov,
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Native rule types
 // ---------------------------------------------------------------------------
 
@@ -1236,6 +1403,16 @@ mod tests {
         }
     }
 
+    // --- MorphophonologyRule tests ---
+
+    #[test]
+    fn english_native_morphophonology_rules_are_non_empty() {
+        let rules = english_native_morphophonology_rules();
+        assert!(
+            !rules.is_empty(),
+            "should have at least one English native morphophonology rule"
+          );
+  }
     #[test]
     fn bulk_english_multi_word_rules_are_imported_as_phrase_level_rules() {
         let rules = english_imported_multi_word_rules();
@@ -1255,6 +1432,97 @@ mod tests {
     }
 
     #[test]
+    fn morphophonology_rules_cover_required_affixes() {
+        let rules = english_native_morphophonology_rules();
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        // At least one suffix and one prefix must be present.
+        let has_suffix = rules
+            .iter()
+            .any(|r| r.morpheme_kind == ling_env::MorphemeKind::Suffix);
+        let has_prefix = rules
+            .iter()
+            .any(|r| r.morpheme_kind == ling_env::MorphemeKind::Prefix);
+        assert!(has_suffix, "expected at least one suffix rule; ids: {ids:?}");
+        assert!(has_prefix, "expected at least one prefix rule; ids: {ids:?}");
+    }
+
+    #[test]
+    fn morphophonology_rules_all_have_espeak_provenance() {
+        let rules = english_native_morphophonology_rules();
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} should carry eSpeak provenance",
+                rule.id
+            );
+            assert!(
+                !rule.provenance.source_license.is_empty(),
+                "rule {} should have a non-empty source_license",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ly_has_ito_y_spelling_repair() {
+        let rules = english_native_morphophonology_rules();
+        let ly_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ly_attachment")
+            .expect("suffix_ly_attachment rule must exist");
+        assert_eq!(ly_rule.morpheme_kind, ling_env::MorphemeKind::Suffix);
+        match &ly_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(
+                    hints.contains(&SpellingRepairHint::IToY),
+                    "-ly rule must include IToY spelling repair hint"
+                );
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ly rule must have SpellingRepair policy, not DirectStripAndLookup");
+            }
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ing_has_doubled_consonant_repair() {
+        let rules = english_native_morphophonology_rules();
+        let ing_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ing_attachment")
+            .expect("suffix_ing_attachment rule must exist");
+        match &ing_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(
+                    hints.contains(&SpellingRepairHint::RemoveDoubledConsonant),
+                    "-ing rule must include RemoveDoubledConsonant hint"
+                );
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ing rule must have SpellingRepair policy");
+            }
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ed_covers_all_three_spelling_repairs() {
+        let rules = english_native_morphophonology_rules();
+        let ed_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ed_attachment")
+            .expect("suffix_ed_attachment rule must exist");
+        match &ed_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(hints.contains(&SpellingRepairHint::RestoreTrailingE));
+                assert!(hints.contains(&SpellingRepairHint::RemoveDoubledConsonant));
+                assert!(hints.contains(&SpellingRepairHint::IToY));
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ed rule must have SpellingRepair policy");
+            }
+        }
+  }
+  #[test]
     fn multi_word_rule_matches_normalized_span_and_preserves_source_spans() {
         let normalizer = TextNormalizer::default();
         let source = "kind of odd";
