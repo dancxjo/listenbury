@@ -7,6 +7,10 @@ use crate::prosody::note_target::{
     MidiNote, NoteArticulation, NoteDuration, NoteTarget, PitchTarget, TimePoint, Velocity,
 };
 
+const DEFAULT_TEMPO_US_PER_QUARTER: u32 = 500_000;
+const MICROS_PER_MILLISECOND: u128 = 1_000;
+const ROUND_TO_NEAREST_MILLISECOND_OFFSET: u128 = 500;
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MidiImportOptions {
     pub track: Option<usize>,
@@ -74,17 +78,35 @@ pub fn note_targets_from_midi_bytes(
 
     let tempo_events = collect_tempo_events(&smf);
     let note_spans = collect_note_spans(&smf, &track_indices, selected_channel)?;
+    let mut tick_to_millis = HashMap::new();
+    for span in &note_spans {
+        tick_to_millis
+            .entry(span.start_tick)
+            .or_insert_with(|| ticks_to_millis(span.start_tick, ppq, &tempo_events));
+        tick_to_millis
+            .entry(span.end_tick)
+            .or_insert_with(|| ticks_to_millis(span.end_tick, ppq, &tempo_events));
+    }
 
     let mut note_targets: Vec<NoteTarget> = note_spans
         .iter()
         .map(|span| {
-            let onset_ms = ticks_to_millis(span.start_tick, ppq, &tempo_events);
-            let end_ms = ticks_to_millis(span.end_tick, ppq, &tempo_events);
+            let onset_ms = *tick_to_millis
+                .get(&span.start_tick)
+                .unwrap_or_else(|| panic!("start tick {} should be cached", span.start_tick));
+            let end_ms = *tick_to_millis
+                .get(&span.end_tick)
+                .unwrap_or_else(|| panic!("end tick {} should be cached", span.end_tick));
             NoteTarget {
-                pitch: PitchTarget::new(MidiNote::new(span.key).expect("MIDI key must be <= 127")),
+                pitch: PitchTarget::new(
+                    MidiNote::new(span.key)
+                        .unwrap_or_else(|| panic!("MIDI key {} must be <= 127", span.key)),
+                ),
                 onset: TimePoint::from_millis(onset_ms),
                 duration: NoteDuration::from_millis(end_ms.saturating_sub(onset_ms)),
-                velocity: Velocity::new(span.velocity).expect("MIDI velocity must be in 1..=127"),
+                velocity: Velocity::new(span.velocity).unwrap_or_else(|| {
+                    panic!("MIDI velocity {} must be in 1..=127", span.velocity)
+                }),
                 articulation: NoteArticulation::Neutral,
             }
         })
@@ -205,7 +227,7 @@ fn collect_note_spans(
 
 fn ticks_to_millis(ticks: u64, ppq: u32, tempo_events: &[(u64, u32)]) -> u64 {
     let mut previous_tick = 0_u64;
-    let mut current_tempo_us_per_quarter = 500_000_u32;
+    let mut current_tempo_us_per_quarter = DEFAULT_TEMPO_US_PER_QUARTER;
     let mut total_microseconds = 0_u128;
 
     for &(tempo_tick, tempo_value) in tempo_events {
@@ -226,7 +248,7 @@ fn ticks_to_millis(ticks: u64, ppq: u32, tempo_events: &[(u64, u32)]) -> u64 {
             ((ticks - previous_tick) as u128 * current_tempo_us_per_quarter as u128) / ppq as u128;
     }
 
-    ((total_microseconds + 500) / 1_000) as u64
+    ((total_microseconds + ROUND_TO_NEAREST_MILLISECOND_OFFSET) / MICROS_PER_MILLISECOND) as u64
 }
 
 #[cfg(test)]
