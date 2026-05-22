@@ -6,6 +6,19 @@
 //! so phonotactic assumptions are separable from the algorithm and can be
 //! swapped for a different English variety or a completely different language.
 //!
+//! # Input phone layer
+//!
+//! Phonotactic profiles operate exclusively over **broad phonemic phones**
+//! ([`PhoneDecompositionPolicy::KeepPhonemic`]).  Affricates such as `/tʃ/`
+//! (ARPABET `CH`) and `/dʒ/` (ARPABET `JH`) are single phonotactic units;
+//! decomposing them into `[t, ʃ]` or `[d, ʒ]` before consulting the tables
+//! would make multi-phone coda entries like `[n, tʃ]` and `[n, dʒ]`
+//! invisible.  Diphthong nuclei (`/oʊ/`, `/aɪ/`, …) are likewise kept whole.
+//!
+//! Decomposition for singing or acoustic rendering is applied **after**
+//! syllabification, via
+//! [`crate::prosody::syllable::SungSyllable::with_decomposition_policy`].
+//!
 //! All profile methods receive **[`Phone`] references** from the phonology
 //! layer; the `phone.ipa` field carries the IPA surface form, and phone
 //! comparisons respect the variety's [`PhoneEqualityOptions`] so that
