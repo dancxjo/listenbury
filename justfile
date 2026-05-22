@@ -6,6 +6,8 @@ cuda-rustflags := if rustflags == "" { "-L native=" + cuda-library-path } else {
 cmudict-url := "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict"
 cmudict-path := "data/cmudict.dict"
 mbrola-voices-url := "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data"
+diphone-model := env_var_or_default("LISTENBURY_DIPHONE_MODEL", "models/voice.onnx")
+diphone-config := env_var_or_default("LISTENBURY_DIPHONE_CONFIG", "models/voice.json")
 
 default:
     @just --list
@@ -29,6 +31,22 @@ mbrola-inventory voice:
 # Audit a MBROLA voice database against a .pho plan: check diphone coverage and fallback strategies.
 mbrola-audit voice plan:
     cargo run -- dev mbrola-audit --voice "{{voice}}" --plan "{{plan}}"
+
+# Forge one neural diphone unit into the local cache.
+forge-diphone left right:
+    cargo run -- diphone forge --model "{{diphone-model}}" --config "{{diphone-config}}" --left "{{left}}" --right "{{right}}"
+
+# Prewarm the neural diphone cache for a named or file-based inventory.
+diphone-cache-build inventory:
+    cargo run -- diphone cache-build --model "{{diphone-model}}" --config "{{diphone-config}}" --inventory "{{inventory}}"
+
+# List diphone cache entries for the configured model/config fingerprints.
+diphone-cache-list:
+    cargo run -- diphone cache-list --model "{{diphone-model}}" --config "{{diphone-config}}"
+
+# Audit a phone plan against MBROLA exact hits, cache hits, neural generatability, and fallbacks.
+diphone-audit plan:
+    cargo run -- diphone audit-plan --model "{{diphone-model}}" --config "{{diphone-config}}" --plan "{{plan}}"
 
 # Start the live PETE listening loop.
 listen *args:
