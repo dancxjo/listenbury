@@ -62,6 +62,11 @@ enum Command {
         #[command(subcommand)]
         command: Option<ModelsCommand>,
     },
+    #[command(about = "Forge, inspect, and audit neural diphone caches (requires tts-riper)")]
+    Diphone {
+        #[command(subcommand)]
+        command: DiphoneCommand,
+    },
     #[command(hide = true)]
     Dev {
         #[command(subcommand)]
@@ -643,6 +648,23 @@ pub(crate) enum DiphoneCacheCommand {
     Forge(DiphoneCacheForgeCommand),
     /// Build a full diphone inventory cache from a phone list file.
     Build(DiphoneCacheBuildCommand),
+    /// List cached diphone entries and metadata.
+    List(DiphoneCacheListCommand),
+    /// Audit a .pho/PhoneTimedPlan against MBROLA, cache, and neural forge availability.
+    AuditPlan(DiphoneAuditPlanCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum DiphoneCommand {
+    /// Forge a single diphone and store it in the cache.
+    Forge(DiphoneCacheForgeCommand),
+    /// Build a full diphone inventory cache.
+    #[command(alias = "build")]
+    CacheBuild(DiphoneCacheBuildCommand),
+    /// List cached diphone entries and metadata.
+    CacheList(DiphoneCacheListCommand),
+    /// Audit a .pho/PhoneTimedPlan against MBROLA, cache, and neural forge availability.
+    AuditPlan(DiphoneAuditPlanCommand),
 }
 
 #[derive(Debug, Args)]
@@ -662,6 +684,9 @@ pub(crate) struct DiphoneCacheForgeCommand {
     /// Directory for the diphone cache (defaults to `./diphone-cache`).
     #[arg(long, default_value = "diphone-cache")]
     pub(crate) cache_dir: PathBuf,
+    /// Directory for forge debug outputs (carrier/extracted/normalized WAV + JSON).
+    #[arg(long)]
+    pub(crate) debug_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -672,14 +697,51 @@ pub(crate) struct DiphoneCacheBuildCommand {
     /// Path to the Piper voice config JSON.
     #[arg(long)]
     pub(crate) config: PathBuf,
-    /// Text file listing phone symbols to include, one per line.
+    /// Inventory name (e.g. `en-us-basic`) or a text file with one phone symbol per line.
     #[arg(long)]
-    pub(crate) inventory: PathBuf,
+    pub(crate) inventory: String,
+    /// Re-forge and overwrite units even when the cache entry already exists.
+    #[arg(long)]
+    pub(crate) force: bool,
     /// Directory for the diphone cache (defaults to `./diphone-cache`).
     #[arg(long, default_value = "diphone-cache")]
     pub(crate) cache_dir: PathBuf,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneCacheListCommand {
+    /// Path to the Piper ONNX model file.
+    #[arg(long)]
+    pub(crate) model: PathBuf,
+    /// Path to the Piper voice config JSON.
+    #[arg(long)]
+    pub(crate) config: PathBuf,
+    /// Directory for the diphone cache (defaults to `./diphone-cache`).
+    #[arg(long, default_value = "diphone-cache")]
+    pub(crate) cache_dir: PathBuf,
+    /// Print full per-entry metadata.
+    #[arg(long)]
+    pub(crate) verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneAuditPlanCommand {
+    /// Path to the Piper ONNX model file.
+    #[arg(long)]
+    pub(crate) model: PathBuf,
+    /// Path to the Piper voice config JSON.
+    #[arg(long)]
+    pub(crate) config: PathBuf,
+    /// Path to a MBROLA voice database file for exact-coverage checks.
+    #[arg(long)]
+    pub(crate) mbrola_voice: Option<PathBuf>,
+    /// Path to the .pho or PhoneTimedPlan JSON to audit.
+    #[arg(long)]
+    pub(crate) plan: PathBuf,
+    /// Directory for the diphone cache (defaults to `./diphone-cache`).
+    #[arg(long, default_value = "diphone-cache")]
+    pub(crate) cache_dir: PathBuf,
+}
 
 pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
@@ -711,6 +773,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Reply(cmd) => commands::run_round_trip_wav(cmd),
         Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
+        Command::Diphone { command } => commands::run_diphone(command),
         Command::Dev { command } => run_dev(command),
     }
 }
@@ -769,6 +832,91 @@ mod tests {
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+    }
+
+    #[test]
+    fn diphone_forge_parses_top_level_command() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "diphone",
+            "forge",
+            "--model",
+            "voice.onnx",
+            "--config",
+            "voice.json",
+            "--left",
+            "h",
+            "--right",
+            "@",
+        ])
+        .expect("diphone forge should parse");
+
+        let Some(Command::Diphone { command }) = cli.command else {
+            panic!("expected top-level diphone command");
+        };
+        let DiphoneCommand::Forge(command) = command else {
+            panic!("expected diphone forge subcommand");
+        };
+        assert_eq!(command.model, PathBuf::from("voice.onnx"));
+        assert_eq!(command.config, PathBuf::from("voice.json"));
+        assert_eq!(command.left, "h");
+        assert_eq!(command.right, "@");
+    }
+
+    #[test]
+    fn diphone_cache_build_parses_inventory_and_force() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "diphone",
+            "cache-build",
+            "--model",
+            "voice.onnx",
+            "--config",
+            "voice.json",
+            "--inventory",
+            "en-us-basic",
+            "--force",
+        ])
+        .expect("diphone cache-build should parse");
+
+        let Some(Command::Diphone { command }) = cli.command else {
+            panic!("expected top-level diphone command");
+        };
+        let DiphoneCommand::CacheBuild(command) = command else {
+            panic!("expected cache-build subcommand");
+        };
+        assert_eq!(command.inventory, "en-us-basic");
+        assert!(command.force);
+    }
+
+    #[test]
+    fn diphone_audit_plan_parses_optional_mbrola_voice() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "diphone",
+            "audit-plan",
+            "--model",
+            "voice.onnx",
+            "--config",
+            "voice.json",
+            "--mbrola-voice",
+            "data/mbrola/us3/us3",
+            "--plan",
+            "out/example.pho",
+        ])
+        .expect("diphone audit-plan should parse");
+
+        let Some(Command::Diphone { command }) = cli.command else {
+            panic!("expected top-level diphone command");
+        };
+        let DiphoneCommand::AuditPlan(command) = command else {
+            panic!("expected audit-plan subcommand");
+        };
+        assert_eq!(
+            command.mbrola_voice,
+            Some(PathBuf::from("data/mbrola/us3/us3"))
+        );
+        assert_eq!(command.plan, PathBuf::from("out/example.pho"));
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub(crate) use continue_generation::run_continue;
 pub(crate) use cpal_diag::{play_audio_frame_stream, play_audio_frames, prepare_audio_playback};
 pub(crate) use cpal_diag::{run_play_wav, run_record_wav};
 pub(crate) use demos::{run_demo_vad, run_fake_turn};
+pub(crate) use diphone_cache::run_diphone;
 pub(crate) use diphone_cache::run_diphone_cache;
 pub(crate) use dogfood_two::run_dogfood_two;
 pub(crate) use live_half_duplex::run_live_half_duplex;
