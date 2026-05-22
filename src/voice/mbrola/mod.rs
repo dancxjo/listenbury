@@ -3,6 +3,10 @@
 //! This module treats MBROLA voice databases as native phone-timed renderers:
 //! `.pho` phone durations and pitch targets drive diphone selection, duration
 //! control, and TD-PSOLA overlap-add synthesis.
+//!
+//! `mbrola` in module/type names means file-format and synthesis-flow
+//! compatibility (voice database parsing + `.pho` behavior), not source-code
+//! derivation from upstream MBROLA implementations.
 
 pub mod database;
 pub mod diphone_provider;
