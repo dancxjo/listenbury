@@ -78,10 +78,7 @@ pub use sentence_analysis::{
     PartOfSpeech, ProsodicRole, ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic,
     ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind,
     SyntacticLinkParse, SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex,
-    ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
-    ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic, ReductionStatus,
-    SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind, SyntacticLinkParse,
-    SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex, WordSyntaxFacts,
+    WordSyntaxFacts,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

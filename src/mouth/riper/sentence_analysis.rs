@@ -443,8 +443,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     orthographic_emphasis,
                     reduction,
                     diagnostic,
-                ) = classify_to_token(raw_token, word_index, prev_prev, prev, next);
-                let (pos, syntactic_role, prosodic_role, reduction, diagnostic) = classify_to_token(
+                ) = classify_to_token(
                     raw_token,
                     word_index,
                     prev_prev,
@@ -2147,6 +2146,7 @@ fn classify_to_token(
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
             ProsodicRole::FunctionWeak,
+            OrthographicEmphasisKind::None,
             ReductionClass::WeakFunctionWord,
             diagnostic(
                 &phrase_final,
