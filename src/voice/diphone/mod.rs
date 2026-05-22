@@ -22,15 +22,16 @@
 //! Cache entries **must not** be committed to version control or redistributed
 //! without verifying that the model license permits redistribution of derived
 //! audio.  Add `diphone-cache/` (or whatever path you choose) to `.gitignore`.
+//! See `docs/architecture/diphone-cache.md` for local-only cache expectations.
 
 pub mod cache;
 pub mod forge;
 pub mod normalize;
 pub mod provider;
 
-pub use cache::{CacheEntryMetadata, CacheKey, DiphoneCache};
+pub use cache::{CacheEntryMetadata, CacheKey, CacheLookup, DiphoneCache};
 pub use forge::{
-    CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, NORMALIZATION_VERSION, ForgeSettings,
+    CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, ForgeSettings, NORMALIZATION_VERSION,
     PhoneClass,
 };
 pub use provider::FallbackDiphoneProvider;
