@@ -8,6 +8,8 @@ use crate::segmentation::boundary_hypotheses::{
 use crate::segmentation::nuclei::NucleusEvidence;
 use crate::segmentation::syllable_regions::SyllableIsland;
 
+// Confidence blend for speech-like word regions:
+// speech + voicing + formants + nucleus/island support, minus noise.
 const WORD_SPEECH_WEIGHT: f32 = 0.35;
 const WORD_VOICED_WEIGHT: f32 = 0.30;
 const WORD_FORMANT_WEIGHT: f32 = 0.25;
@@ -30,6 +32,8 @@ pub struct WordRegionConfig {
 impl Default for WordRegionConfig {
     fn default() -> Self {
         Self {
+            // Require clear periodicity and resonance before elevating a region
+            // to a possible word.
             min_voiced_confidence: 0.30,
             min_formant_confidence: 0.25,
             min_speech_confidence: 0.30,

@@ -46,8 +46,8 @@ pub fn generate_boundary_hypotheses(
 fn boundary_to_span_hypothesis(hypothesis: BoundaryHypothesis) -> SpanHypothesis {
     let kind = to_span_kind(&hypothesis);
     let label = compatibility_label(&hypothesis);
-    let start_ms = hypothesis.start_time.max(0.0).round() as u64;
-    let end_ms = hypothesis.end_time.max(0.0).round() as u64;
+    let start_ms = hypothesis.start_time.max(0.0).floor() as u64;
+    let end_ms = hypothesis.end_time.max(0.0).ceil() as u64;
     let confidence = hypothesis.confidence.clamp(0.0, 1.0);
     let features_used = hypothesis
         .evidence
