@@ -132,6 +132,10 @@ mod tests {
         );
         assert_eq!(realized[1].realization.ipa, "ɾ");
         assert_eq!(
+            realized[1].realization.ipa,
+            realized[1].realization.phone_string.to_ipa()
+        );
+        assert_eq!(
             realized[1].realization.method,
             RealizationMethod::AllophoneRule
         );
@@ -283,6 +287,10 @@ mod tests {
         );
         assert_eq!(realized[1].realization.ipa, "ŋ");
         assert_eq!(
+            realized[1].realization.ipa,
+            realized[1].realization.phone_string.to_ipa()
+        );
+        assert_eq!(
             realized[1].realization.rule.as_deref(),
             Some("alveolar_nasal_velar_assimilation")
         );
@@ -347,6 +355,70 @@ mod tests {
         assert_eq!(palatal_consonant.vowel_height, None);
         assert_eq!(palatal_consonant.vowel_backness, None);
         assert_eq!(palatal_consonant.roundedness, None);
+    }
+
+    #[test]
+    fn representative_vowels_expose_vowel_specific_features() {
+        let cases = [
+            (
+                "IY",
+                VowelHeight::High,
+                VowelBackness::Front,
+                Roundedness::Unrounded,
+            ),
+            (
+                "AH",
+                VowelHeight::Mid,
+                VowelBackness::Central,
+                Roundedness::Unrounded,
+            ),
+            (
+                "AO",
+                VowelHeight::Low,
+                VowelBackness::Back,
+                Roundedness::Rounded,
+            ),
+            (
+                "ER",
+                VowelHeight::Rhotic,
+                VowelBackness::Central,
+                Roundedness::Unrounded,
+            ),
+            (
+                "UW",
+                VowelHeight::High,
+                VowelBackness::Back,
+                Roundedness::Rounded,
+            ),
+        ];
+
+        for (symbol, height, backness, roundedness) in cases {
+            let features = feature_bundle_for_arpabet(symbol);
+            assert_eq!(
+                features.major,
+                MajorClass::Vowel,
+                "{symbol} should be a vowel"
+            );
+            assert_eq!(
+                features.place, None,
+                "{symbol} should not use consonant place"
+            );
+            assert_eq!(
+                features.vowel_height,
+                Some(height),
+                "{symbol} height mismatch"
+            );
+            assert_eq!(
+                features.vowel_backness,
+                Some(backness),
+                "{symbol} backness mismatch"
+            );
+            assert_eq!(
+                features.roundedness,
+                Some(roundedness),
+                "{symbol} roundedness mismatch"
+            );
+        }
     }
 
     #[test]

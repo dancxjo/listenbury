@@ -1140,11 +1140,11 @@ mod tests {
         let table = crate::voice::tract::default_english_phone_targets();
 
         let klatt = render_plan_for_backend(SungBackendKind::Klatt, &plan, 0.7, &table);
-        let RenderPlan::PhoneTimed(targets) = klatt else {
+        let RenderPlan::PhoneTimed(klatt_targets) = klatt else {
             panic!("Klatt should receive a phone-timed render plan");
         };
         assert_eq!(
-            targets
+            klatt_targets
                 .iter()
                 .map(|target| target.phone.ipa.as_str())
                 .collect::<Vec<_>>(),
