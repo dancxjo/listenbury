@@ -135,8 +135,6 @@ pub fn detect_nuclei(
             (None, true) => region_start = Some(i),
             (Some(start), false) => {
                 candidates.push(build_candidate(
-                    start,
-                    i,
                     &scores[start..i],
                     &likelihoods[start..i],
                     &features.frames[start..i],
@@ -168,8 +166,6 @@ fn nucleus_score(l: &SpeechLikelihood, config: &NucleusDetectionConfig) -> f32 {
 
 /// Build a [`VowelNucleusCandidate`] from a contiguous region of frames.
 fn build_candidate(
-    _region_offset: usize,
-    _region_end: usize,
     scores: &[f32],
     likelihoods: &[SpeechLikelihood],
     frames: &[AcousticFeatureFrame],
