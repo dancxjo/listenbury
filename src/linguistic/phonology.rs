@@ -32,7 +32,7 @@ mod tests {
         let phoneme = phoneme_from_arpabet("CH", "cmudict");
         let segments = phoneme.default_phone_string.ipa_segments();
 
-        assert_eq!(segments, vec!["t", "ʃ"]);
+        assert_eq!(segments, vec!["tʃ"]);
         assert_eq!(phoneme.realization.phone_string.ipa_segments(), segments);
         assert_eq!(phoneme.realization.ipa, "tʃ");
         assert_eq!(
@@ -67,13 +67,39 @@ mod tests {
 
         let realized = RealizedPhone::from_phoneme_slice(&phonemes);
 
-        assert_eq!(realized.len(), 2);
-        assert_eq!(realized[0].phone.ipa, "t");
+        assert_eq!(realized.len(), 1);
+        assert_eq!(realized[0].phone.ipa, "tʃ");
         assert_eq!(realized[0].source_phoneme_index, 0);
         assert_eq!(realized[0].source_symbol, "CH");
-        assert_eq!(realized[1].phone.ipa, "ʃ");
-        assert_eq!(realized[1].source_phoneme_index, 0);
-        assert_eq!(realized[1].source_symbol, "CH");
+    }
+
+    #[test]
+    fn acoustic_decomposition_splits_affricates_late() {
+        let phonemes = vec![phoneme_from_arpabet("CH", "cmudict")];
+
+        let broad = RealizedPhone::from_phoneme_slice_with_policy(
+            &phonemes,
+            PhoneDecompositionPolicy::KeepPhonemic,
+        );
+        assert_eq!(
+            broad
+                .iter()
+                .map(|p| p.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tʃ"]
+        );
+
+        let acoustic = RealizedPhone::from_phoneme_slice_with_policy(
+            &phonemes,
+            PhoneDecompositionPolicy::SplitForAcoustics,
+        );
+        assert_eq!(
+            acoustic
+                .iter()
+                .map(|p| p.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["t", "ʃ"]
+        );
     }
 
     #[test]

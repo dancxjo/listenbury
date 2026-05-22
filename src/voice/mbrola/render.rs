@@ -68,7 +68,7 @@ impl MbrolaRenderer {
         if plan.phones.is_empty() {
             bail!("cannot render an empty MBROLA phone plan");
         }
-        render_native_probe_frames(plan, &self.database)
+        render_native_diphone_frames(plan, &self.database)
     }
 }
 
@@ -105,7 +105,7 @@ impl PhoneTimedRenderer for MbrolaRenderer {
         let frames = self.render_phone_plan_to_frames(plan)?;
         write_wav(out_wav, &frames).with_context(|| {
             format!(
-                "failed to write native MBROLA probe WAV {}",
+                "failed to write native MBROLA diphone WAV {}",
                 out_wav.display()
             )
         })?;
@@ -118,7 +118,7 @@ impl PhoneTimedRenderer for MbrolaRenderer {
         }
 
         Ok(RenderReport {
-            backend: "mbrola-native-probe".to_string(),
+            backend: "mbrola-native-diphone".to_string(),
             voice_name: self.config.voice.name.clone(),
             voice_path: self.config.voice.path.clone(),
             out_wav: out_wav.to_path_buf(),
@@ -154,16 +154,16 @@ pub fn render_raw_pho(
 
     let plan = super::pho::read_pho_file(pho_path)?;
     let database = MbrolaDatabase::load(&voice.path)?;
-    let frames = render_native_probe_frames(&plan, &database)?;
+    let frames = render_native_diphone_frames(&plan, &database)?;
     write_wav(out_wav, &frames).with_context(|| {
         format!(
-            "failed to write native MBROLA probe WAV {}",
+            "failed to write native MBROLA diphone WAV {}",
             out_wav.display()
         )
     })?;
 
     Ok(RenderReport {
-        backend: "mbrola-native-probe".to_string(),
+        backend: "mbrola-native-diphone".to_string(),
         voice_name: voice.name,
         voice_path: voice.path,
         out_wav: out_wav.to_path_buf(),
@@ -173,7 +173,7 @@ pub fn render_raw_pho(
     })
 }
 
-fn render_native_probe_frames(
+fn render_native_diphone_frames(
     plan: &PhoneTimedPlan,
     database: &MbrolaDatabase,
 ) -> Result<Vec<AudioFrame>> {

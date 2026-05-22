@@ -710,6 +710,23 @@ mod tests {
     }
 
     #[test]
+    fn affricate_coda_stays_broad_for_phonotactics() {
+        let s = syllabify(&seq(&["IH1", "N", "CH"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(
+            s[0].coda
+                .ipa_segments()
+                .iter()
+                .map(|ipa| *ipa)
+                .collect::<Vec<_>>(),
+            vec!["n", "tʃ"]
+        );
+        assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
+        assert_eq!(syllables_to_ipa(&s), "ˈɪntʃ");
+    }
+
+    #[test]
     fn second_syllable_of_extra_has_str_onset() {
         let s = syllabify(&seq(&["EH1", "K", "S", "T", "R", "AH0"]), &ga());
         assert_eq!(s[1].onset.to_ipa(), "stɹ");

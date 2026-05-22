@@ -154,7 +154,7 @@ fn synthesize_mbrola_from_plan(
     }
     let phone_plan = listenbury::PhoneTimedPlan::new(phones);
     renderer.render_phone_plan_to_frames(&phone_plan).context(
-        "native MBROLA probe renderer failed while using the shared Riper phone-timed plan",
+        "native MBROLA diphone renderer failed while using the shared Riper phone-timed plan",
     )
 }
 
@@ -231,7 +231,7 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
         ],
         SingDemoBackendOption::Mbrola => &[
             "MBROLA loads a real voice database and validates the shared phone-timed plan against its symbol map.",
-            "Native MBROLA waveform decoding is in progress; this probe path renders the MBROLA phone plan without calling Klatt or the mbrola binary.",
+            "Native MBROLA PSOLA prosody matching is incomplete; this diphone path stitches real database waveforms without calling Klatt or the mbrola binary.",
         ],
         SingDemoBackendOption::Piper => &[
             "Piper currently consumes only coarse shared-plan text hints.",

@@ -280,9 +280,13 @@ fn known_coda_clusters_are_legal() {
     let nd = phones(&["n", "d"]);
     let ngk = phones(&["ŋ", "k"]);
     let ngths = phones(&["ŋ", "θ", "s"]);
+    let ntsh = phones(&["n", "tʃ"]);
+    let ndzh = phones(&["n", "dʒ"]);
     assert!(p.is_legal_coda(&refs(&nd)));
     assert!(p.is_legal_coda(&refs(&ngk)));
     assert!(p.is_legal_coda(&refs(&ngths)));
+    assert!(p.is_legal_coda(&refs(&ntsh)));
+    assert!(p.is_legal_coda(&refs(&ndzh)));
 }
 
 // ── Phone equality ───────────────────────────────────────────────────────

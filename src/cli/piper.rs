@@ -280,7 +280,7 @@ impl TtsBackend for MbrolaTextBackend {
         let frames = self
             .renderer
             .render_phone_plan_to_frames(&plan)
-            .with_context(|| format!("native MBROLA probe render failed for `{text}`"))?;
+            .with_context(|| format!("native MBROLA diphone render failed for `{text}`"))?;
         anyhow::ensure!(
             !frames.is_empty(),
             "MBROLA produced no audio frames for `{text}`"

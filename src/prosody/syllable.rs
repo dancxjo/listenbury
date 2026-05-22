@@ -402,9 +402,9 @@ fn decomposed_durations(
 /// | `nucleus` | Nucleus phone(s), e.g. `[ɛ]` or `[e, ɪ]` for a diphthong |
 /// | `coda`    | Coda consonant phones, e.g. `[k]` |
 ///
-/// Diphthongs (`aɪ`, `eɪ`, `oʊ`, ...) and affricates (`tʃ`, `dʒ`) may appear
-/// as multiple `Phone` values from the phoneme's structural
-/// [`realization.phone_string`][`crate::linguistic::phonology::Realization`].
+/// Diphthongs (`aɪ`, `eɪ`, `oʊ`, ...) and affricates (`tʃ`, `dʒ`) may be
+/// decomposed later by [`SungSyllable::with_decomposition_policy`], but the
+/// syllabification structure keeps them as broad phones.
 ///
 /// The `source_span.start..source_span.end` span indexes back into the `&[Phoneme]`
 /// slice passed to the syllabifier, enabling downstream code to recover
@@ -764,6 +764,36 @@ mod tests {
         assert_eq!(decomposed.phones[1].end.millis, 200);
         assert_eq!(decomposed.phones[2].start.millis, 200);
         assert_eq!(decomposed.phones[2].end.millis, 240);
+    }
+
+    #[test]
+    fn acoustic_decomposition_splits_affricate_coda_after_structure() {
+        let syllable = SungSyllable::new(
+            "inch",
+            vec![
+                timed_phone("ɪ", 0, 160),
+                timed_phone("n", 160, 190),
+                timed_phone("tʃ", 190, 250),
+            ],
+            PhoneSpan::new(0, 0).unwrap(),
+            PhoneSpan::new(0, 1).unwrap(),
+            PhoneSpan::new(1, 3).unwrap(),
+            Some(Stress::Primary),
+            None,
+        )
+        .unwrap();
+
+        let decomposed = syllable
+            .with_decomposition_policy(PhoneDecompositionPolicy::SplitForAcoustics)
+            .unwrap();
+        let labels: Vec<&str> = decomposed
+            .phones
+            .iter()
+            .map(|phone| phone.phone.ipa.as_str())
+            .collect();
+        assert_eq!(labels, vec!["ɪ", "n", "t", "ʃ"]);
+        assert_eq!(decomposed.nucleus, PhoneSpan { start: 0, end: 1 });
+        assert_eq!(decomposed.coda, PhoneSpan { start: 1, end: 4 });
     }
 
     #[test]
