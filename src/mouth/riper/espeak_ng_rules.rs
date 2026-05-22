@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::linguistic::arpabet::default_phone_string_for_arpabet;
 use crate::linguistic::environment as ling_env;
+use crate::linguistic::inventory::VarietyImplementationStatus;
 use crate::linguistic::phone::PhoneString;
 use crate::mouth::riper::{NormalizedText, SentenceAnalysis};
 
@@ -506,6 +507,44 @@ pub enum MultiWordRuleOutput {
     },
 }
 
+pub const META_ALLOW_STUB_GA_INHERITANCE: &str = "meta:allow_stub_ga_inheritance";
+pub const META_VOICE_RENDER_ONLY: &str = "meta:voice_render_only";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleSelectionScope {
+    #[default]
+    Phonological,
+    VoiceRender,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VarietyRuleCondition {
+    pub language: String,
+    pub variety: String,
+    pub voice_profile: Option<String>,
+    #[serde(default)]
+    pub enabled_flags: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ActiveVarietyProfile {
+    pub language: String,
+    pub variety: String,
+    pub voice_profile: Option<String>,
+    #[serde(default)]
+    pub enabled_flags: Vec<String>,
+    pub implementation_status: Option<VarietyImplementationStatus>,
+    #[serde(default)]
+    pub selection_scope: RuleSelectionScope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RuleConditionDiagnostics {
+    pub applies: bool,
+    pub reasons: Vec<String>,
+}
+
 /// An eSpeak-ng seed rule translated into a Listenbury-native rule descriptor.
 ///
 /// The [`ling_env::EnvironmentPattern`] encodes the linguistic conditions under
@@ -524,6 +563,8 @@ pub struct ImportedEnvironmentRule {
     pub confidence: f32,
     /// Native lexical/prosody dictionary flags associated with this rule.
     pub lexical_flags: Vec<LexicalProsodyFlagFact>,
+    /// Variety/profile conditions imported from eSpeak dialect/voice rules.
+    pub conditions: Vec<VarietyRuleCondition>,
     /// Phonological/prosodic conditions that must hold for the rule to fire.
     pub pattern: ling_env::EnvironmentPattern,
     /// What the rule produces when it fires.
@@ -535,6 +576,7 @@ pub struct ImportedEnvironmentRule {
 pub struct MultiWordPronunciationRule {
     pub id: String,
     pub words: Vec<String>,
+    pub conditions: Vec<VarietyRuleCondition>,
     pub pattern: ling_env::EnvironmentPattern,
     pub output: MultiWordRuleOutput,
     pub provenance: RuleProvenance,
@@ -742,6 +784,127 @@ fn lexical_flag_facts_for_multi_word_rule(rule: &MultiWordSeedRule) -> Vec<Lexic
     )
 }
 
+fn variety_condition(language: &str, variety: &str) -> VarietyRuleCondition {
+    VarietyRuleCondition {
+        language: language.to_string(),
+        variety: variety.to_string(),
+        voice_profile: None,
+        enabled_flags: Vec::new(),
+    }
+}
+
+fn condition_is_stub_ga_allowed(condition: &VarietyRuleCondition) -> bool {
+    condition.enabled_flags.iter().any(|flag| flag == META_ALLOW_STUB_GA_INHERITANCE)
+}
+
+fn runtime_flag_is_enabled(active: &ActiveVarietyProfile, flag: &str) -> bool {
+    active.enabled_flags.iter().any(|enabled| enabled == flag)
+}
+
+fn is_meta_flag(flag: &str) -> bool {
+    flag.starts_with("meta:")
+}
+
+fn is_stub_derived_from_ga(status: Option<&VarietyImplementationStatus>) -> bool {
+    matches!(
+        status,
+        Some(VarietyImplementationStatus::StubDerivedFrom(source)) if source.0 == "en-US-GA"
+    )
+}
+
+fn condition_matches_active_profile(
+    condition: &VarietyRuleCondition,
+    active: &ActiveVarietyProfile,
+) -> RuleConditionDiagnostics {
+    let mut reasons = Vec::new();
+    if condition.language != active.language {
+        reasons.push(format!(
+            "language mismatch: rule={}, active={}",
+            condition.language, active.language
+        ));
+        return RuleConditionDiagnostics { applies: false, reasons };
+    }
+    if condition.variety != active.variety {
+        let allow_stub_ga = condition_is_stub_ga_allowed(condition)
+            && is_stub_derived_from_ga(active.implementation_status.as_ref())
+            && condition.variety == "american_english";
+        if !allow_stub_ga {
+            reasons.push(format!(
+                "variety mismatch: rule={}, active={}",
+                condition.variety, active.variety
+            ));
+            return RuleConditionDiagnostics { applies: false, reasons };
+        }
+        reasons.push(format!(
+            "matched via explicit GA stub inheritance metadata ({META_ALLOW_STUB_GA_INHERITANCE})"
+        ));
+    }
+    if let Some(required_voice_profile) = &condition.voice_profile {
+        if active.voice_profile.as_ref() != Some(required_voice_profile) {
+            reasons.push(format!(
+                "voice profile mismatch: rule={}, active={}",
+                required_voice_profile,
+                active.voice_profile.as_deref().unwrap_or("<none>")
+            ));
+            return RuleConditionDiagnostics { applies: false, reasons };
+        }
+    }
+    if condition.enabled_flags.iter().any(|flag| flag == META_VOICE_RENDER_ONLY)
+        && active.selection_scope != RuleSelectionScope::VoiceRender
+    {
+        reasons.push("voice/render-only condition skipped during phonological rule selection".to_string());
+        return RuleConditionDiagnostics { applies: false, reasons };
+    }
+    for flag in condition.enabled_flags.iter().filter(|flag| !is_meta_flag(flag)) {
+        if !runtime_flag_is_enabled(active, flag) {
+            reasons.push(format!("missing enabled flag: {flag}"));
+            return RuleConditionDiagnostics { applies: false, reasons };
+        }
+    }
+    reasons.push("condition matched active profile".to_string());
+    RuleConditionDiagnostics { applies: true, reasons }
+}
+
+pub fn evaluate_rule_conditions(
+    rule: &ImportedEnvironmentRule,
+    active: &ActiveVarietyProfile,
+) -> RuleConditionDiagnostics {
+    if rule.conditions.is_empty() {
+        return RuleConditionDiagnostics {
+            applies: true,
+            reasons: vec!["rule has no explicit variety/profile conditions".to_string()],
+        };
+    }
+    let mut rejection_reasons = Vec::new();
+    for condition in &rule.conditions {
+        let evaluated = condition_matches_active_profile(condition, active);
+        if evaluated.applies {
+            return evaluated;
+        }
+        rejection_reasons.extend(evaluated.reasons);
+    }
+    RuleConditionDiagnostics {
+        applies: false,
+        reasons: rejection_reasons,
+    }
+}
+
+pub fn english_voice_render_conditions() -> Vec<VarietyRuleCondition> {
+    english_seed_variety()
+        .voice_variant_rules
+        .iter()
+        .map(|rule| VarietyRuleCondition {
+            language: "en".to_string(),
+            variety: "american_english".to_string(),
+            voice_profile: Some(rule.match_pattern.clone()),
+            enabled_flags: vec![
+                META_VOICE_RENDER_ONLY.to_string(),
+                format!("voice_style:{}", rule.output_transformation),
+            ],
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Public conversion functions
 // ---------------------------------------------------------------------------
@@ -792,6 +955,7 @@ pub fn convert_weak_form_rule(
         priority: rule.priority,
         confidence,
         lexical_flags: lexical_flag_facts_for_weak_form_rule(rule),
+        conditions: vec![variety_condition(language, variety)],
         pattern: ling_env::EnvironmentPattern {
             target,
             left: Vec::new(),
@@ -830,6 +994,7 @@ pub fn convert_punctuation_prosody_rule(
         priority: rule.priority,
         confidence,
         lexical_flags: lexical_flag_facts_for_punctuation_rule(rule),
+        conditions: vec![variety_condition(language, variety)],
         pattern: ling_env::EnvironmentPattern {
             target: ling_env::TargetPattern::Symbol(rule.match_pattern.clone()),
             left: Vec::new(),
@@ -878,6 +1043,7 @@ pub fn convert_multi_word_rule(
     MultiWordPronunciationRule {
         id: rule.rule_id.clone(),
         words: rule.words.clone(),
+        conditions: vec![variety_condition(language, variety)],
         pattern: ling_env::EnvironmentPattern {
             target: ling_env::TargetPattern::Symbols(rule.words.clone()),
             left: Vec::new(),
@@ -1314,6 +1480,17 @@ pub fn rule_matches_context(
     rule: &ImportedEnvironmentRule,
     context: &ling_env::RuleMatchContext<'_>,
 ) -> bool {
+    let active_profile = ActiveVarietyProfile {
+        language: context.language.clone(),
+        variety: context.variety.clone(),
+        voice_profile: None,
+        enabled_flags: Vec::new(),
+        implementation_status: None,
+        selection_scope: RuleSelectionScope::Phonological,
+    };
+    if !evaluate_rule_conditions(rule, &active_profile).applies {
+        return false;
+    }
     if let Some(lang) = &rule.pattern.language {
         if lang != &context.language {
             return false;
@@ -1460,6 +1637,7 @@ mod tests {
     use super::*;
     use crate::linguistic::arpabet::phoneme_from_arpabet;
     use crate::linguistic::environment as ling_env;
+    use crate::linguistic::inventory::VarietyId;
     use crate::linguistic::realization::RealizationConfig;
     use crate::mouth::riper::{HeuristicSentenceAnalyzer, SentenceAnalyzer, TextNormalizer};
 
@@ -1605,6 +1783,136 @@ mod tests {
             !rule_matches_context(&native, &context),
             "English rule should not match a French context"
         );
+    }
+
+    #[test]
+    fn imported_rule_conditions_support_profile_flag_enable_disable() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        native.conditions = vec![VarietyRuleCondition {
+            language: "en".to_string(),
+            variety: "american_english".to_string(),
+            voice_profile: None,
+            enabled_flags: vec!["profile:fast_reduction".to_string()],
+        }];
+
+        let disabled = evaluate_rule_conditions(
+            &native,
+            &ActiveVarietyProfile {
+                language: "en".to_string(),
+                variety: "american_english".to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(!disabled.applies);
+        assert!(
+            disabled.reasons.iter().any(|reason| reason.contains("missing enabled flag")),
+            "expected missing-flag diagnostic"
+        );
+
+        let enabled = evaluate_rule_conditions(
+            &native,
+            &ActiveVarietyProfile {
+                language: "en".to_string(),
+                variety: "american_english".to_string(),
+                enabled_flags: vec!["profile:fast_reduction".to_string()],
+                ..Default::default()
+            },
+        );
+        assert!(enabled.applies);
+    }
+
+    #[test]
+    fn ga_stub_inheritance_requires_explicit_condition_metadata() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let active_stub_profile = ActiveVarietyProfile {
+            language: "en".to_string(),
+            variety: "received_pronunciation".to_string(),
+            implementation_status: Some(VarietyImplementationStatus::StubDerivedFrom(VarietyId::new("en-US-GA"))),
+            ..Default::default()
+        };
+
+        let blocked = evaluate_rule_conditions(&native, &active_stub_profile);
+        assert!(!blocked.applies);
+
+        native.conditions = vec![VarietyRuleCondition {
+            language: "en".to_string(),
+            variety: "american_english".to_string(),
+            voice_profile: None,
+            enabled_flags: vec![META_ALLOW_STUB_GA_INHERITANCE.to_string()],
+        }];
+        let allowed = evaluate_rule_conditions(&native, &active_stub_profile);
+        assert!(allowed.applies);
+        assert!(
+            allowed.reasons.iter().any(|reason| reason.contains("stub inheritance")),
+            "expected explicit-stub-inheritance diagnostic"
+        );
+    }
+
+    #[test]
+    fn voice_render_conditions_do_not_apply_to_phonological_selection() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        native.conditions = vec![VarietyRuleCondition {
+            language: "en".to_string(),
+            variety: "american_english".to_string(),
+            voice_profile: Some("default".to_string()),
+            enabled_flags: vec![META_VOICE_RENDER_ONLY.to_string()],
+        }];
+
+        let phonological = evaluate_rule_conditions(
+            &native,
+            &ActiveVarietyProfile {
+                language: "en".to_string(),
+                variety: "american_english".to_string(),
+                voice_profile: Some("default".to_string()),
+                selection_scope: RuleSelectionScope::Phonological,
+                ..Default::default()
+            },
+        );
+        assert!(!phonological.applies);
+        assert!(
+            phonological.reasons.iter().any(|reason| reason.contains("voice/render-only")),
+            "expected voice/render leakage diagnostic"
+        );
+
+        let voice = evaluate_rule_conditions(
+            &native,
+            &ActiveVarietyProfile {
+                language: "en".to_string(),
+                variety: "american_english".to_string(),
+                voice_profile: Some("default".to_string()),
+                selection_scope: RuleSelectionScope::VoiceRender,
+                ..Default::default()
+            },
+        );
+        assert!(voice.applies);
+    }
+
+    #[test]
+    fn voice_render_conditions_are_imported_from_espeak_voice_variants() {
+        let conditions = english_voice_render_conditions();
+        assert!(
+            !conditions.is_empty(),
+            "expected at least one imported voice/render condition"
+        );
+        assert!(conditions.iter().any(|condition| {
+            condition.voice_profile.as_deref() == Some("default")
+                && condition.enabled_flags.iter().any(|flag| flag == META_VOICE_RENDER_ONLY)
+        }));
     }
 
     #[test]
