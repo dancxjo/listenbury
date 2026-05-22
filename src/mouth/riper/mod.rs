@@ -62,7 +62,8 @@ pub use prosody_planner::{
     FocusAccentDiagnostic, FocusAccentReason, FocusAccentStatus, PauseOp, PauseStrengthClass,
     ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyEnergyClass,
     ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay, ProsodyOverlaySource,
-    ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RiperProsodyRealization,
+    ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RepairCue, RepairPlan, RepairStrategy,
+    RestartScope, RiperProsodyRealization, SpeechCommitState, SpeechCursor,
 };
 pub use sentence_analysis::{
     ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
