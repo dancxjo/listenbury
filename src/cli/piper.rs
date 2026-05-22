@@ -1247,9 +1247,7 @@ mod tests {
         })
         .expect_err("klatt should require riper");
         assert!(
-            error
-                .to_string()
-                .contains("pass --riper --klatt"),
+            error.to_string().contains("pass --riper --klatt"),
             "unexpected error: {error}"
         );
     }
