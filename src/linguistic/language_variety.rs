@@ -34,9 +34,10 @@ impl LanguageVariety {
         if self.is_arpabet_vowel(phone) {
             return true;
         }
-        phone
-            .chars()
-            .any(|ch| self.vowel_phone_chars.contains(&ch.to_ascii_lowercase()))
+        phone.chars().any(|ch| {
+            ch.to_lowercase()
+                .any(|normalized| self.vowel_phone_chars.contains(&normalized))
+        })
     }
 
     pub fn backend_map(
@@ -177,7 +178,7 @@ fn load_english_us_variety() -> Result<LanguageVariety, LanguageVarietyDataError
             .vowel_phone_chars
             .into_iter()
             .flat_map(|symbol| symbol.chars().collect::<Vec<_>>())
-            .map(|ch| ch.to_ascii_lowercase())
+            .flat_map(|ch| ch.to_lowercase().collect::<Vec<_>>())
             .collect(),
         backend_maps,
     })
