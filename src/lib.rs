@@ -90,3 +90,12 @@ pub use vision::{
     AvSyncConfig, EvidenceScore, PhonemeClass, VisualEvidenceStatus, VisualProvenance,
     VisualSpeechClaim, VisualSpeechClaimKind, VisualSpeechFrame, VisualSpeechTrace, VowelShape,
 };
+pub use voice::tract::{
+    FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
+    NoiseEstimate, PhoneAcousticTarget, PhoneRenderTarget, SourceFilterFrame, SourceFilterTrack,
+    VocalTractFilterEstimate, VocalTractFilterTarget, VoicingEstimate,
+    default_english_phone_targets, estimate_f0_autocorrelation, phone_render_targets_from_string,
+    render_phone, render_phone_string, render_targets_from_sung_syllable,
+    render_targets_from_syllable, source_filter_track_from_acoustic,
+    source_filter_track_from_acoustic_full,
+};
