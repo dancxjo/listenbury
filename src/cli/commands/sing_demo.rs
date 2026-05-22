@@ -14,8 +14,6 @@ use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper
 use listenbury::PiperTextToSpeech;
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
-#[cfg(all(feature = "tts-piper", feature = "tts-riper"))]
-use listenbury::mouth::piper::PiperBackendPreference;
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::prosody::note_target::{
@@ -35,7 +33,7 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
     let plan = articulate(&phrase);
     let backend = command.selected_backend();
-    let backend_kind = backend.as_backend_kind();
+    let backend_kind = render_kind_for_backend(backend);
     let detail = backend_detail_expectation(backend_kind);
     let target_table = default_english_phone_targets();
     let render_plan = render_plan_for_backend(backend_kind, &plan, 0.7, &target_table);
@@ -101,29 +99,10 @@ fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
 
 fn synthesize_riper_from_plan(
     plan: RenderPlan,
-    command: &SingDemoCommand,
+    _command: &SingDemoCommand,
 ) -> Result<Vec<AudioFrame>> {
-    #[cfg(not(feature = "tts-piper"))]
-    {
-        let _ = (plan, command);
-        anyhow::bail!("listenbury dev sing-demo --backend riper requires the `tts-piper` feature");
-    }
-
-    #[cfg(feature = "tts-piper")]
-    {
-        #[cfg(not(feature = "tts-riper"))]
-        {
-            let _ = (plan, command);
-            anyhow::bail!(
-                "listenbury dev sing-demo --backend riper requires the `tts-riper` feature"
-            );
-        }
-
-        #[cfg(feature = "tts-riper")]
-        {
-            synthesize_piper_text_from_plan(plan, command, Some(PiperBackendPreference::Riper))
-        }
-    }
+    synthesize_klatt_from_plan(plan)
+        .context("Riper sing-demo Klatt vocoder failed to render the shared phone-timed plan")
 }
 
 fn synthesize_piper_from_plan(
@@ -140,7 +119,7 @@ fn synthesize_piper_from_plan(
     {
         #[cfg(feature = "tts-riper")]
         {
-            synthesize_piper_text_from_plan(plan, command, None)
+            synthesize_piper_text_from_plan(plan, command)
         }
         #[cfg(not(feature = "tts-riper"))]
         {
@@ -153,19 +132,13 @@ fn synthesize_piper_from_plan(
 fn synthesize_piper_text_from_plan(
     plan: RenderPlan,
     command: &SingDemoCommand,
-    preference: Option<PiperBackendPreference>,
 ) -> Result<Vec<AudioFrame>> {
     let text = text_from_text_render_plan(plan)?;
     let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
     let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
     let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
 
-    let mut tts = if let Some(preference) = preference {
-        PiperTextToSpeech::new_with_backend_preference(piper_config, preference)
-    } else {
-        PiperTextToSpeech::new(piper_config)
-    };
-
+    let mut tts = PiperTextToSpeech::new(piper_config);
     tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
     collect_tts_audio(&mut tts, Duration::from_secs(30))
 }
@@ -200,8 +173,8 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
             "TODO: thread per-syllable vibrato from the shared plan into backend F0 modulation.",
         ],
         SingDemoBackendOption::Riper => &[
-            "Riper currently consumes shared-plan text hints and backend phonemization.",
-            "Riper currently ignores shared per-phone durations, note timing detail, and vibrato.",
+            "Riper sing-demo consumes the shared phone-timed plan before vocoder rendering.",
+            "Riper's current sung vocoder path is Klatt source/filter until the ONNX path grows direct F0 and duration controls.",
         ],
         SingDemoBackendOption::Piper => &[
             "Piper currently consumes only coarse shared-plan text hints.",
@@ -483,15 +456,14 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
     Ok(phrase)
 }
 
-impl SingDemoBackendOption {
-    fn as_backend_kind(self) -> SungBackendKind {
-        match self {
-            Self::Klatt => SungBackendKind::Klatt,
-            Self::Riper => SungBackendKind::Riper,
-            Self::Piper => SungBackendKind::Piper,
-        }
+fn render_kind_for_backend(backend: SingDemoBackendOption) -> SungBackendKind {
+    match backend {
+        SingDemoBackendOption::Klatt | SingDemoBackendOption::Riper => SungBackendKind::Klatt,
+        SingDemoBackendOption::Piper => SungBackendKind::Piper,
     }
+}
 
+impl SingDemoBackendOption {
     fn as_str(self) -> &'static str {
         match self {
             Self::Klatt => "klatt",
@@ -578,8 +550,8 @@ mod tests {
 
         let riper = backend_degradation_notes(SingDemoBackendOption::Riper).join(" ");
         assert!(
-            riper.contains("ignores shared per-phone durations"),
-            "riper degradation should be explicit"
+            riper.contains("shared phone-timed plan"),
+            "riper should advertise that it uses the shared sung plan"
         );
 
         let piper = backend_degradation_notes(SingDemoBackendOption::Piper).join(" ");
@@ -603,6 +575,37 @@ mod tests {
         assert!(
             sample_count > 0,
             "klatt sing-demo should emit non-empty audio"
+        );
+    }
+
+    #[test]
+    fn riper_demo_plan_renders_from_shared_phone_timing() {
+        let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
+        let plan = articulate(&phrase);
+        let target_table = default_english_phone_targets();
+        let render_plan = render_plan_for_backend(
+            render_kind_for_backend(SingDemoBackendOption::Riper),
+            &plan,
+            0.7,
+            &target_table,
+        );
+        let frames = synthesize_riper_from_plan(
+            render_plan,
+            &SingDemoCommand {
+                backend: None,
+                riper: true,
+                klatt: false,
+                output_wav: None,
+                piper_bin: None,
+                piper_voice: None,
+            },
+        )
+        .expect("riper sing-demo should synthesize through the shared phone-timed plan");
+        let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+        assert!(!frames.is_empty(), "riper sing-demo should emit frames");
+        assert!(
+            sample_count > 0,
+            "riper sing-demo should emit non-empty audio"
         );
     }
 }

@@ -275,9 +275,7 @@ pub(crate) struct SingDemoCommand {
 
 impl SingDemoCommand {
     pub(crate) fn selected_backend(&self) -> SingDemoBackendOption {
-        if self.klatt {
-            SingDemoBackendOption::Klatt
-        } else if self.riper {
+        if self.riper {
             SingDemoBackendOption::Riper
         } else {
             self.backend.unwrap_or_default()
@@ -1549,7 +1547,7 @@ mod tests {
         };
         assert!(command.riper);
         assert!(command.klatt);
-        assert_eq!(command.selected_backend(), SingDemoBackendOption::Klatt);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
     }
 
     #[test]

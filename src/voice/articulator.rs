@@ -16,8 +16,8 @@
 //! 1. Walks every syllable in the phrase, assigning each phone to its
 //!    structural role: onset consonant attack, pitch-bearing nucleus, or coda
 //!    consonant release.
-//! 2. Marks consonants as unvoiced when their IPA label is in the well-known
-//!    set of unvoiced phones; all vowels and voiced consonants remain voiced.
+//! 2. Marks phones as voiced or unvoiced from the active phonemic inventory's
+//!    feature data.
 //! 3. Derives a phrase-level [`PitchCurve`] from the note targets already
 //!    embedded in the syllables, using linear interpolation between control
 //!    points.
@@ -38,7 +38,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::linguistic::phonology::{Phone, PhoneDecompositionPolicy};
+use crate::linguistic::phonology::{Phone, PhoneDecompositionPolicy, PhonemicInventory};
+use crate::linguistic::variety::EnglishVariety;
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
 use crate::prosody::syllable::PhoneSpan;
@@ -330,25 +331,11 @@ fn pitch_hints_from_plan(plan: &ArticulatorPlan) -> Vec<PitchHint> {
         .collect()
 }
 
-// ─── Voicing heuristic ───────────────────────────────────────────────────────
+// ─── Voicing features ────────────────────────────────────────────────────────
 
-/// Determine whether an IPA phone label represents a voiced sound.
-///
-/// This is a best-effort static heuristic based on the IPA chart.  It returns
-/// `false` for the canonical unvoiced consonants and `true` for everything
-/// else (vowels, voiced consonants, syllabic sonorants).
-///
-/// Phones not in the unvoiced set are assumed voiced so that novel or
-/// composite phones degrade gracefully.
-pub fn is_phone_voiced(ipa: &str) -> bool {
-    // Well-known unvoiced consonant IPA symbols (including common digraphs).
-    const UNVOICED: &[&str] = &[
-        "p", "t", "k", "f", "s", "ʃ", "θ", "h", "x", "ç", "ʔ", // affricates
-        "tʃ", "ts", "pf", "t͡ʃ", "t͡s",
-        // aspirated stops (X-SAMPA / borrowed representations)
-        "pʰ", "tʰ", "kʰ",
-    ];
-    !UNVOICED.contains(&ipa)
+/// Determine whether a phone is voiced according to the active inventory.
+pub fn is_phone_voiced(inventory: &PhonemicInventory, phone: &Phone) -> bool {
+    inventory.features_for_phone(phone).is_voiced()
 }
 
 // ─── Articulator pass ────────────────────────────────────────────────────────
@@ -364,11 +351,11 @@ pub fn is_phone_voiced(ipa: &str) -> bool {
 /// Each phone in every syllable is emitted as a [`PhoneGesture`]:
 ///
 /// - Phones in the **onset span** become [`PhoneRole::Onset`] gestures;
-///   their voicing is inferred from the IPA label.
+///   their voicing comes from the active inventory's feature data.
 /// - Phones in the **nucleus span** become [`PhoneRole::Nucleus`] gestures
 ///   and preserve phone voicing while remaining the pitch-bearing span.
 /// - Phones in the **coda span** become [`PhoneRole::Coda`] gestures;
-///   their voicing is again inferred from the IPA label.
+///   their voicing comes from the same inventory feature data.
 ///
 /// All gestures are emitted in syllable order, onset → nucleus → coda within
 /// each syllable, syllables in phrase order.
@@ -385,13 +372,41 @@ pub fn is_phone_voiced(ipa: &str) -> bool {
 /// (`0.0..=1.0`).  Syllables without note targets do not contribute points;
 /// when no syllable has velocity data the curve is empty.
 pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
-    articulate_with_decomposition_policy(phrase, PhoneDecompositionPolicy::KeepPhonemic)
+    let inventory = EnglishVariety::GeneralAmerican.phonemic_inventory();
+    articulate_with_inventory_and_decomposition_policy(
+        phrase,
+        &inventory,
+        PhoneDecompositionPolicy::KeepPhonemic,
+    )
+}
+
+/// Convert a [`SungPhrase`] into an [`ArticulatorPlan`] using an explicit
+/// phonemic inventory for phone feature lookup.
+pub fn articulate_with_inventory(
+    phrase: &SungPhrase,
+    inventory: &PhonemicInventory,
+) -> ArticulatorPlan {
+    articulate_with_inventory_and_decomposition_policy(
+        phrase,
+        inventory,
+        PhoneDecompositionPolicy::KeepPhonemic,
+    )
 }
 
 /// Convert a [`SungPhrase`] into an [`ArticulatorPlan`] after applying an
 /// explicit phone decomposition policy.
 pub fn articulate_with_decomposition_policy(
     phrase: &SungPhrase,
+    policy: PhoneDecompositionPolicy,
+) -> ArticulatorPlan {
+    let inventory = EnglishVariety::GeneralAmerican.phonemic_inventory();
+    articulate_with_inventory_and_decomposition_policy(phrase, &inventory, policy)
+}
+
+/// Convert a [`SungPhrase`] with explicit inventory and decomposition policy.
+pub fn articulate_with_inventory_and_decomposition_policy(
+    phrase: &SungPhrase,
+    inventory: &PhonemicInventory,
     policy: PhoneDecompositionPolicy,
 ) -> ArticulatorPlan {
     let mut phone_gestures: Vec<PhoneGesture> = Vec::new();
@@ -445,7 +460,7 @@ pub fn articulate_with_decomposition_policy(
                 phone: tpr.phone.ipa.clone(),
                 onset_ms,
                 duration_ms,
-                is_voiced: is_phone_voiced(&tpr.phone.ipa),
+                is_voiced: inventory.features_for_phone(&tpr.phone).is_voiced(),
                 role,
                 is_legato_context: false,
             });
@@ -795,18 +810,28 @@ mod tests {
         }
     }
 
-    /// `is_phone_voiced` correctly identifies voiced and unvoiced phones.
+    /// Inventory features correctly identify voiced and unvoiced phones.
     #[test]
-    fn voicing_heuristic_classifies_phones() {
+    fn inventory_features_classify_phone_voicing() {
+        let inventory = EnglishVariety::GeneralAmerican.phonemic_inventory();
+
         // Unvoiced consonants
         for ipa in &["p", "t", "k", "f", "s", "ʃ", "θ", "h"] {
-            assert!(!is_phone_voiced(ipa), "/{ipa}/ should be unvoiced");
+            let phone = Phone::mapped(*ipa);
+            assert!(
+                !inventory.features_for_phone(&phone).is_voiced(),
+                "/{ipa}/ should be unvoiced"
+            );
         }
         // Voiced sounds (consonants + vowels)
         for ipa in &[
-            "b", "d", "g", "v", "z", "m", "n", "l", "ɹ", "a", "ɛ", "oʊ", "eɪ",
+            "b", "d", "ɡ", "v", "z", "m", "n", "l", "ɹ", "a", "ɛ", "oʊ", "eɪ",
         ] {
-            assert!(is_phone_voiced(ipa), "/{ipa}/ should be voiced");
+            let phone = Phone::mapped(*ipa);
+            assert!(
+                inventory.features_for_phone(&phone).is_voiced(),
+                "/{ipa}/ should be voiced"
+            );
         }
     }
 
@@ -956,7 +981,7 @@ mod tests {
                 .iter()
                 .map(|target| target.phone.ipa.as_str())
                 .collect::<Vec<_>>(),
-            vec!["h", "ɛ", "l", "oʊ"]
+            vec!["h", "ɛ", "l", "l", "oʊ"]
         );
 
         let riper = render_plan_for_backend(SungBackendKind::Riper, &plan, 0.7, &table);
@@ -974,7 +999,7 @@ mod tests {
                 .iter()
                 .map(|phone| phone.phone.as_str())
                 .collect::<Vec<_>>(),
-            vec!["h", "ɛ", "l", "oʊ"]
+            vec!["h", "ɛ", "l", "l", "oʊ"]
         );
         assert!(
             pitch_hints

@@ -508,6 +508,28 @@ impl PhonemicInventory {
             phones_equivalent(&query, &canonical, &self.phone_equality)
         })
     }
+
+    /// Return the feature bundle for a phone in this inventory.
+    ///
+    /// Lookup checks both canonical phoneme IPA and the realized phones in each
+    /// default phone string. Unknown phones default to permissively voiced so
+    /// borrowed or experimental symbols do not lose pitch unless the inventory
+    /// explicitly marks them voiceless.
+    pub fn features_for_phone(&self, phone: &Phone) -> FeatureBundle {
+        self.phonemes
+            .iter()
+            .find(|def| {
+                let canonical = Phone::mapped(def.ipa.clone());
+                phones_equivalent(phone, &canonical, &self.phone_equality)
+                    || def
+                        .default_phone_string
+                        .phones
+                        .iter()
+                        .any(|candidate| phones_equivalent(phone, candidate, &self.phone_equality))
+            })
+            .map(|def| def.features)
+            .unwrap_or_else(FeatureBundle::unknown_phone)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -616,6 +638,20 @@ pub struct FeatureBundle {
 }
 
 impl FeatureBundle {
+    pub fn unknown_phone() -> Self {
+        FeatureBundle {
+            major: MajorClass::Consonant,
+            place: None,
+            manner: None,
+            voicing: None,
+            syllabic: false,
+        }
+    }
+
+    pub fn is_voiced(self) -> bool {
+        !matches!(self.voicing, Some(Voicing::Voiceless))
+    }
+
     pub fn matches_class(self, class: PhonemeClass, stress: Option<Stress>) -> bool {
         match class {
             PhonemeClass::Vowel => self.major == MajorClass::Vowel,
@@ -1443,9 +1479,7 @@ fn stress_pattern_matches(pattern: StressPattern, stress: Option<Stress>) -> boo
 pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
     match base {
         "AA" | "AO" => vowel_features(Place::Glottal),
-        "AE" | "EH" | "ER" | "EY" | "IH" | "IY" | "AY" | "OY" => {
-            vowel_features(Place::Palatal)
-        }
+        "AE" | "EH" | "ER" | "EY" | "IH" | "IY" | "AY" | "OY" => vowel_features(Place::Palatal),
         "AH" => vowel_features(Place::Glottal),
         "AW" | "OW" | "UH" | "UW" => vowel_features(Place::Velar),
         "P" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiceless),
@@ -1535,13 +1569,25 @@ fn phoneme_class_matches(class: PhonemeClass, phoneme: &Phoneme) -> bool {
 fn primary_phoneme_class(phoneme: &Phoneme) -> PhonemeClass {
     if phoneme.features.major == MajorClass::Vowel {
         PhonemeClass::Vowel
-    } else if phoneme.features.matches_class(PhonemeClass::AlveolarNasal, phoneme.stress) {
+    } else if phoneme
+        .features
+        .matches_class(PhonemeClass::AlveolarNasal, phoneme.stress)
+    {
         PhonemeClass::AlveolarNasal
-    } else if phoneme.features.matches_class(PhonemeClass::AlveolarStop, phoneme.stress) {
+    } else if phoneme
+        .features
+        .matches_class(PhonemeClass::AlveolarStop, phoneme.stress)
+    {
         PhonemeClass::AlveolarStop
-    } else if phoneme.features.matches_class(PhonemeClass::VelarStop, phoneme.stress) {
+    } else if phoneme
+        .features
+        .matches_class(PhonemeClass::VelarStop, phoneme.stress)
+    {
         PhonemeClass::VelarStop
-    } else if phoneme.features.matches_class(PhonemeClass::VelarConsonant, phoneme.stress) {
+    } else if phoneme
+        .features
+        .matches_class(PhonemeClass::VelarConsonant, phoneme.stress)
+    {
         PhonemeClass::VelarConsonant
     } else {
         PhonemeClass::Consonant
@@ -1640,26 +1686,6 @@ pub(crate) fn default_phone_string_for_arpabet(base: &str, source_symbol: &str) 
             }],
         },
     }
-}
-
-fn is_vowel_symbol(base: &str) -> bool {
-    matches!(
-        base,
-        "AA" | "AE"
-            | "AH"
-            | "AO"
-            | "AW"
-            | "AY"
-            | "EH"
-            | "ER"
-            | "EY"
-            | "IH"
-            | "IY"
-            | "OW"
-            | "OY"
-            | "UH"
-            | "UW"
-    )
 }
 
 #[cfg(test)]
@@ -1935,6 +1961,23 @@ mod tests {
         );
         assert_eq!(realized[1].realization.ipa, "n");
         assert_eq!(realized[1].realization.method, RealizationMethod::Default);
+    }
+
+    #[test]
+    fn feature_bundle_supports_environment_classes_beyond_labels() {
+        let nasal = phoneme_from_arpabet("M", "cmudict");
+        let sibilant = phoneme_from_arpabet("SH", "cmudict");
+        let high_vowel = phoneme_from_arpabet("IY0", "cmudict");
+
+        assert!(phoneme_class_matches(PhonemeClass::Sonorant, &nasal));
+        assert!(phoneme_class_matches(PhonemeClass::Labial, &nasal));
+        assert!(phoneme_class_matches(PhonemeClass::Sibilant, &sibilant));
+        assert!(phoneme_class_matches(PhonemeClass::Coronal, &sibilant));
+        assert!(phoneme_class_matches(PhonemeClass::HighVowel, &high_vowel));
+        assert!(phoneme_class_matches(
+            PhonemeClass::UnstressedVowel,
+            &high_vowel
+        ));
     }
 
     #[test]
