@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::audio::{AudioFrame, VoiceSignatureId};
-use crate::soundscape::{SoundSource, SourceId, SourceKind, TimeRange};
+use crate::audio::AudioFrame;
+use crate::soundscape::{SoundSource, SourceId, SourceKind, TimeRange, VoiceSignatureId};
 
 /// Stable identifier for a speaker embedding cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -86,18 +86,14 @@ pub trait SourceAttributor {
 
 #[cfg(test)]
 mod tests {
-    use crate::audio::{VoiceSignature, VoiceSignatureLabel, VoiceSignatureSource};
     use crate::soundscape::{
         AttributionEvidence, SourceHypothesis, SourceId, SourceKind, TimePoint, TimeRange,
+        VoiceSignatureId,
     };
 
     #[test]
     fn combines_multiple_evidence_items_into_single_hypothesis() {
-        let signature = VoiceSignature::new(
-            VoiceSignatureLabel::Unknown,
-            0.81,
-            VoiceSignatureSource::EmbeddingModel,
-        );
+        let signature_id = VoiceSignatureId::new();
         let expected_playback_source = SourceId::new();
 
         let hypothesis = SourceHypothesis {
@@ -111,7 +107,7 @@ mod tests {
                     confidence: 0.93,
                 },
                 AttributionEvidence::MatchesVoiceSignature {
-                    signature_id: signature.id,
+                    signature_id,
                     confidence: 0.71,
                 },
                 AttributionEvidence::SpectralContinuity { confidence: 0.77 },

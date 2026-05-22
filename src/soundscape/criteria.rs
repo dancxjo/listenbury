@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::audio::VoiceSignatureId;
-use crate::soundscape::SourceId;
+use crate::soundscape::{SourceId, VoiceSignatureId};
 
 /// Criteria used to select one or more sound sources in a soundscape frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
