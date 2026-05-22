@@ -197,6 +197,7 @@ mod tests {
             spectral_flux: flux,
             low_band_energy_db: low_db,
             high_band_energy_db: high_db,
+            ..AcousticFeatureFrame::default()
         }
     }
 

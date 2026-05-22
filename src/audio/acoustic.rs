@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::audio::features::{AcousticFeatureStream, build_feature_stream};
 use crate::audio::frame::AudioFrame;
 use crate::word::{
     PronunciationCandidateScore, WordPhoneSegmentation, WordPhoneSpan, WordPronunciation,
@@ -38,6 +39,7 @@ pub struct AcousticAnalysis {
     pub spectrogram: SpectrogramAnalysis,
     pub energy_envelope: EnergyEnvelope,
     pub energy_landmarks: EnergyLandmarks,
+    pub feature_stream: AcousticFeatureStream,
     pub formant_tracks: FormantTracks,
 }
 
@@ -151,6 +153,12 @@ pub fn analyze_mono_samples(samples: &[f32], sample_rate: u32) -> AcousticAnalys
     let spectrogram = analyze_spectrogram_samples(samples, sample_rate);
     let energy_envelope = build_energy_envelope(samples, sample_rate);
     let energy_landmarks = detect_energy_landmarks(&energy_envelope);
+    let feature_stream = build_feature_stream(
+        samples,
+        sample_rate,
+        &energy_envelope,
+        spectrogram.levels.first(),
+    );
     let formant_tracks = track_formants(samples, sample_rate);
     AcousticAnalysis {
         sample_rate,
@@ -159,6 +167,7 @@ pub fn analyze_mono_samples(samples: &[f32], sample_rate: u32) -> AcousticAnalys
         spectrogram,
         energy_envelope,
         energy_landmarks,
+        feature_stream,
         formant_tracks,
     }
 }
@@ -1156,6 +1165,10 @@ mod tests {
         assert!(analysis.spectrogram.levels[0].hop_ms > analysis.spectrogram.levels[1].hop_ms);
         assert!(analysis.spectrogram.levels[1].hop_ms > analysis.spectrogram.levels[2].hop_ms);
         assert!(!analysis.energy_envelope.frames.is_empty());
+        assert_eq!(
+            analysis.feature_stream.frames.len(),
+            analysis.energy_envelope.frames.len()
+        );
         assert!(!analysis.formant_tracks.frames.is_empty());
         assert_eq!(analysis.formant_tracks.method, "smoothed-spectrum-peaks");
     }

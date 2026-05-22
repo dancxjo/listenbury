@@ -392,6 +392,7 @@ mod tests {
             spectral_flux: 0.04,
             low_band_energy_db: -12.0,
             high_band_energy_db: -28.0,
+            ..AcousticFeatureFrame::default()
         }
     }
 
@@ -405,6 +406,7 @@ mod tests {
             spectral_flux: 0.05,
             low_band_energy_db: -22.0,
             high_band_energy_db: -14.0,
+            ..AcousticFeatureFrame::default()
         }
     }
 
@@ -418,6 +420,7 @@ mod tests {
             spectral_flux: 0.01,
             low_band_energy_db: -55.0,
             high_band_energy_db: -58.0,
+            ..AcousticFeatureFrame::default()
         }
     }
 
@@ -707,6 +710,7 @@ mod tests {
             spectral_flux: 0.18, // high flux → stop_burst
             low_band_energy_db: -18.0,
             high_band_energy_db: -30.0,
+            ..AcousticFeatureFrame::default()
         }
     }
 
