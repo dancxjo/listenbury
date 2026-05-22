@@ -5,6 +5,7 @@ use crate::mouth::riper::prosody_audit::{
     PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind,
     ProsodyRealizationStatus, Stress,
 };
+use crate::mouth::riper::sentence_analysis::OrthographicEmphasisKind;
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
 use crate::text_stability::stable_prefix_len;
 
@@ -489,6 +490,12 @@ impl ProsodyList {
                     .iter()
                     .find(|analysis| analysis.word_index == Some(word_target.word_index))
                     .and_then(|analysis| analysis.reduction_diagnostic.clone());
+                let capitalization_effect = candidate
+                    .sentence_analysis
+                    .tokens
+                    .iter()
+                    .find(|analysis| analysis.word_index == Some(word_target.word_index))
+                    .map(|analysis| capitalization_effect(analysis.orthographic_emphasis));
                 PhoLikeDiagnosticEntry {
                     word: word_target.normalized_text.clone(),
                     span: if is_vocative_span {
@@ -530,6 +537,7 @@ impl ProsodyList {
                     },
                     pitch_hint,
                     reduction,
+                    capitalization_effect,
                     realization_status: ProsodyRealizationStatus::Requested,
                 }
             })
@@ -539,6 +547,18 @@ impl ProsodyList {
             candidate_id: candidate.id.0,
             entries,
         }
+    }
+}
+
+fn capitalization_effect(emphasis: OrthographicEmphasisKind) -> String {
+    match emphasis {
+        OrthographicEmphasisKind::AllCapsEmphasis | OrthographicEmphasisKind::CapitalizedName => {
+            "prosody".to_string()
+        }
+        OrthographicEmphasisKind::Abbreviation
+        | OrthographicEmphasisKind::Acronym
+        | OrthographicEmphasisKind::ExplicitCitationForm => "pronunciation".to_string(),
+        OrthographicEmphasisKind::None => "neither".to_string(),
     }
 }
 
@@ -1968,6 +1988,37 @@ mod tests {
             reduction.status,
             crate::mouth::riper::ReductionStatus::Applied
         );
+    }
+
+    #[test]
+    fn diagnostics_report_capitalization_effects() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker.ingest_text("US FOR now.").expect("candidate");
+        let latest = latest_candidate(&candidate);
+        let planned = planner.plan_candidate(latest);
+        let diagnostics = planned.pho_like_diagnostics(latest);
+
+        let us = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "us")
+            .expect("us diagnostic");
+        assert_eq!(us.capitalization_effect.as_deref(), Some("pronunciation"));
+
+        let for_entry = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "for")
+            .expect("for diagnostic");
+        assert_eq!(for_entry.capitalization_effect.as_deref(), Some("prosody"));
+
+        let now = diagnostics
+            .entries
+            .iter()
+            .find(|entry| entry.word == "now")
+            .expect("now diagnostic");
+        assert_eq!(now.capitalization_effect.as_deref(), Some("neither"));
     }
 
     #[test]

@@ -74,6 +74,10 @@ pub use prosody_planner::{
     RestartScope, RiperProsodyRealization, SpeechCommitState, SpeechCursor,
 };
 pub use sentence_analysis::{
+    ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, OrthographicEmphasisKind,
+    PartOfSpeech, ProsodicRole, ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic,
+    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind,
+    SyntacticLinkParse, SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex,
     ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
     ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic, ReductionStatus,
     SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind, SyntacticLinkParse,

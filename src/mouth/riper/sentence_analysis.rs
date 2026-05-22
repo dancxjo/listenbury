@@ -138,6 +138,7 @@ pub struct TokenAnalysis {
     pub pos: PartOfSpeech,
     pub syntactic_role: Option<SyntacticRole>,
     pub prosodic_role: ProsodicRole,
+    pub orthographic_emphasis: OrthographicEmphasisKind,
     pub reduction: ReductionClass,
     pub reduction_diagnostic: Option<ReductionDiagnostic>,
 }
@@ -147,6 +148,7 @@ pub struct ProsodyEnvironmentFacts {
     pub word_index: usize,
     pub pos: PartOfSpeech,
     pub prosodic_role: ProsodicRole,
+    pub orthographic_emphasis: OrthographicEmphasisKind,
     pub phrase_boundary_after: PhraseBoundaryKind,
     pub syntactic_links: Vec<SyntacticLinkKind>,
     pub lexical_flags: Vec<LexicalProsodyFlagFact>,
@@ -248,6 +250,16 @@ pub enum ProsodicRole {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrthographicEmphasisKind {
+    None,
+    CapitalizedName,
+    AllCapsEmphasis,
+    Abbreviation,
+    Acronym,
+    ExplicitCitationForm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReductionClass {
     None,
     WeakFunctionWord,
@@ -338,6 +350,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                         pos: PartOfSpeech::Unknown,
                         syntactic_role: None,
                         prosodic_role: ProsodicRole::Content,
+                        orthographic_emphasis: OrthographicEmphasisKind::None,
                         reduction: ReductionClass::None,
                         reduction_diagnostic: None,
                     };
@@ -349,14 +362,21 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                         .get(token_index)
                         .and_then(|span| source_text.get(span.clone()))
                         .unwrap_or(token_text.as_str());
+                    let orthographic_emphasis =
+                        classify_orthographic_emphasis(raw_token, &token_text, base_pos);
                     if is_function_word(&token_text)
-                        && raw_token
-                            .chars()
-                            .all(|ch| !ch.is_ascii_alphabetic() || ch.is_ascii_uppercase())
-                        && raw_token.chars().any(|ch| ch.is_ascii_alphabetic())
-                        && raw_token.len() > 1
+                        && matches!(
+                            orthographic_emphasis,
+                            OrthographicEmphasisKind::AllCapsEmphasis
+                                | OrthographicEmphasisKind::Abbreviation
+                                | OrthographicEmphasisKind::Acronym
+                        )
                     {
-                        if is_all_caps_abbreviation(raw_token, &token_text) {
+                        if matches!(
+                            orthographic_emphasis,
+                            OrthographicEmphasisKind::Abbreviation
+                                | OrthographicEmphasisKind::Acronym
+                        ) {
                             return TokenAnalysis {
                                 token_index,
                                 word_index: Some(word_index),
@@ -364,6 +384,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                                 pos: PartOfSpeech::ProperName,
                                 syntactic_role: None,
                                 prosodic_role: ProsodicRole::Content,
+                                orthographic_emphasis,
                                 reduction: ReductionClass::None,
                                 reduction_diagnostic: None,
                             };
@@ -375,6 +396,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                             pos: base_pos,
                             syntactic_role: None,
                             prosodic_role: ProsodicRole::Contrastive,
+                            orthographic_emphasis,
                             reduction: ReductionClass::None,
                             reduction_diagnostic: None,
                         };
@@ -391,6 +413,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                         pos: base_pos,
                         syntactic_role: None,
                         prosodic_role,
+                        orthographic_emphasis,
                         reduction: ReductionClass::None,
                         reduction_diagnostic: None,
                     };
@@ -413,6 +436,14 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     .get(word_index + 1)
                     .map(|(_, text)| text.as_str());
 
+                let (
+                    pos,
+                    syntactic_role,
+                    prosodic_role,
+                    orthographic_emphasis,
+                    reduction,
+                    diagnostic,
+                ) = classify_to_token(raw_token, word_index, prev_prev, prev, next);
                 let (pos, syntactic_role, prosodic_role, reduction, diagnostic) = classify_to_token(
                     raw_token,
                     word_index,
@@ -431,6 +462,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     pos,
                     syntactic_role,
                     prosodic_role,
+                    orthographic_emphasis,
                     reduction,
                     reduction_diagnostic: Some(diagnostic),
                 }
@@ -540,6 +572,7 @@ impl SentenceAnalysis {
                     word_index,
                     pos: token.pos,
                     prosodic_role,
+                    orthographic_emphasis: token.orthographic_emphasis,
                     phrase_boundary_after,
                     syntactic_links,
                     lexical_flags,
@@ -1868,11 +1901,42 @@ fn is_all_caps_token(word: &str) -> bool {
 }
 
 fn is_all_caps_abbreviation(raw_token: &str, normalized_token: &str) -> bool {
-    is_all_caps_token(raw_token)
-        && matches!(
-            normalized_token,
-            "us" | "uk" | "eu" | "un" | "usa" | "nato" | "fbi" | "cia"
-        )
+    is_all_caps_token(raw_token) && matches!(normalized_token, "us" | "uk" | "eu" | "un")
+}
+
+fn is_all_caps_acronym(raw_token: &str, normalized_token: &str) -> bool {
+    is_all_caps_token(raw_token) && matches!(normalized_token, "usa" | "nato" | "fbi" | "cia")
+}
+
+fn is_capitalized_name_token(raw_token: &str) -> bool {
+    let mut chars = raw_token.chars().filter(|ch| ch.is_ascii_alphabetic());
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_uppercase() && chars.all(|ch| ch.is_ascii_lowercase())
+}
+
+fn classify_orthographic_emphasis(
+    raw_token: &str,
+    normalized_token: &str,
+    base_pos: PartOfSpeech,
+) -> OrthographicEmphasisKind {
+    if raw_token.contains('/') || raw_token.contains('@') {
+        return OrthographicEmphasisKind::ExplicitCitationForm;
+    }
+    if is_all_caps_abbreviation(raw_token, normalized_token) {
+        return OrthographicEmphasisKind::Abbreviation;
+    }
+    if is_all_caps_acronym(raw_token, normalized_token) {
+        return OrthographicEmphasisKind::Acronym;
+    }
+    if is_all_caps_token(raw_token) && raw_token.len() > 1 {
+        return OrthographicEmphasisKind::AllCapsEmphasis;
+    }
+    if matches!(base_pos, PartOfSpeech::ProperName) && is_capitalized_name_token(raw_token) {
+        return OrthographicEmphasisKind::CapitalizedName;
+    }
+    OrthographicEmphasisKind::None
 }
 
 fn detect_with_attachment_ambiguity(words: &[&str]) -> Option<(usize, usize, usize)> {
@@ -1931,6 +1995,7 @@ fn classify_to_token(
     PartOfSpeech,
     Option<SyntacticRole>,
     ProsodicRole,
+    OrthographicEmphasisKind,
     ReductionClass,
     ReductionDiagnostic,
 ) {
@@ -1981,6 +2046,7 @@ fn classify_to_token(
             PartOfSpeech::Preposition,
             Some(SyntacticRole::PrepositionalObjectLink),
             ProsodicRole::Contrastive,
+            OrthographicEmphasisKind::AllCapsEmphasis,
             ReductionClass::None,
             diagnostic(
                 &contrastive,
@@ -1996,6 +2062,7 @@ fn classify_to_token(
             PartOfSpeech::Preposition,
             Some(SyntacticRole::PrepositionalObjectLink),
             ProsodicRole::FunctionStrong,
+            OrthographicEmphasisKind::ExplicitCitationForm,
             ReductionClass::None,
             diagnostic(
                 &explicit_override,
@@ -2011,6 +2078,7 @@ fn classify_to_token(
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
             ProsodicRole::FunctionWeak,
+            OrthographicEmphasisKind::None,
             ReductionClass::WeakFunctionWord,
             diagnostic(
                 &phrase_final,
@@ -2026,6 +2094,7 @@ fn classify_to_token(
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
             ProsodicRole::FunctionStrong,
+            OrthographicEmphasisKind::None,
             ReductionClass::None,
             diagnostic(
                 &citation_initial,
@@ -2041,6 +2110,7 @@ fn classify_to_token(
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
             ProsodicRole::FunctionStrong,
+            OrthographicEmphasisKind::None,
             ReductionClass::None,
             diagnostic(
                 &quotation_citation,
@@ -2061,6 +2131,7 @@ fn classify_to_token(
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
             ProsodicRole::FunctionWeak,
+            OrthographicEmphasisKind::None,
             ReductionClass::WeakFunctionWord,
             diagnostic(
                 &weak_before_verb,
@@ -2101,6 +2172,7 @@ fn classify_to_token(
         prepositional_role,
         Some(SyntacticRole::PrepositionalObjectLink),
         ProsodicRole::FunctionStrong,
+        OrthographicEmphasisKind::None,
         ReductionClass::None,
         diagnostic(
             &prepositional,
@@ -2901,8 +2973,41 @@ mod tests {
             .expect("US token");
         assert_eq!(us.pos, PartOfSpeech::ProperName);
         assert_eq!(us.prosodic_role, ProsodicRole::Content);
+        assert_eq!(
+            us.orthographic_emphasis,
+            OrthographicEmphasisKind::Abbreviation
+        );
         assert_eq!(us.reduction, ReductionClass::None);
         assert!(us.reduction_diagnostic.is_none());
+    }
+
+    #[test]
+    fn marks_emphatic_all_caps_function_word_as_contrastive() {
+        let analysis = analyze("FOR now.");
+        let for_token = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "for")
+            .expect("FOR token");
+        assert_eq!(
+            for_token.orthographic_emphasis,
+            OrthographicEmphasisKind::AllCapsEmphasis
+        );
+        assert_eq!(for_token.prosodic_role, ProsodicRole::Contrastive);
+    }
+
+    #[test]
+    fn marks_initial_as_capitalized_name_orthography() {
+        let analysis = analyze("F. Scott Fitzgerald wrote.");
+        let initial = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "f")
+            .expect("initial token");
+        assert_eq!(
+            initial.orthographic_emphasis,
+            OrthographicEmphasisKind::CapitalizedName
+        );
     }
 
     #[test]

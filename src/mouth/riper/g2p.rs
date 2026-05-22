@@ -7,25 +7,25 @@ use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
-    PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
-    realize_sequence,
+    phoneme_from_arpabet, realize_sequence, PhonemeSchema, RealizationConfig,
+    Stress as PhonologyStress,
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
-use crate::mouth::riper::LexicalProsodyFlag;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, ProsodicRole, ProsodyEnvironmentFacts, ReductionStatus,
-    SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
+    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
+    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
-use crate::mouth::riper::{AnalysisSource, PhonologicalStress, morphophonology};
+use crate::mouth::riper::LexicalProsodyFlag;
+use crate::mouth::riper::{morphophonology, AnalysisSource, PhonologicalStress};
 use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
@@ -180,6 +180,13 @@ impl PhonemeProsodyCandidate {
                     text_range: target.text_range.clone(),
                     phoneme_range: target.phoneme_range.clone(),
                     lexical_stress,
+                    orthographic_emphasis: self
+                        .sentence_analysis
+                        .tokens
+                        .iter()
+                        .find(|analysis| analysis.word_index == Some(target.word_index))
+                        .map(|analysis| analysis.orthographic_emphasis)
+                        .unwrap_or(OrthographicEmphasisKind::None),
                     prominence_class: if is_default_function_word(&target.normalized_text) {
                         ProminenceClass::Weak
                     } else {
@@ -670,8 +677,12 @@ fn pronounce_word_unit(
             }
         });
     let weak_symbols = weak_form_symbols(word, analyzed_token, environment_facts);
-    let derives_stress_from_emitted_symbols = reduced_symbols.is_some() || weak_symbols.is_some();
+    let orthographic_symbols = analyzed_token
+        .and_then(|analysis| orthographic_symbols_override(word, analysis.orthographic_emphasis));
+    let derives_stress_from_emitted_symbols =
+        reduced_symbols.is_some() || orthographic_symbols.is_some() || weak_symbols.is_some();
     let emitted_symbols = reduced_symbols
+        .or(orthographic_symbols)
         .or(weak_symbols)
         .unwrap_or_else(|| word_realization.symbols.clone());
     let stress_by_phone = if derives_stress_from_emitted_symbols {
@@ -702,6 +713,35 @@ fn pronounce_word_unit(
         stress_by_phone,
         stress_source: word_realization.stress_source,
     })
+}
+
+fn orthographic_symbols_override(
+    word: &str,
+    emphasis: OrthographicEmphasisKind,
+) -> Option<Vec<String>> {
+    match emphasis {
+        OrthographicEmphasisKind::Abbreviation => spell_token_as_letter_names(word),
+        OrthographicEmphasisKind::Acronym
+            if word.chars().filter(|ch| ch.is_ascii_alphabetic()).count() <= 3 =>
+        {
+            spell_token_as_letter_names(word)
+        }
+        _ => None,
+    }
+}
+
+fn spell_token_as_letter_names(word: &str) -> Option<Vec<String>> {
+    let mut symbols = Vec::new();
+    let mut has_letter = false;
+    for ch in word.chars() {
+        if !ch.is_ascii_alphabetic() {
+            continue;
+        }
+        has_letter = true;
+        let phones = initial_to_phones(ch.to_ascii_lowercase())?;
+        symbols.extend(phones.iter().map(|symbol| (*symbol).to_string()));
+    }
+    has_letter.then_some(symbols)
 }
 
 fn inter_word_boundary_symbol(
@@ -1024,6 +1064,12 @@ fn weak_form_symbols(
     environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<Vec<String>> {
     let analysis = analyzed_token?;
+    if matches!(
+        analysis.orthographic_emphasis,
+        OrthographicEmphasisKind::AllCapsEmphasis | OrthographicEmphasisKind::ExplicitCitationForm
+    ) {
+        return None;
+    }
     if environment_facts.is_some_and(|facts| {
         !facts.conservative
             && facts.confidence >= 0.75
@@ -1063,11 +1109,10 @@ fn realization_config_for_word(
         } else {
             crate::linguistic::environment::SpanState::Stable
         };
-        if facts
-            .lexical_flags
-            .iter()
-            .any(|fact| fact.flag == LexicalProsodyFlag::AllCapsEmphasis)
-        {
+        if matches!(
+            facts.orthographic_emphasis,
+            OrthographicEmphasisKind::AllCapsEmphasis
+        ) {
             config.prosodic_role = Some(crate::linguistic::environment::ProsodicRole::Contrastive);
         }
         if facts
@@ -1225,9 +1270,32 @@ fn is_default_function_word(word: &str) -> bool {
 
 fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
     match initial.to_ascii_lowercase() {
+        'a' => Some(&["EY"]),
+        'b' => Some(&["B", "IY"]),
+        'c' => Some(&["S", "IY"]),
+        'd' => Some(&["D", "IY"]),
+        'e' => Some(&["IY"]),
         'f' => Some(&["EH", "F"]),
+        'g' => Some(&["JH", "IY"]),
+        'h' => Some(&["EY", "CH"]),
+        'i' => Some(&["AY"]),
         'j' => Some(&["JH", "EY"]),
+        'k' => Some(&["K", "EY"]),
+        'l' => Some(&["EH", "L"]),
+        'm' => Some(&["EH", "M"]),
+        'n' => Some(&["EH", "N"]),
+        'o' => Some(&["OW"]),
+        'p' => Some(&["P", "IY"]),
+        'q' => Some(&["K", "Y", "UW"]),
         'r' => Some(&["AA", "R"]),
+        's' => Some(&["EH", "S"]),
+        't' => Some(&["T", "IY"]),
+        'u' => Some(&["Y", "UW"]),
+        'v' => Some(&["V", "IY"]),
+        'w' => Some(&["D", "AH", "B", "AH", "L", "Y", "UW"]),
+        'x' => Some(&["EH", "K", "S"]),
+        'y' => Some(&["W", "AY"]),
+        'z' => Some(&["Z", "IY"]),
         _ => None,
     }
 }
@@ -1397,9 +1465,7 @@ mod tests {
         );
         assert_eq!(
             symbols_for_word(&unit, "unpunctuated"),
-            vec![
-                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"
-            ],
+            vec!["AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"],
             "expected unpunctuated to flap /t/ before the unstressed -ed vowel"
         );
         assert_eq!(
@@ -1684,6 +1750,122 @@ mod tests {
                 .any(|phones| phones[0] == "T" && phones[1].starts_with("UW")),
             "contrastive TO should remain unreduced"
         );
+    }
+
+    #[test]
+    fn suppresses_weak_for_under_all_caps_emphasis() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("FOR now").expect("phonemize");
+        let for_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "for")
+            .expect("for analysis");
+        assert_eq!(
+            for_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::AllCapsEmphasis
+        );
+        let for_symbols = symbols_for_word(&unit, "for");
+        assert!(
+            !for_symbols
+                .windows(2)
+                .any(|phones| phones[0] == "F" && phones[1] == "ER0"),
+            "all-caps emphasis should suppress weak /fər/ reduction"
+        );
+    }
+
+    #[test]
+    fn keeps_all_caps_abbreviation_out_of_contrastive_role() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("US policy changed.").expect("phonemize");
+        let us_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "us")
+            .expect("US analysis");
+        assert_eq!(
+            us_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Abbreviation
+        );
+        assert_eq!(
+            us_analysis.prosodic_role,
+            crate::mouth::riper::ProsodicRole::Content
+        );
+        let us_symbols = symbols_for_word(&unit, "us");
+        assert_eq!(us_symbols, vec!["Y", "UW", "EH", "S"]);
+    }
+
+    #[test]
+    fn uses_letter_names_for_short_all_caps_acronym() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("FBI agents.").expect("phonemize");
+        let fbi_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "fbi")
+            .expect("FBI analysis");
+        assert_eq!(
+            fbi_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Acronym
+        );
+        let fbi_symbols = symbols_for_word(&unit, "fbi");
+        assert_eq!(fbi_symbols, vec!["EH", "F", "B", "IY", "AY"]);
+    }
+
+    #[test]
+    fn leaves_longer_acronym_to_word_pronunciation_path() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("NATO policy changed.")
+            .expect("phonemize");
+        let nato_analysis = unit
+            .sentence_analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "nato")
+            .expect("NATO analysis");
+        assert_eq!(
+            nato_analysis.orthographic_emphasis,
+            crate::mouth::riper::OrthographicEmphasisKind::Acronym
+        );
+        let nato_symbols = symbols_for_word(&unit, "nato");
+        assert_ne!(nato_symbols, vec!["EH", "N", "EY", "T", "OW"]);
+    }
+
+    #[test]
+    fn maps_added_letter_name_phone_sequences() {
+        assert_eq!(initial_to_phones('a'), Some(&["EY"][..]));
+        assert_eq!(initial_to_phones('b'), Some(&["B", "IY"][..]));
+        assert_eq!(initial_to_phones('c'), Some(&["S", "IY"][..]));
+        assert_eq!(initial_to_phones('d'), Some(&["D", "IY"][..]));
+        assert_eq!(initial_to_phones('e'), Some(&["IY"][..]));
+        assert_eq!(initial_to_phones('f'), Some(&["EH", "F"][..]));
+        assert_eq!(initial_to_phones('g'), Some(&["JH", "IY"][..]));
+        assert_eq!(initial_to_phones('h'), Some(&["EY", "CH"][..]));
+        assert_eq!(initial_to_phones('i'), Some(&["AY"][..]));
+        assert_eq!(initial_to_phones('j'), Some(&["JH", "EY"][..]));
+        assert_eq!(initial_to_phones('k'), Some(&["K", "EY"][..]));
+        assert_eq!(initial_to_phones('l'), Some(&["EH", "L"][..]));
+        assert_eq!(initial_to_phones('m'), Some(&["EH", "M"][..]));
+        assert_eq!(initial_to_phones('n'), Some(&["EH", "N"][..]));
+        assert_eq!(initial_to_phones('o'), Some(&["OW"][..]));
+        assert_eq!(initial_to_phones('p'), Some(&["P", "IY"][..]));
+        assert_eq!(initial_to_phones('q'), Some(&["K", "Y", "UW"][..]));
+        assert_eq!(initial_to_phones('r'), Some(&["AA", "R"][..]));
+        assert_eq!(initial_to_phones('s'), Some(&["EH", "S"][..]));
+        assert_eq!(initial_to_phones('t'), Some(&["T", "IY"][..]));
+        assert_eq!(initial_to_phones('u'), Some(&["Y", "UW"][..]));
+        assert_eq!(initial_to_phones('v'), Some(&["V", "IY"][..]));
+        assert_eq!(
+            initial_to_phones('w'),
+            Some(&["D", "AH", "B", "AH", "L", "Y", "UW"][..])
+        );
+        assert_eq!(initial_to_phones('x'), Some(&["EH", "K", "S"][..]));
+        assert_eq!(initial_to_phones('y'), Some(&["W", "AY"][..]));
+        assert_eq!(initial_to_phones('z'), Some(&["Z", "IY"][..]));
     }
 
     #[test]
