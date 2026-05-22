@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::symbols::MbrolaSymbolMap;
+use crate::speech::canonical_plan::{
+    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_phone_timed_plan,
+};
 use crate::speech::prosody_timing::ProsodyTimingPlan;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -102,40 +105,8 @@ pub fn prosody_timing_plan_to_phone_timed_plan(
     plan: &ProsodyTimingPlan,
     symbol_map: &MbrolaSymbolMap,
 ) -> Result<PhoneTimedPlan> {
-    let mut phones = Vec::new();
-    for segment in &plan.segments {
-        for phone in &segment.phones {
-            let duration_ms = phone
-                .pace_target_ms
-                .unwrap_or_else(|| ((phone.t1 - phone.t0).max(0.0) * 1000.0).round() as u64)
-                .clamp(1, u64::from(u32::MAX)) as u32;
-            let mut mbrola_phone = MbrolaPhone::new(symbol_map.map_phone(&phone.p)?, duration_ms);
-            if phone.nucleus {
-                mbrola_phone.pitch_targets = vec![
-                    MbrolaPitchTarget {
-                        percent: 0,
-                        hz: 125.0,
-                    },
-                    MbrolaPitchTarget {
-                        percent: 60,
-                        hz: 135.0,
-                    },
-                    MbrolaPitchTarget {
-                        percent: 100,
-                        hz: 128.0,
-                    },
-                ];
-            }
-            phones.push(mbrola_phone);
-        }
-        if let Some(break_ms) = segment.break_hint_ms {
-            phones.push(MbrolaPhone::new(
-                "_",
-                break_ms.clamp(1, u64::from(u32::MAX)) as u32,
-            ));
-        }
-    }
-    Ok(PhoneTimedPlan::new(phones))
+    let canonical = canonical_speech_plan_from_prosody_timing(plan);
+    canonical_speech_plan_to_phone_timed_plan(&canonical, symbol_map)
 }
 
 pub fn parse_pho(text: &str) -> std::result::Result<PhoneTimedPlan, MbrolaPhoParseError> {

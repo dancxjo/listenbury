@@ -85,6 +85,14 @@ pub use span::{
     SpanRevision, SpanState, Text, TextId,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
+pub use speech::canonical_plan::{
+    CanonicalArticulationHints, CanonicalEnergyPlan, CanonicalPhoneProvenance,
+    CanonicalPhoneTiming, CanonicalPitchPlan, CanonicalPitchTarget, CanonicalSpeechBreak,
+    CanonicalSpeechPhone, CanonicalSpeechPlan, CanonicalSpeechPlanMetadata,
+    CanonicalSpeechPlanSource, CanonicalSpeechSegment, CanonicalStress, CanonicalSyllableRole,
+    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_phone_timed_plan,
+    canonical_speech_plan_to_piper_phoneme_sequence, canonical_speech_plan_to_piper_timing,
+};
 pub use speech::prosody_timing::{
     AlignedPhone, AlignedWord, BreakReason, BreathGroup, ExternalAlignmentCommand, ForcedAlignment,
     PiperTimingBreak, PiperTimingPhone, PiperTimingPlan, PraatCommandConfig, PraatNucleus,
@@ -108,8 +116,8 @@ pub use voice::mbrola::{
     MbrolaPitchTarget, MbrolaRenderer, MbrolaRendererConfig, MbrolaSymbolMap, MbrolaVoice,
     PhoneTimedPlan, PhoneTimedRenderer, RenderReport, UnitAssemblyReport, VoiceManifest,
     assemble_unit, fallback_warning, left_half_samples, phone_timed_plan_to_pho,
-    prosody_timing_plan_to_phone_timed_plan, read_pho_file, resolve_left_half,
-    resolve_right_half, right_half_samples, write_pho_file,
+    prosody_timing_plan_to_phone_timed_plan, read_pho_file, resolve_left_half, resolve_right_half,
+    right_half_samples, write_pho_file,
 };
 pub use voice::tract::{
     FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
