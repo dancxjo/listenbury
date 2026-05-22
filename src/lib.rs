@@ -59,10 +59,12 @@ pub use mouth::read_aloud::{
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
-    AcousticContribution, AcousticMixture, AttributionEvidence, ClusterId, EventId, MixtureId,
-    SoundEvent, SoundEventKind, SoundSource, Soundscape, SoundscapeContext, SoundscapeFrame,
-    SoundscapeId, SourceAttributor, SourceHypothesis, SourceId, SourceKind, SourceLabel, TimePoint,
-    TimeRange, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel, VoiceRoleInSpan,
+    AcousticContribution, AcousticMixture, AttributionEvidence, ClusterId, EventId,
+    IsolationEvaluation, IsolationPolicy, MixtureId, SoundEvent, SoundEventKind, SoundSource,
+    Soundscape, SoundscapeContext, SoundscapeFrame, SoundscapeId, SourceAttributor,
+    SourceCriterion, SourceHypothesis, SourceId, SourceKind, SourceLabel, SourceOperation,
+    SuppressionTarget, TimePoint, TimeRange, TrackingTarget, Voice, VoiceAttribution, VoiceId,
+    VoiceKind, VoiceLabel, VoiceRoleInSpan, evaluate_policies, self_hearing_suppression_policy,
 };
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::audio::frame::AudioFrame;
+use crate::soundscape::{IsolationPolicy, SourceId, self_hearing_suppression_policy};
 use crate::time::ExactTimestamp;
 
 /// Additional silence to suppress after Pete's TTS output ends, to absorb room echo.
@@ -124,6 +125,12 @@ impl SelfHearingState {
     /// remains active so that post-output room echo is still suppressed.
     pub fn mark_output_finished(&mut self) {
         self.pete_speaking = false;
+    }
+
+    /// Transitional adapter exposing self-hearing suppression as an isolation
+    /// policy keyed by Pete's source id.
+    pub fn isolation_policy_for_source(pete_voice_source_id: SourceId) -> IsolationPolicy {
+        self_hearing_suppression_policy(pete_voice_source_id)
     }
 
     /// Decide how a microphone frame arriving *now* should be treated.
@@ -473,6 +480,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::audio::frame::AudioFrame;
+    use crate::soundscape::{SourceCriterion, SourceId, SourceOperation};
     use crate::time::ExactTimestamp;
 
     use super::{
@@ -644,6 +652,18 @@ mod tests {
         assert!(state.pete_speaking);
         state.mark_output_finished();
         assert!(!state.pete_speaking);
+    }
+
+    #[test]
+    fn self_hearing_can_be_expressed_as_known_source_suppression_policy() {
+        let pete_source_id = SourceId::new();
+        let policy = SelfHearingState::isolation_policy_for_source(pete_source_id);
+        assert_eq!(policy.operation, SourceOperation::Suppress);
+        assert_eq!(
+            policy.criterion,
+            SourceCriterion::KnownSource(pete_source_id)
+        );
+        assert_eq!(policy.strength, 1.0);
     }
 
     #[test]
