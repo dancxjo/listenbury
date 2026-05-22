@@ -4,6 +4,7 @@
 //! playback, voices, room noise, and other audible events can coexist in one
 //! timeline.
 
+pub mod attribution;
 pub mod event;
 pub mod frame;
 pub mod source;
@@ -14,6 +15,9 @@ use uuid::Uuid;
 
 use crate::audio::VoiceSignatureId;
 
+pub use attribution::{
+    AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
+};
 pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
