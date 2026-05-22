@@ -10,13 +10,12 @@ pub mod event;
 pub mod expected;
 pub mod frame;
 pub mod isolation;
+pub mod signature;
 pub mod source;
 pub mod time;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-
-use crate::audio::VoiceSignatureId;
 
 pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
@@ -26,13 +25,17 @@ pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
 pub use expected::{
-    ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
-    playback_match_evidence,
+    playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig,
+    TranscriptHypothesis,
 };
 pub use frame::SoundscapeFrame;
 pub use isolation::{
-    IsolationEvaluation, SuppressionTarget, TrackingTarget, evaluate_policies,
-    self_hearing_suppression_policy,
+    evaluate_policies, self_hearing_suppression_policy, IsolationEvaluation, SuppressionTarget,
+    TrackingTarget,
+};
+pub use signature::{
+    FormantProfile, PitchProfile, ProsodyProfile, RateProfile, TimbreProfile, VoiceSignature,
+    VoiceSignatureId, VoiceSignatureMatch, VoiceSignatureObservation,
 };
 pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
 pub use time::{TimePoint, TimeRange};
