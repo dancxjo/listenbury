@@ -42,6 +42,8 @@ mod trajectory;
 // Configuration
 // ---------------------------------------------------------------------------
 
+const CONTINUOUS_VOWEL_BLEND_GAIN: f32 = 1.02;
+
 /// Renderer configuration shared across a synthesis session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KlattRenderConfig {
@@ -448,7 +450,7 @@ fn continuous_target_rms(target: &PhoneRenderTarget) -> f32 {
             .as_ref()
             .filter(|filter| is_vowel_like_filter(Some(filter)))
         {
-            vowel_region_target_rms(filter) * amplitude
+            vowel_region_target_rms(filter) * CONTINUOUS_VOWEL_BLEND_GAIN * amplitude
         } else if target.filter.is_some() {
             0.063 * amplitude
         } else {
