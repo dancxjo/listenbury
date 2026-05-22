@@ -2,6 +2,10 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::linguistic::arpabet::default_phone_string_for_arpabet;
+use crate::linguistic::environment as ling_env;
+use crate::linguistic::phone::PhoneString;
+
 const ESPEAK_NG_SEED_RULES_JSON: &str = include_str!("data/espeak_ng_seed_rules.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,9 +210,286 @@ pub fn english_punctuation_rule(
         .find(|rule| rule.match_pattern == pattern)
 }
 
+// ---------------------------------------------------------------------------
+// Native rule types
+// ---------------------------------------------------------------------------
+
+/// Backend-neutral output produced by a converted eSpeak-derived rule.
+///
+/// Unlike backend-specific outputs (e.g. `PiperPhonemeSequence`), these variants
+/// describe the linguistic intent — phoneme replacement or prosodic boundary — in
+/// terms that any downstream renderer can interpret.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleOutput {
+    /// Replace the target phoneme(s) with this IPA phone string.
+    PhoneString(PhoneString),
+    /// Annotate a phrase boundary with the given kind and an optional prosodic
+    /// contour label (e.g. `"exclamation"`, `"final_rising"`).
+    ProsodyBoundary {
+        boundary: ling_env::PhraseBoundaryKind,
+        contour: Option<String>,
+    },
+}
+
+/// An eSpeak-ng seed rule translated into a Listenbury-native rule descriptor.
+///
+/// The [`ling_env::EnvironmentPattern`] encodes the linguistic conditions under
+/// which this rule applies (POS, prosodic role, phrase boundary, confidence,
+/// language/variety).  Provenance fields are preserved verbatim so diagnostics
+/// can trace every rule back to its eSpeak-ng origin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedEnvironmentRule {
+    /// Unique rule identifier, copied from the seed rule's `rule_id`.
+    pub id: String,
+    /// Trace back to the originating eSpeak-ng source file and license.
+    pub provenance: RuleProvenance,
+    /// Higher values take precedence when multiple rules match.
+    pub priority: i32,
+    /// Normalised confidence in `[0, 1]`.
+    pub confidence: f32,
+    /// Phonological/prosodic conditions that must hold for the rule to fire.
+    pub pattern: ling_env::EnvironmentPattern,
+    /// What the rule produces when it fires.
+    pub output: RuleOutput,
+}
+
+// ---------------------------------------------------------------------------
+// Conversion helpers (private)
+// ---------------------------------------------------------------------------
+
+/// Strip the ARPAbet stress-digit suffix (`0`, `1`, `2`) from a symbol.
+fn arpabet_base(symbol: &str) -> &str {
+    symbol.trim_end_matches(|c: char| c.is_ascii_digit())
+}
+
+/// Parse a space-separated ARPAbet string (e.g. `"T AH0"`) into a [`PhoneString`].
+fn arpabet_to_phone_string(arpabet_str: &str) -> PhoneString {
+    let phones = arpabet_str
+        .split_whitespace()
+        .flat_map(|token| {
+            // `base` is the stress-stripped symbol (e.g. "AH" from "AH0") used as the
+            // ARPAbet lookup key, while `token` is passed as the full original token so
+            // the underlying helper can use the stress digit for tie-breaking if needed.
+            let base = arpabet_base(token);
+            default_phone_string_for_arpabet(base, token).phones
+        })
+        .collect();
+    PhoneString { phones }
+}
+
+/// Parse the `output_transformation` field of a [`PunctuationProsodyRule`] into a
+/// `(PhraseBoundaryKind, contour_label)` pair.
+///
+/// Expected format: `"boundary:<label>"` where `<label>` is a lower-case contour
+/// name such as `"exclamation"` or `"final_rising"`.  Any unrecognised payload
+/// maps to [`ling_env::PhraseBoundaryKind::Major`].
+fn parse_boundary_output(
+    output: &str,
+) -> (ling_env::PhraseBoundaryKind, Option<String>) {
+    if let Some(label) = output.strip_prefix("boundary:") {
+        let boundary = match label {
+            "none" => ling_env::PhraseBoundaryKind::None,
+            "minor" => ling_env::PhraseBoundaryKind::Minor,
+            _ => ling_env::PhraseBoundaryKind::Major,
+        };
+        (boundary, Some(label.to_string()))
+    } else {
+        (ling_env::PhraseBoundaryKind::Major, None)
+    }
+}
+
+/// Seed rule `confidence` values are stored as integers in the range 0–100.
+/// Divide by this factor to normalise them to the [0.0, 1.0] range expected by
+/// [`ImportedEnvironmentRule::confidence`].
+const CONFIDENCE_SCALE_FACTOR: f32 = 100.0;
+
+// ---------------------------------------------------------------------------
+// Public conversion functions
+// ---------------------------------------------------------------------------
+
+/// Convert a [`WeakFormRule`] into a native [`ImportedEnvironmentRule`].
+///
+/// The resulting rule fires when the phonological context indicates a function
+/// word in a weak prosodic position ([`ling_env::ProsodicRole::FunctionWeak`]).
+///
+/// The seed rule's `next_pos` constraint (e.g. "fire before a verb") is *not*
+/// mapped to a [`ling_env::ContextPredicate::Pos`] predicate because it refers to
+/// the *next* word's POS, which the current `EnvironmentPattern` engine does not
+/// model directly.  The `ProsodicRole::FunctionWeak` predicate captures the same
+/// linguistic insight at a higher level of abstraction.
+pub fn convert_weak_form_rule(
+    rule: &WeakFormRule,
+    language: &str,
+    variety: &str,
+) -> ImportedEnvironmentRule {
+    let output_phones = arpabet_to_phone_string(&rule.output_transformation);
+    let confidence = rule.confidence as f32 / CONFIDENCE_SCALE_FACTOR;
+
+    // Prosodic role: weak form words are always function words in weak position.
+    // Note: the seed rule's `next_pos` constraint ("fire when the next word is a
+    // verb/noun/…") cannot be expressed as a `ContextPredicate::Pos` on the
+    // *current* word — the native engine does not yet model "next-word POS"
+    // directly.  The `ProsodicRole::FunctionWeak` predicate captures the same
+    // semantic intent: "to" before a verb is always a weakly-stressed function word.
+    let contains: Vec<ling_env::ContextPredicate> = vec![
+        ling_env::ContextPredicate::ProsodicRole(ling_env::ProsodicRole::FunctionWeak),
+    ];
+
+    // Build a target pattern from the citation form's base ARPAbet symbols.
+    let citation_symbols: Vec<String> = rule
+        .citation_form
+        .split_whitespace()
+        .map(|t| arpabet_base(t).to_string())
+        .collect();
+    let target = if citation_symbols.len() == 1 {
+        ling_env::TargetPattern::Symbol(citation_symbols.into_iter().next().unwrap())
+    } else {
+        ling_env::TargetPattern::Symbols(citation_symbols)
+    };
+
+    ImportedEnvironmentRule {
+        id: rule.rule_id.clone(),
+        provenance: rule.provenance.clone(),
+        priority: rule.priority,
+        confidence,
+        pattern: ling_env::EnvironmentPattern {
+            target,
+            left: Vec::new(),
+            right: Vec::new(),
+            contains,
+            overlaps: Vec::new(),
+            word_position: None,
+            syllable_position: None,
+            phrase_position: None,
+            stress: None,
+            language: Some(language.to_string()),
+            variety: Some(variety.to_string()),
+            timing: Vec::new(),
+        },
+        output: RuleOutput::PhoneString(output_phones),
+    }
+}
+
+/// Convert a [`PunctuationProsodyRule`] into a native [`ImportedEnvironmentRule`].
+///
+/// The output is a [`RuleOutput::ProsodyBoundary`] whose `contour` label is
+/// derived from the seed rule's `output_transformation` string
+/// (`"boundary:<label>"`).  The target pattern carries the literal punctuation
+/// character so callers can identify which surface form triggers this rule.
+pub fn convert_punctuation_prosody_rule(
+    rule: &PunctuationProsodyRule,
+    language: &str,
+    variety: &str,
+) -> ImportedEnvironmentRule {
+    let confidence = rule.confidence as f32 / CONFIDENCE_SCALE_FACTOR;
+    let (boundary, contour) = parse_boundary_output(&rule.output_transformation);
+
+    ImportedEnvironmentRule {
+        id: rule.rule_id.clone(),
+        provenance: rule.provenance.clone(),
+        priority: rule.priority,
+        confidence,
+        pattern: ling_env::EnvironmentPattern {
+            target: ling_env::TargetPattern::Symbol(rule.match_pattern.clone()),
+            left: Vec::new(),
+            right: Vec::new(),
+            contains: Vec::new(),
+            overlaps: Vec::new(),
+            word_position: None,
+            syllable_position: None,
+            phrase_position: None,
+            stress: None,
+            language: Some(language.to_string()),
+            variety: Some(variety.to_string()),
+            timing: Vec::new(),
+        },
+        output: RuleOutput::ProsodyBoundary { boundary, contour },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bulk converters for the bundled English variety
+// ---------------------------------------------------------------------------
+
+/// Return native [`ImportedEnvironmentRule`] descriptors for all weak-form rules
+/// in the bundled English (US, General American) seed variety.
+pub fn english_imported_weak_form_rules() -> Vec<ImportedEnvironmentRule> {
+    english_seed_variety()
+        .weak_form_rules
+        .iter()
+        .map(|r| convert_weak_form_rule(r, "en", "american_english"))
+        .collect()
+}
+
+/// Return native [`ImportedEnvironmentRule`] descriptors for all punctuation
+/// prosody rules in the bundled English (US, General American) seed variety.
+pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
+    english_seed_variety()
+        .punctuation_prosody_rules
+        .iter()
+        .map(|r| convert_punctuation_prosody_rule(r, "en", "american_english"))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Context matching
+// ---------------------------------------------------------------------------
+
+/// Check whether a converted rule's environment constraints are satisfied by
+/// the given [`ling_env::RuleMatchContext`].
+///
+/// This covers the word-level predicates relevant to weak-form and
+/// punctuation-prosody rules: [`ling_env::ContextPredicate::ProsodicRole`],
+/// [`ling_env::ContextPredicate::Pos`], [`ling_env::ContextPredicate::BoundaryKind`],
+/// [`ling_env::ContextPredicate::ConfidenceAtLeast`],
+/// [`ling_env::ContextPredicate::SpanState`], and
+/// [`ling_env::ContextPredicate::MorphemeKind`], plus language/variety.
+/// Phoneme-level predicates (`Symbol`, `PhoneIpa`, `PhonemeClass`, `Stress`) are
+/// out of scope for word-level imported rules and are treated as always-satisfied.
+pub fn rule_matches_context(
+    rule: &ImportedEnvironmentRule,
+    context: &ling_env::RuleMatchContext<'_>,
+) -> bool {
+    if let Some(lang) = &rule.pattern.language {
+        if lang != &context.language {
+            return false;
+        }
+    }
+    if let Some(variety) = &rule.pattern.variety {
+        if variety != &context.variety {
+            return false;
+        }
+    }
+    rule.pattern
+        .contains
+        .iter()
+        .all(|predicate| env_predicate_matches(predicate, context))
+}
+
+fn env_predicate_matches(
+    predicate: &ling_env::ContextPredicate,
+    context: &ling_env::RuleMatchContext<'_>,
+) -> bool {
+    match predicate {
+        ling_env::ContextPredicate::ProsodicRole(role) => context.prosodic_role == Some(*role),
+        ling_env::ContextPredicate::Pos(pos) => context.part_of_speech == Some(*pos),
+        ling_env::ContextPredicate::BoundaryKind(boundary) => {
+            context.phrase_boundary == Some(*boundary)
+        }
+        ling_env::ContextPredicate::ConfidenceAtLeast(min) => context.confidence >= *min,
+        ling_env::ContextPredicate::SpanState(state) => context.span_state == *state,
+        ling_env::ContextPredicate::MorphemeKind(kind) => context.morphology == Some(*kind),
+        // Phoneme-level predicates are out of scope for word-level imported rules.
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linguistic::arpabet::phoneme_from_arpabet;
+    use crate::linguistic::environment as ling_env;
+    use crate::linguistic::realization::RealizationConfig;
 
     #[test]
     fn parses_bundled_seed_rule_table_and_supports_nested_varieties() {
@@ -241,5 +522,225 @@ mod tests {
         let punctuation = english_punctuation_rule('!').expect("exclamation rule");
         assert_eq!(punctuation.output_transformation, "boundary:exclamation");
         assert_eq!(punctuation.provenance.source_license, "GPL-3.0-or-later");
+    }
+
+    // --- Converted native rule tests ---
+
+    #[test]
+    fn converted_weak_form_rule_preserves_provenance() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+
+        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+
+        assert_eq!(native.id, "weak_form_to_before_verb");
+        assert_eq!(native.provenance.source, "espeak-ng-derived");
+        assert!(
+            native.provenance.source_file.contains("en_rules"),
+            "provenance source file should survive conversion"
+        );
+    }
+
+    #[test]
+    fn converted_weak_form_rule_matches_function_weak_prosodic_role() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+
+        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+
+        let sequence = vec![
+            phoneme_from_arpabet("T", "cmudict"),
+            phoneme_from_arpabet("UW1", "cmudict"),
+        ];
+        let config = RealizationConfig {
+            language: "en".to_string(),
+            dialect: "american_english".to_string(),
+            prosodic_role: Some(ling_env::ProsodicRole::FunctionWeak),
+            ..Default::default()
+        };
+        let context = ling_env::RuleMatchContext::from_sequence(&sequence, 0, &config);
+
+        assert!(
+            rule_matches_context(&native, &context),
+            "rule should match when word is in FunctionWeak prosodic role"
+        );
+    }
+
+    #[test]
+    fn converted_weak_form_rule_rejects_content_word_prosodic_role() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+
+        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+
+        let sequence = vec![phoneme_from_arpabet("T", "cmudict")];
+        let config = RealizationConfig {
+            language: "en".to_string(),
+            dialect: "american_english".to_string(),
+            prosodic_role: Some(ling_env::ProsodicRole::Content),
+            ..Default::default()
+        };
+        let context = ling_env::RuleMatchContext::from_sequence(&sequence, 0, &config);
+
+        assert!(
+            !rule_matches_context(&native, &context),
+            "rule should not match when word is a content word"
+        );
+    }
+
+    #[test]
+    fn converted_weak_form_rule_rejects_wrong_language() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+
+        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+
+        let sequence = vec![phoneme_from_arpabet("T", "cmudict")];
+        let config = RealizationConfig {
+            language: "fr".to_string(),
+            dialect: "standard_french".to_string(),
+            prosodic_role: Some(ling_env::ProsodicRole::FunctionWeak),
+            ..Default::default()
+        };
+        let context = ling_env::RuleMatchContext::from_sequence(&sequence, 0, &config);
+
+        assert!(
+            !rule_matches_context(&native, &context),
+            "English rule should not match a French context"
+        );
+    }
+
+    #[test]
+    fn converted_weak_form_rule_output_is_phone_string_not_backend_specific() {
+        let seed_rule = english_seed_variety()
+            .weak_form_rules
+            .iter()
+            .find(|r| r.rule_id == "weak_form_to_before_verb")
+            .expect("seed rule must exist");
+
+        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+
+        assert!(
+            matches!(&native.output, RuleOutput::PhoneString(_)),
+            "weak form output must be a PhoneString, not a backend-specific sequence"
+        );
+        if let RuleOutput::PhoneString(ps) = &native.output {
+            // IPA phones should not retain raw ARPAbet tokens (non-empty all-caps+digits)
+            for phone in &ps.phones {
+                let s = phone.ipa.as_str();
+                let looks_like_arpabet = !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+                assert!(
+                    !looks_like_arpabet,
+                    "IPA output '{}' looks like a raw ARPAbet token",
+                    phone.ipa
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn converted_punctuation_prosody_rule_has_major_boundary_output() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+
+        assert_eq!(native.id, "punctuation_exclamation_boundary");
+        assert!(
+            matches!(&native.output, RuleOutput::ProsodyBoundary { .. }),
+            "punctuation output must be a ProsodyBoundary"
+        );
+        if let RuleOutput::ProsodyBoundary { boundary, contour } = &native.output {
+            assert_eq!(*boundary, ling_env::PhraseBoundaryKind::Major);
+            assert_eq!(contour.as_deref(), Some("exclamation"));
+        }
+    }
+
+    #[test]
+    fn converted_punctuation_prosody_rule_preserves_provenance() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+
+        assert_eq!(native.provenance.source, "espeak-ng-derived");
+        assert_eq!(native.provenance.source_license, "GPL-3.0-or-later");
+    }
+
+    #[test]
+    fn question_mark_rule_has_final_rising_contour() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "?")
+            .expect("question mark rule must exist");
+
+        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+
+        if let RuleOutput::ProsodyBoundary { boundary, contour } = &native.output {
+            assert_eq!(*boundary, ling_env::PhraseBoundaryKind::Major);
+            assert_eq!(contour.as_deref(), Some("final_rising"));
+        } else {
+            panic!("expected ProsodyBoundary output");
+        }
+    }
+
+    #[test]
+    fn bulk_english_weak_form_rules_are_non_empty_and_all_have_provenance() {
+        let rules = english_imported_weak_form_rules();
+        assert!(!rules.is_empty(), "should have at least one English weak form rule");
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} provenance should survive bulk conversion",
+                rule.id
+            );
+            assert!(
+                matches!(&rule.output, RuleOutput::PhoneString(_)),
+                "weak form rule {} output should be a PhoneString",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_english_punctuation_rules_are_non_empty_and_all_have_boundary_output() {
+        let rules = english_imported_punctuation_rules();
+        assert!(
+            !rules.is_empty(),
+            "should have at least one English punctuation rule"
+        );
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} provenance should survive bulk conversion",
+                rule.id
+            );
+            assert!(
+                matches!(&rule.output, RuleOutput::ProsodyBoundary { .. }),
+                "punctuation rule {} output should be a ProsodyBoundary",
+                rule.id
+            );
+        }
     }
 }
