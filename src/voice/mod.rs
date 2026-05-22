@@ -16,9 +16,19 @@
 
 pub mod articulator;
 pub mod coarticulation;
+pub mod tract;
 
 pub use articulator::{ArticulatorPlan, EnergyCurve, EnergyPoint, articulate, is_phone_voiced};
 pub use coarticulation::{
     BoundaryKind, CoarticulatedPlan, PhoneGesture, PhoneRole, RefinedGesture, VocalGesturePlan,
     coarticulate,
+};
+pub use tract::{
+    FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
+    NoiseEstimate, PhoneAcousticTarget, PhoneRenderTarget, SourceFilterFrame, SourceFilterTrack,
+    VocalTractFilterEstimate, VocalTractFilterTarget, VoicingEstimate,
+    default_english_phone_targets, estimate_f0_autocorrelation, phone_render_targets_from_string,
+    render_phone, render_phone_string, render_targets_from_sung_syllable,
+    render_targets_from_syllable, source_filter_track_from_acoustic,
+    source_filter_track_from_acoustic_full,
 };
