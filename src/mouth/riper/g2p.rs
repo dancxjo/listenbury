@@ -1262,6 +1262,18 @@ mod tests {
     }
 
     #[test]
+    fn phonemizes_diphones_as_di_plus_phones() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("The synthesizer concatenates diphones.")
+            .expect("phonemize");
+        assert_eq!(
+            symbols_for_word(&unit, "diphones"),
+            vec!["D", "AY1", "F", "OW", "N", "Z"]
+        );
+    }
+
+    #[test]
     fn applies_intervocalic_flap_for_riper() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");

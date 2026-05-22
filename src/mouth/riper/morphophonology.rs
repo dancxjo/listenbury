@@ -122,6 +122,18 @@ pub struct WordPronunciation {
     pub stress_by_phone: Vec<Option<PhonologicalStress>>,
 }
 
+#[derive(Debug, Clone)]
+struct AffixPronunciation {
+    text: &'static str,
+    surface: &'static str,
+    lemma: &'static str,
+    kind: MorphemeKind,
+    tags: &'static [&'static str],
+    meaning: Option<&'static str>,
+    rule: &'static str,
+    pronunciation: WordPronunciation,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MorphophonologyResult {
     pub analysis: MorphologicalAnalysis,
@@ -177,9 +189,13 @@ fn exact_lexical(surface: &str) -> Option<MorphophonologyResult> {
 }
 
 fn known_derived(surface: &str) -> Option<MorphophonologyResult> {
-    if !surface.eq_ignore_ascii_case("unpunctuated") {
-        return None;
+    if surface.eq_ignore_ascii_case("unpunctuated") {
+        return known_unpunctuated(surface);
     }
+    None
+}
+
+fn known_unpunctuated(surface: &str) -> Option<MorphophonologyResult> {
     let stem = lexicon_pronunciation("punctuate")?;
     let prefix_symbols = vec!["AH1".to_string(), "N".to_string()];
     let prefix_stress = vec![Some(PhonologicalStress::Primary), None];
@@ -271,6 +287,9 @@ fn productive_morphology(surface: &str) -> Option<MorphophonologyResult> {
         return None;
     }
 
+    if let Some(prefixed) = analyze_known_prefix(surface) {
+        return Some(prefixed);
+    }
     if let Some(mixed) = analyze_un_plus_stem_plus_ed(surface) {
         return Some(mixed);
     }
@@ -281,6 +300,78 @@ fn productive_morphology(surface: &str) -> Option<MorphophonologyResult> {
         return Some(ed_word);
     }
     None
+}
+
+fn analyze_known_prefix(surface: &str) -> Option<MorphophonologyResult> {
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
+
+    let prefix = known_prefixes()
+        .into_iter()
+        .find(|prefix| surface_starts_with_affix(surface, prefix.text))?;
+    let stem_text = &surface[prefix.text.len()..];
+    if stem_text.is_empty() {
+        return None;
+    }
+
+    let stem = lexicon_pronunciation(stem_text)?;
+
+    let mut realized = prefix.pronunciation.symbols.clone();
+    realized.extend(stem.symbols.clone());
+
+    let mut stress = prefix.pronunciation.stress_by_phone.clone();
+    stress.extend(stem.stress_by_phone.clone());
+
+    let boundaries = vec![MorphemeBoundary {
+        phone_index: prefix.pronunciation.symbols.len(),
+        label: prefix.surface.to_string(),
+    }];
+
+    let mut underlying = prefix.pronunciation.symbols.clone();
+    underlying.extend(stem.symbols.clone());
+
+    let phonology = phonology_form(underlying, realized.clone(), stress.clone(), boundaries);
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes: vec![
+                MorphemeAnalysis {
+                    surface: prefix.surface.to_string(),
+                    kind: prefix.kind,
+                    lemma: Some(prefix.lemma.to_string()),
+                    features: MorphemeFeatures {
+                        tags: prefix.tags.iter().map(|tag| (*tag).to_string()).collect(),
+                        meaning: prefix.meaning.map(str::to_string),
+                    },
+                    phonology: None,
+                },
+                MorphemeAnalysis {
+                    surface: stem_text.to_string(),
+                    kind: MorphemeKind::Stem,
+                    lemma: Some(stem_text.to_string()),
+                    features: MorphemeFeatures::default(),
+                    phonology: None,
+                },
+            ],
+            confidence: 0.84,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology: Some(phonology),
+            rules: vec![
+                prefix.rule.to_string(),
+                "affix_lookup_cmudict_variants".to_string(),
+                "stem_lookup_or_fallback".to_string(),
+                "stress_assignment".to_string(),
+            ],
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+        },
+        pronunciation: WordPronunciation {
+            symbols: realized,
+            stress_by_phone: stress,
+        },
+    })
 }
 
 fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> {
@@ -632,6 +723,68 @@ fn lexicon_pronunciation(surface: &str) -> Option<WordPronunciation> {
     }
     let phones = cmudict::bundled().lookup(surface)?;
     Some(cmu_phones_to_symbols(phones))
+}
+
+fn known_prefixes() -> Vec<AffixPronunciation> {
+    let mut prefixes = Vec::new();
+    if let Some(pronunciation) = affix_pronunciation("di", AffixVariantPreference::PreferAy) {
+        prefixes.push(AffixPronunciation {
+            text: "di",
+            surface: "di-",
+            lemma: "di",
+            kind: MorphemeKind::Prefix,
+            tags: &["technical_prefix"],
+            meaning: Some("two"),
+            rule: "prefix_di_attachment",
+            pronunciation,
+        });
+    }
+    prefixes
+}
+
+fn surface_starts_with_affix(surface: &str, affix: &str) -> bool {
+    surface
+        .get(..affix.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(affix))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AffixVariantPreference {
+    PreferAy,
+}
+
+fn affix_pronunciation(
+    surface: &str,
+    preference: AffixVariantPreference,
+) -> Option<WordPronunciation> {
+    let variants = affix_pronunciations(surface)?;
+    match preference {
+        AffixVariantPreference::PreferAy => variants
+            .iter()
+            .find(|pronunciation| {
+                pronunciation
+                    .symbols
+                    .iter()
+                    .any(|symbol| symbol.trim_end_matches(|ch: char| ch.is_ascii_digit()) == "AY")
+            })
+            .cloned()
+            .or_else(|| variants.into_iter().next()),
+    }
+}
+
+fn affix_pronunciations(surface: &str) -> Option<Vec<WordPronunciation>> {
+    cmudict::bundled().lookup_all(surface).map(|variants| {
+        variants
+            .iter()
+            .map(|phones| WordPronunciation {
+                symbols: phones.iter().map(cmu_phone_source_symbol).collect(),
+                stress_by_phone: phones
+                    .iter()
+                    .map(|phone| cmu_stress_level(phone.stress))
+                    .collect(),
+            })
+            .collect()
+    })
 }
 
 fn lexical_override(surface: &str) -> Option<WordPronunciation> {
@@ -991,6 +1144,52 @@ mod tests {
                 "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "T", "IH0", "D"
             ],
             "morphophonology should keep the phonemic /t/ before G2P surface realization"
+        );
+    }
+
+    #[test]
+    fn analyzes_diphones_as_di_plus_phones() {
+        let result = analyze_word("diphones");
+        assert_eq!(
+            result
+                .analysis
+                .morphemes
+                .iter()
+                .map(|m| m.surface.as_str())
+                .collect::<Vec<_>>(),
+            vec!["di-", "phones"]
+        );
+        assert!(matches!(
+            result.analysis.source,
+            AnalysisSource::ProductiveMorphology
+        ));
+        assert_eq!(
+            result.pronunciation.symbols,
+            vec!["D", "AY1", "F", "OW", "N", "Z"]
+        );
+        assert!(
+            result
+                .analysis
+                .rules
+                .iter()
+                .any(|rule| rule == "prefix_di_attachment")
+        );
+    }
+
+    #[test]
+    fn pulls_di_prefix_variants_from_cmudict() {
+        let variants = affix_pronunciations("di").expect("di prefix variants");
+        let symbols = variants
+            .iter()
+            .map(|pronunciation| pronunciation.symbols.clone())
+            .collect::<Vec<_>>();
+        assert!(symbols.contains(&vec!["D".to_string(), "IY1".to_string()]));
+        assert!(symbols.contains(&vec!["D".to_string(), "AY1".to_string()]));
+        assert_eq!(
+            affix_pronunciation("di", AffixVariantPreference::PreferAy)
+                .expect("preferred di prefix")
+                .symbols,
+            vec!["D", "AY1"]
         );
     }
 
