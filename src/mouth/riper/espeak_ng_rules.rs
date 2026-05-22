@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::linguistic::arpabet::default_phone_string_for_arpabet;
 use crate::linguistic::environment as ling_env;
 use crate::linguistic::phone::PhoneString;
+use crate::mouth::riper::{NormalizedText, SentenceAnalysis};
 
 const ESPEAK_NG_SEED_RULES_JSON: &str = include_str!("data/espeak_ng_seed_rules.json");
 
@@ -104,6 +105,21 @@ pub struct PunctuationProsodyRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiWordSeedRule {
+    pub rule_id: String,
+    pub words: Vec<String>,
+    pub context: RuleContextConstraint,
+    pub output_transformation: String,
+    pub confidence: u8,
+    pub priority: i32,
+    #[serde(default)]
+    pub required_links: Vec<String>,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
+    pub provenance: RuleProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceVariantRule {
     pub rule_id: String,
     pub match_pattern: String,
@@ -143,6 +159,8 @@ pub struct LinguisticVarietyRuleTable {
     pub stress_rules: Vec<StressRule>,
     pub pronunciation_override_rules: Vec<PronunciationOverrideRule>,
     pub punctuation_prosody_rules: Vec<PunctuationProsodyRule>,
+    #[serde(default)]
+    pub multi_word_rules: Vec<MultiWordSeedRule>,
     pub voice_variant_rules: Vec<VoiceVariantRule>,
     pub phoneme_mapping_rules: Vec<PhonemeMappingRule>,
 }
@@ -471,6 +489,23 @@ pub enum RuleOutput {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiWordRuleOutput {
+    /// Replace the matched phrase with an explicit phone sequence.
+    PhoneString(PhoneString),
+    /// Keep the phrase contiguous (suppress auto-inserted internal break/breath split).
+    NoBreak,
+    /// Prefer citation forms over weak reductions in this phrase.
+    CitationFormSelection,
+    /// Prefer weak forms inside this phrase.
+    WeakFormSelection,
+    /// Override the phrase boundary associated with this phrase.
+    PhraseBoundary {
+        boundary: ling_env::PhraseBoundaryKind,
+        contour: Option<String>,
+    },
+}
+
 /// An eSpeak-ng seed rule translated into a Listenbury-native rule descriptor.
 ///
 /// The [`ling_env::EnvironmentPattern`] encodes the linguistic conditions under
@@ -493,6 +528,35 @@ pub struct ImportedEnvironmentRule {
     pub pattern: ling_env::EnvironmentPattern,
     /// What the rule produces when it fires.
     pub output: RuleOutput,
+}
+
+/// Phrase-level pronunciation/prosody rule imported from an eSpeak multi-word seed entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiWordPronunciationRule {
+    pub id: String,
+    pub words: Vec<String>,
+    pub pattern: ling_env::EnvironmentPattern,
+    pub output: MultiWordRuleOutput,
+    pub provenance: RuleProvenance,
+    pub priority: i32,
+    pub confidence: f32,
+    pub required_links: Vec<String>,
+    pub lexical_flags: Vec<LexicalProsodyFlagFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchedWordSpan {
+    pub words: Vec<String>,
+    pub word_range: std::ops::Range<usize>,
+    pub token_range: std::ops::Range<usize>,
+    pub source_span: std::ops::Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiWordRuleMatch {
+    pub rule_id: String,
+    pub matched_word_span: MatchedWordSpan,
+    pub provenance: RuleProvenance,
 }
 
 // ---------------------------------------------------------------------------
@@ -664,6 +728,20 @@ fn lexical_flag_facts_for_punctuation_rule(
     )
 }
 
+fn lexical_flag_facts_for_multi_word_rule(rule: &MultiWordSeedRule) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    if rule.output_transformation == "no_break" {
+        push_flag_once(&mut flags, LexicalProsodyFlag::PauseAfter);
+    }
+    flags.extend(contextual_flags(&rule.context));
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Public conversion functions
 // ---------------------------------------------------------------------------
@@ -770,6 +848,59 @@ pub fn convert_punctuation_prosody_rule(
     }
 }
 
+fn parse_multi_word_output(output: &str) -> MultiWordRuleOutput {
+    if output.eq_ignore_ascii_case("no_break") {
+        return MultiWordRuleOutput::NoBreak;
+    }
+    if output.eq_ignore_ascii_case("citation_form") {
+        return MultiWordRuleOutput::CitationFormSelection;
+    }
+    if output.eq_ignore_ascii_case("weak_form") {
+        return MultiWordRuleOutput::WeakFormSelection;
+    }
+    if let Some(arpabet) = output.strip_prefix("phones:") {
+        return MultiWordRuleOutput::PhoneString(arpabet_to_phone_string(arpabet));
+    }
+    if output.starts_with("boundary:") {
+        let (boundary, contour) = parse_boundary_output(output);
+        return MultiWordRuleOutput::PhraseBoundary { boundary, contour };
+    }
+    MultiWordRuleOutput::PhoneString(arpabet_to_phone_string(output))
+}
+
+/// Convert a [`MultiWordSeedRule`] into a native phrase-level
+/// [`MultiWordPronunciationRule`].
+pub fn convert_multi_word_rule(
+    rule: &MultiWordSeedRule,
+    language: &str,
+    variety: &str,
+) -> MultiWordPronunciationRule {
+    MultiWordPronunciationRule {
+        id: rule.rule_id.clone(),
+        words: rule.words.clone(),
+        pattern: ling_env::EnvironmentPattern {
+            target: ling_env::TargetPattern::Symbols(rule.words.clone()),
+            left: Vec::new(),
+            right: Vec::new(),
+            contains: Vec::new(),
+            overlaps: Vec::new(),
+            word_position: None,
+            syllable_position: None,
+            phrase_position: None,
+            stress: None,
+            language: Some(language.to_string()),
+            variety: Some(variety.to_string()),
+            timing: Vec::new(),
+        },
+        output: parse_multi_word_output(&rule.output_transformation),
+        provenance: rule.provenance.clone(),
+        priority: rule.priority,
+        confidence: confidence_from_seed(rule.confidence),
+        required_links: rule.required_links.clone(),
+        lexical_flags: lexical_flag_facts_for_multi_word_rule(rule),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bulk converters for the bundled English variety
 // ---------------------------------------------------------------------------
@@ -791,6 +922,16 @@ pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
         .punctuation_prosody_rules
         .iter()
         .map(|r| convert_punctuation_prosody_rule(r, "en", "american_english"))
+        .collect()
+}
+
+/// Return native phrase-level descriptors for all imported multi-word rules in
+/// the bundled English (US, General American) seed variety.
+pub fn english_imported_multi_word_rules() -> Vec<MultiWordPronunciationRule> {
+    english_seed_variety()
+        .multi_word_rules
+        .iter()
+        .map(|r| convert_multi_word_rule(r, "en", "american_english"))
         .collect()
 }
 
@@ -847,12 +988,120 @@ fn env_predicate_matches(
     }
 }
 
+fn canonical_link_label(label: &str) -> String {
+    label
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn link_kind_matches_label(
+    kind: crate::mouth::riper::SyntacticLinkKind,
+    required_label: &str,
+) -> bool {
+    canonical_link_label(&format!("{kind:?}")) == canonical_link_label(required_label)
+}
+
+fn required_links_satisfied(
+    required_links: &[String],
+    sentence_analysis: &SentenceAnalysis,
+    span_start_word: usize,
+    span_end_word_exclusive: usize,
+) -> bool {
+    if required_links.is_empty() {
+        return true;
+    }
+    let Some(primary_parse) = sentence_analysis.link_parses.first() else {
+        return false;
+    };
+    required_links.iter().all(|required_label| {
+        primary_parse.links.iter().any(|link| {
+            let (left, right) = if link.left <= link.right {
+                (link.left, link.right)
+            } else {
+                (link.right, link.left)
+            };
+            left >= span_start_word
+                && right < span_end_word_exclusive
+                && link_kind_matches_label(link.kind, required_label)
+        })
+    })
+}
+
+/// Match a phrase-level rule against normalized words and return all matched
+/// spans, preserving both word-index and source-token ranges for diagnostics.
+pub fn match_multi_word_rule(
+    rule: &MultiWordPronunciationRule,
+    normalized: &NormalizedText,
+    sentence_analysis: &SentenceAnalysis,
+) -> Vec<MultiWordRuleMatch> {
+    if rule.words.is_empty() {
+        return Vec::new();
+    }
+    let mut words_with_tokens = sentence_analysis
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            token
+                .word_index
+                .map(|word_index| (word_index, token.token_index, token.text.as_str()))
+        })
+        .collect::<Vec<_>>();
+    words_with_tokens.sort_unstable_by_key(|(word_index, _, _)| *word_index);
+
+    let phrase_len = rule.words.len();
+    words_with_tokens
+        .windows(phrase_len)
+        .filter_map(|window| {
+            let words_match = window
+                .iter()
+                .zip(rule.words.iter())
+                .all(|((_, _, token_word), rule_word)| token_word.eq_ignore_ascii_case(rule_word));
+            if !words_match {
+                return None;
+            }
+
+            let span_start_word = window.first()?.0;
+            let span_end_word_exclusive = span_start_word + phrase_len;
+            if !required_links_satisfied(
+                &rule.required_links,
+                sentence_analysis,
+                span_start_word,
+                span_end_word_exclusive,
+            ) {
+                return None;
+            }
+
+            let token_start = window.first()?.1;
+            let token_end_inclusive = window.last()?.1;
+            let source_start = normalized.token_spans.get(token_start)?.start;
+            let source_end = normalized.token_spans.get(token_end_inclusive)?.end;
+
+            Some(MultiWordRuleMatch {
+                rule_id: rule.id.clone(),
+                matched_word_span: MatchedWordSpan {
+                    words: window
+                        .iter()
+                        .map(|(_, _, word)| (*word).to_string())
+                        .collect(),
+                    word_range: span_start_word..span_end_word_exclusive,
+                    token_range: token_start..(token_end_inclusive + 1),
+                    source_span: source_start..source_end,
+                },
+                provenance: rule.provenance.clone(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linguistic::arpabet::phoneme_from_arpabet;
     use crate::linguistic::environment as ling_env;
     use crate::linguistic::realization::RealizationConfig;
+    use crate::mouth::riper::{HeuristicSentenceAnalyzer, SentenceAnalyzer, TextNormalizer};
 
     #[test]
     fn parses_bundled_seed_rule_table_and_supports_nested_varieties() {
@@ -1162,6 +1411,23 @@ mod tests {
         assert!(
             !rules.is_empty(),
             "should have at least one English native morphophonology rule"
+          );
+  }
+    #[test]
+    fn bulk_english_multi_word_rules_are_imported_as_phrase_level_rules() {
+        let rules = english_imported_multi_word_rules();
+        assert!(
+            !rules.is_empty(),
+            "expected at least one imported multi-word phrase rule"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.words == vec!["kind", "of"]),
+            "expected function-word phrase seed entry"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.words == vec!["to", "go"]
+                && matches!(rule.output, MultiWordRuleOutput::NoBreak)),
+            "expected no-break phrase seed entry"
         );
     }
 
@@ -1255,5 +1521,50 @@ mod tests {
                 panic!("-ed rule must have SpellingRepair policy");
             }
         }
+  }
+  #[test]
+    fn multi_word_rule_matches_normalized_span_and_preserves_source_spans() {
+        let normalizer = TextNormalizer::default();
+        let source = "kind of odd";
+        let normalized = normalizer.normalize(source).expect("normalize");
+        let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
+        let rule = english_imported_multi_word_rules()
+            .into_iter()
+            .find(|rule| rule.id == "phrase_kind_of_reduction")
+            .expect("kind-of rule should exist");
+        let matches = match_multi_word_rule(&rule, &normalized, &analysis);
+        let matched = matches.first().expect("kind-of phrase should match");
+
+        assert_eq!(matched.matched_word_span.word_range, 0..2);
+        assert_eq!(matched.matched_word_span.token_range, 0..2);
+        assert_eq!(matched.matched_word_span.source_span, 0..7);
+        assert_eq!(matched.matched_word_span.words, vec!["kind", "of"]);
+        assert_eq!(matched.provenance.source, "espeak-ng-derived");
+    }
+
+    #[test]
+    fn multi_word_link_requirements_gate_break_suppression_matches() {
+        let normalizer = TextNormalizer::default();
+        let source = "to go now";
+        let normalized = normalizer.normalize(source).expect("normalize");
+        let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
+        let rule = english_imported_multi_word_rules()
+            .into_iter()
+            .find(|rule| rule.id == "phrase_to_go_no_break")
+            .expect("to-go no-break rule should exist");
+
+        let matches = match_multi_word_rule(&rule, &normalized, &analysis);
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected infinitival phrase to match once"
+        );
+
+        let mut wrong_link_rule = rule.clone();
+        wrong_link_rule.required_links = vec!["Determiner".to_string()];
+        assert!(
+            match_multi_word_rule(&wrong_link_rule, &normalized, &analysis).is_empty(),
+            "link-constrained matching should fail when required link kind is absent"
+        );
     }
 }
