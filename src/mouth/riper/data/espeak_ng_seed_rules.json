@@ -33,6 +33,11 @@
                     "output_transformation": "T AH0",
                     "confidence": 95,
                     "priority": 100,
+                    "dictionary_flags": [
+                      "unstressed",
+                      "likely_verb_context",
+                      "capital_sensitive"
+                    ],
                     "provenance": {
                       "source": "espeak-ng-derived",
                       "source_file": "dictsource/en_rules, phsource/en_us",
@@ -101,6 +106,10 @@
                     "output_transformation": "T UW1",
                     "confidence": 99,
                     "priority": 200,
+                    "dictionary_flags": [
+                      "all_caps_emphasis",
+                      "capital_sensitive"
+                    ],
                     "provenance": {
                       "source": "espeak-ng-derived",
                       "source_file": "dictsource/en_rules",
@@ -216,6 +225,11 @@
                     "output_transformation": "boundary:exclamation",
                     "confidence": 90,
                     "priority": 100,
+                    "dictionary_flags": [
+                      "pause_after",
+                      "break_after",
+                      "clause_final_stress"
+                    ],
                     "provenance": {
                       "source": "espeak-ng-derived",
                       "source_file": "dictsource/en_rules",
@@ -236,6 +250,11 @@
                     "output_transformation": "boundary:final_rising",
                     "confidence": 90,
                     "priority": 100,
+                    "dictionary_flags": [
+                      "pause_after",
+                      "break_after",
+                      "clause_final_stress"
+                    ],
                     "provenance": {
                       "source": "espeak-ng-derived",
                       "source_file": "dictsource/en_rules",

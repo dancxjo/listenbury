@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
+use crate::mouth::riper::espeak_ng_rules::{
+    LexicalProsodyFlagFact, english_lexical_flag_facts_for_rule, english_to_rule_descriptor,
+};
 use crate::mouth::riper::evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
 };
@@ -40,6 +42,7 @@ const COMMON_LINK_ADJECTIVES: &[&str] = &[
 pub struct SentenceAnalysis {
     pub tokens: Vec<TokenAnalysis>,
     pub link_parses: Vec<SyntacticLinkParse>,
+    pub terminal_boundary_kind: PhraseBoundaryKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +64,7 @@ pub struct ProsodyEnvironmentFacts {
     pub prosodic_role: ProsodicRole,
     pub phrase_boundary_after: PhraseBoundaryKind,
     pub syntactic_links: Vec<SyntacticLinkKind>,
+    pub lexical_flags: Vec<LexicalProsodyFlagFact>,
     pub confidence: f32,
     pub conservative: bool,
 }
@@ -255,6 +259,18 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                         && raw_token.chars().any(|ch| ch.is_ascii_alphabetic())
                         && raw_token.len() > 1
                     {
+                        if is_all_caps_abbreviation(raw_token, &token_text) {
+                            return TokenAnalysis {
+                                token_index,
+                                word_index: Some(word_index),
+                                text: token_text,
+                                pos: PartOfSpeech::ProperName,
+                                syntactic_role: None,
+                                prosodic_role: ProsodicRole::Content,
+                                reduction: ReductionClass::None,
+                                reduction_diagnostic: None,
+                            };
+                        }
                         return TokenAnalysis {
                             token_index,
                             word_index: Some(word_index),
@@ -320,6 +336,7 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
         SentenceAnalysis {
             tokens,
             link_parses,
+            terminal_boundary_kind: normalized.boundary_kind,
         }
     }
 }
@@ -345,6 +362,11 @@ impl SentenceAnalysis {
         };
         let conservative_ambiguity = self.has_low_confidence_ambiguity();
         let parse_rank_confidence = primary_parse.rank.clamp(0.0, 1.0);
+        let last_word_index = self
+            .tokens
+            .iter()
+            .filter_map(|token| token.word_index)
+            .max();
 
         self.tokens
             .iter()
@@ -385,6 +407,30 @@ impl SentenceAnalysis {
                 } else {
                     boundary_after_word(primary_parse, word_index)
                 };
+                let phrase_boundary_after = if !conservative_ambiguity
+                    && Some(word_index) == last_word_index
+                    && matches!(phrase_boundary_after, PhraseBoundaryKind::None)
+                {
+                    self.terminal_boundary_kind
+                } else {
+                    phrase_boundary_after
+                };
+                let mut lexical_flags = token
+                    .reduction_diagnostic
+                    .as_ref()
+                    .map(|diagnostic| english_lexical_flag_facts_for_rule(&diagnostic.rule))
+                    .unwrap_or_default();
+                if Some(word_index) == last_word_index {
+                    lexical_flags.extend(boundary_flag_facts_for_kind(phrase_boundary_after));
+                }
+                lexical_flags.sort_unstable_by(|left, right| {
+                    left.source_rule_id
+                        .cmp(&right.source_rule_id)
+                        .then((left.flag as u8).cmp(&(right.flag as u8)))
+                });
+                lexical_flags.dedup_by(|left, right| {
+                    left.source_rule_id == right.source_rule_id && left.flag == right.flag
+                });
 
                 Some(ProsodyEnvironmentFacts {
                     word_index,
@@ -392,6 +438,7 @@ impl SentenceAnalysis {
                     prosodic_role,
                     phrase_boundary_after,
                     syntactic_links,
+                    lexical_flags,
                     confidence,
                     conservative: conservative_ambiguity,
                 })
@@ -500,6 +547,18 @@ fn boundary_after_word(parse: &SyntacticLinkParse, word_index: usize) -> PhraseB
         return PhraseBoundaryKind::Parenthetical;
     }
     PhraseBoundaryKind::None
+}
+
+fn boundary_flag_facts_for_kind(kind: PhraseBoundaryKind) -> Vec<LexicalProsodyFlagFact> {
+    match kind {
+        PhraseBoundaryKind::Exclamation => {
+            english_lexical_flag_facts_for_rule("punctuation_exclamation_boundary")
+        }
+        PhraseBoundaryKind::FinalRising => {
+            english_lexical_flag_facts_for_rule("punctuation_question_rising_boundary")
+        }
+        _ => Vec::new(),
+    }
 }
 
 impl SyntacticLinkParse {
@@ -1507,6 +1566,14 @@ fn is_all_caps_token(word: &str) -> bool {
     has_alpha
 }
 
+fn is_all_caps_abbreviation(raw_token: &str, normalized_token: &str) -> bool {
+    is_all_caps_token(raw_token)
+        && matches!(
+            normalized_token,
+            "us" | "uk" | "eu" | "un" | "usa" | "nato" | "fbi" | "cia"
+        )
+}
+
 fn detect_with_attachment_ambiguity(words: &[&str]) -> Option<(usize, usize, usize)> {
     for with_index in 1..words.len() {
         if words[with_index] != "with" || with_index + 2 >= words.len() {
@@ -2299,6 +2366,54 @@ mod tests {
             you_facts.phrase_boundary_after,
             PhraseBoundaryKind::Vocative
         );
+    }
+
+    #[test]
+    fn imports_unstressed_dictionary_flags_into_word_environment_facts() {
+        let analysis = analyze("I want to go.");
+        let to = word_index(&analysis, "to");
+        let facts = analysis
+            .prosody_environment_facts_for_word(to)
+            .expect("to facts");
+        let unstressed = facts
+            .lexical_flags
+            .iter()
+            .find(|fact| fact.flag == crate::mouth::riper::LexicalProsodyFlag::Unstressed)
+            .expect("unstressed lexical flag");
+        assert_eq!(unstressed.source_rule_id, "weak_form_to_before_verb");
+        assert_eq!(unstressed.provenance.source, "espeak-ng-derived");
+    }
+
+    #[test]
+    fn imports_pause_break_flags_for_terminal_exclamation_word() {
+        let analysis = analyze("Go now!");
+        let now = word_index(&analysis, "now");
+        let facts = analysis
+            .prosody_environment_facts_for_word(now)
+            .expect("now facts");
+        assert_eq!(facts.phrase_boundary_after, PhraseBoundaryKind::Exclamation);
+        assert!(facts.lexical_flags.iter().any(|fact| {
+            fact.flag == crate::mouth::riper::LexicalProsodyFlag::BreakAfter
+                && fact.source_rule_id == "punctuation_exclamation_boundary"
+        }));
+        assert!(facts.lexical_flags.iter().any(|fact| {
+            fact.flag == crate::mouth::riper::LexicalProsodyFlag::PauseAfter
+                && fact.source_rule_id == "punctuation_exclamation_boundary"
+        }));
+    }
+
+    #[test]
+    fn distinguishes_all_caps_abbreviation_from_contrastive_emphasis() {
+        let analysis = analyze("US policy changed.");
+        let us = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "us")
+            .expect("US token");
+        assert_eq!(us.pos, PartOfSpeech::ProperName);
+        assert_eq!(us.prosodic_role, ProsodicRole::Content);
+        assert_eq!(us.reduction, ReductionClass::None);
+        assert!(us.reduction_diagnostic.is_none());
     }
 
     #[test]
