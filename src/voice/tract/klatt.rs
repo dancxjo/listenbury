@@ -146,6 +146,7 @@ struct ContinuousRenderState {
     noise_state: u32,
     tilt_state: f32,
     lowpass_state: f32,
+    level_gain: f32,
     resonators: Vec<FormantResonator>,
 }
 
@@ -156,6 +157,7 @@ impl ContinuousRenderState {
             noise_state: 0x51A7_EED5,
             tilt_state: 0.0,
             lowpass_state: 0.0,
+            level_gain: 1.0,
             resonators: Vec::new(),
         }
     }
@@ -373,6 +375,7 @@ fn render_phone_continuous(
     for sample in &mut filtered {
         *sample *= target.amplitude * makeup_gain;
     }
+    apply_continuous_level_target(&mut filtered, target, state);
     filtered
 }
 
@@ -411,6 +414,77 @@ fn continuous_makeup_gain(target: &PhoneRenderTarget, breathiness: f32) -> f32 {
 
 fn is_vowel_like_filter(filter: Option<&VocalTractFilterTarget>) -> bool {
     filter.is_some_and(|filter| filter.f1_amp_db >= -4.5 && filter.f2_amp_db >= -6.0)
+}
+
+fn apply_continuous_level_target(
+    samples: &mut [f32],
+    target: &PhoneRenderTarget,
+    state: &mut ContinuousRenderState,
+) {
+    if samples.is_empty() {
+        return;
+    }
+    let actual = rms_level(samples);
+    if actual <= 1e-7 {
+        return;
+    }
+    let desired = continuous_target_rms(target);
+    let next_gain = (desired / actual).clamp(0.04, 160.0);
+    let prev_gain = state.level_gain;
+    let len = samples.len().max(1) as f32;
+    for (idx, sample) in samples.iter_mut().enumerate() {
+        let alpha = smoothstep01((idx + 1) as f32 / len);
+        let gain = prev_gain + (next_gain - prev_gain) * alpha;
+        *sample *= gain;
+    }
+    state.level_gain = next_gain;
+}
+
+fn continuous_target_rms(target: &PhoneRenderTarget) -> f32 {
+    let amplitude = target.amplitude.clamp(0.0, 1.0);
+    if target.f0_hz.is_some() {
+        if let Some(filter) = target
+            .filter
+            .as_ref()
+            .filter(|filter| is_vowel_like_filter(Some(filter)))
+        {
+            vowel_region_target_rms(filter) * amplitude
+        } else if target.filter.is_some() {
+            0.058 * amplitude
+        } else {
+            0.030 * amplitude
+        }
+    } else if target.filter.is_some() {
+        0.045 * amplitude
+    } else {
+        0.025 * amplitude
+    }
+}
+
+fn vowel_region_target_rms(filter: &VocalTractFilterTarget) -> f32 {
+    if filter.f2_hz < 1_150.0 {
+        0.034
+    } else if filter.f1_hz >= 550.0 && filter.f2_hz >= 1_350.0 {
+        0.260
+    } else if filter.f1_hz >= 550.0 {
+        0.038
+    } else if (450.0..=540.0).contains(&filter.f1_hz) && (1_300.0..=1_700.0).contains(&filter.f2_hz)
+    {
+        0.040
+    } else if filter.f1_hz < 430.0 && filter.f2_hz >= 1_800.0 {
+        0.032
+    } else {
+        0.070
+    }
+}
+
+fn rms_level(samples: &[f32]) -> f32 {
+    (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+fn smoothstep01(alpha: f32) -> f32 {
+    let alpha = alpha.clamp(0.0, 1.0);
+    alpha * alpha * (3.0 - 2.0 * alpha)
 }
 
 fn next_glottal_sample(
@@ -746,6 +820,39 @@ mod tests {
         assert!(
             vowel_rms > consonant_rms * 0.6,
             "vowels should not be buried by consonant bursts; vowel_rms={vowel_rms}, consonant_rms={consonant_rms}"
+        );
+    }
+
+    #[test]
+    fn vowel_inventory_renders_with_balanced_loudness() {
+        let config = KlattRenderConfig::default();
+        let vowels = ["i", "ɪ", "e", "ɛ", "æ", "ə", "ʌ", "ɑ", "ɔ", "o", "ʊ", "u"];
+        let mut targets = targets_for_ipa_sequence(&vowels, Some(150.0));
+        for target in &mut targets {
+            target.duration_ms = 120;
+        }
+
+        let pcm = render_phone_string(&targets, &config);
+        let samples_per_phone = ((120.0 / 1000.0) * config.sample_rate as f32).round() as usize;
+        let window = ((50.0 / 1000.0) * config.sample_rate as f32).round() as usize;
+        let offset = ((35.0 / 1000.0) * config.sample_rate as f32).round() as usize;
+        let mut measured = Vec::new();
+        for (idx, vowel) in vowels.iter().enumerate() {
+            let start = idx * samples_per_phone + offset;
+            let energy = rms(&pcm[start..start + window]);
+            measured.push((*vowel, energy));
+        }
+        let min = measured
+            .iter()
+            .map(|(_, energy)| *energy)
+            .fold(f32::INFINITY, f32::min);
+        let max = measured
+            .iter()
+            .map(|(_, energy)| *energy)
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            min > max * 0.45,
+            "vowel RMS should stay balanced; min={min}, max={max}, measured={measured:?}"
         );
     }
 
