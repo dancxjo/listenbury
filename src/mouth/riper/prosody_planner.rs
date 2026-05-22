@@ -14,6 +14,9 @@ const PAUSE_MS_BREATH: u64 = 180;
 const PAUSE_MS_VOCATIVE_REDUCTION: u64 = 60;
 const BREATH_PAUSE_WORD_INTERVAL: usize = 9;
 const BREATH_PAUSE_MIN_WORDS_AFTER: usize = 4;
+const LOCAL_SCOPE_CANCELLABLE_TOLERANCE_CHARS: usize = 2;
+const LOCAL_PHRASE_DELIMITERS: &[char] = &[',', ';', ':'];
+const CLAUSE_DELIMITERS: &[char] = &[',', ';', ':', '.'];
 const CONTOUR_CONTINUING: (f32, f32, f32) = (0.82_f32, 0.10_f32, 1.0_f32);
 const CONTOUR_PHRASE_BREAK: (f32, f32, f32) = (0.74_f32, 0.58_f32, 0.95_f32);
 const CONTOUR_POSSIBLE_CLOSURE: (f32, f32, f32) = (0.34_f32, 0.76_f32, 0.90_f32);
@@ -663,8 +666,15 @@ impl BreathGroupProsodyPlanner {
         cue: RepairCue,
     ) -> RepairPlan {
         let replacement_prosody = self.plan_candidate(revised);
-        let divergence = stable_prefix_len(&previous.text, &revised.text);
-        let strategy = choose_repair_strategy(previous, revised, commit_state, divergence, cue);
+        let (strategy, divergence) = if previous.text == revised.text {
+            (RepairStrategy::ContinueWithProsodicRetarget, revised.text.len())
+        } else {
+            let divergence = stable_prefix_len(&previous.text, &revised.text);
+            (
+                choose_repair_strategy(previous, revised, commit_state, divergence, cue),
+                divergence,
+            )
+        };
         let anchor = select_repair_anchor(revised, commit_state, strategy.clone(), divergence);
         RepairPlan {
             strategy,
@@ -682,26 +692,24 @@ fn choose_repair_strategy(
     divergence: usize,
     cue: RepairCue,
 ) -> RepairStrategy {
-    if previous.text == revised.text {
+    let divergence_is_uncommitted = divergence >= commit_state.committed_until.char_offset;
+    if revised.text.starts_with(&previous.text) && divergence_is_uncommitted {
         return RepairStrategy::ContinueWithProsodicRetarget;
     }
 
-    if revised.text.starts_with(&previous.text)
-        && commit_state.committed_until.char_offset.saturating_add(1) >= divergence
-    {
-        return RepairStrategy::ContinueWithProsodicRetarget;
-    }
-
-    if divergence >= commit_state.committed_until.char_offset {
+    if divergence_is_uncommitted {
         return RepairStrategy::ReplaceUncommittedFuture;
     }
 
+    let cancellable_tolerance_boundary = commit_state
+        .cancellable_until
+        .char_offset
+        .saturating_sub(LOCAL_SCOPE_CANCELLABLE_TOLERANCE_CHARS);
     let local_scope_viable = commit_state
         .current_phrase_anchor
         .as_ref()
         .is_some_and(|anchor| {
-            divergence >= anchor.char_offset
-                || divergence >= commit_state.cancellable_until.char_offset.saturating_sub(2)
+            divergence >= anchor.char_offset || divergence >= cancellable_tolerance_boundary
         });
     if local_scope_viable {
         return RepairStrategy::PauseAndRestartFromAnchor {
@@ -786,7 +794,10 @@ fn cursor_from_char_offset(
             candidate
                 .lexical_stress
                 .iter()
-                .filter(|stress| stress.phoneme_index < target.phoneme_range.end)
+                .filter(|stress| {
+                    stress.phoneme_index >= target.phoneme_range.start
+                        && stress.phoneme_index < target.phoneme_range.end
+                })
                 .count(),
         )
     });
@@ -849,12 +860,12 @@ fn anchor_word_index_for_scope(
         RestartScope::LocalPhrase => Some(scan_back_to_delimiter(
             candidate,
             word_index,
-            &[',', ';', ':'],
+            LOCAL_PHRASE_DELIMITERS,
         )),
         RestartScope::Clause => Some(scan_back_to_delimiter(
             candidate,
             word_index,
-            &[',', ';', ':', '.'],
+            CLAUSE_DELIMITERS,
         )),
         RestartScope::BreathGroup => {
             Some(word_index.saturating_sub(word_index % BREATH_PAUSE_WORD_INTERVAL))
@@ -868,16 +879,12 @@ fn scan_back_to_delimiter(
     from_word: usize,
     delimiters: &[char],
 ) -> usize {
-    for index in (1..=from_word).rev() {
-        let previous = candidate
-            .word_targets
-            .iter()
-            .find(|target| target.word_index == index - 1);
-        let current = candidate
-            .word_targets
-            .iter()
-            .find(|target| target.word_index == index);
-        let Some((previous, current)) = previous.zip(current) else {
+    let max_index = from_word.min(candidate.word_targets.len().saturating_sub(1));
+    for index in (1..=max_index).rev() {
+        let Some(previous) = candidate.word_targets.get(index - 1) else {
+            continue;
+        };
+        let Some(current) = candidate.word_targets.get(index) else {
             continue;
         };
         let between = &candidate.text[previous.text_range.end..current.text_range.start];
@@ -893,7 +900,7 @@ fn has_clause_break_before_offset(candidate: &PhonemeProsodyCandidate, char_offs
         .text
         .chars()
         .take(char_offset.min(candidate.text.len()))
-        .any(|ch| matches!(ch, ',' | ';' | ':'))
+        .any(|ch| CLAUSE_DELIMITERS.contains(&ch))
 }
 
 fn boundary_state(candidate: &PhonemeProsodyCandidate) -> BoundaryState {
@@ -1904,10 +1911,15 @@ mod tests {
         );
 
         let plan = planner.plan_repair(&previous, &revised, &commit_state, RepairCue::IMean);
+        let kennedy_index = revised
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "kennedy")
+            .map(|target| target.word_index);
         assert_eq!(plan.strategy, RepairStrategy::ContinueWithProsodicRetarget);
         assert_eq!(
             plan.anchor.word_index,
-            Some(7),
+            kennedy_index,
             "anchor should start at Kennedy"
         );
     }
@@ -1935,6 +1947,11 @@ mod tests {
         );
 
         let plan = planner.plan_repair(&previous, &revised, &commit_state, RepairCue::IMean);
+        let john_index = revised
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "john")
+            .map(|target| target.word_index);
         assert_eq!(
             plan.strategy,
             RepairStrategy::PauseAndRestartFromAnchor {
@@ -1945,7 +1962,7 @@ mod tests {
         assert!(plan.anchor.char_offset <= divergence);
         assert_eq!(
             plan.anchor.word_index,
-            Some(6),
+            john_index,
             "local restart should anchor at John"
         );
     }
