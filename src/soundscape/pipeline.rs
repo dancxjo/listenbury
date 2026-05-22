@@ -2,12 +2,14 @@ use crate::audio::AudioFrame;
 use crate::hearing::VadResult;
 use crate::mouth::player::PlaybackEvent;
 use crate::soundscape::{
-    AcousticContribution, AcousticMixture, AcousticMixtureId, AttributionEvidence, EventId,
-    ExpectedSound, ObservedSound, SoundEvent, SoundEventKind, SoundSource, SoundscapeFrame,
+    AcousticContribution, AcousticMixture, AttributionEvidence, EventId, ExpectedSound, MixtureId,
+    ObservedSound, SoundEvent, SoundEventKind, SoundSource, SoundscapeFrame,
     SourceAttributedTranscript, SourceHypothesis, SourceId, SourceKind, SourceLabel, TimePoint,
     TimeRange, TranscriptHypothesis,
 };
 use crate::speech::transcript::TranscriptChunk;
+
+const DEFAULT_PLAYBACK_LABEL: &str = "Playback";
 
 /// Thin adapter between current pipeline events and soundscape inputs/outputs.
 ///
@@ -29,13 +31,20 @@ impl Default for SoundscapePipelineAdapter {
         Self {
             playback_source_id: SourceId::new(),
             microphone_source_id: SourceId::new(),
-            playback_label: "Pete".to_string(),
+            playback_label: DEFAULT_PLAYBACK_LABEL.to_string(),
             unknown_voice_ordinal: 1,
         }
     }
 }
 
 impl SoundscapePipelineAdapter {
+    pub fn with_playback_label(playback_label: impl Into<String>) -> Self {
+        Self {
+            playback_label: playback_label.into(),
+            ..Self::default()
+        }
+    }
+
     pub fn observed_from_audio_vad_asr(
         &self,
         frame: &AudioFrame,
@@ -148,7 +157,7 @@ impl SoundscapePipelineAdapter {
             .unwrap_or(observed.range);
         let mixtures = if contributions.len() > 1 {
             vec![AcousticMixture {
-                id: AcousticMixtureId::new().0,
+                id: MixtureId::new(),
                 event_ids: events.iter().map(|event| event.id).collect(),
                 contributions,
             }]
@@ -198,7 +207,8 @@ fn nanos_to_millis(unix_nanos: u128) -> u64 {
 }
 
 fn audio_frame_duration_millis(frame: &AudioFrame) -> u64 {
-    let per_channel_samples = frame.samples.len() / usize::from(frame.channels.max(1));
+    let channel_count = usize::from(frame.channels.max(1));
+    let per_channel_samples = frame.samples.len().div_ceil(channel_count);
     if frame.sample_rate_hz == 0 {
         0
     } else {

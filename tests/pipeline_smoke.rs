@@ -59,7 +59,7 @@ fn playback_check_orders_stubbed_asr_planner_tts_and_device_events() {
 }
 
 #[test]
-fn playback_check_can_emit_soundscape_frame_and_source_attributed_transcript() {
+fn soundscape_adapter_converts_playback_and_microphone_events() {
     let fake_clock = FakeClock::from_unix_nanos(3_000_000_000);
     let clock: Arc<dyn Clock> = Arc::new(fake_clock.clone());
     let events = run_playback_check(clock, |duration| {
