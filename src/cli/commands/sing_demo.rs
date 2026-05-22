@@ -499,9 +499,9 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
 
 fn render_kind_for_backend(backend: SingDemoBackendOption) -> SungBackendKind {
     match backend {
-        SingDemoBackendOption::Klatt
-        | SingDemoBackendOption::Riper
-        | SingDemoBackendOption::Mbrola => SungBackendKind::Klatt,
+        SingDemoBackendOption::Klatt => SungBackendKind::Klatt,
+        SingDemoBackendOption::Mbrola => SungBackendKind::Mbrola,
+        SingDemoBackendOption::Riper => SungBackendKind::Riper,
         SingDemoBackendOption::Piper => SungBackendKind::Piper,
     }
 }
@@ -665,6 +665,36 @@ mod tests {
         assert!(
             sample_count > 0,
             "riper sing-demo should emit non-empty audio"
+        );
+    }
+
+    #[test]
+    fn mbrola_backend_kind_is_distinct_and_phone_timed() {
+        assert_eq!(
+            render_kind_for_backend(SingDemoBackendOption::Mbrola),
+            SungBackendKind::Mbrola
+        );
+        assert_ne!(
+            render_kind_for_backend(SingDemoBackendOption::Mbrola),
+            render_kind_for_backend(SingDemoBackendOption::Klatt),
+            "MBROLA should no longer be identified as Klatt"
+        );
+
+        let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
+        let plan = articulate(&phrase);
+        let target_table = default_english_phone_targets();
+        let render_plan = render_plan_for_backend(
+            render_kind_for_backend(SingDemoBackendOption::Mbrola),
+            &plan,
+            0.7,
+            &target_table,
+        );
+        let RenderPlan::PhoneTimed(targets) = render_plan else {
+            panic!("MBROLA should receive a phone-timed render plan");
+        };
+        assert!(
+            !targets.is_empty(),
+            "MBROLA render plan should preserve shared phone timing targets"
         );
     }
 }
