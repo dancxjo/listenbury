@@ -57,6 +57,6 @@ pub use klatt::{KlattRenderConfig, render_phone, render_phone_string};
 pub use source::{GlottalSourceEstimate, NoiseEstimate, VoicingEstimate};
 pub use targets::{
     GlottalSourceTarget, PhoneAcousticTarget, PhoneRenderTarget, VocalTractFilterTarget,
-    default_english_phone_targets, phone_render_targets_from_string,
+    default_english_phone_targets, klatt_targets_from_features, phone_render_targets_from_string,
     render_targets_from_sung_syllable, render_targets_from_syllable,
 };

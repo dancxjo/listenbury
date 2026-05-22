@@ -560,12 +560,12 @@ printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt 
 #### Klatt refinement notes
 
 - Klatt stays on the shared `--riper --klatt` phone/prosody path and now renders from a smoothed parameter trajectory (rather than only per-phone static blobs).
-- Phone acoustic targets live in `src/voice/tract/targets.rs` (`default_english_phone_targets()`).
+- Phone acoustic targets are now derived from `FeatureBundle` (`klatt_targets_from_features`) and then optionally tuned per symbol via `default_english_phone_targets()` overrides in `src/voice/tract/targets.rs`.
 - Trajectory interpolation, range clamping, and coarticulation live in:
   - `src/voice/tract/klatt/params.rs`
   - `src/voice/tract/klatt/trajectory.rs`
   - `src/voice/tract/klatt/coarticulation.rs`
-- To tune/add a phone, update `default_english_phone_targets()` with source/filter defaults; trajectory and coarticulation passes will automatically consume the updated target.
+- To add a new phone, define/verify its features in the phonemic inventory; to tune one variety/symbol, override acoustics in `default_english_phone_targets()` without changing feature-to-Klatt logic.
 
 ### `mbrola-render`
 

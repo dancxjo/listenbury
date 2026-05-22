@@ -40,7 +40,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::linguistic::phonology::{Phone, PhoneDecompositionPolicy, PhonemicInventory};
+use crate::linguistic::phonology::{
+    Phone, PhoneDecompositionPolicy, PhonemicInventory, general_american_english,
+};
 use crate::linguistic::variety::EnglishVariety;
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
@@ -702,18 +704,28 @@ pub fn klatt_render_targets_from_phone_timed(
     neutral: &[PhoneTimedRenderTarget],
     acoustic_table: &HashMap<String, PhoneAcousticTarget>,
 ) -> Vec<PhoneRenderTarget> {
+    let inventory = general_american_english();
     neutral
         .iter()
         .map(|target| {
-            let table_entry = acoustic_table.get(target.phone.ipa.as_str());
+            let features = inventory.features_for_phone(&target.phone);
+            let mut acoustic = crate::voice::tract::targets::klatt_targets_from_features(
+                &target.phone,
+                &features,
+                &inventory,
+            );
+            if let Some(table_entry) = acoustic_table.get(target.phone.ipa.as_str()) {
+                acoustic.filter = table_entry.filter.clone();
+                acoustic.source = table_entry.source.clone();
+            }
             PhoneRenderTarget {
                 phone: target.phone.clone(),
                 duration_ms: target.duration_ms,
                 f0_hz: target.f0_hz,
                 amplitude: target.amplitude,
                 vibrato: target.vibrato,
-                source: table_entry.map(|t| t.source.clone()),
-                filter: table_entry.and_then(|t| t.filter.clone()),
+                source: Some(acoustic.source),
+                filter: acoustic.filter,
             }
         })
         .collect()
