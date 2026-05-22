@@ -6,6 +6,7 @@
 
 pub mod attribution;
 pub mod event;
+pub mod expected;
 pub mod frame;
 pub mod source;
 pub mod time;
@@ -20,6 +21,10 @@ pub use attribution::{
 };
 pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
+};
+pub use expected::{
+    ExpectedSound, ObservedSound, PlaybackMatchConfig, TranscriptHypothesis,
+    playback_match_evidence,
 };
 pub use frame::SoundscapeFrame;
 pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
