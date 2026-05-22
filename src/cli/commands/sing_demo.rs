@@ -45,7 +45,9 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
 
     let frames = match backend {
         SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(render_plan)?,
-        SingDemoBackendOption::Riper => synthesize_riper_from_plan(render_plan, &command)?,
+        SingDemoBackendOption::Riper => {
+            synthesize_riper_klatt_fallback_from_plan(render_plan, &command)?
+        }
         SingDemoBackendOption::Mbrola => synthesize_mbrola_from_plan(render_plan, &command)?,
         SingDemoBackendOption::Piper => synthesize_piper_from_plan(render_plan, &command)?,
     };
@@ -98,12 +100,12 @@ fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
     }])
 }
 
-fn synthesize_riper_from_plan(
+fn synthesize_riper_klatt_fallback_from_plan(
     plan: RenderPlan,
     _command: &SingDemoCommand,
 ) -> Result<Vec<AudioFrame>> {
     synthesize_klatt_from_plan(plan)
-        .context("Riper sing-demo Klatt vocoder failed to render the shared phone-timed plan")
+        .context("Riper Klatt fallback sing-demo path failed to render the shared phone-timed plan")
 }
 
 fn synthesize_mbrola_from_plan(
@@ -226,7 +228,7 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
             "TODO: thread per-syllable vibrato from the shared plan into backend F0 modulation.",
         ],
         SingDemoBackendOption::Riper => &[
-            "Riper sing-demo consumes the shared phone-timed plan before vocoder rendering.",
+            "Riper sing-demo currently routes through an explicit RiperKlattFallback sung path.",
             "Riper's current sung vocoder path is Klatt source/filter until the ONNX path grows direct F0 and duration controls.",
         ],
         SingDemoBackendOption::Mbrola => &[
@@ -501,7 +503,7 @@ fn render_kind_for_backend(backend: SingDemoBackendOption) -> SungBackendKind {
     match backend {
         SingDemoBackendOption::Klatt => SungBackendKind::Klatt,
         SingDemoBackendOption::Mbrola => SungBackendKind::Mbrola,
-        SingDemoBackendOption::Riper => SungBackendKind::Riper,
+        SingDemoBackendOption::Riper => SungBackendKind::RiperKlattFallback,
         SingDemoBackendOption::Piper => SungBackendKind::Piper,
     }
 }
@@ -607,8 +609,12 @@ mod tests {
 
         let riper = backend_degradation_notes(SingDemoBackendOption::Riper).join(" ");
         assert!(
-            riper.contains("shared phone-timed plan"),
-            "riper should advertise that it uses the shared sung plan"
+            riper.contains("RiperKlattFallback"),
+            "riper should advertise that it currently routes through the explicit fallback path"
+        );
+        assert!(
+            riper.contains("Klatt source/filter"),
+            "riper should advertise that its sung path is currently Klatt-backed"
         );
 
         let piper = backend_degradation_notes(SingDemoBackendOption::Piper).join(" ");
@@ -640,13 +646,21 @@ mod tests {
         let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
         let plan = articulate(&phrase);
         let target_table = default_english_phone_targets();
+        assert_eq!(
+            render_kind_for_backend(SingDemoBackendOption::Riper),
+            SungBackendKind::RiperKlattFallback
+        );
+        assert_eq!(
+            backend_detail_expectation(SungBackendKind::RiperKlattFallback),
+            listenbury::voice::articulator::SungBackendDetail::PhoneTimedViaKlattFallback
+        );
         let render_plan = render_plan_for_backend(
             render_kind_for_backend(SingDemoBackendOption::Riper),
             &plan,
             0.7,
             &target_table,
         );
-        let frames = synthesize_riper_from_plan(
+        let frames = synthesize_riper_klatt_fallback_from_plan(
             render_plan,
             &SingDemoCommand {
                 backend: None,
@@ -659,7 +673,7 @@ mod tests {
                 piper_voice: None,
             },
         )
-        .expect("riper sing-demo should synthesize through the shared phone-timed plan");
+        .expect("riper sing-demo should synthesize through the Klatt-backed phone-timed fallback");
         let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
         assert!(!frames.is_empty(), "riper sing-demo should emit frames");
         assert!(
