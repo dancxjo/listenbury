@@ -127,15 +127,6 @@ impl DiphoneProvider for NeuralDiphoneProvider {
 }
 
 #[cfg(feature = "tts-riper")]
-impl NeuralDiphoneProvider {
-    fn with_context<F: FnOnce() -> String>(self, _f: F) -> Self {
-        self
-    }
-}
-
-// Provide a blanket helper so callers can use `?` ergonomics inside the impl.
-// (The real anyhow::Context comes from the use statement below.)
-#[cfg(feature = "tts-riper")]
 use anyhow::Context as _;
 
 // ── FallbackDiphoneProvider ───────────────────────────────────────────────────

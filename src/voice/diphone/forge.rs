@@ -241,7 +241,6 @@ fn segment_diphone(
 
     // Estimate the join midpoint as the energy minimum within the window.
     let midpoint_in_window = energy_min_index(window, 8);
-    let _halfseg = window_start + midpoint_in_window;
 
     // Confidence: ratio of the energy drop at the midpoint vs average energy.
     let confidence = energy_confidence(window, midpoint_in_window, 8);

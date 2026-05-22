@@ -154,17 +154,25 @@ fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
     let mut forged_count = 0usize;
     let mut skip_count = 0usize;
     let mut error_count = 0usize;
+    let mut pair_index = 0usize;
 
-    // Build all diphones: each phone with each other phone (N² pairs) plus silence boundaries
+    // Build all diphones: each phone with each other phone (N²) plus silence boundaries.
     let mut all_phones: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
     if !all_phones.contains(&"_".to_string()) {
         all_phones.push("_".to_string());
     }
 
+    let total_pairs = all_phones.len() * all_phones.len() - 1; // approximate (minus "_"-"_")
+
     for left in &all_phones {
         for right in &all_phones {
             if left == "_" && right == "_" {
                 continue;
+            }
+
+            pair_index += 1;
+            if pair_index % 50 == 0 || pair_index == 1 {
+                println!("[{pair_index}/{total_pairs}] forging diphones…");
             }
 
             let key = CacheKey {
