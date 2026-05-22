@@ -78,6 +78,7 @@ enum DevCommand {
     Continue(ContinueCommand),
     TraceViewerExport(TraceViewerExportCommand),
     ProsodyPlan(ProsodyPlanCommand),
+    SingDemo(SingDemoCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
     DogfoodTwo(DogfoodTwoCommand),
@@ -252,6 +253,18 @@ pub(crate) struct ProsodyPlanCommand {
     /// Optional SSML file with mark and break tags derived from the plan.
     #[arg(long)]
     pub(crate) ssml_output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SingDemoCommand {
+    #[arg(long, value_enum, default_value_t = SingDemoBackendOption::Klatt)]
+    pub(crate) backend: SingDemoBackendOption,
+    #[arg(long)]
+    pub(crate) output_wav: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long, alias = "model-path")]
+    pub(crate) piper_voice: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -516,6 +529,14 @@ pub(crate) enum ModelsUseKind {
     Whisper,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum SingDemoBackendOption {
+    #[default]
+    Klatt,
+    Riper,
+    Piper,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum SpeechCacheCommand {
     Prewarm(SpeechCachePrewarmCommand),
@@ -592,6 +613,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
         }
         DevCommand::TraceViewerExport(cmd) => commands::run_trace_viewer_export(cmd),
         DevCommand::ProsodyPlan(cmd) => commands::run_prosody_plan(cmd),
+        DevCommand::SingDemo(cmd) => commands::run_sing_demo(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         DevCommand::LiveHalfDuplex(cmd) => {
             run_live_session(LiveSessionConfig::from_listen_command(cmd))
@@ -1447,6 +1469,50 @@ mod tests {
         assert_eq!(command.praat_json, PathBuf::from("out/praat.json"));
         assert_eq!(command.output_json, PathBuf::from("out/prosody-plan.json"));
         assert_eq!(command.ssml_output, Some(PathBuf::from("out/prosody.ssml")));
+    }
+
+    #[test]
+    fn dev_sing_demo_parses_backend_and_output() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "sing-demo",
+            "--backend",
+            "riper",
+            "--output-wav",
+            "out/hello-ragtime-riper.wav",
+            "--piper-voice",
+            "voices/demo.onnx",
+        ])
+        .expect("sing-demo should parse backend and optional output path");
+
+        let Some(Command::Dev {
+            command: DevCommand::SingDemo(command),
+        }) = cli.command
+        else {
+            panic!("expected sing-demo command");
+        };
+        assert_eq!(command.backend, SingDemoBackendOption::Riper);
+        assert_eq!(
+            command.output_wav,
+            Some(PathBuf::from("out/hello-ragtime-riper.wav"))
+        );
+        assert_eq!(command.piper_voice, Some(PathBuf::from("voices/demo.onnx")));
+    }
+
+    #[test]
+    fn dev_sing_demo_defaults_to_klatt_backend() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo"])
+            .expect("sing-demo should parse defaults");
+
+        let Some(Command::Dev {
+            command: DevCommand::SingDemo(command),
+        }) = cli.command
+        else {
+            panic!("expected sing-demo command");
+        };
+        assert_eq!(command.backend, SingDemoBackendOption::Klatt);
+        assert!(command.output_wav.is_none());
     }
 
     #[test]
