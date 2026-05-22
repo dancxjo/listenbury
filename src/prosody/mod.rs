@@ -8,6 +8,7 @@
 //! specifies a sung note: pitch (MIDI + microtonal offset), onset time,
 //! duration, velocity, and articulation.
 
+pub mod midi;
 pub mod note_target;
 pub mod phonotactics;
 pub mod pitch_curve;
