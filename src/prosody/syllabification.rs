@@ -109,8 +109,13 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         let cluster_range = prev_end..nuc_pos;
         let cluster: Vec<&Phone> = phones[cluster_range.clone()].iter().collect();
 
-        let (onset_phones, coda_phones, mut diagnostics) =
-            split_mop(&cluster, profile, &phones[cluster_range.start..nuc_pos]);
+        let (onset_phones, coda_phones, mut diagnostics) = if syl_idx == 0 {
+            let diagnostics = initial_onset_diagnostics(&cluster, profile);
+            let onset_phones = phones[cluster_range.clone()].to_vec();
+            (onset_phones, vec![], diagnostics)
+        } else {
+            split_mop(&cluster, profile, &phones[cluster_range.start..nuc_pos])
+        };
 
         // Coda from previous syllable = coda_phones (everything that MOP
         // couldn't assign to the current onset).
@@ -122,8 +127,9 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
                 phones: coda_phones.clone(),
             };
         }
-        // The initial coda (before the first nucleus) is dropped — it becomes
-        // a leading onset for the very first syllable.
+        // Leading consonants before the first nucleus are always onset
+        // material. MOP is only used between nuclei, where a coda can be
+        // assigned to a preceding syllable.
 
         // Source span for this syllable: onset_start..nuc_end.
         let onset_start = nuc_pos - onset_phones.len();
@@ -285,6 +291,22 @@ fn split_mop<P: PhonotacticProfile>(
     (vec![], coda, diagnostics)
 }
 
+fn initial_onset_diagnostics<P: PhonotacticProfile>(
+    cluster: &[&Phone],
+    profile: &P,
+) -> Vec<SyllableDiagnostic> {
+    if cluster.is_empty() {
+        return vec![];
+    }
+
+    let verdict = profile.onset_verdict(cluster);
+    if verdict.is_legal {
+        vec![]
+    } else {
+        vec![verdict.as_diagnostic()]
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -374,6 +396,22 @@ mod tests {
         let s = syllabify(&seq(&["AE1"]), &ga());
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].nucleus.to_ipa(), "æ");
+    }
+
+    #[test]
+    fn illegal_initial_onset_cluster_is_preserved_as_onset() {
+        let s = syllabify(&seq(&["T", "L", "AE1"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.to_ipa(), "tl");
+        assert_eq!(s[0].coda.to_ipa(), "");
+        assert_eq!(syllables_to_ipa(&s), "ˈtlæ");
+        assert_eq!(s[0].source_span, SourceSpan { start: 0, end: 3 });
+        assert!(
+            s[0].diagnostics
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::RejectedOnset)
+        );
     }
 
     #[test]
