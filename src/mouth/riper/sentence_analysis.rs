@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mouth::riper::espeak_ng_rules::{
-    LexicalProsodyFlagFact, english_lexical_flag_facts_for_rule, english_to_rule_descriptor,
+    LexicalProsodyFlag, LexicalProsodyFlagFact, english_lexical_flag_facts_for_rule,
+    english_to_rule_descriptor,
 };
 use crate::mouth::riper::evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
@@ -33,6 +34,9 @@ const COMMA_BEHAVIOR_CLAIM_CONFIDENCE: f32 = 0.84;
 const ARTICLE_HOOK_CLAIM_CONFIDENCE: f32 = 0.85;
 const AMBIGUOUS_NOUN_ATTACHMENT_CONFIDENCE: f32 = 0.46;
 const AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE: f32 = 0.44;
+const LOW_CONFIDENCE_PARSE_RANK_DELTA: f32 = 0.1;
+const LOW_CONFIDENCE_PARSE_RANK_MIN: f32 = 0.7;
+const TO_RULE_CONTEXT_CONFIDENCE_MIN: f32 = 0.65;
 
 const COMMON_LINK_ADJECTIVES: &[&str] = &[
     "small", "big", "good", "bad", "bright", "dark", "quick", "slow", "new", "old", "young",
@@ -148,6 +152,15 @@ pub struct ProsodyEnvironmentFacts {
     pub lexical_flags: Vec<LexicalProsodyFlagFact>,
     pub confidence: f32,
     pub conservative: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WordSyntaxFacts {
+    pub word_index: usize,
+    pub pos: PartOfSpeech,
+    pub syntactic_links: Vec<SyntacticLinkKind>,
+    pub prosodic_role: ProsodicRole,
+    pub confidence: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -300,6 +313,9 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
             .enumerate()
             .map(|(word_index, (token_index, _))| (*token_index, word_index))
             .collect::<std::collections::HashMap<_, _>>();
+        let link_parses = build_link_parses(source_text, normalized, &word_slots, &source_words);
+        let conservative_ambiguity = has_low_confidence_ambiguity(&link_parses);
+        let syntax_facts_by_word = derive_word_syntax_facts(&word_slots, &link_parses);
 
         let tokens = normalized
             .tokens
@@ -397,8 +413,16 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                     .get(word_index + 1)
                     .map(|(_, text)| text.as_str());
 
-                let (pos, syntactic_role, prosodic_role, reduction, diagnostic) =
-                    classify_to_token(raw_token, word_index, prev_prev, prev, next);
+                let (pos, syntactic_role, prosodic_role, reduction, diagnostic) = classify_to_token(
+                    raw_token,
+                    word_index,
+                    prev_prev,
+                    prev,
+                    next,
+                    syntax_facts_by_word.get(word_index),
+                    syntax_facts_by_word.get(word_index + 1),
+                    conservative_ambiguity,
+                );
 
                 TokenAnalysis {
                     token_index,
@@ -412,7 +436,6 @@ impl SentenceAnalyzer for HeuristicSentenceAnalyzer {
                 }
             })
             .collect();
-        let link_parses = build_link_parses(source_text, normalized, &word_slots, &source_words);
 
         SentenceAnalysis {
             tokens,
@@ -536,13 +559,132 @@ impl SentenceAnalysis {
             .find(|facts| facts.word_index == word_index)
     }
 
+    pub fn word_syntax_facts(&self) -> Vec<WordSyntaxFacts> {
+        self.prosody_environment_facts()
+            .into_iter()
+            .map(|facts| WordSyntaxFacts {
+                word_index: facts.word_index,
+                pos: facts.pos,
+                syntactic_links: facts.syntactic_links,
+                prosodic_role: facts.prosodic_role,
+                confidence: facts.confidence,
+            })
+            .collect()
+    }
+
     fn has_low_confidence_ambiguity(&self) -> bool {
-        if self.link_parses.len() < 2 {
-            return false;
+        has_low_confidence_ambiguity(&self.link_parses)
+    }
+}
+
+fn has_low_confidence_ambiguity(link_parses: &[SyntacticLinkParse]) -> bool {
+    if link_parses.len() < 2 {
+        return false;
+    }
+    let best = link_parses[0].rank;
+    let second = link_parses[1].rank;
+    (best - second).abs() <= LOW_CONFIDENCE_PARSE_RANK_DELTA
+        || best < LOW_CONFIDENCE_PARSE_RANK_MIN
+}
+
+fn derive_word_syntax_facts(
+    word_slots: &[(usize, String)],
+    link_parses: &[SyntacticLinkParse],
+) -> Vec<WordSyntaxFacts> {
+    let Some(primary_parse) = link_parses.first() else {
+        return word_slots
+            .iter()
+            .enumerate()
+            .map(|(word_index, (_, word))| WordSyntaxFacts {
+                word_index,
+                pos: base_pos(word),
+                syntactic_links: Vec::new(),
+                prosodic_role: if is_function_word(word) {
+                    ProsodicRole::FunctionWeak
+                } else {
+                    ProsodicRole::Content
+                },
+                confidence: 0.0,
+            })
+            .collect();
+    };
+
+    let parse_rank_confidence = primary_parse.rank.clamp(0.0, 1.0);
+    word_slots
+        .iter()
+        .enumerate()
+        .map(|(word_index, (_, word))| {
+            let mut syntactic_links = primary_parse
+                .links
+                .iter()
+                .filter_map(|link| {
+                    (link.left == word_index || link.right == word_index).then_some(link.kind)
+                })
+                .collect::<Vec<_>>();
+            syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+            syntactic_links.dedup();
+
+            let claim_confidence = primary_parse
+                .claims
+                .iter()
+                .filter(|claim| targets_word(claim, word_index))
+                .map(|claim| claim.confidence)
+                .fold(0.0_f32, f32::max);
+            let link_confidence = primary_parse
+                .links
+                .iter()
+                .filter(|link| link.left == word_index || link.right == word_index)
+                .map(|link| link.confidence)
+                .fold(0.0_f32, f32::max);
+            let confidence = parse_rank_confidence.max(claim_confidence.max(link_confidence));
+
+            let base = base_pos(word);
+            let pos = disambiguate_pos_from_links(word_index, base, &primary_parse.links);
+            let prosodic_role =
+                claim_prosodic_role(primary_parse, word_index).unwrap_or_else(|| {
+                    if is_function_word(word) {
+                        ProsodicRole::FunctionWeak
+                    } else {
+                        ProsodicRole::Content
+                    }
+                });
+
+            WordSyntaxFacts {
+                word_index,
+                pos,
+                syntactic_links,
+                prosodic_role,
+                confidence,
+            }
+        })
+        .collect()
+}
+
+fn disambiguate_pos_from_links(
+    word_index: usize,
+    base: PartOfSpeech,
+    links: &[SyntacticLink],
+) -> PartOfSpeech {
+    let has_incoming = |kind: SyntacticLinkKind| {
+        links
+            .iter()
+            .any(|link| link.right == word_index && link.kind == kind)
+    };
+    let has_touching = |kind: SyntacticLinkKind| {
+        links
+            .iter()
+            .any(|link| (link.left == word_index || link.right == word_index) && link.kind == kind)
+    };
+
+    match base {
+        PartOfSpeech::Noun if has_incoming(SyntacticLinkKind::InfinitivalMarker) => {
+            PartOfSpeech::Verb
         }
-        let best = self.link_parses[0].rank;
-        let second = self.link_parses[1].rank;
-        (best - second).abs() <= 0.1 || best < 0.7
+        PartOfSpeech::Noun if has_incoming(SyntacticLinkKind::Auxiliary) => PartOfSpeech::Verb,
+        PartOfSpeech::Verb if has_incoming(SyntacticLinkKind::Determiner) => PartOfSpeech::Noun,
+        PartOfSpeech::Verb if has_incoming(SyntacticLinkKind::Preposition) => PartOfSpeech::Noun,
+        _ if has_touching(SyntacticLinkKind::InfinitivalMarker) => PartOfSpeech::Particle,
+        _ => base,
     }
 }
 
@@ -1782,6 +1924,9 @@ fn classify_to_token(
     prev_prev: Option<&str>,
     prev: Option<&str>,
     next: Option<&str>,
+    current_syntax: Option<&WordSyntaxFacts>,
+    next_syntax: Option<&WordSyntaxFacts>,
+    conservative_ambiguity: bool,
 ) -> (
     PartOfSpeech,
     Option<SyntacticRole>,
@@ -1906,7 +2051,12 @@ fn classify_to_token(
         );
     }
 
-    if next.is_some_and(is_likely_verb) {
+    if rule_matches_word_syntax_context(
+        "weak_form_to_before_verb",
+        current_syntax,
+        next_syntax,
+        conservative_ambiguity,
+    ) {
         return (
             PartOfSpeech::Particle,
             Some(SyntacticRole::InfinitivalMarker),
@@ -1921,8 +2071,34 @@ fn classify_to_token(
         );
     }
 
+    if conservative_ambiguity || should_keep_to_provisional(next_syntax) {
+        return (
+            PartOfSpeech::Particle,
+            Some(SyntacticRole::InfinitivalMarker),
+            ProsodicRole::FunctionWeak,
+            ReductionClass::WeakFunctionWord,
+            diagnostic(
+                &phrase_final,
+                &phrase_final.output_transformation,
+                "low_confidence_context_pending",
+                ReductionStatus::Provisional,
+            ),
+        );
+    }
+
+    let prepositional_role = if rule_matches_word_syntax_context(
+        "strong_to_prepositional",
+        current_syntax,
+        next_syntax,
+        conservative_ambiguity,
+    ) {
+        PartOfSpeech::Preposition
+    } else {
+        PartOfSpeech::Particle
+    };
+
     (
-        PartOfSpeech::Preposition,
+        prepositional_role,
         Some(SyntacticRole::PrepositionalObjectLink),
         ProsodicRole::FunctionStrong,
         ReductionClass::None,
@@ -1933,6 +2109,70 @@ fn classify_to_token(
             ReductionStatus::Blocked,
         ),
     )
+}
+
+fn has_imported_lexical_flag(rule_id: &str, flag: LexicalProsodyFlag) -> bool {
+    english_lexical_flag_facts_for_rule(rule_id)
+        .iter()
+        .any(|fact| fact.flag == flag)
+}
+
+fn should_keep_to_provisional(next_syntax: Option<&WordSyntaxFacts>) -> bool {
+    let Some(next) = next_syntax else {
+        return false;
+    };
+    next.confidence < TO_RULE_CONTEXT_CONFIDENCE_MIN && !is_nominal_pos(next.pos)
+}
+
+fn is_nominal_pos(pos: PartOfSpeech) -> bool {
+    matches!(
+        pos,
+        PartOfSpeech::Noun | PartOfSpeech::Pronoun | PartOfSpeech::ProperName
+    )
+}
+
+fn has_link(facts: Option<&WordSyntaxFacts>, kind: SyntacticLinkKind) -> bool {
+    facts.is_some_and(|facts| facts.syntactic_links.iter().any(|link| *link == kind))
+}
+
+fn rule_matches_word_syntax_context(
+    rule_id: &str,
+    current_syntax: Option<&WordSyntaxFacts>,
+    next_syntax: Option<&WordSyntaxFacts>,
+    conservative_ambiguity: bool,
+) -> bool {
+    if conservative_ambiguity {
+        return false;
+    }
+
+    let verb_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyVerbContext);
+    let noun_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyNounContext);
+    let past_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyPastContext);
+    let next_is_verb = next_syntax.is_some_and(|facts| facts.pos == PartOfSpeech::Verb);
+    let linked_infinitive = has_link(current_syntax, SyntacticLinkKind::InfinitivalMarker);
+    let linked_aux_chain = has_link(next_syntax, SyntacticLinkKind::Auxiliary);
+    if !context_requirement(verb_context, next_is_verb || linked_infinitive || linked_aux_chain) {
+        return false;
+    }
+
+    let next_is_nominal = next_syntax.is_some_and(|facts| is_nominal_pos(facts.pos));
+    let linked_preposition = has_link(current_syntax, SyntacticLinkKind::Preposition);
+    if !context_requirement(noun_context, next_is_nominal || linked_preposition) {
+        return false;
+    }
+
+    let next_is_likely_past_or_participle = next_syntax.is_some_and(|facts| {
+        facts.pos == PartOfSpeech::Verb
+            && facts
+                .syntactic_links
+                .iter()
+                .any(|kind| *kind == SyntacticLinkKind::Auxiliary)
+    });
+    context_requirement(past_context, next_is_likely_past_or_participle)
+}
+
+fn context_requirement(enabled: bool, satisfied: bool) -> bool {
+    !enabled || satisfied
 }
 
 struct ToRuleDescriptorFallback {
@@ -2597,6 +2837,43 @@ mod tests {
     }
 
     #[test]
+    fn adapter_exposes_word_syntax_facts_for_rule_matching() {
+        let infinitival = analyze("I want to go.");
+        let infinitival_facts = infinitival.word_syntax_facts();
+        let to = word_index(&infinitival, "to");
+        let go = word_index(&infinitival, "go");
+        assert!(rule_matches_word_syntax_context(
+            "weak_form_to_before_verb",
+            infinitival_facts.get(to),
+            infinitival_facts.get(go),
+            false,
+        ));
+        assert!(!rule_matches_word_syntax_context(
+            "strong_to_prepositional",
+            infinitival_facts.get(to),
+            infinitival_facts.get(go),
+            false,
+        ));
+
+        let prepositional = analyze("This is addressed to you.");
+        let prepositional_facts = prepositional.word_syntax_facts();
+        let to = word_index(&prepositional, "to");
+        let you = word_index(&prepositional, "you");
+        assert!(rule_matches_word_syntax_context(
+            "strong_to_prepositional",
+            prepositional_facts.get(to),
+            prepositional_facts.get(you),
+            false,
+        ));
+        assert!(!rule_matches_word_syntax_context(
+            "strong_to_prepositional",
+            prepositional_facts.get(to),
+            prepositional_facts.get(you),
+            true,
+        ));
+    }
+
+    #[test]
     fn imports_pause_break_flags_for_terminal_exclamation_word() {
         let analysis = analyze("Go now!");
         let now = word_index(&analysis, "now");
@@ -2638,6 +2915,22 @@ mod tests {
         assert!(facts.conservative);
         assert_eq!(facts.phrase_boundary_after, PhraseBoundaryKind::None);
         assert_eq!(facts.prosodic_role, ProsodicRole::Content);
+    }
+
+    #[test]
+    fn low_confidence_ambiguity_keeps_to_provisional() {
+        let analysis = analyze("I saw the man with the telescope to go.");
+        let to = analysis
+            .tokens
+            .iter()
+            .find(|token| token.text == "to")
+            .expect("to token");
+        let diagnostic = to
+            .reduction_diagnostic
+            .as_ref()
+            .expect("reduction diagnostic");
+        assert_eq!(diagnostic.status, ReductionStatus::Provisional);
+        assert_eq!(diagnostic.reason, "low_confidence_context_pending");
     }
 
     #[test]

@@ -359,6 +359,66 @@
                     }
                   }
                 ],
+                "multi_word_rules": [
+                  {
+                    "rule_id": "phrase_kind_of_reduction",
+                    "words": [
+                      "kind",
+                      "of"
+                    ],
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": true
+                    },
+                    "output_transformation": "phones:K AY1 N D AH0 V",
+                    "confidence": 82,
+                    "priority": 135,
+                    "required_links": [],
+                    "dictionary_flags": [
+                      "unstressed"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_list",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  },
+                  {
+                    "rule_id": "phrase_to_go_no_break",
+                    "words": [
+                      "to",
+                      "go"
+                    ],
+                    "context": {
+                      "previous_words": [],
+                      "next_words": [],
+                      "next_pos": [
+                        "verb"
+                      ],
+                      "disallow_all_caps": true,
+                      "allow_phrase_final": false
+                    },
+                    "output_transformation": "no_break",
+                    "confidence": 91,
+                    "priority": 170,
+                    "required_links": [
+                      "InfinitivalMarker"
+                    ],
+                    "dictionary_flags": [
+                      "likely_verb_context"
+                    ],
+                    "provenance": {
+                      "source": "espeak-ng-derived",
+                      "source_file": "dictsource/en_rules",
+                      "source_license": "GPL-3.0-or-later",
+                      "imported_at": "2026-05-21T00:23:41Z"
+                    }
+                  }
+                ],
                 "voice_variant_rules": [
                   {
                     "rule_id": "voice_variant_default_en_us",
