@@ -13,6 +13,7 @@ pub mod isolation;
 pub mod signature;
 pub mod source;
 pub mod time;
+pub mod voice_count;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -39,6 +40,9 @@ pub use signature::{
 };
 pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
 pub use time::{TimePoint, TimeRange};
+pub use voice_count::{
+    RollingVoiceCountEstimator, VoiceActivityFrame, VoiceCount, VoiceCountConfig,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SoundscapeId(pub Uuid);
