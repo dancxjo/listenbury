@@ -549,6 +549,8 @@ listenbury transcribe input.wav
 
 Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, and `--mbrola` loads a real MBROLA voice database for the native Rust MBROLA diphone path.
 
+Here, "MBROLA" means compatibility with MBROLA file/data conventions (`.pho` + voice databases), not copied upstream MBROLA implementation code. See `docs/legal/mbrola-psola-audit.md` for the patent/license/compliance boundary.
+
 ```bash
 listenbury say "Testing one two three."
 listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
@@ -570,6 +572,8 @@ printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt 
 ### `mbrola-render`
 
 Renders a low-level MBROLA `.pho` phone plan through Listenbury's native MBROLA diphone renderer. Run `just fetch` to download the default `us3` and `en1` voice databases into `data/mbrola`.
+
+Voice databases and generated diphone caches are local artifacts by default; do not redistribute or vendor them without confirming license/provenance rights. See `docs/legal/mbrola-psola-audit.md`.
 
 ```bash
 listenbury mbrola-render --voice data/mbrola/us3/us3 --phones examples/mbrola/hello-us3.pho --out out/hello-mbrola.wav
