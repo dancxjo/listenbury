@@ -46,6 +46,7 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let frames = match backend {
         SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(render_plan)?,
         SingDemoBackendOption::Riper => synthesize_riper_from_plan(render_plan, &command)?,
+        SingDemoBackendOption::Mbrola => synthesize_mbrola_from_plan(render_plan, &command)?,
         SingDemoBackendOption::Piper => synthesize_piper_from_plan(render_plan, &command)?,
     };
 
@@ -103,6 +104,58 @@ fn synthesize_riper_from_plan(
 ) -> Result<Vec<AudioFrame>> {
     synthesize_klatt_from_plan(plan)
         .context("Riper sing-demo Klatt vocoder failed to render the shared phone-timed plan")
+}
+
+fn synthesize_mbrola_from_plan(
+    plan: RenderPlan,
+    command: &SingDemoCommand,
+) -> Result<Vec<AudioFrame>> {
+    let voice_path = resolve_sing_mbrola_voice(command.mbrola_voice.clone())?;
+    let renderer = listenbury::MbrolaRenderer::from_voice_path(None, &voice_path)
+        .with_context(|| format!("failed to load MBROLA voice {}", voice_path.display()))?;
+    let RenderPlan::PhoneTimed(targets) = plan else {
+        anyhow::bail!("MBROLA sing-demo requires a phone-timed render plan");
+    };
+    let mut phones = Vec::with_capacity(targets.len());
+    for target in &targets {
+        let symbol = renderer
+            .voice()
+            .symbol_map
+            .map_phone(&target.phone.ipa)
+            .with_context(|| {
+                format!(
+                    "failed to map sung phone `{}` to MBROLA voice `{}`",
+                    target.phone.ipa,
+                    renderer.voice().name
+                )
+            })?;
+        let duration_ms = target.duration_ms.clamp(1, u64::from(u32::MAX)) as u32;
+        let pitch_targets = target
+            .f0_hz
+            .map(|hz| {
+                vec![
+                    listenbury::MbrolaPitchTarget { percent: 0, hz },
+                    listenbury::MbrolaPitchTarget {
+                        percent: 50,
+                        hz: hz * 1.02,
+                    },
+                    listenbury::MbrolaPitchTarget {
+                        percent: 100,
+                        hz: hz * 0.99,
+                    },
+                ]
+            })
+            .unwrap_or_default();
+        phones.push(listenbury::MbrolaPhone {
+            symbol,
+            duration_ms,
+            pitch_targets,
+        });
+    }
+    let phone_plan = listenbury::PhoneTimedPlan::new(phones);
+    renderer.render_phone_plan_to_frames(&phone_plan).context(
+        "native MBROLA probe renderer failed while using the shared Riper phone-timed plan",
+    )
 }
 
 fn synthesize_piper_from_plan(
@@ -175,6 +228,10 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
         SingDemoBackendOption::Riper => &[
             "Riper sing-demo consumes the shared phone-timed plan before vocoder rendering.",
             "Riper's current sung vocoder path is Klatt source/filter until the ONNX path grows direct F0 and duration controls.",
+        ],
+        SingDemoBackendOption::Mbrola => &[
+            "MBROLA loads a real voice database and validates the shared phone-timed plan against its symbol map.",
+            "Native MBROLA waveform decoding is in progress; this probe path renders the MBROLA phone plan without calling Klatt or the mbrola binary.",
         ],
         SingDemoBackendOption::Piper => &[
             "Piper currently consumes only coarse shared-plan text hints.",
@@ -458,7 +515,9 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
 
 fn render_kind_for_backend(backend: SingDemoBackendOption) -> SungBackendKind {
     match backend {
-        SingDemoBackendOption::Klatt | SingDemoBackendOption::Riper => SungBackendKind::Klatt,
+        SingDemoBackendOption::Klatt
+        | SingDemoBackendOption::Riper
+        | SingDemoBackendOption::Mbrola => SungBackendKind::Klatt,
         SingDemoBackendOption::Piper => SungBackendKind::Piper,
     }
 }
@@ -468,9 +527,23 @@ impl SingDemoBackendOption {
         match self {
             Self::Klatt => "klatt",
             Self::Riper => "riper",
+            Self::Mbrola => "mbrola",
             Self::Piper => "piper",
         }
     }
+}
+
+fn resolve_sing_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    explicit
+        .or_else(|| std::env::var_os("LISTENBURY_MBROLA_VOICE").map(PathBuf::from))
+        .or_else(|| std::env::var_os("MBROLA_VOICE").map(PathBuf::from))
+        .or_else(|| {
+            let fetched = PathBuf::from("data/mbrola/us3/us3");
+            fetched.is_file().then_some(fetched)
+        })
+        .with_context(|| {
+            "failed to find MBROLA voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --mbrola-voice"
+        })
 }
 
 #[cfg(test)]
@@ -595,6 +668,8 @@ mod tests {
                 backend: None,
                 riper: true,
                 klatt: false,
+                mbrola: false,
+                mbrola_voice: None,
                 output_wav: None,
                 piper_bin: None,
                 piper_voice: None,

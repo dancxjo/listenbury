@@ -16,6 +16,7 @@
 
 pub mod articulator;
 pub mod coarticulation;
+pub mod mbrola;
 pub mod tract;
 pub mod vocal_plausibility;
 
@@ -30,6 +31,11 @@ pub use articulator::{
 pub use coarticulation::{
     BoundaryKind, CoarticulatedPlan, PhoneGesture, PhoneRole, RefinedGesture, VocalGesturePlan,
     coarticulate,
+};
+pub use mbrola::{
+    MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, MbrolaRendererConfig, MbrolaSymbolMap,
+    MbrolaVoice, PhoneTimedPlan, PhoneTimedRenderer, RenderReport, phone_timed_plan_to_pho,
+    prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,
 };
 pub use tract::{
     FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,

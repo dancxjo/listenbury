@@ -5,6 +5,7 @@ rustflags := env_var_or_default("RUSTFLAGS", "")
 cuda-rustflags := if rustflags == "" { "-L native=" + cuda-library-path } else { rustflags + " -L native=" + cuda-library-path }
 cmudict-url := "https://raw.githubusercontent.com/cmusphinx/cmudict/master/cmudict.dict"
 cmudict-path := "data/cmudict.dict"
+mbrola-voices-url := "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data"
 
 default:
     @just --list
@@ -12,6 +13,14 @@ default:
 # Run the CLI with the default Cargo feature set.
 run *args:
     cargo run -- "$@"
+
+# Speak through the Riper MBROLA backend. Run `just fetch` first for the default us3/en1 voices.
+say-mbrola text:
+    cargo run -- say --riper --mbrola "{{text}}"
+
+# Render the ragtime singing demo through the Riper MBROLA probe backend.
+sing-mbrola:
+    cargo run -- sing --riper --mbrola
 
 # Start the live PETE listening loop.
 listen *args:
@@ -21,6 +30,7 @@ listen *args:
 fetch:
     @mkdir -p "$(dirname "{{cmudict-path}}")"
     @tmp="$(mktemp "{{cmudict-path}}.XXXXXX")" && curl --fail --location --show-error --output "$tmp" "{{cmudict-url}}" && mv "$tmp" "{{cmudict-path}}"
+    @for voice in us3 en1; do mkdir -p "data/mbrola/$voice"; tmp="$(mktemp "data/mbrola/$voice/$voice.XXXXXX")"; curl --fail --location --show-error --output "$tmp" "{{mbrola-voices-url}}/$voice/$voice"; mv "$tmp" "data/mbrola/$voice/$voice"; done
 
 # Download the default model assets into LISTENBURY_HOME.
 fetch-models *args:

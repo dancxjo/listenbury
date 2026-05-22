@@ -30,6 +30,8 @@ enum Command {
     Transcribe(TranscribeCommand),
     #[command(about = "Speak text aloud")]
     Say(SayCommand),
+    #[command(about = "Render a raw MBROLA .pho file to WAV")]
+    MbrolaRender(MbrolaRenderCommand),
     #[command(about = "Sing the ragtime demo phrase")]
     Sing(SingDemoCommand),
     #[command(
@@ -265,6 +267,10 @@ pub(crate) struct SingDemoCommand {
     pub(crate) riper: bool,
     #[arg(long, requires = "riper")]
     pub(crate) klatt: bool,
+    #[arg(long, requires = "riper", conflicts_with = "klatt")]
+    pub(crate) mbrola: bool,
+    #[arg(long, requires = "mbrola")]
+    pub(crate) mbrola_voice: Option<PathBuf>,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
     #[arg(long)]
@@ -276,7 +282,11 @@ pub(crate) struct SingDemoCommand {
 impl SingDemoCommand {
     pub(crate) fn selected_backend(&self) -> SingDemoBackendOption {
         if self.riper {
-            SingDemoBackendOption::Riper
+            if self.mbrola {
+                SingDemoBackendOption::Mbrola
+            } else {
+                SingDemoBackendOption::Riper
+            }
         } else {
             self.backend.unwrap_or_default()
         }
@@ -340,8 +350,22 @@ pub(crate) struct SayCommand {
     pub(crate) riper: bool,
     #[arg(long, requires = "riper")]
     pub(crate) klatt: bool,
-    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    #[arg(long, requires = "riper", conflicts_with = "klatt")]
+    pub(crate) mbrola: bool,
+    #[arg(long, requires = "mbrola")]
+    pub(crate) mbrola_voice: Option<PathBuf>,
+    #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MbrolaRenderCommand {
+    #[arg(long)]
+    pub(crate) voice: PathBuf,
+    #[arg(long)]
+    pub(crate) phones: PathBuf,
+    #[arg(long)]
+    pub(crate) out: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -550,6 +574,7 @@ pub(crate) enum SingDemoBackendOption {
     #[default]
     Klatt,
     Riper,
+    Mbrola,
     Piper,
 }
 
@@ -599,6 +624,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
+        Command::MbrolaRender(cmd) => commands::run_mbrola_render(cmd),
         Command::Sing(cmd) => commands::run_sing_demo(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
         Command::Echo(cmd) => commands::run_echo(cmd),
@@ -754,6 +780,8 @@ mod tests {
         assert!(command.output_wav.is_none());
         assert!(!command.riper);
         assert!(!command.klatt);
+        assert!(!command.mbrola);
+        assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -775,6 +803,8 @@ mod tests {
         assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
         assert!(!command.riper);
         assert!(!command.klatt);
+        assert!(!command.mbrola);
+        assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -788,6 +818,8 @@ mod tests {
         };
         assert!(command.riper);
         assert!(!command.klatt);
+        assert!(!command.mbrola);
+        assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello", "there"]);
     }
 
@@ -825,6 +857,82 @@ mod tests {
         assert!(command.riper);
         assert!(command.klatt);
         assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_riper_mbrola_voice() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "--mbrola", "hello"])
+            .expect("say should parse MBROLA as a Riper backend voice");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.riper);
+        assert!(!command.klatt);
+        assert!(command.mbrola);
+        assert!(command.mbrola_voice.is_none());
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_riper_mbrola_without_text_for_smoke_demo() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--mbrola", "--riper"])
+            .expect("say should parse MBROLA smoke command without text");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.riper);
+        assert!(command.mbrola);
+        assert!(command.words.is_empty());
+    }
+
+    #[test]
+    fn say_accepts_riper_mbrola_explicit_voice() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "say",
+            "--riper",
+            "--mbrola",
+            "--mbrola-voice",
+            "data/mbrola/en1/en1",
+            "hello",
+        ])
+        .expect("say should parse explicit MBROLA voice");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.mbrola);
+        assert_eq!(
+            command.mbrola_voice,
+            Some(PathBuf::from("data/mbrola/en1/en1"))
+        );
+    }
+
+    #[test]
+    fn mbrola_render_accepts_raw_pho_inputs() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "mbrola-render",
+            "--voice",
+            "voices/us1",
+            "--phones",
+            "examples/mbrola/hello-us3.pho",
+            "--out",
+            "out/hello.wav",
+        ])
+        .expect("mbrola-render should parse voice, phones, and output paths");
+
+        let Some(Command::MbrolaRender(command)) = cli.command else {
+            panic!("expected mbrola-render command");
+        };
+        assert_eq!(command.voice, PathBuf::from("voices/us1"));
+        assert_eq!(
+            command.phones,
+            PathBuf::from("examples/mbrola/hello-us3.pho")
+        );
+        assert_eq!(command.out, PathBuf::from("out/hello.wav"));
     }
 
     #[test]
@@ -1564,6 +1672,19 @@ mod tests {
         assert!(command.riper);
         assert!(!command.klatt);
         assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_riper_mbrola() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--mbrola", "--riper"])
+            .expect("top-level sing should parse MBROLA as a Riper backend voice");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert!(command.riper);
+        assert!(command.mbrola);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Mbrola);
     }
 
     #[test]

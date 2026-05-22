@@ -7,6 +7,7 @@ target
 out
 
 /data/cmudict.dict
+/data/mbrola/
 
 # Optional cold-memory Docker volumes
 qdrant_data

@@ -34,6 +34,8 @@ use listenbury::mouth::tts::TextToSpeech;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
+#[cfg(feature = "tts-riper")]
+use listenbury::voice::mbrola::{MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, PhoneTimedPlan};
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::{
     default_english_phone_targets, phone_render_targets_from_string,
@@ -50,6 +52,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(feature = "tts-riper"))]
 const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
@@ -60,6 +63,19 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
 
     if should_use_klatt_backend(&piper_args) {
         let frames = synthesize_klatt_for_say(&piper_args.text)?;
+        if let Some(output_path) = piper_args.output_wav {
+            write_say_wav(&output_path, &frames)?;
+        } else {
+            play_say_audio(&frames)?;
+        }
+        return Ok(());
+    }
+
+    if should_use_mbrola_backend(&piper_args) {
+        let mut tts = say_mbrola_tts_for_args(&piper_args)?;
+        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
+        let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+
         if let Some(output_path) = piper_args.output_wav {
             write_say_wav(&output_path, &frames)?;
         } else {
@@ -108,6 +124,8 @@ fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
 
         let synthesis_result = if should_use_klatt_backend(&piper_args) {
             stream_klatt_stdin_to_frames(frame_tx)
+        } else if should_use_mbrola_backend(&piper_args) {
+            stream_mbrola_stdin_to_frames(piper_args, frame_tx)
         } else {
             stream_piper_stdin_to_frames(piper_args, frame_tx)
         };
@@ -173,6 +191,28 @@ fn stream_piper_stdin_to_frames(
     Ok(())
 }
 
+#[cfg(feature = "audio-cpal")]
+fn stream_mbrola_stdin_to_frames(
+    piper_args: SayArgs,
+    frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+) -> Result<()> {
+    let mut tts = say_mbrola_tts_for_args(&piper_args)?;
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let text = line.context("failed to read stdin for listenbury say --riper --mbrola -")?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text.to_string())))?;
+        let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
+        frame_tx
+            .send(frames)
+            .context("failed to send MBROLA stdin audio to playback")?;
+    }
+    Ok(())
+}
+
 fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     if args.riper {
         return say_riper_tts_for_voice(piper_voice);
@@ -186,6 +226,19 @@ fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToS
 }
 
 #[cfg(feature = "tts-riper")]
+fn say_mbrola_tts_for_args(args: &SayArgs) -> Result<PiperTextToSpeech> {
+    let voice = resolve_mbrola_voice(args.mbrola_voice.clone())?;
+    Ok(PiperTextToSpeech::with_backend(MbrolaTextBackend::load(
+        voice,
+    )?))
+}
+
+#[cfg(not(feature = "tts-riper"))]
+fn say_mbrola_tts_for_args(_args: &SayArgs) -> Result<PiperTextToSpeech> {
+    anyhow::bail!("listenbury say --riper --mbrola requires the `tts-riper` feature")
+}
+
+#[cfg(feature = "tts-riper")]
 fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     Ok(PiperTextToSpeech::new_with_backend_preference(
         piper_config_for_riper_voice(piper_voice)?,
@@ -196,6 +249,158 @@ fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
 #[cfg(not(feature = "tts-riper"))]
 fn say_riper_tts_for_voice(_piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     anyhow::bail!("listenbury say --riper requires the `tts-riper` feature")
+}
+
+#[cfg(feature = "tts-riper")]
+#[derive(Debug)]
+struct MbrolaTextBackend {
+    renderer: MbrolaRenderer,
+    phonemizer: SimpleEnglishG2p,
+}
+
+#[cfg(feature = "tts-riper")]
+impl MbrolaTextBackend {
+    fn load(voice_path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            renderer: MbrolaRenderer::from_voice_path(None, voice_path)?,
+            phonemizer: SimpleEnglishG2p::default(),
+        })
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+impl TtsBackend for MbrolaTextBackend {
+    fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
+        let phonemes = self
+            .phonemizer
+            .phonemize_unit(text)
+            .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
+            .phonemes;
+        let plan = mbrola_plan_from_riper_phonemes(&phonemes, text, self.renderer.voice())?;
+        let frames = self
+            .renderer
+            .render_phone_plan_to_frames(&plan)
+            .with_context(|| format!("native MBROLA probe render failed for `{text}`"))?;
+        anyhow::ensure!(
+            !frames.is_empty(),
+            "MBROLA produced no audio frames for `{text}`"
+        );
+        Ok(frames)
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn mbrola_plan_from_riper_phonemes(
+    phonemes: &PiperPhonemeSequence,
+    text: &str,
+    voice: &listenbury::MbrolaVoice,
+) -> Result<PhoneTimedPlan> {
+    let mut phones = Vec::new();
+    for phoneme in &phonemes.phonemes {
+        let symbol = phoneme.0.as_str();
+        if symbol.trim().is_empty()
+            || matches!(symbol, "_" | "^" | "$" | "|" | "‖" | "." | "," | "!" | "?")
+        {
+            continue;
+        }
+        let mapped = voice.symbol_map.map_phone(symbol).with_context(|| {
+            format!(
+                "failed to map Riper phone `{symbol}` to MBROLA voice `{}` while rendering `{text}`",
+                voice.name
+            )
+        })?;
+        let duration_ms = mbrola_default_phone_duration_ms(symbol);
+        let pitch_targets = if mbrola_symbol_is_pitch_bearing(symbol) {
+            vec![
+                MbrolaPitchTarget {
+                    percent: 0,
+                    hz: 125.0,
+                },
+                MbrolaPitchTarget {
+                    percent: 60,
+                    hz: 135.0,
+                },
+                MbrolaPitchTarget {
+                    percent: 100,
+                    hz: 128.0,
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        phones.push(MbrolaPhone {
+            symbol: mapped,
+            duration_ms,
+            pitch_targets,
+        });
+    }
+    phones.push(MbrolaPhone::new("_", 120));
+    anyhow::ensure!(
+        phones.iter().any(|phone| phone.symbol != "_"),
+        "Riper produced no MBROLA-renderable phones for `{text}`"
+    );
+    Ok(PhoneTimedPlan::new(phones))
+}
+
+#[cfg(feature = "tts-riper")]
+fn mbrola_default_phone_duration_ms(symbol: &str) -> u32 {
+    if mbrola_symbol_is_pitch_bearing(symbol) {
+        145
+    } else {
+        75
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn mbrola_symbol_is_pitch_bearing(symbol: &str) -> bool {
+    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
+    matches!(
+        base,
+        "AA" | "AE"
+            | "AH"
+            | "AO"
+            | "AW"
+            | "AY"
+            | "EH"
+            | "ER"
+            | "EY"
+            | "IH"
+            | "IY"
+            | "OW"
+            | "OY"
+            | "UH"
+            | "UW"
+            | "i"
+            | "ɪ"
+            | "e"
+            | "ɛ"
+            | "æ"
+            | "ə"
+            | "ʌ"
+            | "ɑ"
+            | "ɔ"
+            | "o"
+            | "ʊ"
+            | "u"
+    )
+}
+
+#[cfg(feature = "tts-riper")]
+fn resolve_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    explicit
+        .or_else(|| std::env::var_os("LISTENBURY_MBROLA_VOICE").map(PathBuf::from))
+        .or_else(|| std::env::var_os("MBROLA_VOICE").map(PathBuf::from))
+        .or_else(|| {
+            let fetched = PathBuf::from("data/mbrola/us3/us3");
+            fetched.is_file().then_some(fetched)
+        })
+        .or_else(|| {
+            let fetched = PathBuf::from("data/mbrola/us1/us1");
+            fetched.is_file().then_some(fetched)
+        })
+        .with_context(|| {
+            "failed to find MBROLA voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --mbrola-voice"
+        })
 }
 
 pub(crate) fn run_riper_compare(command: RiperCompareCommand) -> Result<()> {
@@ -876,6 +1081,8 @@ fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
 struct SayArgs {
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
+    mbrola: bool,
+    mbrola_voice: Option<PathBuf>,
     output_wav: Option<PathBuf>,
     riper: bool,
     klatt: bool,
@@ -913,16 +1120,26 @@ impl SayArgs {
             piper_voice = Some(PathBuf::from(words.remove(0)));
         }
 
+        let mbrola = command.mbrola || command.mbrola_voice.is_some();
+        if words.is_empty() && mbrola {
+            words.push("Hello, my baby.".to_string());
+        }
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
             !klatt || riper,
             "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
+        );
+        anyhow::ensure!(
+            !mbrola || riper,
+            "listenbury say: --mbrola is only supported as a Riper backend alternative; pass --riper --mbrola"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
         Ok(Self {
             piper_bin,
             piper_voice,
+            mbrola,
+            mbrola_voice: command.mbrola_voice,
             output_wav: command.output_wav,
             riper,
             klatt,
@@ -938,6 +1155,10 @@ impl SayArgs {
 
 fn should_use_klatt_backend(args: &SayArgs) -> bool {
     args.klatt
+}
+
+fn should_use_mbrola_backend(args: &SayArgs) -> bool {
+    args.mbrola
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
@@ -1170,6 +1391,7 @@ fn klatt_phone_string_from_demo_lexicon(text: &str) -> Result<PhoneString> {
     Ok(PhoneString { phones })
 }
 
+#[cfg(not(feature = "tts-riper"))]
 fn klatt_word_phones(word: &str) -> Option<&'static [&'static str]> {
     const HELLO: [&str; 5] = ["h", "ɛ", "l", "o", "ʊ"];
     const MY: [&str; 3] = ["m", "ɑ", "ɪ"];
@@ -1422,6 +1644,8 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
         .expect("single word should be text");
@@ -1439,6 +1663,8 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "hello".to_string(),
@@ -1462,6 +1688,8 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "voice.onnx".to_string(),
@@ -1486,6 +1714,8 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec![
                 "hello".to_string(),
                 "there".to_string(),
@@ -1507,6 +1737,8 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
         })
         .expect_err("klatt should require riper");
@@ -1524,12 +1756,49 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: true,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
         .expect("riper+klatt should parse, with klatt selecting the non-ONNX backend");
         assert!(args.riper);
         assert!(args.klatt);
         assert!(should_use_klatt_backend(&args));
+    }
+
+    #[test]
+    fn say_args_accepts_riper_mbrola_voice() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: true,
+            klatt: false,
+            mbrola: true,
+            mbrola_voice: Some(PathBuf::from("voices/us1")),
+            words: vec!["hello".to_string()],
+        })
+        .expect("riper+mbrola should select MBROLA as the voice backend");
+        assert!(args.riper);
+        assert!(!args.klatt);
+        assert!(should_use_mbrola_backend(&args));
+        assert_eq!(args.mbrola_voice, Some(PathBuf::from("voices/us1")));
+    }
+
+    #[test]
+    fn say_args_uses_default_mbrola_demo_text() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: true,
+            klatt: false,
+            mbrola: true,
+            mbrola_voice: None,
+            words: Vec::new(),
+        })
+        .expect("riper+mbrola should have a default smoke utterance");
+        assert_eq!(args.text, "Hello, my baby.");
     }
 
     #[test]
@@ -1540,6 +1809,8 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: true,
+            mbrola: false,
+            mbrola_voice: None,
             words: vec!["-".to_string()],
         })
         .expect("dash should select stdin streaming");

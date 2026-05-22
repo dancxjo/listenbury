@@ -547,12 +547,28 @@ listenbury transcribe input.wav
 
 ### `say`
 
-Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt.
+Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, and `--mbrola` loads a real MBROLA voice database for the native Rust MBROLA probe path.
 
 ```bash
 listenbury say "Testing one two three."
 listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
+listenbury say --riper --mbrola "Hello, my baby."
+listenbury sing --riper --mbrola
 printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt -
+```
+
+### `mbrola-render`
+
+Renders a low-level MBROLA `.pho` phone plan through Listenbury's native MBROLA probe renderer. Run `just fetch` to download the default `us3` and `en1` voice databases into `data/mbrola`.
+
+```bash
+listenbury mbrola-render --voice data/mbrola/us3/us3 --phones examples/mbrola/hello-us3.pho --out out/hello-mbrola.wav
+```
+
+The MBROLA path is:
+
+```text
+text -> Riper phonemes -> PhoneTimedPlan -> MBROLA voice symbol map -> native renderer -> WAV
 ```
 
 ### `riper-compare`
@@ -638,6 +654,7 @@ LISTENBURY_LLM_MODEL=/path/to/model.gguf
 LISTENBURY_PIPER_BIN=/path/to/piper
 LISTENBURY_PIPER_VOICE=/path/to/voice.onnx
 LISTENBURY_PIPER_BACKEND=process # process|riper|riper-fallback
+LISTENBURY_MBROLA_VOICE=/path/to/mbrola/voice
 PETE_LLM=gpt-oss
 PETE_VOICE=Amy
 ```

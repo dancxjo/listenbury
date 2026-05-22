@@ -103,6 +103,11 @@ pub use vision::{
     AvSyncConfig, EvidenceScore, PhonemeClass, VisualEvidenceStatus, VisualProvenance,
     VisualSpeechClaim, VisualSpeechClaimKind, VisualSpeechFrame, VisualSpeechTrace, VowelShape,
 };
+pub use voice::mbrola::{
+    MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, MbrolaRendererConfig, MbrolaSymbolMap,
+    MbrolaVoice, PhoneTimedPlan, PhoneTimedRenderer, RenderReport, phone_timed_plan_to_pho,
+    prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,
+};
 pub use voice::tract::{
     FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
     NoiseEstimate, PhoneAcousticTarget, PhoneRenderTarget, SourceFilterFrame, SourceFilterTrack,
