@@ -61,6 +61,12 @@ pub use mouth::read_aloud::{
     SpeechCandidateCommitment, SpeechCandidateId,
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
+pub use segmentation::{
+    BoundaryEvidence, BoundaryHypothesis, BoundaryHypothesisConfig, BoundaryKind,
+    NucleusDetectionConfig, NucleusEvidence, SyllableExpansionConfig, SyllableIsland,
+    VowelNucleusCandidate, WordRegionConfig, detect_nuclei, emit_ranked_boundary_hypotheses,
+    extract_syllable_islands, generate_landmark_hypotheses, rank_word_region_hypotheses,
+};
 pub use soundscape::{
     AcousticContribution, AcousticMixture, AcousticMixtureId, AttributionEvidence, AudioSpan,
     ClusterId, DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, EventId,
@@ -77,10 +83,6 @@ pub use soundscape::{
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
     SpanRevision, SpanState, Text, TextId,
-};
-pub use segmentation::{
-    NucleusDetectionConfig, NucleusEvidence, SyllableExpansionConfig, SyllableIsland,
-    VowelNucleusCandidate, detect_nuclei, extract_syllable_islands,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 pub use speech::prosody_timing::{
