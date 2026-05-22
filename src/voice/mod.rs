@@ -21,8 +21,8 @@ pub mod vocal_plausibility;
 
 pub use articulator::{
     ArticulatorPlan, EnergyCurve, EnergyPoint, GestureSpan, SungBackendDetail, SungBackendKind,
-    SyllableRenderSpan, articulate, backend_detail_expectation, is_phone_voiced,
-    klatt_targets_from_articulator_plan,
+    SyllableRenderSpan, articulate, articulate_with_decomposition_policy,
+    backend_detail_expectation, is_phone_voiced, klatt_targets_from_articulator_plan,
 };
 pub use coarticulation::{
     BoundaryKind, CoarticulatedPlan, PhoneGesture, PhoneRole, RefinedGesture, VocalGesturePlan,

@@ -22,7 +22,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::linguistic::phonology::{Phone, PhoneStatus, PhoneString, Stress};
+use crate::linguistic::phonology::{
+    Phone, PhoneDecompositionPolicy, PhoneString, Stress, decompose_phone,
+};
 use crate::prosody::note_target::{NoteTarget, TimePoint};
 use crate::prosody::pitch_curve::PitchCurve;
 use crate::prosody::vibrato::Vibrato;
@@ -236,6 +238,86 @@ impl SungSyllable {
         [self.nucleus]
     }
 
+    /// Per-phone spans inside the nucleus.
+    ///
+    /// For a decomposed diphthong nucleus such as `[o, ʊ]`, this returns
+    /// separate subspans so singing/rendering code can distinguish the stable
+    /// vowel target from the release glide while still preserving the whole
+    /// nucleus span.
+    pub fn nucleus_subspans(&self) -> Vec<PhoneSpan> {
+        (self.nucleus.start..self.nucleus.end)
+            .map(|idx| PhoneSpan {
+                start: idx,
+                end: idx + 1,
+            })
+            .collect()
+    }
+
+    /// Return a copy of this syllable with phones decomposed for the requested
+    /// downstream surface.
+    ///
+    /// `KeepPhonemic` preserves broad phones. `SplitForSinging` splits
+    /// diphthong nucleus phones into a stable vowel target and a shorter glide,
+    /// so note sustain is allocated mostly to the vowel. `SplitForAcoustics`
+    /// also allows renderer-friendly composite phone targets outside the
+    /// nucleus.
+    pub fn with_decomposition_policy(
+        &self,
+        policy: PhoneDecompositionPolicy,
+    ) -> Result<Self, NucleusSpanError> {
+        if policy == PhoneDecompositionPolicy::KeepPhonemic {
+            return Ok(self.clone());
+        }
+
+        let mut phones = Vec::with_capacity(self.phones.len());
+        let mut boundaries = Vec::with_capacity(self.phones.len() + 1);
+        boundaries.push(0);
+
+        for (idx, timed_phone) in self.phones.iter().enumerate() {
+            let mut parts = decompose_phone(&timed_phone.phone, policy);
+            if parts.is_empty() {
+                parts.push(timed_phone.phone.clone());
+            }
+
+            let durations = decomposed_durations(
+                timed_phone
+                    .end
+                    .millis
+                    .saturating_sub(timed_phone.start.millis),
+                parts.len(),
+                policy,
+                idx >= self.nucleus.start && idx < self.nucleus.end,
+            );
+            let mut cursor = timed_phone.start.millis;
+            for (part, duration_ms) in parts.into_iter().zip(durations) {
+                let end = cursor.saturating_add(duration_ms);
+                phones.push(TimedPhoneRef {
+                    phone: part,
+                    start: TimePoint::from_millis(cursor),
+                    end: TimePoint::from_millis(end),
+                });
+                cursor = end;
+            }
+            if let Some(last) = phones.last_mut() {
+                last.end = timed_phone.end;
+            }
+            boundaries.push(phones.len());
+        }
+
+        let mut decomposed = Self::new(
+            self.text.clone(),
+            phones,
+            PhoneSpan::new(boundaries[self.onset.start], boundaries[self.onset.end])?,
+            PhoneSpan::new(boundaries[self.nucleus.start], boundaries[self.nucleus.end])?,
+            PhoneSpan::new(boundaries[self.coda.start], boundaries[self.coda.end])?,
+            self.stress,
+            self.note.clone(),
+        )?;
+        decomposed.pitch_curve = self.pitch_curve.clone();
+        decomposed.vibrato = self.vibrato.clone();
+        Ok(decomposed)
+    }
+
     /// Start time from the first phone (or `None` when phone list is empty).
     pub fn start_time(&self) -> Option<TimePoint> {
         self.phones.first().map(|phone| phone.start)
@@ -266,6 +348,47 @@ impl SungSyllable {
         self.vibrato = vibrato;
         self
     }
+}
+
+fn decomposed_durations(
+    total_ms: u64,
+    part_count: usize,
+    policy: PhoneDecompositionPolicy,
+    is_nucleus: bool,
+) -> Vec<u64> {
+    if part_count <= 1 {
+        return vec![total_ms];
+    }
+
+    let mut durations = vec![0; part_count];
+    if policy == PhoneDecompositionPolicy::SplitForSinging && is_nucleus {
+        let main = ((total_ms as u128) * 4 / 5) as u64;
+        durations[0] = main;
+        let mut remaining = total_ms.saturating_sub(main);
+        for idx in 1..part_count {
+            let slots = (part_count - idx) as u64;
+            let duration = if slots == 0 {
+                remaining
+            } else {
+                remaining / slots
+            };
+            durations[idx] = duration;
+            remaining = remaining.saturating_sub(duration);
+        }
+    } else {
+        let base = total_ms / part_count as u64;
+        let mut remaining = total_ms;
+        for idx in 0..part_count {
+            let duration = if idx + 1 == part_count {
+                remaining
+            } else {
+                base
+            };
+            durations[idx] = duration;
+            remaining = remaining.saturating_sub(duration);
+        }
+    }
+    durations
 }
 
 /// A phonological syllable produced by the syllabifier.
@@ -379,6 +502,7 @@ impl Syllable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linguistic::phonology::PhoneStatus;
     use crate::prosody::note_target::{
         MidiNote, NoteArticulation, NoteDuration, PitchTarget, TimePoint, Velocity,
     };
@@ -604,6 +728,42 @@ mod tests {
             syllable.pitch_bearing_spans(),
             [PhoneSpan { start: 1, end: 2 }]
         );
+    }
+
+    #[test]
+    fn singing_decomposition_splits_diphthong_nucleus_with_short_glide() {
+        let syllable = SungSyllable::new(
+            "lo",
+            vec![timed_phone("l", 0, 40), timed_phone("oʊ", 40, 240)],
+            PhoneSpan::new(0, 1).unwrap(),
+            PhoneSpan::new(1, 2).unwrap(),
+            PhoneSpan::new(2, 2).unwrap(),
+            Some(Stress::Unstressed),
+            None,
+        )
+        .unwrap();
+
+        let decomposed = syllable
+            .with_decomposition_policy(PhoneDecompositionPolicy::SplitForSinging)
+            .unwrap();
+        let labels: Vec<&str> = decomposed
+            .phones
+            .iter()
+            .map(|phone| phone.phone.ipa.as_str())
+            .collect();
+        assert_eq!(labels, vec!["l", "o", "ʊ"]);
+        assert_eq!(decomposed.nucleus, PhoneSpan { start: 1, end: 3 });
+        assert_eq!(
+            decomposed.nucleus_subspans(),
+            vec![
+                PhoneSpan { start: 1, end: 2 },
+                PhoneSpan { start: 2, end: 3 }
+            ]
+        );
+        assert_eq!(decomposed.phones[1].start.millis, 40);
+        assert_eq!(decomposed.phones[1].end.millis, 200);
+        assert_eq!(decomposed.phones[2].start.millis, 200);
+        assert_eq!(decomposed.phones[2].end.millis, 240);
     }
 
     #[test]

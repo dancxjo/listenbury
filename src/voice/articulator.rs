@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::linguistic::phonology::Phone;
+use crate::linguistic::phonology::{Phone, PhoneDecompositionPolicy};
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
 use crate::prosody::syllable::PhoneSpan;
@@ -263,11 +263,29 @@ pub fn is_phone_voiced(ipa: &str) -> bool {
 /// (`0.0..=1.0`).  Syllables without note targets do not contribute points;
 /// when no syllable has velocity data the curve is empty.
 pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
+    articulate_with_decomposition_policy(phrase, PhoneDecompositionPolicy::KeepPhonemic)
+}
+
+/// Convert a [`SungPhrase`] into an [`ArticulatorPlan`] after applying an
+/// explicit phone decomposition policy.
+pub fn articulate_with_decomposition_policy(
+    phrase: &SungPhrase,
+    policy: PhoneDecompositionPolicy,
+) -> ArticulatorPlan {
     let mut phone_gestures: Vec<PhoneGesture> = Vec::new();
     let mut energy_points: Vec<EnergyPoint> = Vec::new();
     let mut syllable_spans: Vec<SyllableRenderSpan> = Vec::new();
 
     for syllable in &phrase.syllables {
+        let decomposed;
+        let syllable = if policy == PhoneDecompositionPolicy::KeepPhonemic {
+            syllable
+        } else {
+            decomposed = syllable
+                .with_decomposition_policy(policy)
+                .unwrap_or_else(|_| syllable.clone());
+            &decomposed
+        };
         // ── Collect phone gestures ────────────────────────────────────────
         let phones = &syllable.phones;
         if phones.is_empty() {
@@ -289,7 +307,7 @@ pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
             .unwrap_or(0);
         if note_duration_ms > explicit_duration_ms {
             let extra = note_duration_ms - explicit_duration_ms;
-            let pitch_spans = syllable.pitch_bearing_spans();
+            let pitch_spans = syllable.nucleus_subspans();
             stretch_pitch_bearing_durations(&mut durations_ms, extra, &pitch_spans);
         }
 
@@ -313,7 +331,7 @@ pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
         }
         let gesture_end = phone_gestures.len();
         let pitch_bearing_spans = syllable
-            .pitch_bearing_spans()
+            .nucleus_subspans()
             .iter()
             .map(|span| gesture_span_from_phone_span(gesture_start, *span))
             .collect();
@@ -720,6 +738,59 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(end_ms, 1000, "note duration should shape total plan");
         assert_eq!(plan.syllables[0].nucleus, GestureSpan { start: 1, end: 2 });
+    }
+
+    #[test]
+    fn split_for_singing_allocates_diphthong_sustain_to_vowel_then_glide() {
+        let lo = SungSyllable::new(
+            "lo",
+            vec![timed("l", 0, 40), timed("oʊ", 40, 240)],
+            PhoneSpan::new(0, 1).unwrap(),
+            PhoneSpan::new(1, 2).unwrap(),
+            PhoneSpan::new(2, 2).unwrap(),
+            None,
+            Some(note(67, 0, 1000)),
+        )
+        .unwrap();
+        let mut phrase = SungPhrase::new();
+        phrase.push(lo).unwrap();
+
+        let broad = articulate(&phrase);
+        assert_eq!(
+            broad
+                .gestures
+                .gestures
+                .iter()
+                .map(|gesture| gesture.phone.as_str())
+                .collect::<Vec<_>>(),
+            vec!["l", "oʊ"]
+        );
+
+        let split = articulate_with_decomposition_policy(
+            &phrase,
+            PhoneDecompositionPolicy::SplitForSinging,
+        );
+        let gestures = &split.gestures.gestures;
+        assert_eq!(
+            gestures
+                .iter()
+                .map(|gesture| gesture.phone.as_str())
+                .collect::<Vec<_>>(),
+            vec!["l", "o", "ʊ"]
+        );
+        assert_eq!(split.syllables[0].nucleus, GestureSpan { start: 1, end: 3 });
+        assert_eq!(
+            split.syllables[0].pitch_bearing_spans,
+            vec![
+                GestureSpan { start: 1, end: 2 },
+                GestureSpan { start: 2, end: 3 }
+            ]
+        );
+        assert!(
+            gestures[1].duration_ms > gestures[2].duration_ms * 3,
+            "stable vowel should receive most sung diphthong sustain"
+        );
+        assert_eq!(gestures[0].duration_ms, 40);
     }
 
     #[test]

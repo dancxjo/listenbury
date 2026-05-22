@@ -23,6 +23,22 @@ pub enum PhoneStatus {
     UnknownSymbol,
 }
 
+/// Controls how phonemic phones are exposed to downstream timing/rendering code.
+///
+/// Broad speech planning can keep English diphthongs as one phonemic phone
+/// (`/oʊ/`), while singing and low-level acoustic renderers can ask for the
+/// internal vowel targets (`[o, ʊ]`) when they need to shape the transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PhoneDecompositionPolicy {
+    /// Preserve broad phonemic phones: `/oʊ/` remains one phone.
+    KeepPhonemic,
+    /// Split singable diphthong nuclei into stable vowel + release glide.
+    SplitForSinging,
+    /// Split renderer-friendly composite targets, including affricates.
+    SplitForAcoustics,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhoneString {
@@ -116,6 +132,20 @@ impl PhoneString {
                 .collect(),
         }
     }
+
+    /// Build a [`PhoneString`] from phonemes using an explicit decomposition
+    /// policy.
+    pub fn from_phoneme_slice_with_policy(
+        phonemes: &[Phoneme],
+        policy: PhoneDecompositionPolicy,
+    ) -> Self {
+        Self {
+            phones: RealizedPhone::from_phoneme_slice_with_policy(phonemes, policy)
+                .into_iter()
+                .map(|realized| realized.phone)
+                .collect(),
+        }
+    }
 }
 
 impl RealizedPhone {
@@ -137,6 +167,47 @@ impl RealizedPhone {
             .collect()
     }
 
+    /// Build realized phone tokens from one [`Phoneme`] using an explicit
+    /// decomposition policy.
+    pub fn from_phoneme_with_policy(
+        index: usize,
+        phoneme: &Phoneme,
+        policy: PhoneDecompositionPolicy,
+    ) -> Vec<Self> {
+        let source_symbol = Some(phoneme.source_symbol.clone());
+        let phones = match policy {
+            PhoneDecompositionPolicy::KeepPhonemic => vec![Phone {
+                ipa: phoneme.realization.ipa.clone(),
+                source_symbol,
+                status: phoneme
+                    .realization
+                    .phone_string
+                    .phones
+                    .first()
+                    .map(|phone| phone.status)
+                    .unwrap_or(PhoneStatus::Mapped),
+            }],
+            PhoneDecompositionPolicy::SplitForSinging
+            | PhoneDecompositionPolicy::SplitForAcoustics => phoneme
+                .realization
+                .phone_string
+                .phones
+                .iter()
+                .flat_map(|phone| decompose_phone(phone, policy))
+                .collect(),
+        };
+
+        phones
+            .into_iter()
+            .map(|phone| Self {
+                phone,
+                source_phoneme_index: index,
+                source_symbol: phoneme.source_symbol.clone(),
+                stress: phoneme.stress,
+            })
+            .collect()
+    }
+
     /// Build realized phone tokens from a phoneme slice.
     pub fn from_phoneme_slice(phonemes: &[Phoneme]) -> Vec<Self> {
         phonemes
@@ -144,6 +215,60 @@ impl RealizedPhone {
             .enumerate()
             .flat_map(|(index, phoneme)| Self::from_phoneme(index, phoneme))
             .collect()
+    }
+
+    /// Build realized phone tokens from a phoneme slice using an explicit
+    /// decomposition policy.
+    pub fn from_phoneme_slice_with_policy(
+        phonemes: &[Phoneme],
+        policy: PhoneDecompositionPolicy,
+    ) -> Vec<Self> {
+        phonemes
+            .iter()
+            .enumerate()
+            .flat_map(|(index, phoneme)| Self::from_phoneme_with_policy(index, phoneme, policy))
+            .collect()
+    }
+}
+
+/// Decompose a single phone according to `policy`.
+pub fn decompose_phone(phone: &Phone, policy: PhoneDecompositionPolicy) -> Vec<Phone> {
+    let segments = match policy {
+        PhoneDecompositionPolicy::KeepPhonemic => None,
+        PhoneDecompositionPolicy::SplitForSinging => singing_decomposition(phone.ipa.as_str()),
+        PhoneDecompositionPolicy::SplitForAcoustics => singing_decomposition(phone.ipa.as_str())
+            .or_else(|| acoustic_decomposition(phone.ipa.as_str())),
+    };
+
+    match segments {
+        Some(segments) => segments
+            .iter()
+            .map(|ipa| Phone {
+                ipa: (*ipa).to_string(),
+                source_symbol: phone.source_symbol.clone(),
+                status: phone.status,
+            })
+            .collect(),
+        None => vec![phone.clone()],
+    }
+}
+
+fn singing_decomposition(ipa: &str) -> Option<&'static [&'static str]> {
+    match ipa {
+        "aʊ" => Some(&["a", "ʊ"]),
+        "aɪ" => Some(&["a", "ɪ"]),
+        "eɪ" => Some(&["e", "ɪ"]),
+        "oʊ" => Some(&["o", "ʊ"]),
+        "ɔɪ" => Some(&["ɔ", "ɪ"]),
+        _ => None,
+    }
+}
+
+fn acoustic_decomposition(ipa: &str) -> Option<&'static [&'static str]> {
+    match ipa {
+        "tʃ" => Some(&["t", "ʃ"]),
+        "dʒ" => Some(&["d", "ʒ"]),
+        _ => None,
     }
 }
 
@@ -1647,5 +1772,34 @@ mod tests {
         );
         assert_eq!(realized[1].realization.ipa, "t");
         assert_eq!(realized[1].realization.method, RealizationMethod::Default);
+    }
+
+    #[test]
+    fn phone_decomposition_policy_keeps_or_splits_diphthongs() {
+        let seq = vec![phoneme_from_arpabet("OW1", "cmudict")];
+
+        let broad = RealizedPhone::from_phoneme_slice_with_policy(
+            &seq,
+            PhoneDecompositionPolicy::KeepPhonemic,
+        );
+        assert_eq!(
+            broad
+                .iter()
+                .map(|p| p.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["oʊ"]
+        );
+
+        let singing = RealizedPhone::from_phoneme_slice_with_policy(
+            &seq,
+            PhoneDecompositionPolicy::SplitForSinging,
+        );
+        assert_eq!(
+            singing
+                .iter()
+                .map(|p| p.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["o", "ʊ"]
+        );
     }
 }
