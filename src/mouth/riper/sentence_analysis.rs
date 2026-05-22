@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::mouth::riper::espeak_ng_rules::{
+use crate::linguistic::language_pack_rules::{
     LexicalProsodyFlag, LexicalProsodyFlagFact, english_lexical_flag_facts_for_rule,
     english_to_rule_descriptor,
 };
@@ -615,8 +615,7 @@ fn has_low_confidence_ambiguity(link_parses: &[SyntacticLinkParse]) -> bool {
     }
     let best = link_parses[0].rank;
     let second = link_parses[1].rank;
-    (best - second).abs() <= LOW_CONFIDENCE_PARSE_RANK_DELTA
-        || best < LOW_CONFIDENCE_PARSE_RANK_MIN
+    (best - second).abs() <= LOW_CONFIDENCE_PARSE_RANK_DELTA || best < LOW_CONFIDENCE_PARSE_RANK_MIN
 }
 
 fn derive_word_syntax_facts(
@@ -2223,7 +2222,10 @@ fn rule_matches_word_syntax_context(
     let next_is_verb = next_syntax.is_some_and(|facts| facts.pos == PartOfSpeech::Verb);
     let linked_infinitive = has_link(current_syntax, SyntacticLinkKind::InfinitivalMarker);
     let linked_aux_chain = has_link(next_syntax, SyntacticLinkKind::Auxiliary);
-    if !context_requirement(verb_context, next_is_verb || linked_infinitive || linked_aux_chain) {
+    if !context_requirement(
+        verb_context,
+        next_is_verb || linked_infinitive || linked_aux_chain,
+    ) {
         return false;
     }
 
@@ -2256,8 +2258,8 @@ struct ToRuleDescriptorFallback {
     output_transformation: String,
 }
 
-impl From<crate::mouth::riper::espeak_ng_rules::ToRuleDescriptor> for ToRuleDescriptorFallback {
-    fn from(value: crate::mouth::riper::espeak_ng_rules::ToRuleDescriptor) -> Self {
+impl From<crate::linguistic::language_pack_rules::ToRuleDescriptor> for ToRuleDescriptorFallback {
+    fn from(value: crate::linguistic::language_pack_rules::ToRuleDescriptor) -> Self {
         Self {
             rule_id: value.rule_id,
             source: value.provenance.source,

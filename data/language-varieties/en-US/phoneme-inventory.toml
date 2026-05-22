@@ -1,0 +1,2 @@
+vowels = ["AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"]
+consonants = ["P", "B", "T", "D", "K", "G", "F", "V", "TH", "DH", "S", "Z", "SH", "ZH", "HH", "CH", "JH", "M", "N", "NG", "L", "R", "W", "Y"]

@@ -5,10 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::linguistic::arpabet::default_phone_string_for_arpabet;
 use crate::linguistic::environment as ling_env;
 use crate::linguistic::inventory::VarietyImplementationStatus;
+use crate::linguistic::language_pack::english_us_language_pack;
 use crate::linguistic::phone::PhoneString;
 use crate::mouth::riper::{NormalizedText, SentenceAnalysis};
-
-const ESPEAK_NG_SEED_RULES_JSON: &str = include_str!("data/espeak_ng_seed_rules.json");
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleProvenance {
@@ -216,8 +215,12 @@ pub fn export_rule_table_to_json(
 pub fn load_seed_rule_table() -> &'static EspeakNgSeedRuleTable {
     static TABLE: OnceLock<EspeakNgSeedRuleTable> = OnceLock::new();
     TABLE.get_or_init(|| {
-        import_rule_table_from_str(ESPEAK_NG_SEED_RULES_JSON)
-            .expect("bundled eSpeak-ng seed rules JSON should parse")
+        import_rule_table_from_str(
+            english_us_language_pack()
+                .pronunciation_rules
+                .seed_rule_table_json,
+        )
+        .expect("bundled eSpeak-ng seed rules JSON should parse")
     })
 }
 
@@ -435,9 +438,7 @@ pub fn english_native_morphophonology_rules() -> Vec<MorphophonologyRule> {
             id: "suffix_ly_attachment".to_string(),
             affix: "ly".to_string(),
             morpheme_kind: ling_env::MorphemeKind::Suffix,
-            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
-                SpellingRepairHint::IToY,
-            ]),
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![SpellingRepairHint::IToY]),
             output_policy: MorphophonologyOutput::AppendArpabet("L IY0".to_string()),
             provenance: prov.clone(),
         },
@@ -796,7 +797,10 @@ fn variety_condition(language: &str, variety: &str) -> VarietyRuleCondition {
 }
 
 fn condition_is_stub_ga_allowed(condition: &VarietyRuleCondition) -> bool {
-    condition.enabled_flags.iter().any(|flag| flag == META_ALLOW_STUB_GA_INHERITANCE)
+    condition
+        .enabled_flags
+        .iter()
+        .any(|flag| flag == META_ALLOW_STUB_GA_INHERITANCE)
 }
 
 fn runtime_flag_is_enabled(active: &ActiveVarietyProfile, flag: &str) -> bool {
@@ -825,7 +829,10 @@ fn condition_matches_active_profile(
             "language mismatch: rule={}, active={}",
             condition.language, active.language
         ));
-        return RuleConditionDiagnostics { applies: false, reasons };
+        return RuleConditionDiagnostics {
+            applies: false,
+            reasons,
+        };
     }
     if condition.variety != active.variety {
         let allow_stub_ga = condition_is_stub_ga_allowed(condition)
@@ -836,7 +843,10 @@ fn condition_matches_active_profile(
                 "variety mismatch: rule={}, active={}",
                 condition.variety, active.variety
             ));
-            return RuleConditionDiagnostics { applies: false, reasons };
+            return RuleConditionDiagnostics {
+                applies: false,
+                reasons,
+            };
         }
         reasons.push(format!(
             "matched via explicit GA stub inheritance metadata ({})",
@@ -850,23 +860,44 @@ fn condition_matches_active_profile(
                 required_voice_profile,
                 active.voice_profile.as_deref().unwrap_or("<none>")
             ));
-            return RuleConditionDiagnostics { applies: false, reasons };
+            return RuleConditionDiagnostics {
+                applies: false,
+                reasons,
+            };
         }
     }
-    if condition.enabled_flags.iter().any(|flag| flag == META_VOICE_RENDER_ONLY)
+    if condition
+        .enabled_flags
+        .iter()
+        .any(|flag| flag == META_VOICE_RENDER_ONLY)
         && active.selection_scope != RuleSelectionScope::VoiceRender
     {
-        reasons.push("voice/render-only condition skipped during phonological rule selection".to_string());
-        return RuleConditionDiagnostics { applies: false, reasons };
+        reasons.push(
+            "voice/render-only condition skipped during phonological rule selection".to_string(),
+        );
+        return RuleConditionDiagnostics {
+            applies: false,
+            reasons,
+        };
     }
-    for flag in condition.enabled_flags.iter().filter(|flag| !is_meta_flag(flag)) {
+    for flag in condition
+        .enabled_flags
+        .iter()
+        .filter(|flag| !is_meta_flag(flag))
+    {
         if !runtime_flag_is_enabled(active, flag) {
             reasons.push(format!("missing enabled flag: {flag}"));
-            return RuleConditionDiagnostics { applies: false, reasons };
+            return RuleConditionDiagnostics {
+                applies: false,
+                reasons,
+            };
         }
     }
     reasons.push("condition matched active profile".to_string());
-    RuleConditionDiagnostics { applies: true, reasons }
+    RuleConditionDiagnostics {
+        applies: true,
+        reasons,
+    }
 }
 
 pub fn evaluate_rule_conditions(
@@ -1656,7 +1687,12 @@ mod tests {
 
     #[test]
     fn converter_round_trip_is_deterministic() {
-        let parsed = import_rule_table_from_str(ESPEAK_NG_SEED_RULES_JSON).expect("parse");
+        let parsed = import_rule_table_from_str(
+            english_us_language_pack()
+                .pronunciation_rules
+                .seed_rule_table_json,
+        )
+        .expect("parse");
         let emitted = export_rule_table_to_json(&parsed).expect("export");
         let reparsed = import_rule_table_from_str(&emitted).expect("reparse");
         assert_eq!(parsed, reparsed);
@@ -1814,7 +1850,10 @@ mod tests {
         );
         assert!(!disabled.applies);
         assert!(
-            disabled.reasons.iter().any(|reason| reason.contains("missing enabled flag")),
+            disabled
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("missing enabled flag")),
             "expected missing-flag diagnostic"
         );
 
@@ -1841,7 +1880,9 @@ mod tests {
         let active_stub_profile = ActiveVarietyProfile {
             language: "en".to_string(),
             variety: "received_pronunciation".to_string(),
-            implementation_status: Some(VarietyImplementationStatus::StubDerivedFrom(VarietyId::new("en-US-GA"))),
+            implementation_status: Some(VarietyImplementationStatus::StubDerivedFrom(
+                VarietyId::new("en-US-GA"),
+            )),
             ..Default::default()
         };
 
@@ -1857,7 +1898,10 @@ mod tests {
         let allowed = evaluate_rule_conditions(&native, &active_stub_profile);
         assert!(allowed.applies);
         assert!(
-            allowed.reasons.iter().any(|reason| reason.contains("stub inheritance")),
+            allowed
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("stub inheritance")),
             "expected explicit-stub-inheritance diagnostic"
         );
     }
@@ -1889,7 +1933,10 @@ mod tests {
         );
         assert!(!phonological.applies);
         assert!(
-            phonological.reasons.iter().any(|reason| reason.contains("voice/render-only")),
+            phonological
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("voice/render-only")),
             "expected voice/render leakage diagnostic"
         );
 
@@ -1915,7 +1962,10 @@ mod tests {
         );
         assert!(conditions.iter().any(|condition| {
             condition.voice_profile.as_deref() == Some("default")
-                && condition.enabled_flags.iter().any(|flag| flag == META_VOICE_RENDER_ONLY)
+                && condition
+                    .enabled_flags
+                    .iter()
+                    .any(|flag| flag == META_VOICE_RENDER_ONLY)
         }));
     }
 
@@ -2092,7 +2142,10 @@ mod tests {
         assert_eq!(rule.id, "punctuation_exclamation_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('!'));
         assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
-        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::Exclamation));
+        assert_eq!(
+            rule.output.pitch_direction,
+            Some(PitchDirection::Exclamation)
+        );
         assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
         assert!(
             rule.output.pitch_range_factor.map_or(false, |f| f > 1.0),
@@ -2118,7 +2171,10 @@ mod tests {
         assert_eq!(rule.id, "punctuation_question_rising_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('?'));
         assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
-        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalRising));
+        assert_eq!(
+            rule.output.pitch_direction,
+            Some(PitchDirection::FinalRising)
+        );
         assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
         assert!(
             rule.output.suppressible_by.is_empty(),
@@ -2167,7 +2223,10 @@ mod tests {
         assert_eq!(rule.id, "punctuation_period_final_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('.'));
         assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
-        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(
+            rule.output.pitch_direction,
+            Some(PitchDirection::FinalFalling)
+        );
         assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
         assert!(
             rule.output.suppressible_by.is_empty(),
@@ -2189,19 +2248,27 @@ mod tests {
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation(','));
         assert_eq!(rule.output.boundary_kind, BoundaryKind::Minor);
         assert!(
-            rule.output.suppressible_by.contains(&SuppressibleBy::VocativeContext),
+            rule.output
+                .suppressible_by
+                .contains(&SuppressibleBy::VocativeContext),
             "comma should be suppressible by vocative context"
         );
         assert!(
-            rule.output.suppressible_by.contains(&SuppressibleBy::AppositiveContext),
+            rule.output
+                .suppressible_by
+                .contains(&SuppressibleBy::AppositiveContext),
             "comma should be suppressible by appositive context"
         );
         assert!(
-            rule.output.suppressible_by.contains(&SuppressibleBy::ParentheticalContext),
+            rule.output
+                .suppressible_by
+                .contains(&SuppressibleBy::ParentheticalContext),
             "comma should be suppressible by parenthetical context"
         );
         assert!(
-            rule.output.suppressible_by.contains(&SuppressibleBy::TightSyntacticLink),
+            rule.output
+                .suppressible_by
+                .contains(&SuppressibleBy::TightSyntacticLink),
             "comma should be suppressible by tight syntactic link"
         );
     }
@@ -2267,15 +2334,24 @@ mod tests {
             .find(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd)
             .expect("utterance-end clause rule must exist");
         assert_eq!(utterance_end.output.boundary_kind, BoundaryKind::Major);
-        assert_eq!(utterance_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
-        assert_eq!(utterance_end.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert_eq!(
+            utterance_end.output.pitch_direction,
+            Some(PitchDirection::FinalFalling)
+        );
+        assert_eq!(
+            utterance_end.output.stress_effect,
+            StressEffect::ClauseFinalStress
+        );
 
         let clause_end = rules
             .iter()
             .find(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd)
             .expect("clause-end rule must exist");
         assert_eq!(clause_end.output.boundary_kind, BoundaryKind::Major);
-        assert_eq!(clause_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(
+            clause_end.output.pitch_direction,
+            Some(PitchDirection::FinalFalling)
+        );
 
         let clause_start = rules
             .iter()
@@ -2303,11 +2379,15 @@ mod tests {
 
         // Clause-position rules are present.
         assert!(
-            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd),
+            rules
+                .iter()
+                .any(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd),
             "bulk rules must include utterance-end clause rule"
         );
         assert!(
-            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd),
+            rules
+                .iter()
+                .any(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd),
             "bulk rules must include clause-end rule"
         );
 
@@ -2368,8 +2448,14 @@ mod tests {
         let has_prefix = rules
             .iter()
             .any(|r| r.morpheme_kind == ling_env::MorphemeKind::Prefix);
-        assert!(has_suffix, "expected at least one suffix rule; ids: {ids:?}");
-        assert!(has_prefix, "expected at least one prefix rule; ids: {ids:?}");
+        assert!(
+            has_suffix,
+            "expected at least one suffix rule; ids: {ids:?}"
+        );
+        assert!(
+            has_prefix,
+            "expected at least one prefix rule; ids: {ids:?}"
+        );
     }
 
     #[test]

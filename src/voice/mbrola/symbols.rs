@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::linguistic::english_us_variety;
+use crate::linguistic::english_us_language_pack;
 
 /// Voice-specific mapping from Listenbury phone symbols to MBROLA symbols.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,9 +22,9 @@ impl MbrolaSymbolMap {
 
     /// A conservative US-English starter map. Real voices may need overrides.
     pub fn us1_starter() -> Self {
-        let map = english_us_variety()
+        let map = english_us_language_pack()
             .backend_map("mbrola-us1")
-            .expect("en-US datapack should define mbrola-us1 backend map");
+            .expect("en-US language pack should define mbrola-us1 backend map");
         Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
     }
 
@@ -37,9 +37,9 @@ impl MbrolaSymbolMap {
     /// Starter map for the `us3` voice inventory, whose diphthongs use
     /// uppercase SAMPA-style symbols like `EI`, `AI`, and `@U`.
     pub fn us3_starter() -> Self {
-        let map = english_us_variety()
+        let map = english_us_language_pack()
             .backend_map("mbrola-us3")
-            .expect("en-US datapack should define mbrola-us3 backend map");
+            .expect("en-US language pack should define mbrola-us3 backend map");
         Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
     }
 
