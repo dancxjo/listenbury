@@ -34,6 +34,10 @@
 
 use super::targets::{PhoneRenderTarget, VocalTractFilterTarget};
 
+mod coarticulation;
+mod params;
+mod trajectory;
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -304,6 +308,17 @@ fn db_to_linear(db: f32) -> f32 {
 ///
 /// The total duration is the sum of all individual `duration_ms` values.
 pub fn render_phone_string(targets: &[PhoneRenderTarget], config: &KlattRenderConfig) -> Vec<f32> {
+    let coarticulated = coarticulation::apply_neighbor_influence(targets);
+    let trajectory = trajectory::trajectory_targets_from_phones(
+        &coarticulated,
+        trajectory::TrajectoryConfig::default(),
+    );
+    let mut trajectory_config = config.clone();
+    trajectory_config.crossfade_ms = trajectory_config.crossfade_ms.min(4.0);
+    render_phone_sequence(&trajectory, &trajectory_config)
+}
+
+fn render_phone_sequence(targets: &[PhoneRenderTarget], config: &KlattRenderConfig) -> Vec<f32> {
     if targets.is_empty() {
         return vec![];
     }
@@ -367,8 +382,8 @@ mod tests {
     use crate::linguistic::phonology::Phone;
     use crate::linguistic::phonology::PhoneString;
     use crate::voice::tract::targets::{
-        GlottalSourceTarget, VocalTractFilterTarget, default_english_phone_targets,
-        phone_render_targets_from_string,
+        default_english_phone_targets, phone_render_targets_from_string, GlottalSourceTarget,
+        VocalTractFilterTarget,
     };
 
     fn vowel_target(f0: f32) -> PhoneRenderTarget {
@@ -500,6 +515,7 @@ mod tests {
             duration_ms: 50,
             f0_hz: Some(200.0),
             amplitude: 0.8,
+            vibrato: None,
             source: Some(GlottalSourceTarget {
                 breathiness: 0.0,
                 open_quotient: 0.5,

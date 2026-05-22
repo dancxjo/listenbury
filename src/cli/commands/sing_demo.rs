@@ -10,8 +10,6 @@ use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
 
-#[cfg(feature = "tts-piper")]
-use listenbury::PiperTextToSpeech;
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
@@ -23,12 +21,14 @@ use listenbury::prosody::singing::SungPhrase;
 use listenbury::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
 use listenbury::prosody::vibrato::Vibrato;
 use listenbury::time::ExactTimestamp;
-use listenbury::voice::articulator::{
-    RenderPlan, SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
-};
-use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
-use listenbury::voice::tract::targets::default_english_phone_targets;
 use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
+use listenbury::voice::articulator::{
+    articulate, backend_detail_expectation, render_plan_for_backend, RenderPlan, SungBackendKind,
+};
+use listenbury::voice::tract::klatt::{render_phone_string, KlattRenderConfig};
+use listenbury::voice::tract::targets::default_english_phone_targets;
+#[cfg(feature = "tts-piper")]
+use listenbury::PiperTextToSpeech;
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
@@ -227,7 +227,7 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
     match backend {
         SingDemoBackendOption::Klatt => &[
             "Klatt consumes the shared phone-timed plan and nucleus-driven pitch sampling.",
-            "TODO: thread per-syllable vibrato from the shared plan into backend F0 modulation.",
+            "Per-syllable vibrato now modulates sustained nucleus F0 in the trajectory layer.",
         ],
         SingDemoBackendOption::Riper => &[
             "Riper sing-demo currently routes through an explicit RiperKlattFallback sung path.",
@@ -605,8 +605,8 @@ mod tests {
     fn backend_degradation_notes_are_explicit() {
         let klatt = backend_degradation_notes(SingDemoBackendOption::Klatt).join(" ");
         assert!(
-            klatt.contains("TODO: thread per-syllable vibrato"),
-            "klatt degradation should call out current vibrato limitation"
+            klatt.contains("vibrato now modulates sustained nucleus F0"),
+            "klatt note should call out trajectory vibrato support"
         );
 
         let riper = backend_degradation_notes(SingDemoBackendOption::Riper).join(" ");

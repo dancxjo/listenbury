@@ -8,10 +8,12 @@
 use std::f32::consts::TAU;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::prosody::pitch_curve::PitchCurve;
 
 /// Parameterized vibrato envelope and oscillator.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vibrato {
     /// Oscillation rate in Hz.
     pub rate_hz: f32,
