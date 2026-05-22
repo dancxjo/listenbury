@@ -132,6 +132,10 @@ mod tests {
         );
         assert_eq!(realized[1].realization.ipa, "ɾ");
         assert_eq!(
+            realized[1].realization.ipa,
+            realized[1].realization.phone_string.to_ipa()
+        );
+        assert_eq!(
             realized[1].realization.method,
             RealizationMethod::AllophoneRule
         );
@@ -282,6 +286,10 @@ mod tests {
             },
         );
         assert_eq!(realized[1].realization.ipa, "ŋ");
+        assert_eq!(
+            realized[1].realization.ipa,
+            realized[1].realization.phone_string.to_ipa()
+        );
         assert_eq!(
             realized[1].realization.rule.as_deref(),
             Some("alveolar_nasal_velar_assimilation")

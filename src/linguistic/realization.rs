@@ -516,6 +516,7 @@ mod tests {
         let realization = realization_from_rule_output(&rule, &target, environment_match);
 
         assert_eq!(realization.ipa, "ts");
+        assert_eq!(realization.ipa, realization.phone_string.to_ipa());
         assert_eq!(realization.phone_string.ipa_segments(), vec!["t", "s"]);
         assert_eq!(
             realization
