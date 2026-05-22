@@ -14,6 +14,7 @@ pub mod overlap;
 pub mod signature;
 pub mod source;
 pub mod time;
+pub mod transcript;
 pub mod voice_count;
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ pub use signature::{
 };
 pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
 pub use time::{TimePoint, TimeRange};
+pub use transcript::{AcousticMixtureId, SourceAttributedTranscript};
 pub use voice_count::{
     RollingVoiceCountEstimator, VoiceActivityFrame, VoiceCount, VoiceCountConfig,
 };
