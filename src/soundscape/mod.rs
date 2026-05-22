@@ -10,6 +10,7 @@ pub mod event;
 pub mod expected;
 pub mod frame;
 pub mod isolation;
+pub mod overlap;
 pub mod signature;
 pub mod source;
 pub mod time;
@@ -34,6 +35,7 @@ pub use isolation::{
     evaluate_policies, self_hearing_suppression_policy, IsolationEvaluation, SuppressionTarget,
     TrackingTarget,
 };
+pub use overlap::{detect_overlaps, MixtureComponent, OverlapMixture};
 pub use signature::{
     FormantProfile, PitchProfile, ProsodyProfile, RateProfile, TimbreProfile, VoiceSignature,
     VoiceSignatureId, VoiceSignatureMatch, VoiceSignatureObservation,

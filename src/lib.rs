@@ -61,11 +61,12 @@ pub use mouth::read_aloud::{
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use soundscape::{
     AcousticContribution, AcousticMixture, AttributionEvidence, ClusterId, EventId,
-    IsolationEvaluation, IsolationPolicy, MixtureId, SoundEvent, SoundEventKind, SoundSource,
-    Soundscape, SoundscapeContext, SoundscapeFrame, SoundscapeId, SourceAttributor,
-    SourceCriterion, SourceHypothesis, SourceId, SourceKind, SourceLabel, SourceOperation,
-    SuppressionTarget, TimePoint, TimeRange, TrackingTarget, Voice, VoiceAttribution, VoiceId,
-    VoiceKind, VoiceLabel, VoiceRoleInSpan, evaluate_policies, self_hearing_suppression_policy,
+    IsolationEvaluation, IsolationPolicy, MixtureComponent, MixtureId, OverlapMixture,
+    SoundEvent, SoundEventKind, SoundSource, Soundscape, SoundscapeContext, SoundscapeFrame,
+    SoundscapeId, SourceAttributor, SourceCriterion, SourceHypothesis, SourceId, SourceKind,
+    SourceLabel, SourceOperation, SuppressionTarget, TimePoint, TimeRange, TrackingTarget, Voice,
+    VoiceAttribution, VoiceId, VoiceKind, VoiceLabel, VoiceRoleInSpan, detect_overlaps,
+    evaluate_policies, self_hearing_suppression_policy,
 };
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
