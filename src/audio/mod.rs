@@ -10,6 +10,7 @@ pub mod features;
 pub mod frame;
 pub mod hypothesis;
 pub mod lattice;
+pub mod noise_floor;
 pub mod phone_class;
 pub mod ring;
 pub mod streaming_prosody;
@@ -33,6 +34,7 @@ pub use lattice::{
     HypothesisEdgeKind, HypothesisLattice, SpeechEvidenceSource, SpeechHypothesisEngine,
     SpeechHypothesisFusion, fuse_hypotheses,
 };
+pub use noise_floor::{AdaptiveNoiseFloor, NoiseFloorConfig, NoiseFloorObservation};
 pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};
 pub use viterbi::{PhoneState, viterbi_align_pronunciation};
 pub use voice_signature::{
