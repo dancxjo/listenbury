@@ -12,6 +12,12 @@ use crate::audio::noise_floor::AdaptiveNoiseFloor;
 
 const DEFAULT_DB_FLOOR: f32 = -60.0;
 const DEFAULT_BAND_SUMMARY_DB: [f32; 4] = [DEFAULT_DB_FLOOR; 4];
+const MIN_SPEECH_FLOOR_RMS: f32 = 0.0005;
+const SPEECH_ENERGY_OVER_FLOOR_RATIO: f32 = 1.7;
+const SPEECH_MAX_ZCR: f32 = 0.18;
+const SPEECH_MAX_SPECTRAL_FLUX: f32 = 0.25;
+const SPEECH_BAND_SHAPE_MARGIN_DB: f32 = 6.0;
+const SPEECH_MAX_NOISE_LIKENESS: f32 = 0.72;
 
 /// Speech-layer alias for framewise acoustic features.
 pub type SpeechFrameFeatures = AcousticFeatureFrame;
@@ -399,11 +405,11 @@ fn is_probable_speech(
     high_band_energy_db: f32,
     noise_likeness: f32,
 ) -> bool {
-    let floor = floor_rms.max(0.0005);
-    let energetic = rms >= floor * 1.7;
-    let periodicish = zcr <= 0.18 && spectral_flux <= 0.25;
-    let speech_band_shape = low_band_energy_db >= high_band_energy_db - 6.0;
-    energetic && periodicish && speech_band_shape && noise_likeness < 0.72
+    let floor = floor_rms.max(MIN_SPEECH_FLOOR_RMS);
+    let energetic = rms >= floor * SPEECH_ENERGY_OVER_FLOOR_RATIO;
+    let periodicish = zcr <= SPEECH_MAX_ZCR && spectral_flux <= SPEECH_MAX_SPECTRAL_FLUX;
+    let speech_band_shape = low_band_energy_db >= high_band_energy_db - SPEECH_BAND_SHAPE_MARGIN_DB;
+    energetic && periodicish && speech_band_shape && noise_likeness < SPEECH_MAX_NOISE_LIKENESS
 }
 
 fn spectral_deviation_from_floor(current: &[f32], floor: Option<&[f32]>) -> f32 {
@@ -463,11 +469,14 @@ mod tests {
     }
 
     fn deterministic_noise(len: usize) -> Vec<f32> {
+        // Numerical Recipes LCG parameters: quick deterministic pseudo-noise for tests.
+        const LCG_A: u32 = 1_664_525;
+        const LCG_C: u32 = 1_013_904_223;
         let mut state: u32 = 0x1234_5678;
         (0..len)
             .map(|_| {
-                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                let unit = ((state >> 8) as f32) / (u32::MAX >> 8) as f32;
+                state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
+                let unit = ((state >> 8) as f32) / ((u32::MAX >> 8) as f32);
                 (unit * 2.0 - 1.0) * 0.18
             })
             .collect()
