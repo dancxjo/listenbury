@@ -10,6 +10,7 @@
 
 pub mod note_target;
 pub mod pitch_curve;
+pub mod singing;
 pub mod syllable;
 pub mod phonotactics;
 pub mod syllabification;
