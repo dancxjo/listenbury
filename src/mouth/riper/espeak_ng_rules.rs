@@ -509,6 +509,8 @@ pub enum MultiWordRuleOutput {
 
 pub const META_ALLOW_STUB_GA_INHERITANCE: &str = "meta:allow_stub_ga_inheritance";
 pub const META_VOICE_RENDER_ONLY: &str = "meta:voice_render_only";
+const VARIETY_ID_EN_US_GA: &str = "en-US-GA";
+const VARIETY_ID_AMERICAN_ENGLISH: &str = "american_english";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -808,7 +810,8 @@ fn is_meta_flag(flag: &str) -> bool {
 fn is_stub_derived_from_ga(status: Option<&VarietyImplementationStatus>) -> bool {
     matches!(
         status,
-        Some(VarietyImplementationStatus::StubDerivedFrom(source)) if source.0 == "en-US-GA"
+        Some(VarietyImplementationStatus::StubDerivedFrom(source))
+            if *source == crate::linguistic::inventory::VarietyId::new(VARIETY_ID_EN_US_GA)
     )
 }
 
@@ -827,7 +830,7 @@ fn condition_matches_active_profile(
     if condition.variety != active.variety {
         let allow_stub_ga = condition_is_stub_ga_allowed(condition)
             && is_stub_derived_from_ga(active.implementation_status.as_ref())
-            && condition.variety == "american_english";
+            && condition.variety == VARIETY_ID_AMERICAN_ENGLISH;
         if !allow_stub_ga {
             reasons.push(format!(
                 "variety mismatch: rule={}, active={}",
@@ -836,7 +839,8 @@ fn condition_matches_active_profile(
             return RuleConditionDiagnostics { applies: false, reasons };
         }
         reasons.push(format!(
-            "matched via explicit GA stub inheritance metadata ({META_ALLOW_STUB_GA_INHERITANCE})"
+            "matched via explicit GA stub inheritance metadata ({})",
+            META_ALLOW_STUB_GA_INHERITANCE
         ));
     }
     if let Some(required_voice_profile) = &condition.voice_profile {
@@ -895,7 +899,7 @@ pub fn english_voice_render_conditions() -> Vec<VarietyRuleCondition> {
         .iter()
         .map(|rule| VarietyRuleCondition {
             language: "en".to_string(),
-            variety: "american_english".to_string(),
+            variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
             voice_profile: Some(rule.match_pattern.clone()),
             enabled_flags: vec![
                 META_VOICE_RENDER_ONLY.to_string(),
@@ -1792,10 +1796,10 @@ mod tests {
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
             .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         native.conditions = vec![VarietyRuleCondition {
             language: "en".to_string(),
-            variety: "american_english".to_string(),
+            variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
             voice_profile: None,
             enabled_flags: vec!["profile:fast_reduction".to_string()],
         }];
@@ -1804,7 +1808,7 @@ mod tests {
             &native,
             &ActiveVarietyProfile {
                 language: "en".to_string(),
-                variety: "american_english".to_string(),
+                variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
                 ..Default::default()
             },
         );
@@ -1818,7 +1822,7 @@ mod tests {
             &native,
             &ActiveVarietyProfile {
                 language: "en".to_string(),
-                variety: "american_english".to_string(),
+                variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
                 enabled_flags: vec!["profile:fast_reduction".to_string()],
                 ..Default::default()
             },
@@ -1833,7 +1837,7 @@ mod tests {
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
             .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         let active_stub_profile = ActiveVarietyProfile {
             language: "en".to_string(),
             variety: "received_pronunciation".to_string(),
@@ -1846,7 +1850,7 @@ mod tests {
 
         native.conditions = vec![VarietyRuleCondition {
             language: "en".to_string(),
-            variety: "american_english".to_string(),
+            variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
             voice_profile: None,
             enabled_flags: vec![META_ALLOW_STUB_GA_INHERITANCE.to_string()],
         }];
@@ -1865,10 +1869,10 @@ mod tests {
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
             .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         native.conditions = vec![VarietyRuleCondition {
             language: "en".to_string(),
-            variety: "american_english".to_string(),
+            variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
             voice_profile: Some("default".to_string()),
             enabled_flags: vec![META_VOICE_RENDER_ONLY.to_string()],
         }];
@@ -1877,7 +1881,7 @@ mod tests {
             &native,
             &ActiveVarietyProfile {
                 language: "en".to_string(),
-                variety: "american_english".to_string(),
+                variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
                 voice_profile: Some("default".to_string()),
                 selection_scope: RuleSelectionScope::Phonological,
                 ..Default::default()
@@ -1893,7 +1897,7 @@ mod tests {
             &native,
             &ActiveVarietyProfile {
                 language: "en".to_string(),
-                variety: "american_english".to_string(),
+                variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
                 voice_profile: Some("default".to_string()),
                 selection_scope: RuleSelectionScope::VoiceRender,
                 ..Default::default()
