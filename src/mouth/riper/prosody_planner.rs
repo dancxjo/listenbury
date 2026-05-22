@@ -289,6 +289,9 @@ pub enum FocusAccentReason {
     CorrectiveParticle,
     QuotedWord,
     FinalContentWord,
+    SyntacticContrastive,
+    SyntacticFocus,
+    SyntacticDirectAddress,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -667,7 +670,10 @@ impl BreathGroupProsodyPlanner {
     ) -> RepairPlan {
         let replacement_prosody = self.plan_candidate(revised);
         let (strategy, divergence) = if previous.text == revised.text {
-            (RepairStrategy::ContinueWithProsodicRetarget, revised.text.len())
+            (
+                RepairStrategy::ContinueWithProsodicRetarget,
+                revised.text.len(),
+            )
         } else {
             let divergence = stable_prefix_len(&previous.text, &revised.text);
             (
@@ -973,6 +979,12 @@ fn default_emphasis_ops(
     let mut ops = Vec::new();
     let mut diagnostics = Vec::new();
     let mut focus_by_word = std::collections::HashMap::<usize, FocusSelection>::new();
+    let env_facts_by_word = candidate
+        .sentence_analysis
+        .prosody_environment_facts()
+        .into_iter()
+        .map(|facts| (facts.word_index, facts))
+        .collect::<std::collections::HashMap<_, _>>();
     let word_count = candidate.word_targets.len();
     if word_count == 0 {
         return FocusAccentPlan { ops, diagnostics };
@@ -980,6 +992,31 @@ fn default_emphasis_ops(
 
     for target in &candidate.word_targets {
         let word = target.normalized_text.as_str();
+        if let Some(facts) = env_facts_by_word.get(&target.word_index)
+            && !facts.conservative
+        {
+            match facts.prosodic_role {
+                crate::mouth::riper::ProsodicRole::Contrastive => promote_focus(
+                    &mut focus_by_word,
+                    target.word_index,
+                    FocusAccentReason::SyntacticContrastive,
+                    88,
+                ),
+                crate::mouth::riper::ProsodicRole::Focus => promote_focus(
+                    &mut focus_by_word,
+                    target.word_index,
+                    FocusAccentReason::SyntacticFocus,
+                    84,
+                ),
+                crate::mouth::riper::ProsodicRole::DirectAddress => promote_focus(
+                    &mut focus_by_word,
+                    target.word_index,
+                    FocusAccentReason::SyntacticDirectAddress,
+                    70,
+                ),
+                _ => {}
+            }
+        }
         if has_quote_emphasis(candidate, target.text_range.start, target.text_range.end) {
             promote_focus(
                 &mut focus_by_word,
@@ -1206,7 +1243,10 @@ fn focus_status_from_commitment(commitment: ProsodyCommitment) -> FocusAccentSta
 }
 
 fn focus_reason_accent_kind(reason: FocusAccentReason) -> ProsodyAccentKind {
-    if matches!(reason, FocusAccentReason::ContrastMarker) {
+    if matches!(
+        reason,
+        FocusAccentReason::ContrastMarker | FocusAccentReason::SyntacticContrastive
+    ) {
         ProsodyAccentKind::Contrastive
     } else {
         ProsodyAccentKind::Focus
@@ -1538,6 +1578,42 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, ProsodyOp::PreserveLexicalStress { .. }))
         );
+    }
+
+    #[test]
+    fn syntactic_object_focus_outranks_weak_function_word() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker
+            .ingest_text("I saw the machine.")
+            .expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+
+        let machine_strength = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex { index },
+                kind,
+                strength,
+            } if *index == 3 && matches!(kind, ProsodyAccentKind::Focus) => Some(*strength),
+            _ => None,
+        });
+        let the_strength = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::SetAccent {
+                target: ProsodyTarget::WordIndex { index },
+                kind,
+                strength,
+            } if *index == 2 && matches!(kind, ProsodyAccentKind::GivenInformation) => {
+                Some(*strength)
+            }
+            _ => None,
+        });
+
+        assert!(
+            machine_strength.is_some(),
+            "object should receive focus accent"
+        );
+        assert!(the_strength.is_some(), "determiner should stay weak");
+        assert!(machine_strength > the_strength);
     }
 
     #[test]
@@ -1918,8 +1994,7 @@ mod tests {
             .map(|target| target.word_index);
         assert_eq!(plan.strategy, RepairStrategy::ContinueWithProsodicRetarget);
         assert_eq!(
-            plan.anchor.word_index,
-            kennedy_index,
+            plan.anchor.word_index, kennedy_index,
             "anchor should start at Kennedy"
         );
     }
@@ -1961,8 +2036,7 @@ mod tests {
         );
         assert!(plan.anchor.char_offset <= divergence);
         assert_eq!(
-            plan.anchor.word_index,
-            john_index,
+            plan.anchor.word_index, john_index,
             "local restart should anchor at John"
         );
     }

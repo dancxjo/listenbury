@@ -70,9 +70,9 @@ pub use prosody_planner::{
 };
 pub use sentence_analysis::{
     ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
-    ReductionClass, ReductionDiagnostic, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
-    SyntacticLink, SyntacticLinkKind, SyntacticLinkParse, SyntacticLinkSource, SyntacticRole,
-    TokenAnalysis, WordIndex,
+    ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic, ReductionStatus,
+    SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind, SyntacticLinkParse,
+    SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,

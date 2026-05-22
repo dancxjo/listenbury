@@ -4,6 +4,7 @@ use crate::mouth::riper::espeak_ng_rules::english_to_rule_descriptor;
 use crate::mouth::riper::evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
 };
+use crate::mouth::riper::prosody_audit::PhraseBoundaryKind;
 use crate::mouth::riper::text::{NormalizedText, NormalizedToken, detect_vocative_spans};
 
 pub type WordIndex = usize;
@@ -51,6 +52,17 @@ pub struct TokenAnalysis {
     pub prosodic_role: ProsodicRole,
     pub reduction: ReductionClass,
     pub reduction_diagnostic: Option<ReductionDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProsodyEnvironmentFacts {
+    pub word_index: usize,
+    pub pos: PartOfSpeech,
+    pub prosodic_role: ProsodicRole,
+    pub phrase_boundary_after: PhraseBoundaryKind,
+    pub syntactic_links: Vec<SyntacticLinkKind>,
+    pub confidence: f32,
+    pub conservative: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -326,6 +338,168 @@ impl SentenceAnalysis {
             .map(SyntacticLinkParse::as_environment_pattern)
             .collect()
     }
+
+    pub fn prosody_environment_facts(&self) -> Vec<ProsodyEnvironmentFacts> {
+        let Some(primary_parse) = self.link_parses.first() else {
+            return Vec::new();
+        };
+        let conservative_ambiguity = self.has_low_confidence_ambiguity();
+        let parse_rank_confidence = primary_parse.rank.clamp(0.0, 1.0);
+
+        self.tokens
+            .iter()
+            .filter_map(|token| {
+                let word_index = token.word_index?;
+                let mut syntactic_links = primary_parse
+                    .links
+                    .iter()
+                    .filter_map(|link| {
+                        (link.left == word_index || link.right == word_index).then_some(link.kind)
+                    })
+                    .collect::<Vec<_>>();
+                syntactic_links.sort_unstable_by_key(|kind| *kind as u8);
+                syntactic_links.dedup();
+
+                let claim_confidence = primary_parse
+                    .claims
+                    .iter()
+                    .filter(|claim| targets_word(claim, word_index))
+                    .map(|claim| claim.confidence)
+                    .fold(0.0_f32, f32::max);
+                let link_confidence = primary_parse
+                    .links
+                    .iter()
+                    .filter(|link| link.left == word_index || link.right == word_index)
+                    .map(|link| link.confidence)
+                    .fold(0.0_f32, f32::max);
+                let confidence = parse_rank_confidence.max(claim_confidence.max(link_confidence));
+
+                let prosodic_role = if conservative_ambiguity {
+                    token.prosodic_role
+                } else {
+                    claim_prosodic_role(primary_parse, word_index).unwrap_or(token.prosodic_role)
+                };
+
+                let phrase_boundary_after = if conservative_ambiguity {
+                    PhraseBoundaryKind::None
+                } else {
+                    boundary_after_word(primary_parse, word_index)
+                };
+
+                Some(ProsodyEnvironmentFacts {
+                    word_index,
+                    pos: token.pos,
+                    prosodic_role,
+                    phrase_boundary_after,
+                    syntactic_links,
+                    confidence,
+                    conservative: conservative_ambiguity,
+                })
+            })
+            .collect()
+    }
+
+    pub fn prosody_environment_facts_for_word(
+        &self,
+        word_index: usize,
+    ) -> Option<ProsodyEnvironmentFacts> {
+        self.prosody_environment_facts()
+            .into_iter()
+            .find(|facts| facts.word_index == word_index)
+    }
+
+    fn has_low_confidence_ambiguity(&self) -> bool {
+        if self.link_parses.len() < 2 {
+            return false;
+        }
+        let best = self.link_parses[0].rank;
+        let second = self.link_parses[1].rank;
+        (best - second).abs() <= 0.1 || best < 0.7
+    }
+}
+
+fn targets_word(claim: &AnalysisClaim, word_index: usize) -> bool {
+    match &claim.target {
+        AnalysisTarget::WordIndex(index) => *index == word_index,
+        AnalysisTarget::WordRange(range) => range.contains(&word_index),
+        AnalysisTarget::Boundary { left_word, .. } => {
+            left_word.is_some_and(|left| left == word_index)
+        }
+        _ => false,
+    }
+}
+
+fn claim_prosodic_role(parse: &SyntacticLinkParse, word_index: usize) -> Option<ProsodicRole> {
+    parse
+        .claims
+        .iter()
+        .filter(|claim| {
+            claim.kind == ClaimKind::ProsodicRole
+                && claim.target == AnalysisTarget::WordIndex(word_index)
+        })
+        .max_by(|left, right| {
+            left.confidence
+                .partial_cmp(&right.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|claim| match &claim.value {
+            ClaimValue::ProsodicRole(role) => parse_prosodic_role(role),
+            _ => None,
+        })
+}
+
+fn parse_prosodic_role(role: &str) -> Option<ProsodicRole> {
+    match role {
+        "Content" => Some(ProsodicRole::Content),
+        "FunctionWeak" => Some(ProsodicRole::FunctionWeak),
+        "FunctionStrong" => Some(ProsodicRole::FunctionStrong),
+        "Contrastive" => Some(ProsodicRole::Contrastive),
+        "Focus" => Some(ProsodicRole::Focus),
+        "DirectAddress" => Some(ProsodicRole::DirectAddress),
+        _ => None,
+    }
+}
+
+fn boundary_after_word(parse: &SyntacticLinkParse, word_index: usize) -> PhraseBoundaryKind {
+    let claimed = parse
+        .claims
+        .iter()
+        .filter_map(|claim| match (&claim.target, &claim.value) {
+            (
+                AnalysisTarget::Boundary {
+                    left_word: Some(left),
+                    ..
+                },
+                ClaimValue::BoundaryKind(boundary),
+            ) if *left == word_index => Some((claim.confidence, boundary.as_str())),
+            _ => None,
+        })
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .and_then(|(_, boundary)| match boundary {
+            "VocativeCommaPauseSuppressed" => Some(PhraseBoundaryKind::Vocative),
+            "Coordination" => Some(PhraseBoundaryKind::MinorPhrase),
+            "PrepositionalPhrase" => Some(PhraseBoundaryKind::MinorPhrase),
+            "MajorPhrasePause" => Some(PhraseBoundaryKind::MajorPhrase),
+            "MinorPhrasePause" => Some(PhraseBoundaryKind::MinorPhrase),
+            _ => None,
+        });
+    if let Some(boundary) = claimed {
+        return boundary;
+    }
+    if parse.links.iter().any(|link| {
+        (link.left == word_index || link.right == word_index)
+            && matches!(
+                link.kind,
+                SyntacticLinkKind::Parenthetical | SyntacticLinkKind::Apposition
+            )
+    }) {
+        return PhraseBoundaryKind::Parenthetical;
+    }
+    PhraseBoundaryKind::None
 }
 
 impl SyntacticLinkParse {
@@ -2044,6 +2218,42 @@ mod tests {
                     .iter()
                     .any(|link| link.source == SyntacticLinkSource::AmbiguityVariant)
         }));
+    }
+
+    #[test]
+    fn bridges_link_claims_into_prosody_environment_facts() {
+        let analysis = analyze("I saw the bright machine.");
+        let machine = word_index(&analysis, "machine");
+        let facts = analysis
+            .prosody_environment_facts_for_word(machine)
+            .expect("machine facts");
+        assert_eq!(facts.word_index, machine);
+        assert_eq!(facts.prosodic_role, ProsodicRole::Focus);
+        assert!(facts.syntactic_links.contains(&SyntacticLinkKind::Object));
+        assert!(facts.confidence >= 0.7);
+        assert!(!facts.conservative);
+
+        let vocative = analyze("Thank you, Dave.");
+        let you = word_index(&vocative, "you");
+        let you_facts = vocative
+            .prosody_environment_facts_for_word(you)
+            .expect("you facts");
+        assert_eq!(
+            you_facts.phrase_boundary_after,
+            PhraseBoundaryKind::Vocative
+        );
+    }
+
+    #[test]
+    fn ambiguous_attachment_facts_stay_conservative() {
+        let analysis = analyze("I saw the man with the telescope.");
+        let telescope = word_index(&analysis, "telescope");
+        let facts = analysis
+            .prosody_environment_facts_for_word(telescope)
+            .expect("telescope facts");
+        assert!(facts.conservative);
+        assert_eq!(facts.phrase_boundary_after, PhraseBoundaryKind::None);
+        assert_eq!(facts.prosodic_role, ProsodicRole::Content);
     }
 
     #[test]
