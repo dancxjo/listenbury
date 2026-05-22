@@ -243,14 +243,14 @@ export function defaultPhoneStringAsString(defaultPhoneString) {
 }
 
 /**
- * Apply opt-in allophone rules to an ARPAbet-derived phoneme sequence.
+ * Apply default-on allophone rules to an ARPAbet-derived phoneme sequence.
  *
  * @param {Phoneme[]} phonemes
  * @param {{enabled?: boolean, language?: string, dialect?: string}} [config]
  * @returns {Phoneme[]}
  */
 export function realizePhonemeSequence(phonemes, config = {}) {
-  const enabled = config.enabled === true;
+  const enabled = config.enabled !== false;
   if (!enabled || !Array.isArray(phonemes)) {
     return Array.isArray(phonemes) ? phonemes : [];
   }

@@ -142,7 +142,7 @@ The initial rule is:
 
 Human conversation often includes short responses that are not full semantic turns: acknowledgments, hesitation markers, backchannels, and floor-holding sounds.
 
-Listenbury includes an early conservative planner for this kind of behavior, but it is disabled by default for now.
+Listenbury includes an early conservative planner for this kind of behavior, and it is enabled by default.
 
 When enabled, the current design prefers silence unless a short, cached response is useful and safe. Repetition guards prevent the same filler from being repeated too often.
 

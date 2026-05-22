@@ -148,9 +148,9 @@ test("unknown ARPABET symbols are explicit and safe", () => {
   assert.equal(phoneme.defaultPhoneString[0].status, "unknown_symbol");
 });
 
-test("applies opt-in intervocalic flapping allophone rule", () => {
+test("applies intervocalic flapping allophone rule by default", () => {
   const base = ["AE1", "T", "ER0"].map((token) => phonemeFromArpabet(token));
-  const realized = realizePhonemeSequence(base, { enabled: true, dialect: "american_english" });
+  const realized = realizePhonemeSequence(base, { dialect: "american_english" });
   assert.equal(realized[1].symbol, "T");
   assert.equal(realized[1].realization.ipa, "ɾ");
   assert.equal(realized[1].realization.method, "allophone_rule");
@@ -161,8 +161,10 @@ test("applies opt-in intervocalic flapping allophone rule", () => {
   );
 });
 
-test("does not apply allophone rules unless enabled", () => {
-  const spans = projectPhonemesIntoWordInterval(["AE1", "T", "ER0"], 0, 300);
+test("can disable allophone rules explicitly", () => {
+  const spans = projectPhonemesIntoWordInterval(["AE1", "T", "ER0"], 0, 300, "cmudict.proportional", {
+    allophoneRules: { enabled: false },
+  });
   assert.equal(spans[1].realization.ipa, "t");
   assert.equal(spans[1].realization.method, "default");
 });

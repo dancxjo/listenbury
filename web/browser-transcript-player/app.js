@@ -6956,7 +6956,7 @@ function buildPhoneSegmentationForWord(word, options = {}) {
     "projected.proportional",
     {
       allophoneRules: {
-        enabled: options.allophoneRulesEnabled === true,
+        enabled: options.allophoneRulesEnabled !== false,
         dialect: "american_english",
       },
     },

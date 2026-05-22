@@ -806,7 +806,7 @@ pub struct RealizationConfig {
 impl Default for RealizationConfig {
     fn default() -> Self {
         Self {
-            enable_allophone_rules: false,
+            enable_allophone_rules: true,
             language: "en".to_string(),
             dialect: "american_english".to_string(),
             now_index: None,
@@ -1441,13 +1441,34 @@ mod tests {
     }
 
     #[test]
-    fn allophone_rules_are_opt_in() {
+    fn allophone_rules_are_enabled_by_default() {
         let seq = vec![
             phoneme_from_arpabet("AE1", "cmudict"),
             phoneme_from_arpabet("T", "cmudict"),
             phoneme_from_arpabet("ER0", "cmudict"),
         ];
         let realized = realize_sequence(&seq, &RealizationConfig::default());
+        assert_eq!(realized[1].realization.ipa, "ɾ");
+        assert_eq!(
+            realized[1].realization.method,
+            RealizationMethod::AllophoneRule
+        );
+    }
+
+    #[test]
+    fn allophone_rules_can_be_disabled() {
+        let seq = vec![
+            phoneme_from_arpabet("AE1", "cmudict"),
+            phoneme_from_arpabet("T", "cmudict"),
+            phoneme_from_arpabet("ER0", "cmudict"),
+        ];
+        let realized = realize_sequence(
+            &seq,
+            &RealizationConfig {
+                enable_allophone_rules: false,
+                ..RealizationConfig::default()
+            },
+        );
         assert_eq!(realized[1].realization.ipa, "t");
         assert_eq!(realized[1].realization.method, RealizationMethod::Default);
     }
