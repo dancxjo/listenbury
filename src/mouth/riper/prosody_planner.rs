@@ -6,6 +6,7 @@ use crate::mouth::riper::prosody_audit::{
     ProsodyRealizationStatus, Stress,
 };
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
+use crate::text_stability::stable_prefix_len;
 
 const PAUSE_MS_DEFAULT: u64 = 140;
 const PAUSE_MS_FINAL_CLOSURE: u64 = 260;
@@ -200,6 +201,68 @@ pub struct ProsodyList {
     pub base: BreathGroupCandidate,
     pub ops: Vec<ProsodyOp>,
     pub focus_diagnostics: Vec<FocusAccentDiagnostic>,
+}
+
+/// Stable cursor into a speech candidate.
+///
+/// Cursors carry boundary anchors at syllable, word, phrase, and breath-group
+/// granularity so correction planning can decide whether to retarget in place
+/// or explicitly restart from an earlier unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechCursor {
+    pub candidate_id: SpeechCandidateId,
+    pub char_offset: usize,
+    pub syllable_index: Option<usize>,
+    pub word_index: Option<usize>,
+    pub phrase_anchor_word_index: Option<usize>,
+    pub breath_group_anchor_word_index: Option<usize>,
+    pub clause_anchor_word_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepairCue {
+    Silence,
+    IMean,
+    Rather,
+    Sorry,
+    Custom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RestartScope {
+    LocalPhrase,
+    BreathGroup,
+    Clause,
+    Utterance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepairStrategy {
+    ReplaceUncommittedFuture,
+    ContinueWithProsodicRetarget,
+    PauseAndRestartFromAnchor { cue: RepairCue, scope: RestartScope },
+    AbortAndRestartUtterance { cue: RepairCue },
+}
+
+/// Runtime commitment model for in-flight correction.
+///
+/// - `committed_until`: speech already heard by the listener.
+/// - `cancellable_until`: generated/buffered speech that can still be replaced.
+/// - Remaining speech is speculative.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechCommitState {
+    pub committed_until: SpeechCursor,
+    pub cancellable_until: SpeechCursor,
+    pub current_breath_group: Option<BreathGroupId>,
+    pub current_phrase_anchor: Option<SpeechCursor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepairPlan {
+    pub strategy: RepairStrategy,
+    pub anchor: SpeechCursor,
+    pub replacement_text: String,
+    pub replacement_prosody: ProsodyList,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -591,6 +654,246 @@ impl BreathGroupProsodyPlanner {
         self.active = Some(planned.clone());
         planned
     }
+
+    pub fn plan_repair(
+        &mut self,
+        previous: &PhonemeProsodyCandidate,
+        revised: &PhonemeProsodyCandidate,
+        commit_state: &SpeechCommitState,
+        cue: RepairCue,
+    ) -> RepairPlan {
+        let replacement_prosody = self.plan_candidate(revised);
+        let divergence = stable_prefix_len(&previous.text, &revised.text);
+        let strategy = choose_repair_strategy(previous, revised, commit_state, divergence, cue);
+        let anchor = select_repair_anchor(revised, commit_state, strategy.clone(), divergence);
+        RepairPlan {
+            strategy,
+            anchor,
+            replacement_text: revised.text.clone(),
+            replacement_prosody,
+        }
+    }
+}
+
+fn choose_repair_strategy(
+    previous: &PhonemeProsodyCandidate,
+    revised: &PhonemeProsodyCandidate,
+    commit_state: &SpeechCommitState,
+    divergence: usize,
+    cue: RepairCue,
+) -> RepairStrategy {
+    if previous.text == revised.text {
+        return RepairStrategy::ContinueWithProsodicRetarget;
+    }
+
+    if revised.text.starts_with(&previous.text)
+        && commit_state.committed_until.char_offset.saturating_add(1) >= divergence
+    {
+        return RepairStrategy::ContinueWithProsodicRetarget;
+    }
+
+    if divergence >= commit_state.committed_until.char_offset {
+        return RepairStrategy::ReplaceUncommittedFuture;
+    }
+
+    let local_scope_viable = commit_state
+        .current_phrase_anchor
+        .as_ref()
+        .is_some_and(|anchor| {
+            divergence >= anchor.char_offset
+                || divergence >= commit_state.cancellable_until.char_offset.saturating_sub(2)
+        });
+    if local_scope_viable {
+        return RepairStrategy::PauseAndRestartFromAnchor {
+            cue,
+            scope: RestartScope::LocalPhrase,
+        };
+    }
+
+    if has_clause_break_before_offset(revised, divergence) {
+        return RepairStrategy::PauseAndRestartFromAnchor {
+            cue,
+            scope: RestartScope::Clause,
+        };
+    }
+
+    RepairStrategy::PauseAndRestartFromAnchor {
+        cue,
+        scope: RestartScope::BreathGroup,
+    }
+}
+
+fn select_repair_anchor(
+    candidate: &PhonemeProsodyCandidate,
+    commit_state: &SpeechCommitState,
+    strategy: RepairStrategy,
+    divergence: usize,
+) -> SpeechCursor {
+    match strategy {
+        RepairStrategy::ContinueWithProsodicRetarget => {
+            cursor_from_char_offset(candidate, divergence.min(candidate.text.len()))
+        }
+        RepairStrategy::ReplaceUncommittedFuture => commit_state.cancellable_until.clone(),
+        RepairStrategy::PauseAndRestartFromAnchor { scope, .. } => match scope {
+            RestartScope::LocalPhrase => {
+                let word_index = anchor_word_index_for_scope(candidate, divergence, scope)
+                    .or_else(|| {
+                        commit_state
+                            .current_phrase_anchor
+                            .as_ref()
+                            .and_then(|p| p.word_index)
+                    })
+                    .unwrap_or(0);
+                cursor_for_word_index(candidate, word_index)
+            }
+            RestartScope::BreathGroup | RestartScope::Clause => {
+                let word_index =
+                    anchor_word_index_for_scope(candidate, divergence, scope).unwrap_or(0);
+                cursor_for_word_index(candidate, word_index)
+            }
+            RestartScope::Utterance => cursor_from_char_offset(candidate, 0),
+        },
+        RepairStrategy::AbortAndRestartUtterance { .. } => cursor_from_char_offset(candidate, 0),
+    }
+}
+
+fn cursor_for_word_index(candidate: &PhonemeProsodyCandidate, word_index: usize) -> SpeechCursor {
+    let char_offset = candidate
+        .word_targets
+        .iter()
+        .find(|target| target.word_index == word_index)
+        .map(|target| target.text_range.start)
+        .unwrap_or(0);
+    cursor_from_char_offset(candidate, char_offset)
+}
+
+fn cursor_from_char_offset(
+    candidate: &PhonemeProsodyCandidate,
+    char_offset: usize,
+) -> SpeechCursor {
+    let bounded_offset = char_offset.min(candidate.text.len());
+    let word_index = candidate
+        .word_targets
+        .iter()
+        .rfind(|target| target.text_range.start <= bounded_offset)
+        .map(|target| target.word_index);
+    let syllable_index = word_index.and_then(|word| {
+        let target = candidate
+            .word_targets
+            .iter()
+            .find(|target| target.word_index == word)?;
+        Some(
+            candidate
+                .lexical_stress
+                .iter()
+                .filter(|stress| stress.phoneme_index < target.phoneme_range.end)
+                .count(),
+        )
+    });
+    let phrase_anchor_word_index = word_index.map(|word| {
+        anchor_word_index_for_scope(
+            candidate,
+            word_to_char(candidate, word),
+            RestartScope::LocalPhrase,
+        )
+        .unwrap_or(0)
+    });
+    let breath_group_anchor_word_index = word_index.map(|word| {
+        anchor_word_index_for_scope(
+            candidate,
+            word_to_char(candidate, word),
+            RestartScope::BreathGroup,
+        )
+        .unwrap_or(0)
+    });
+    let clause_anchor_word_index = word_index.map(|word| {
+        anchor_word_index_for_scope(
+            candidate,
+            word_to_char(candidate, word),
+            RestartScope::Clause,
+        )
+        .unwrap_or(0)
+    });
+
+    SpeechCursor {
+        candidate_id: candidate.id,
+        char_offset: bounded_offset,
+        syllable_index,
+        word_index,
+        phrase_anchor_word_index,
+        breath_group_anchor_word_index,
+        clause_anchor_word_index,
+    }
+}
+
+fn word_to_char(candidate: &PhonemeProsodyCandidate, word_index: usize) -> usize {
+    candidate
+        .word_targets
+        .iter()
+        .find(|target| target.word_index == word_index)
+        .map(|target| target.text_range.start)
+        .unwrap_or(0)
+}
+
+fn anchor_word_index_for_scope(
+    candidate: &PhonemeProsodyCandidate,
+    char_offset: usize,
+    scope: RestartScope,
+) -> Option<usize> {
+    let word_index = candidate
+        .word_targets
+        .iter()
+        .rfind(|target| target.text_range.start <= char_offset)
+        .map(|target| target.word_index)?;
+    match scope {
+        RestartScope::LocalPhrase => Some(scan_back_to_delimiter(
+            candidate,
+            word_index,
+            &[',', ';', ':'],
+        )),
+        RestartScope::Clause => Some(scan_back_to_delimiter(
+            candidate,
+            word_index,
+            &[',', ';', ':', '.'],
+        )),
+        RestartScope::BreathGroup => {
+            Some(word_index.saturating_sub(word_index % BREATH_PAUSE_WORD_INTERVAL))
+        }
+        RestartScope::Utterance => Some(0),
+    }
+}
+
+fn scan_back_to_delimiter(
+    candidate: &PhonemeProsodyCandidate,
+    from_word: usize,
+    delimiters: &[char],
+) -> usize {
+    for index in (1..=from_word).rev() {
+        let previous = candidate
+            .word_targets
+            .iter()
+            .find(|target| target.word_index == index - 1);
+        let current = candidate
+            .word_targets
+            .iter()
+            .find(|target| target.word_index == index);
+        let Some((previous, current)) = previous.zip(current) else {
+            continue;
+        };
+        let between = &candidate.text[previous.text_range.end..current.text_range.start];
+        if between.chars().any(|ch| delimiters.contains(&ch)) {
+            return index;
+        }
+    }
+    0
+}
+
+fn has_clause_break_before_offset(candidate: &PhonemeProsodyCandidate, char_offset: usize) -> bool {
+    candidate
+        .text
+        .chars()
+        .take(char_offset.min(candidate.text.len()))
+        .any(|ch| matches!(ch, ',' | ';' | ':'))
 }
 
 fn boundary_state(candidate: &PhonemeProsodyCandidate) -> BoundaryState {
@@ -1036,6 +1339,21 @@ mod tests {
             ProsodyOp::InsertPause(pause) => Some(pause),
             _ => None,
         })
+    }
+
+    fn commit_state_for(
+        candidate: &PhonemeProsodyCandidate,
+        committed_char_offset: usize,
+        cancellable_char_offset: usize,
+        phrase_anchor_char_offset: Option<usize>,
+    ) -> SpeechCommitState {
+        SpeechCommitState {
+            committed_until: cursor_from_char_offset(candidate, committed_char_offset),
+            cancellable_until: cursor_from_char_offset(candidate, cancellable_char_offset),
+            current_breath_group: Some(BreathGroupId(candidate.id.0)),
+            current_phrase_anchor: phrase_anchor_char_offset
+                .map(|offset| cursor_from_char_offset(candidate, offset)),
+        }
     }
 
     #[test]
@@ -1564,5 +1882,100 @@ mod tests {
             reduction.status,
             crate::mouth::riper::ReductionStatus::Applied
         );
+    }
+
+    #[test]
+    fn repair_plan_retargets_john_f_continuation_without_restart() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let first = tracker
+            .ingest_text("The president at the time was John F.")
+            .expect("candidate");
+        let previous = latest_candidate(&first).clone();
+        let second = tracker
+            .ingest_text("The president at the time was John F. Kennedy")
+            .expect("candidate");
+        let revised = latest_candidate(&second).clone();
+        let commit_state = commit_state_for(
+            &previous,
+            previous.text.len(),
+            previous.text.len(),
+            previous.text.find("John"),
+        );
+
+        let plan = planner.plan_repair(&previous, &revised, &commit_state, RepairCue::IMean);
+        assert_eq!(plan.strategy, RepairStrategy::ContinueWithProsodicRetarget);
+        assert_eq!(
+            plan.anchor.word_index,
+            Some(7),
+            "anchor should start at Kennedy"
+        );
+    }
+
+    #[test]
+    fn repair_plan_prefers_local_phrase_restart_on_false_start() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let first = tracker
+            .ingest_text("The president at the time was John F.")
+            .expect("candidate");
+        let previous = latest_candidate(&first).clone();
+        let second = tracker
+            .ingest_text(
+                "The president at the time was John F. Kennedy, who would later be assassinated.",
+            )
+            .expect("candidate");
+        let revised = latest_candidate(&second).clone();
+        let divergence = stable_prefix_len(&previous.text, &revised.text);
+        let commit_state = commit_state_for(
+            &previous,
+            previous.text.len().saturating_sub(2),
+            previous.text.len().saturating_sub(1),
+            previous.text.find("John"),
+        );
+
+        let plan = planner.plan_repair(&previous, &revised, &commit_state, RepairCue::IMean);
+        assert_eq!(
+            plan.strategy,
+            RepairStrategy::PauseAndRestartFromAnchor {
+                cue: RepairCue::IMean,
+                scope: RestartScope::LocalPhrase
+            }
+        );
+        assert!(plan.anchor.char_offset <= divergence);
+        assert_eq!(
+            plan.anchor.word_index,
+            Some(6),
+            "local restart should anchor at John"
+        );
+    }
+
+    #[test]
+    fn repair_plan_silently_replaces_uncommitted_future() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let first = tracker
+            .ingest_text("We should ship this Friday.")
+            .expect("candidate");
+        let previous = latest_candidate(&first).clone();
+        let second = tracker
+            .ingest_text("We should ship this next Friday.")
+            .expect("candidate");
+        let revised = latest_candidate(&second).clone();
+        let divergence = stable_prefix_len(&previous.text, &revised.text);
+        let commit_state = commit_state_for(
+            &previous,
+            "We should ship ".len(),
+            "We should ship this ".len(),
+            Some(0),
+        );
+
+        let plan = planner.plan_repair(&previous, &revised, &commit_state, RepairCue::Silence);
+        assert_eq!(plan.strategy, RepairStrategy::ReplaceUncommittedFuture);
+        assert_eq!(
+            plan.anchor.char_offset, commit_state.cancellable_until.char_offset,
+            "silent replacements should begin from cancellable boundary"
+        );
+        assert!(divergence >= commit_state.committed_until.char_offset);
     }
 }
