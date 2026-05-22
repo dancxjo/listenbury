@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::linguistic::arpabet::default_phone_string_for_arpabet;
 use crate::linguistic::environment as ling_env;
 use crate::linguistic::phone::PhoneString;
+use crate::mouth::riper::{NormalizedText, SentenceAnalysis};
 
 const ESPEAK_NG_SEED_RULES_JSON: &str = include_str!("data/espeak_ng_seed_rules.json");
 
@@ -104,6 +105,21 @@ pub struct PunctuationProsodyRule {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MultiWordSeedRule {
+    pub rule_id: String,
+    pub words: Vec<String>,
+    pub context: RuleContextConstraint,
+    pub output_transformation: String,
+    pub confidence: u8,
+    pub priority: i32,
+    #[serde(default)]
+    pub required_links: Vec<String>,
+    #[serde(default)]
+    pub dictionary_flags: Vec<LexicalProsodyFlag>,
+    pub provenance: RuleProvenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceVariantRule {
     pub rule_id: String,
     pub match_pattern: String,
@@ -143,6 +159,8 @@ pub struct LinguisticVarietyRuleTable {
     pub stress_rules: Vec<StressRule>,
     pub pronunciation_override_rules: Vec<PronunciationOverrideRule>,
     pub punctuation_prosody_rules: Vec<PunctuationProsodyRule>,
+    #[serde(default)]
+    pub multi_word_rules: Vec<MultiWordSeedRule>,
     pub voice_variant_rules: Vec<VoiceVariantRule>,
     pub phoneme_mapping_rules: Vec<PhonemeMappingRule>,
 }
@@ -284,6 +302,173 @@ pub fn english_punctuation_rule(
 }
 
 // ---------------------------------------------------------------------------
+// Morphophonology rule types
+// ---------------------------------------------------------------------------
+
+/// A spelling repair that must be applied to a stripped surface form before
+/// looking up the stem in the lexicon.
+///
+/// These three repairs encode the eSpeak rule-file wisdom about how English
+/// orthography mutates at suffix boundaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpellingRepairHint {
+    /// Restore a trailing `e` that was dropped before the suffix
+    /// (e.g. `"liked"` → stem candidate `"like"` before `-ed` lookup).
+    RestoreTrailingE,
+    /// Undo consonant doubling at the suffix boundary
+    /// (e.g. `"running"` → stem candidate `"run"` before `-ing` lookup).
+    RemoveDoubledConsonant,
+    /// Reverse a `y` → `i` change at the stem/suffix boundary
+    /// (e.g. `"happily"` → stem candidate `"happy"` before `-ly` lookup).
+    IToY,
+}
+
+/// Describes how to extract and look up the stem once the surface affix has
+/// been stripped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StemRetranslationPolicy {
+    /// Strip the affix and look up the bare stem directly.
+    DirectStripAndLookup,
+    /// Try the listed spelling repairs (in order) as additional stem
+    /// candidates before falling back to the bare form.
+    SpellingRepair(Vec<SpellingRepairHint>),
+}
+
+/// Specifies what this morphophonology rule contributes to the output once
+/// the stem pronunciation has been resolved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MorphophonologyOutput {
+    /// Append a space-separated ARPAbet phone string to the stem's phones.
+    AppendArpabet(String),
+    /// Preserve the stem's pronunciation without appending anything.
+    /// Used for prefix-only rules where the prefix phones are prepended
+    /// externally.
+    PreserveStemPronunciation,
+}
+
+/// A native morphophonology rule encoding eSpeak-style affix and
+/// retranslation behaviour.
+///
+/// These rules represent the linguistic knowledge that eSpeak's rule files
+/// encode (prefix/suffix removal, spelling repairs, POS hints) in a structured
+/// format that any downstream component can inspect without re-parsing
+/// eSpeak's proprietary rule syntax.
+///
+/// A rule carries full [`RuleProvenance`] so diagnostics can always trace
+/// where a particular pronunciation decision originated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MorphophonologyRule {
+    /// Unique stable identifier for this rule.
+    pub id: String,
+    /// The orthographic affix string (e.g. `"ed"`, `"ing"`, `"un"`).
+    pub affix: String,
+    /// Whether the affix is a prefix or a suffix.
+    pub morpheme_kind: ling_env::MorphemeKind,
+    /// How to derive the stem form for pronunciation lookup.
+    pub stem_policy: StemRetranslationPolicy,
+    /// What the rule produces once the stem is resolved.
+    pub output_policy: MorphophonologyOutput,
+    /// Where this rule's knowledge was originally encoded.
+    pub provenance: RuleProvenance,
+}
+
+fn espeak_provenance() -> RuleProvenance {
+    RuleProvenance {
+        source: "espeak-ng-derived".to_string(),
+        source_file: "dictsource/en_rules".to_string(),
+        source_license: "GPL-3.0-or-later".to_string(),
+        imported_at: "2026-05-21T00:23:41Z".to_string(),
+    }
+}
+
+/// Return the bundled set of English native morphophonology rules derived
+/// from eSpeak affix and retranslation wisdom.
+///
+/// These rules cover the most productive English suffixes (`-ed`, `-ing`,
+/// `-s`, `-ly`) and common prefixes (`un-`, `re-`, `di-`).  Every rule
+/// carries [`RuleProvenance`] so callers can surface attribution in
+/// diagnostics.
+pub fn english_native_morphophonology_rules() -> Vec<MorphophonologyRule> {
+    let prov = espeak_provenance();
+    vec![
+        // --- Suffixes ---
+        MorphophonologyRule {
+            id: "suffix_ed_attachment".to_string(),
+            affix: "ed".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::RestoreTrailingE,
+                SpellingRepairHint::RemoveDoubledConsonant,
+                SpellingRepairHint::IToY,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet(
+                "IH0 D".to_string(), // underlying /ɪd/; allomorph selected at realisation
+            ),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_ing_attachment".to_string(),
+            affix: "ing".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::RestoreTrailingE,
+                SpellingRepairHint::RemoveDoubledConsonant,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet("IH0 NG".to_string()),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_s_attachment".to_string(),
+            affix: "s".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::AppendArpabet(
+                "Z".to_string(), // underlying /z/; allomorph selected at realisation
+            ),
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "suffix_ly_attachment".to_string(),
+            affix: "ly".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Suffix,
+            stem_policy: StemRetranslationPolicy::SpellingRepair(vec![
+                SpellingRepairHint::IToY,
+            ]),
+            output_policy: MorphophonologyOutput::AppendArpabet("L IY0".to_string()),
+            provenance: prov.clone(),
+        },
+        // --- Prefixes ---
+        MorphophonologyRule {
+            id: "prefix_un_attachment".to_string(),
+            affix: "un".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "prefix_re_attachment".to_string(),
+            affix: "re".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov.clone(),
+        },
+        MorphophonologyRule {
+            id: "prefix_di_attachment".to_string(),
+            affix: "di".to_string(),
+            morpheme_kind: ling_env::MorphemeKind::Prefix,
+            stem_policy: StemRetranslationPolicy::DirectStripAndLookup,
+            output_policy: MorphophonologyOutput::PreserveStemPronunciation,
+            provenance: prov,
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Native rule types
 // ---------------------------------------------------------------------------
 
@@ -299,6 +484,23 @@ pub enum RuleOutput {
     /// Annotate a phrase boundary with the given kind and an optional prosodic
     /// contour label (e.g. `"exclamation"`, `"final_rising"`).
     ProsodyBoundary {
+        boundary: ling_env::PhraseBoundaryKind,
+        contour: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MultiWordRuleOutput {
+    /// Replace the matched phrase with an explicit phone sequence.
+    PhoneString(PhoneString),
+    /// Keep the phrase contiguous (suppress auto-inserted internal break/breath split).
+    NoBreak,
+    /// Prefer citation forms over weak reductions in this phrase.
+    CitationFormSelection,
+    /// Prefer weak forms inside this phrase.
+    WeakFormSelection,
+    /// Override the phrase boundary associated with this phrase.
+    PhraseBoundary {
         boundary: ling_env::PhraseBoundaryKind,
         contour: Option<String>,
     },
@@ -326,6 +528,35 @@ pub struct ImportedEnvironmentRule {
     pub pattern: ling_env::EnvironmentPattern,
     /// What the rule produces when it fires.
     pub output: RuleOutput,
+}
+
+/// Phrase-level pronunciation/prosody rule imported from an eSpeak multi-word seed entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiWordPronunciationRule {
+    pub id: String,
+    pub words: Vec<String>,
+    pub pattern: ling_env::EnvironmentPattern,
+    pub output: MultiWordRuleOutput,
+    pub provenance: RuleProvenance,
+    pub priority: i32,
+    pub confidence: f32,
+    pub required_links: Vec<String>,
+    pub lexical_flags: Vec<LexicalProsodyFlagFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchedWordSpan {
+    pub words: Vec<String>,
+    pub word_range: std::ops::Range<usize>,
+    pub token_range: std::ops::Range<usize>,
+    pub source_span: std::ops::Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiWordRuleMatch {
+    pub rule_id: String,
+    pub matched_word_span: MatchedWordSpan,
+    pub provenance: RuleProvenance,
 }
 
 // ---------------------------------------------------------------------------
@@ -497,6 +728,20 @@ fn lexical_flag_facts_for_punctuation_rule(
     )
 }
 
+fn lexical_flag_facts_for_multi_word_rule(rule: &MultiWordSeedRule) -> Vec<LexicalProsodyFlagFact> {
+    let mut flags = rule.dictionary_flags.clone();
+    if rule.output_transformation == "no_break" {
+        push_flag_once(&mut flags, LexicalProsodyFlag::PauseAfter);
+    }
+    flags.extend(contextual_flags(&rule.context));
+    lexical_flag_facts(
+        &rule.rule_id,
+        confidence_from_seed(rule.confidence),
+        &rule.provenance,
+        flags,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Public conversion functions
 // ---------------------------------------------------------------------------
@@ -603,6 +848,398 @@ pub fn convert_punctuation_prosody_rule(
     }
 }
 
+fn parse_multi_word_output(output: &str) -> MultiWordRuleOutput {
+    if output.eq_ignore_ascii_case("no_break") {
+        return MultiWordRuleOutput::NoBreak;
+    }
+    if output.eq_ignore_ascii_case("citation_form") {
+        return MultiWordRuleOutput::CitationFormSelection;
+    }
+    if output.eq_ignore_ascii_case("weak_form") {
+        return MultiWordRuleOutput::WeakFormSelection;
+    }
+    if let Some(arpabet) = output.strip_prefix("phones:") {
+        return MultiWordRuleOutput::PhoneString(arpabet_to_phone_string(arpabet));
+    }
+    if output.starts_with("boundary:") {
+        let (boundary, contour) = parse_boundary_output(output);
+        return MultiWordRuleOutput::PhraseBoundary { boundary, contour };
+    }
+    MultiWordRuleOutput::PhoneString(arpabet_to_phone_string(output))
+}
+
+/// Convert a [`MultiWordSeedRule`] into a native phrase-level
+/// [`MultiWordPronunciationRule`].
+pub fn convert_multi_word_rule(
+    rule: &MultiWordSeedRule,
+    language: &str,
+    variety: &str,
+) -> MultiWordPronunciationRule {
+    MultiWordPronunciationRule {
+        id: rule.rule_id.clone(),
+        words: rule.words.clone(),
+        pattern: ling_env::EnvironmentPattern {
+            target: ling_env::TargetPattern::Symbols(rule.words.clone()),
+            left: Vec::new(),
+            right: Vec::new(),
+            contains: Vec::new(),
+            overlaps: Vec::new(),
+            word_position: None,
+            syllable_position: None,
+            phrase_position: None,
+            stress: None,
+            language: Some(language.to_string()),
+            variety: Some(variety.to_string()),
+            timing: Vec::new(),
+        },
+        output: parse_multi_word_output(&rule.output_transformation),
+        provenance: rule.provenance.clone(),
+        priority: rule.priority,
+        confidence: confidence_from_seed(rule.confidence),
+        required_links: rule.required_links.clone(),
+        lexical_flags: lexical_flag_facts_for_multi_word_rule(rule),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured boundary prosody rule types
+// ---------------------------------------------------------------------------
+
+/// The pattern that triggers a [`BoundaryProsodyRule`] — either a specific
+/// punctuation character or a clause/utterance position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryPattern {
+    /// A specific punctuation character (e.g. `'!'`, `'?'`, `','`).
+    Punctuation(char),
+    /// The end of a complete clause or sentence (any final-boundary position).
+    ClauseEnd,
+    /// The start of a clause or sentence.
+    ClauseStart,
+    /// The very end of the utterance string — stronger than `ClauseEnd`.
+    UtteranceEnd,
+    /// Any major phrase boundary, regardless of punctuation.
+    AnyMajorBoundary,
+    /// Any minor phrase boundary, regardless of punctuation.
+    AnyMinorBoundary,
+}
+
+/// Phrase boundary strength for a [`BoundaryProsodyRule`] output.
+///
+/// This is a prosody-level classification and is intentionally kept separate
+/// from [`ling_env::PhraseBoundaryKind`] (which covers only `None/Minor/Major`)
+/// to allow richer downstream discrimination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryKind {
+    None,
+    Minor,
+    Major,
+}
+
+/// Pitch movement direction at a prosodic boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PitchDirection {
+    /// Falling pitch at the end of a declarative sentence.
+    FinalFalling,
+    /// Rising pitch at the end of a question.
+    FinalRising,
+    /// High/expanded pitch associated with exclamations.
+    Exclamation,
+    /// Level or neutral pitch — continuation or parenthetical.
+    Level,
+}
+
+/// Stress effect at a clause boundary position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StressEffect {
+    /// The final stressed syllable before the boundary receives extra prominence.
+    ClauseFinalStress,
+    /// Stress is reduced or relaxed — typical for parentheticals or appositives.
+    StressRelaxation,
+    /// No special stress adjustment.
+    Neutral,
+}
+
+/// Context evidence that can suppress or soften a comma pause.
+///
+/// When any of these conditions hold at the comma site, the minor-phrase pause
+/// should be shortened or omitted, matching eSpeak-ng's vocative/appositive
+/// comma suppression behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuppressibleBy {
+    /// A vocative (direct-address) construction is present at the comma site.
+    VocativeContext,
+    /// A non-restrictive appositive phrase flanks the comma.
+    AppositiveContext,
+    /// A parenthetical aside is delimited by the comma.
+    ParentheticalContext,
+    /// A tight syntactic dependency (e.g. determiner–noun, auxiliary–verb)
+    /// crosses the comma, indicating the pause is prosodically inappropriate.
+    TightSyntacticLink,
+}
+
+/// Structured prosodic effect produced when a [`BoundaryProsodyRule`] fires.
+///
+/// All fields are optional; `None` means "do not modify the default".  A rule
+/// may influence only the boundary strength while leaving pitch and stress to
+/// downstream defaults, for example.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryProsodyEffect {
+    /// The phrase boundary strength that applies at this position.
+    pub boundary_kind: BoundaryKind,
+    /// The pitch contour direction at this boundary, if specified.
+    pub pitch_direction: Option<PitchDirection>,
+    /// Additional pause duration in milliseconds (relative to the baseline
+    /// pause for this boundary kind).  Positive values extend the pause;
+    /// negative values shorten it.
+    pub pause_delta_ms: Option<i32>,
+    /// Pitch range multiplier: `1.0` is neutral, `> 1.0` widens the range
+    /// (excited/exclamation), `< 1.0` narrows it.
+    pub pitch_range_factor: Option<f32>,
+    /// Clause-boundary stress adjustment.
+    pub stress_effect: StressEffect,
+    /// Evidence kinds that can suppress or soften this boundary's pause.
+    /// Empty means the pause is unconditional.
+    pub suppressible_by: Vec<SuppressibleBy>,
+}
+
+/// A structured boundary/prosody rule derived from eSpeak-ng clause-position
+/// and punctuation prosody rules.
+///
+/// Unlike [`ImportedEnvironmentRule`], which stores the output as an opaque
+/// `contour: Option<String>`, `BoundaryProsodyRule` encodes every prosodic
+/// dimension as a typed field so that downstream renderers can act on them
+/// without parsing strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryProsodyRule {
+    /// Unique identifier, copied from the originating seed rule's `rule_id`.
+    pub id: String,
+    /// What position or punctuation character triggers this rule.
+    pub boundary_pattern: BoundaryPattern,
+    /// The structured prosodic effect when the rule fires.
+    pub output: BoundaryProsodyEffect,
+    /// Higher values take precedence when multiple rules match.
+    pub priority: i32,
+    /// Normalised confidence in `[0, 1]`.
+    pub confidence: f32,
+    /// Trace back to the originating eSpeak-ng source file and license.
+    pub provenance: RuleProvenance,
+}
+
+// ---------------------------------------------------------------------------
+// Conversion: PunctuationProsodyRule → BoundaryProsodyRule
+// ---------------------------------------------------------------------------
+
+/// Intermediate result of parsing an `output_transformation` string into
+/// structured prosody effect fields.  Used only inside
+/// [`structured_boundary_output`] to avoid returning a raw 4-tuple.
+struct ParsedBoundaryOutput {
+    boundary_kind: BoundaryKind,
+    pitch_direction: Option<PitchDirection>,
+    pitch_range_factor: Option<f32>,
+    stress_effect: StressEffect,
+}
+
+/// Derive the structured prosody effect fields from an `output_transformation`
+/// string such as `"boundary:exclamation"`.
+fn structured_boundary_output(output: &str) -> ParsedBoundaryOutput {
+    if let Some(label) = output.strip_prefix("boundary:") {
+        match label {
+            "none" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::None,
+                pitch_direction: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
+            "minor" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Minor,
+                pitch_direction: Some(PitchDirection::Level),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
+            "major" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::Level),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "final_falling" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "final_rising" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalRising),
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            "exclamation" => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::Exclamation),
+                pitch_range_factor: Some(1.25),
+                stress_effect: StressEffect::ClauseFinalStress,
+            },
+            _ => ParsedBoundaryOutput {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+            },
+        }
+    } else {
+        ParsedBoundaryOutput {
+            boundary_kind: BoundaryKind::Major,
+            pitch_direction: None,
+            pitch_range_factor: None,
+            stress_effect: StressEffect::Neutral,
+        }
+    }
+}
+
+/// Derive which context evidence can suppress this punctuation's pause.
+///
+/// Comma pauses can be suppressed by vocative/appositive/parenthetical
+/// evidence; sentence-final punctuation (`!`, `?`, `.`) is never suppressible.
+fn suppressible_by_for_punctuation(match_pattern: &str) -> Vec<SuppressibleBy> {
+    match match_pattern {
+        "," => vec![
+            SuppressibleBy::VocativeContext,
+            SuppressibleBy::AppositiveContext,
+            SuppressibleBy::ParentheticalContext,
+            SuppressibleBy::TightSyntacticLink,
+        ],
+        // Semicolons and colons can be softened when a tight link is present
+        // (e.g. a colon introducing a list where the first item follows immediately).
+        ";" | ":" => vec![SuppressibleBy::TightSyntacticLink],
+        _ => vec![],
+    }
+}
+
+/// Convert a [`PunctuationProsodyRule`] into a structured [`BoundaryProsodyRule`].
+///
+/// Unlike [`convert_punctuation_prosody_rule`] which produces an
+/// [`ImportedEnvironmentRule`] with a string `contour` field, this function
+/// produces fully typed output that does not depend on string parsing downstream.
+///
+/// `match_pattern` is expected to be a single Unicode scalar value (punctuation
+/// character).  If it is empty the pattern falls back to
+/// [`BoundaryPattern::AnyMajorBoundary`].
+pub fn convert_to_boundary_prosody_rule(rule: &PunctuationProsodyRule) -> BoundaryProsodyRule {
+    let confidence = confidence_from_seed(rule.confidence);
+    // match_pattern is always a single punctuation character in the seed data.
+    // chars().next() safely handles the empty-string edge case without panicking.
+    let boundary_pattern = match rule.match_pattern.chars().next() {
+        Some(ch) => BoundaryPattern::Punctuation(ch),
+        None => BoundaryPattern::AnyMajorBoundary,
+    };
+    let parsed = structured_boundary_output(&rule.output_transformation);
+    let suppressible_by = suppressible_by_for_punctuation(&rule.match_pattern);
+
+    BoundaryProsodyRule {
+        id: rule.rule_id.clone(),
+        boundary_pattern,
+        output: BoundaryProsodyEffect {
+            boundary_kind: parsed.boundary_kind,
+            pitch_direction: parsed.pitch_direction,
+            pause_delta_ms: None,
+            pitch_range_factor: parsed.pitch_range_factor,
+            stress_effect: parsed.stress_effect,
+            suppressible_by,
+        },
+        priority: rule.priority,
+        confidence,
+        provenance: rule.provenance.clone(),
+    }
+}
+
+/// Return whether a [`BoundaryProsodyRule`]'s comma pause is suppressed by the
+/// given context evidence.
+///
+/// Returns `true` if at least one of the rule's [`SuppressibleBy`] kinds is
+/// present in `active_suppressors`.  A `false` result means the pause should
+/// proceed at full strength.
+pub fn is_comma_pause_suppressed(
+    rule: &BoundaryProsodyRule,
+    active_suppressors: &[SuppressibleBy],
+) -> bool {
+    rule.output
+        .suppressible_by
+        .iter()
+        .any(|kind| active_suppressors.contains(kind))
+}
+
+// ---------------------------------------------------------------------------
+// Clause-position boundary rules
+// ---------------------------------------------------------------------------
+
+/// Build a hardcoded set of clause-position [`BoundaryProsodyRule`]s that
+/// capture start-of-clause, end-of-clause, and end-of-utterance behaviour
+/// independently of any specific punctuation character.
+///
+/// These supplement the punctuation-derived rules with position-based prosodic
+/// effects such as utterance-final falling cadence and clause-start freshness.
+pub fn clause_position_boundary_rules() -> Vec<BoundaryProsodyRule> {
+    let provenance = RuleProvenance {
+        source: "espeak-ng-derived".to_string(),
+        source_file: "dictsource/en_rules, phsource/prosody".to_string(),
+        source_license: "GPL-3.0-or-later".to_string(),
+        imported_at: "2026-05-21T00:23:41Z".to_string(),
+    };
+    vec![
+        BoundaryProsodyRule {
+            id: "clause_utterance_end_falling".to_string(),
+            boundary_pattern: BoundaryPattern::UtteranceEnd,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+                suppressible_by: vec![],
+            },
+            priority: 110,
+            confidence: 0.92,
+            provenance: provenance.clone(),
+        },
+        BoundaryProsodyRule {
+            id: "clause_end_falling".to_string(),
+            boundary_pattern: BoundaryPattern::ClauseEnd,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+                suppressible_by: vec![],
+            },
+            priority: 100,
+            confidence: 0.85,
+            provenance: provenance.clone(),
+        },
+        BoundaryProsodyRule {
+            id: "clause_start_level".to_string(),
+            boundary_pattern: BoundaryPattern::ClauseStart,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::None,
+                pitch_direction: Some(PitchDirection::Level),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+                suppressible_by: vec![],
+            },
+            priority: 90,
+            confidence: 0.80,
+            provenance,
+        },
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // Bulk converters for the bundled English variety
 // ---------------------------------------------------------------------------
@@ -624,6 +1261,37 @@ pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
         .punctuation_prosody_rules
         .iter()
         .map(|r| convert_punctuation_prosody_rule(r, "en", "american_english"))
+        .collect()
+}
+
+/// Return all structured [`BoundaryProsodyRule`]s for the bundled English
+/// (US, General American) variety.
+///
+/// The result combines:
+/// 1. Punctuation-derived rules converted from the seed JSON via
+///    [`convert_to_boundary_prosody_rule`].
+/// 2. Clause-position rules from [`clause_position_boundary_rules`].
+///
+/// Rules are returned sorted by descending priority so callers may apply them
+/// in order, stopping at the first match.
+pub fn english_boundary_prosody_rules() -> Vec<BoundaryProsodyRule> {
+    let mut rules: Vec<BoundaryProsodyRule> = english_seed_variety()
+        .punctuation_prosody_rules
+        .iter()
+        .map(convert_to_boundary_prosody_rule)
+        .collect();
+    rules.extend(clause_position_boundary_rules());
+    rules.sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+    rules
+}
+
+/// Return native phrase-level descriptors for all imported multi-word rules in
+/// the bundled English (US, General American) seed variety.
+pub fn english_imported_multi_word_rules() -> Vec<MultiWordPronunciationRule> {
+    english_seed_variety()
+        .multi_word_rules
+        .iter()
+        .map(|r| convert_multi_word_rule(r, "en", "american_english"))
         .collect()
 }
 
@@ -680,12 +1348,120 @@ fn env_predicate_matches(
     }
 }
 
+fn canonical_link_label(label: &str) -> String {
+    label
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn link_kind_matches_label(
+    kind: crate::mouth::riper::SyntacticLinkKind,
+    required_label: &str,
+) -> bool {
+    canonical_link_label(&format!("{kind:?}")) == canonical_link_label(required_label)
+}
+
+fn required_links_satisfied(
+    required_links: &[String],
+    sentence_analysis: &SentenceAnalysis,
+    span_start_word: usize,
+    span_end_word_exclusive: usize,
+) -> bool {
+    if required_links.is_empty() {
+        return true;
+    }
+    let Some(primary_parse) = sentence_analysis.link_parses.first() else {
+        return false;
+    };
+    required_links.iter().all(|required_label| {
+        primary_parse.links.iter().any(|link| {
+            let (left, right) = if link.left <= link.right {
+                (link.left, link.right)
+            } else {
+                (link.right, link.left)
+            };
+            left >= span_start_word
+                && right < span_end_word_exclusive
+                && link_kind_matches_label(link.kind, required_label)
+        })
+    })
+}
+
+/// Match a phrase-level rule against normalized words and return all matched
+/// spans, preserving both word-index and source-token ranges for diagnostics.
+pub fn match_multi_word_rule(
+    rule: &MultiWordPronunciationRule,
+    normalized: &NormalizedText,
+    sentence_analysis: &SentenceAnalysis,
+) -> Vec<MultiWordRuleMatch> {
+    if rule.words.is_empty() {
+        return Vec::new();
+    }
+    let mut words_with_tokens = sentence_analysis
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            token
+                .word_index
+                .map(|word_index| (word_index, token.token_index, token.text.as_str()))
+        })
+        .collect::<Vec<_>>();
+    words_with_tokens.sort_unstable_by_key(|(word_index, _, _)| *word_index);
+
+    let phrase_len = rule.words.len();
+    words_with_tokens
+        .windows(phrase_len)
+        .filter_map(|window| {
+            let words_match = window
+                .iter()
+                .zip(rule.words.iter())
+                .all(|((_, _, token_word), rule_word)| token_word.eq_ignore_ascii_case(rule_word));
+            if !words_match {
+                return None;
+            }
+
+            let span_start_word = window.first()?.0;
+            let span_end_word_exclusive = span_start_word + phrase_len;
+            if !required_links_satisfied(
+                &rule.required_links,
+                sentence_analysis,
+                span_start_word,
+                span_end_word_exclusive,
+            ) {
+                return None;
+            }
+
+            let token_start = window.first()?.1;
+            let token_end_inclusive = window.last()?.1;
+            let source_start = normalized.token_spans.get(token_start)?.start;
+            let source_end = normalized.token_spans.get(token_end_inclusive)?.end;
+
+            Some(MultiWordRuleMatch {
+                rule_id: rule.id.clone(),
+                matched_word_span: MatchedWordSpan {
+                    words: window
+                        .iter()
+                        .map(|(_, _, word)| (*word).to_string())
+                        .collect(),
+                    word_range: span_start_word..span_end_word_exclusive,
+                    token_range: token_start..(token_end_inclusive + 1),
+                    source_span: source_start..source_end,
+                },
+                provenance: rule.provenance.clone(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linguistic::arpabet::phoneme_from_arpabet;
     use crate::linguistic::environment as ling_env;
     use crate::linguistic::realization::RealizationConfig;
+    use crate::mouth::riper::{HeuristicSentenceAnalyzer, SentenceAnalyzer, TextNormalizer};
 
     #[test]
     fn parses_bundled_seed_rule_table_and_supports_nested_varieties() {
@@ -985,5 +1761,420 @@ mod tests {
                 rule.id
             );
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // BoundaryProsodyRule tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn boundary_prosody_rule_exclamation_has_structured_effect() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_exclamation_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('!'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::Exclamation));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.pitch_range_factor.map_or(false, |f| f > 1.0),
+            "exclamation should have expanded pitch range"
+        );
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "exclamation pause must not be suppressible"
+        );
+        assert_eq!(rule.provenance.source, "espeak-ng-derived");
+    }
+
+    #[test]
+    fn boundary_prosody_rule_question_has_final_rising_direction() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "?")
+            .expect("question mark rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_question_rising_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('?'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalRising));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "question-mark pause must not be suppressible"
+      );
+  }
+    // --- MorphophonologyRule tests ---
+
+    #[test]
+    fn english_native_morphophonology_rules_are_non_empty() {
+        let rules = english_native_morphophonology_rules();
+        assert!(
+            !rules.is_empty(),
+            "should have at least one English native morphophonology rule"
+          );
+  }
+    #[test]
+    fn bulk_english_multi_word_rules_are_imported_as_phrase_level_rules() {
+        let rules = english_imported_multi_word_rules();
+        assert!(
+            !rules.is_empty(),
+            "expected at least one imported multi-word phrase rule"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.words == vec!["kind", "of"]),
+            "expected function-word phrase seed entry"
+        );
+        assert!(
+            rules.iter().any(|rule| rule.words == vec!["to", "go"]
+                && matches!(rule.output, MultiWordRuleOutput::NoBreak)),
+            "expected no-break phrase seed entry"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_rule_period_has_final_falling_direction() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ".")
+            .expect("period rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_period_final_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('.'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "period pause must not be suppressible"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_rule_comma_is_minor_and_suppressible() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ",")
+            .expect("comma rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_comma_minor_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation(','));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Minor);
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::VocativeContext),
+            "comma should be suppressible by vocative context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::AppositiveContext),
+            "comma should be suppressible by appositive context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::ParentheticalContext),
+            "comma should be suppressible by parenthetical context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::TightSyntacticLink),
+            "comma should be suppressible by tight syntactic link"
+        );
+    }
+
+    #[test]
+    fn comma_pause_suppression_by_vocative_evidence() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ",")
+            .expect("comma rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        // Vocative context suppresses the pause.
+        assert!(
+            is_comma_pause_suppressed(&rule, &[SuppressibleBy::VocativeContext]),
+            "vocative context should suppress comma pause"
+        );
+        // Appositive context also suppresses the pause.
+        assert!(
+            is_comma_pause_suppressed(&rule, &[SuppressibleBy::AppositiveContext]),
+            "appositive context should suppress comma pause"
+        );
+        // No active suppressors → pause proceeds.
+        assert!(
+            !is_comma_pause_suppressed(&rule, &[]),
+            "comma pause should not be suppressed without context evidence"
+        );
+    }
+
+    #[test]
+    fn exclamation_pause_is_never_suppressed() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        // Even with every possible suppressor, exclamation is never suppressed.
+        assert!(
+            !is_comma_pause_suppressed(
+                &rule,
+                &[
+                    SuppressibleBy::VocativeContext,
+                    SuppressibleBy::AppositiveContext,
+                    SuppressibleBy::ParentheticalContext,
+                    SuppressibleBy::TightSyntacticLink,
+                ]
+            ),
+            "exclamation pause must never be suppressed"
+        );
+    }
+
+    #[test]
+    fn clause_position_rules_cover_utterance_end_clause_end_and_start() {
+        let rules = clause_position_boundary_rules();
+
+        let utterance_end = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd)
+            .expect("utterance-end clause rule must exist");
+        assert_eq!(utterance_end.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(utterance_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(utterance_end.output.stress_effect, StressEffect::ClauseFinalStress);
+
+        let clause_end = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd)
+            .expect("clause-end rule must exist");
+        assert_eq!(clause_end.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(clause_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
+
+        let clause_start = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::ClauseStart)
+            .expect("clause-start rule must exist");
+        assert_eq!(clause_start.output.boundary_kind, BoundaryKind::None);
+        assert_eq!(clause_start.output.stress_effect, StressEffect::Neutral);
+    }
+
+    #[test]
+    fn english_boundary_prosody_rules_covers_all_seed_punctuation_and_clause_positions() {
+        let rules = english_boundary_prosody_rules();
+
+        assert!(!rules.is_empty(), "bulk rules must not be empty");
+
+        // All seed punctuation rules appear.
+        for ch in ['!', '?', '.', ',', ';', ':'] {
+            assert!(
+                rules
+                    .iter()
+                    .any(|r| r.boundary_pattern == BoundaryPattern::Punctuation(ch)),
+                "bulk rules must include punctuation rule for '{ch}'"
+            );
+        }
+
+        // Clause-position rules are present.
+        assert!(
+            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd),
+            "bulk rules must include utterance-end clause rule"
+        );
+        assert!(
+            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd),
+            "bulk rules must include clause-end rule"
+        );
+
+        // All rules have espeak provenance.
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} provenance should be espeak-ng-derived",
+                rule.id
+            );
+        }
+
+        // Rules are sorted by descending priority.
+        let priorities: Vec<i32> = rules.iter().map(|r| r.priority).collect();
+        let mut sorted = priorities.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(
+            priorities, sorted,
+            "english_boundary_prosody_rules() must return rules sorted by descending priority"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_effects_are_structurally_typed_not_strings() {
+        // Every BoundaryProsodyRule output uses typed enums, not opaque strings.
+        // This is the core acceptance criterion: effects are structural, not string hacks.
+        for rule in english_boundary_prosody_rules() {
+            // boundary_kind is a typed enum variant — not a String
+            let _ = match rule.output.boundary_kind {
+                BoundaryKind::None | BoundaryKind::Minor | BoundaryKind::Major => true,
+            };
+            // pitch_direction is a typed Option<PitchDirection>
+            if let Some(dir) = rule.output.pitch_direction {
+                let _ = match dir {
+                    PitchDirection::FinalFalling
+                    | PitchDirection::FinalRising
+                    | PitchDirection::Exclamation
+                    | PitchDirection::Level => true,
+                };
+            }
+            // stress_effect is a typed enum variant
+            let _ = match rule.output.stress_effect {
+                StressEffect::ClauseFinalStress
+                | StressEffect::StressRelaxation
+                | StressEffect::Neutral => true,
+            };
+        }
+    fn morphophonology_rules_cover_required_affixes() {
+        let rules = english_native_morphophonology_rules();
+        let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
+        // At least one suffix and one prefix must be present.
+        let has_suffix = rules
+            .iter()
+            .any(|r| r.morpheme_kind == ling_env::MorphemeKind::Suffix);
+        let has_prefix = rules
+            .iter()
+            .any(|r| r.morpheme_kind == ling_env::MorphemeKind::Prefix);
+        assert!(has_suffix, "expected at least one suffix rule; ids: {ids:?}");
+        assert!(has_prefix, "expected at least one prefix rule; ids: {ids:?}");
+    }
+
+    #[test]
+    fn morphophonology_rules_all_have_espeak_provenance() {
+        let rules = english_native_morphophonology_rules();
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} should carry eSpeak provenance",
+                rule.id
+            );
+            assert!(
+                !rule.provenance.source_license.is_empty(),
+                "rule {} should have a non-empty source_license",
+                rule.id
+            );
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ly_has_ito_y_spelling_repair() {
+        let rules = english_native_morphophonology_rules();
+        let ly_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ly_attachment")
+            .expect("suffix_ly_attachment rule must exist");
+        assert_eq!(ly_rule.morpheme_kind, ling_env::MorphemeKind::Suffix);
+        match &ly_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(
+                    hints.contains(&SpellingRepairHint::IToY),
+                    "-ly rule must include IToY spelling repair hint"
+                );
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ly rule must have SpellingRepair policy, not DirectStripAndLookup");
+            }
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ing_has_doubled_consonant_repair() {
+        let rules = english_native_morphophonology_rules();
+        let ing_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ing_attachment")
+            .expect("suffix_ing_attachment rule must exist");
+        match &ing_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(
+                    hints.contains(&SpellingRepairHint::RemoveDoubledConsonant),
+                    "-ing rule must include RemoveDoubledConsonant hint"
+                );
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ing rule must have SpellingRepair policy");
+            }
+        }
+    }
+
+    #[test]
+    fn morphophonology_rule_ed_covers_all_three_spelling_repairs() {
+        let rules = english_native_morphophonology_rules();
+        let ed_rule = rules
+            .iter()
+            .find(|r| r.id == "suffix_ed_attachment")
+            .expect("suffix_ed_attachment rule must exist");
+        match &ed_rule.stem_policy {
+            StemRetranslationPolicy::SpellingRepair(hints) => {
+                assert!(hints.contains(&SpellingRepairHint::RestoreTrailingE));
+                assert!(hints.contains(&SpellingRepairHint::RemoveDoubledConsonant));
+                assert!(hints.contains(&SpellingRepairHint::IToY));
+            }
+            StemRetranslationPolicy::DirectStripAndLookup => {
+                panic!("-ed rule must have SpellingRepair policy");
+            }
+        }
+  }
+  #[test]
+    fn multi_word_rule_matches_normalized_span_and_preserves_source_spans() {
+        let normalizer = TextNormalizer::default();
+        let source = "kind of odd";
+        let normalized = normalizer.normalize(source).expect("normalize");
+        let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
+        let rule = english_imported_multi_word_rules()
+            .into_iter()
+            .find(|rule| rule.id == "phrase_kind_of_reduction")
+            .expect("kind-of rule should exist");
+        let matches = match_multi_word_rule(&rule, &normalized, &analysis);
+        let matched = matches.first().expect("kind-of phrase should match");
+
+        assert_eq!(matched.matched_word_span.word_range, 0..2);
+        assert_eq!(matched.matched_word_span.token_range, 0..2);
+        assert_eq!(matched.matched_word_span.source_span, 0..7);
+        assert_eq!(matched.matched_word_span.words, vec!["kind", "of"]);
+        assert_eq!(matched.provenance.source, "espeak-ng-derived");
+    }
+
+    #[test]
+    fn multi_word_link_requirements_gate_break_suppression_matches() {
+        let normalizer = TextNormalizer::default();
+        let source = "to go now";
+        let normalized = normalizer.normalize(source).expect("normalize");
+        let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
+        let rule = english_imported_multi_word_rules()
+            .into_iter()
+            .find(|rule| rule.id == "phrase_to_go_no_break")
+            .expect("to-go no-break rule should exist");
+
+        let matches = match_multi_word_rule(&rule, &normalized, &analysis);
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected infinitival phrase to match once"
+        );
+
+        let mut wrong_link_rule = rule.clone();
+        wrong_link_rule.required_links = vec!["Determiner".to_string()];
+        assert!(
+            match_multi_word_rule(&wrong_link_rule, &normalized, &analysis).is_empty(),
+            "link-constrained matching should fail when required link kind is absent"
+        );
     }
 }

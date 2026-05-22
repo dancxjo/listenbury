@@ -2,6 +2,10 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use super::espeak_ng_rules::{
+    MorphophonologyOutput, MorphophonologyRule, RuleProvenance, SpellingRepairHint,
+    StemRetranslationPolicy, english_native_morphophonology_rules,
+};
 use crate::linguistic::cmudict::{self, CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::pronounce::OrthographyToPhonemes;
@@ -114,6 +118,10 @@ pub struct MorphologicalAnalysis {
     pub rules: Vec<String>,
     pub pipeline: Vec<String>,
     pub parser_spike_path: String,
+    /// Provenance records for the morphophonology rules that fired.
+    /// Empty for plain lexical lookups; populated for derived forms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_provenance: Vec<RuleProvenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +191,7 @@ fn exact_lexical(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: stem,
     })
@@ -274,6 +283,7 @@ fn known_unpunctuated(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols: realized,
@@ -298,6 +308,15 @@ fn productive_morphology(surface: &str) -> Option<MorphophonologyResult> {
     }
     if let Some(ed_word) = analyze_ed_suffix(surface) {
         return Some(ed_word);
+    }
+    if let Some(ing_word) = analyze_ing_suffix(surface) {
+        return Some(ing_word);
+    }
+    if let Some(ly_word) = analyze_ly_suffix(surface) {
+        return Some(ly_word);
+    }
+    if let Some(s_word) = analyze_s_suffix(surface) {
+        return Some(s_word);
     }
     None
 }
@@ -366,6 +385,7 @@ fn analyze_known_prefix(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols: realized,
@@ -461,6 +481,7 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols: realized,
@@ -533,6 +554,7 @@ fn analyze_un_prefix(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols: realized,
@@ -607,12 +629,381 @@ fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols: realized,
             stress_by_phone: stress,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// MorphophonologyRule-driven analysis helpers
+// ---------------------------------------------------------------------------
+
+/// Return the bundled English morphophonology rules (cached).
+fn native_morphophonology_rules() -> &'static [MorphophonologyRule] {
+    static RULES: OnceLock<Vec<MorphophonologyRule>> = OnceLock::new();
+    RULES.get_or_init(english_native_morphophonology_rules)
+}
+
+/// Returns `true` when `ch` is an English vowel letter.
+fn is_vowel(ch: char) -> bool {
+    matches!(ch, 'a' | 'e' | 'i' | 'o' | 'u')
+}
+
+/// Apply the spelling repairs encoded in `stem_policy` to `base` and return
+/// the full list of stem candidates to try (most specific first).
+fn stem_candidates_with_policy(base: &str, stem_policy: &StemRetranslationPolicy) -> Vec<String> {
+    let mut candidates = vec![base.to_string()];
+    if let StemRetranslationPolicy::SpellingRepair(hints) = stem_policy {
+        for hint in hints {
+            match hint {
+                SpellingRepairHint::RestoreTrailingE => {
+                    candidates.push(format!("{base}e"));
+                }
+                SpellingRepairHint::RemoveDoubledConsonant => {
+                    let chars: Vec<char> = base.chars().collect();
+                    if chars.len() >= 2 {
+                        let last = chars[chars.len() - 1];
+                        let prev = chars[chars.len() - 2];
+                        if last == prev && !is_vowel(last) {
+                            candidates.push(chars[..chars.len() - 1].iter().collect());
+                        }
+                    }
+                }
+                SpellingRepairHint::IToY => {
+                    if base.ends_with('i') {
+                        let mut y_stem = base.to_string();
+                        y_stem.pop();
+                        y_stem.push('y');
+                        candidates.push(y_stem);
+                    }
+                }
+            }
+        }
+    }
+    candidates.dedup();
+    candidates
+}
+
+/// Parse a space-separated ARPAbet string into symbol/stress pairs, mirroring
+/// the conventions used by the rest of this module.
+fn arpabet_str_to_phones(arpabet: &str) -> WordPronunciation {
+    let raw_symbols: Vec<&str> = arpabet.split_whitespace().collect();
+    let symbols: Vec<String> = raw_symbols
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let stress_by_phone: Vec<Option<PhonologicalStress>> = raw_symbols
+        .iter()
+        .map(|s| {
+            if s.ends_with('1') {
+                Some(PhonologicalStress::Primary)
+            } else if s.ends_with('2') {
+                Some(PhonologicalStress::Secondary)
+            } else if s.ends_with('0') {
+                Some(PhonologicalStress::Unstressed)
+            } else {
+                None
+            }
+        })
+        .collect();
+    WordPronunciation {
+        symbols,
+        stress_by_phone,
+    }
+}
+
+/// Analyze a word as *stem + `-ing`*, backed by the `suffix_ing_attachment`
+/// native morphophonology rule.
+fn analyze_ing_suffix(surface: &str) -> Option<MorphophonologyResult> {
+    let lower = surface.to_ascii_lowercase();
+    if !lower.ends_with("ing") || lower.len() <= 3 {
+        return None;
+    }
+    // Skip if the whole word is already in the lexicon.
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
+    let rule = native_morphophonology_rules()
+        .iter()
+        .find(|r| r.id == "suffix_ing_attachment")?;
+
+    let base = &lower[..lower.len() - 3];
+    if base.is_empty() {
+        return None;
+    }
+
+    let MorphophonologyOutput::AppendArpabet(ref affix_arpabet) = rule.output_policy else {
+        return None;
+    };
+    let affix_phones = arpabet_str_to_phones(affix_arpabet);
+
+    let candidates = stem_candidates_with_policy(base, &rule.stem_policy);
+    let (stem_text, stem) = candidates
+        .iter()
+        .find_map(|c| lexicon_pronunciation(c).map(|p| (c.clone(), p)))?;
+
+    let mut realized = stem.symbols.clone();
+    realized.extend(affix_phones.symbols.clone());
+
+    let mut stress = stem.stress_by_phone.clone();
+    stress.extend(affix_phones.stress_by_phone.clone());
+
+    let mut underlying = stem.symbols.clone();
+    underlying.extend(affix_phones.symbols.clone());
+
+    let boundaries = vec![MorphemeBoundary {
+        phone_index: stem.symbols.len(),
+        label: "-ing".to_string(),
+    }];
+
+    let phonology = phonology_form(underlying, realized.clone(), stress.clone(), boundaries);
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes: vec![
+                MorphemeAnalysis {
+                    surface: stem_text,
+                    kind: MorphemeKind::Stem,
+                    lemma: None,
+                    features: MorphemeFeatures::default(),
+                    phonology: None,
+                },
+                MorphemeAnalysis {
+                    surface: "-ing".to_string(),
+                    kind: MorphemeKind::Suffix,
+                    lemma: Some("ing".to_string()),
+                    features: MorphemeFeatures {
+                        tags: vec!["progressive".to_string(), "gerund".to_string()],
+                        meaning: None,
+                    },
+                    phonology: None,
+                },
+            ],
+            confidence: 0.82,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology: Some(phonology),
+            rules: vec![
+                rule.id.clone(),
+                "stem_lookup_or_fallback".to_string(),
+                "stress_assignment".to_string(),
+            ],
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![rule.provenance.clone()],
+        },
+        pronunciation: WordPronunciation {
+            symbols: realized,
+            stress_by_phone: stress,
+        },
+    })
+}
+
+/// Analyze a word as *stem + `-ly`*, backed by the `suffix_ly_attachment`
+/// native morphophonology rule.  Handles `y → i` spelling repair (e.g.
+/// `"happily"` → `"happy"` + `"-ly"`).
+fn analyze_ly_suffix(surface: &str) -> Option<MorphophonologyResult> {
+    let lower = surface.to_ascii_lowercase();
+    if !lower.ends_with("ly") || lower.len() <= 2 {
+        return None;
+    }
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
+    let rule = native_morphophonology_rules()
+        .iter()
+        .find(|r| r.id == "suffix_ly_attachment")?;
+
+    let base = &lower[..lower.len() - 2];
+    if base.is_empty() {
+        return None;
+    }
+
+    let MorphophonologyOutput::AppendArpabet(ref affix_arpabet) = rule.output_policy else {
+        return None;
+    };
+    let affix_phones = arpabet_str_to_phones(affix_arpabet);
+
+    let candidates = stem_candidates_with_policy(base, &rule.stem_policy);
+    let (stem_text, stem) = candidates
+        .iter()
+        .find_map(|c| lexicon_pronunciation(c).map(|p| (c.clone(), p)))?;
+
+    let mut realized = stem.symbols.clone();
+    realized.extend(affix_phones.symbols.clone());
+
+    let mut stress = stem.stress_by_phone.clone();
+    stress.extend(affix_phones.stress_by_phone.clone());
+
+    let mut underlying = stem.symbols.clone();
+    underlying.extend(affix_phones.symbols.clone());
+
+    let boundaries = vec![MorphemeBoundary {
+        phone_index: stem.symbols.len(),
+        label: "-ly".to_string(),
+    }];
+
+    let phonology = phonology_form(underlying, realized.clone(), stress.clone(), boundaries);
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes: vec![
+                MorphemeAnalysis {
+                    surface: stem_text,
+                    kind: MorphemeKind::Stem,
+                    lemma: None,
+                    features: MorphemeFeatures::default(),
+                    phonology: None,
+                },
+                MorphemeAnalysis {
+                    surface: "-ly".to_string(),
+                    kind: MorphemeKind::Suffix,
+                    lemma: Some("ly".to_string()),
+                    features: MorphemeFeatures {
+                        tags: vec!["adverb_forming".to_string()],
+                        meaning: None,
+                    },
+                    phonology: None,
+                },
+            ],
+            confidence: 0.80,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology: Some(phonology),
+            rules: vec![
+                rule.id.clone(),
+                "stem_lookup_or_fallback".to_string(),
+                "stress_assignment".to_string(),
+            ],
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![rule.provenance.clone()],
+        },
+        pronunciation: WordPronunciation {
+            symbols: realized,
+            stress_by_phone: stress,
+        },
+    })
+}
+
+/// Analyze a word as *stem + `-s`*, backed by the `suffix_s_attachment`
+/// native morphophonology rule.
+fn analyze_s_suffix(surface: &str) -> Option<MorphophonologyResult> {
+    let lower = surface.to_ascii_lowercase();
+    if !lower.ends_with('s') || lower.len() <= 1 {
+        return None;
+    }
+    // Skip if the whole word is already in the lexicon.
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
+    let rule = native_morphophonology_rules()
+        .iter()
+        .find(|r| r.id == "suffix_s_attachment")?;
+
+    let base = &lower[..lower.len() - 1];
+    if base.is_empty() {
+        return None;
+    }
+
+    let MorphophonologyOutput::AppendArpabet(ref affix_arpabet) = rule.output_policy else {
+        return None;
+    };
+
+    let candidates = stem_candidates_with_policy(base, &rule.stem_policy);
+    let (stem_text, stem) = candidates
+        .iter()
+        .find_map(|c| lexicon_pronunciation(c).map(|p| (c.clone(), p)))?;
+
+    // Select voiced/voiceless allomorph based on stem-final phone.
+    let s_allomorph = s_allomorph_from_stem(&stem.symbols);
+    let affix_phones = if s_allomorph != affix_arpabet.as_str() {
+        arpabet_str_to_phones(s_allomorph)
+    } else {
+        arpabet_str_to_phones(affix_arpabet)
+    };
+
+    let mut realized = stem.symbols.clone();
+    realized.extend(affix_phones.symbols.clone());
+
+    let mut stress = stem.stress_by_phone.clone();
+    stress.extend(affix_phones.stress_by_phone.clone());
+
+    let mut underlying = stem.symbols.clone();
+    // The underlying form is the canonical /z/ from the rule's output policy;
+    // the realized form uses the allomorph selected by s_allomorph_from_stem.
+    let canonical_affix = arpabet_str_to_phones(affix_arpabet);
+    underlying.extend(canonical_affix.symbols);
+
+    let boundaries = vec![MorphemeBoundary {
+        phone_index: stem.symbols.len(),
+        label: "-s".to_string(),
+    }];
+
+    let phonology = phonology_form(underlying, realized.clone(), stress.clone(), boundaries);
+
+    let allomorph_rule = format!("s_suffix_realization_{}", s_allomorph.to_ascii_lowercase());
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes: vec![
+                MorphemeAnalysis {
+                    surface: stem_text,
+                    kind: MorphemeKind::Stem,
+                    lemma: None,
+                    features: MorphemeFeatures::default(),
+                    phonology: None,
+                },
+                MorphemeAnalysis {
+                    surface: "-s".to_string(),
+                    kind: MorphemeKind::Suffix,
+                    lemma: Some("s".to_string()),
+                    features: MorphemeFeatures {
+                        tags: vec!["plural".to_string(), "third_person_singular".to_string()],
+                        meaning: None,
+                    },
+                    phonology: None,
+                },
+            ],
+            confidence: 0.78,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology: Some(phonology),
+            rules: vec![
+                rule.id.clone(),
+                allomorph_rule,
+                "stem_lookup_or_fallback".to_string(),
+                "stress_assignment".to_string(),
+            ],
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![rule.provenance.clone()],
+        },
+        pronunciation: WordPronunciation {
+            symbols: realized,
+            stress_by_phone: stress,
+        },
+    })
+}
+
+/// Select the correct surface allomorph for `-s` based on the stem-final phone.
+/// Returns `"Z"` (voiced), `"S"` (voiceless), or `"IH0 Z"` (after sibilants).
+fn s_allomorph_from_stem(stem_symbols: &[String]) -> &'static str {
+    let last = stem_symbols
+        .last()
+        .map(|s| s.trim_end_matches(|c: char| c.is_ascii_digit()))
+        .unwrap_or("");
+    if matches!(last, "S" | "Z" | "SH" | "ZH" | "CH" | "JH") {
+        return "IH0 Z";
+    }
+    if is_voiceless(last) {
+        return "S";
+    }
+    "Z"
 }
 
 #[derive(Debug, Clone)]
@@ -681,6 +1072,7 @@ fn spelling_fallback(surface: &str) -> Option<MorphophonologyResult> {
             ],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation,
     })
@@ -709,6 +1101,7 @@ fn safe_unknown(surface: &str) -> MorphophonologyResult {
             rules: vec!["unknown_word_safe_fallback".to_string()],
             pipeline: default_pipeline(),
             parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![],
         },
         pronunciation: WordPronunciation {
             symbols,
@@ -1250,5 +1643,160 @@ mod tests {
                 | AnalysisSource::SpellingToSoundFallback
                 | AnalysisSource::UnknownWordSafeFallback
         ));
+    }
+
+    // --- Native MorphophonologyRule-driven suffix tests ---
+
+    /// `"crispily"` is not in CMUdict; the `-ly` rule must find stem `"crispy"`
+    /// via the `IToY` spelling repair and append the `-ly` phones.
+    #[test]
+    fn analyzes_crispily_via_ito_y_repair_and_ly_rule() {
+        let result = analyze_word("crispily");
+        let morphemes: Vec<&str> = result
+            .analysis
+            .morphemes
+            .iter()
+            .map(|m| m.surface.as_str())
+            .collect();
+        // Stem resolved via y→i repair; "-ly" appended.
+        assert_eq!(morphemes, vec!["crispy", "-ly"]);
+        assert_eq!(result.analysis.morphemes[0].kind, MorphemeKind::Stem);
+        assert_eq!(result.analysis.morphemes[1].kind, MorphemeKind::Suffix);
+        assert!(matches!(
+            result.analysis.source,
+            AnalysisSource::ProductiveMorphology
+        ));
+        // Phonology should end with L IY0.
+        assert!(
+            result.pronunciation.symbols.ends_with(&["L".to_string(), "IY0".to_string()]),
+            "expected -ly phones at end: {:?}",
+            result.pronunciation.symbols
+        );
+        // Stem's primary stress must be preserved in the derived form.
+        let has_primary = result
+            .pronunciation
+            .stress_by_phone
+            .iter()
+            .any(|s| *s == Some(PhonologicalStress::Primary));
+        assert!(has_primary, "primary stress from stem must survive in derived form");
+    }
+
+    /// `"thriftily"` is not in CMUdict; the `-ly` rule must resolve stem
+    /// `"thrifty"` via `IToY` repair.
+    #[test]
+    fn analyzes_thriftily_with_y_to_i_spelling_repair() {
+        let result = analyze_word("thriftily");
+        let morphemes: Vec<&str> = result
+            .analysis
+            .morphemes
+            .iter()
+            .map(|m| m.surface.as_str())
+            .collect();
+        assert_eq!(morphemes, vec!["thrifty", "-ly"]);
+        // Rule name from the native rule must appear in diagnostics.
+        assert!(
+            result
+                .analysis
+                .rules
+                .iter()
+                .any(|r| r == "suffix_ly_attachment"),
+            "ly rule id must appear in rules: {:?}",
+            result.analysis.rules
+        );
+        // Provenance must be present (eSpeak-derived).
+        assert!(
+            !result.analysis.rule_provenance.is_empty(),
+            "rule_provenance should be non-empty for ly-derived words"
+        );
+        assert_eq!(
+            result.analysis.rule_provenance[0].source,
+            "espeak-ng-derived"
+        );
+    }
+
+    /// `"plopping"` is not in CMUdict; the `-ing` rule must find stem `"plop"`
+    /// via the `RemoveDoubledConsonant` spelling repair.
+    #[test]
+    fn analyzes_plopping_with_doubled_consonant_repair() {
+        let result = analyze_word("plopping");
+        let morphemes: Vec<&str> = result
+            .analysis
+            .morphemes
+            .iter()
+            .map(|m| m.surface.as_str())
+            .collect();
+        assert_eq!(morphemes, vec!["plop", "-ing"]);
+        // Phonology should end with IH0 NG.
+        assert!(
+            result
+                .pronunciation
+                .symbols
+                .ends_with(&["IH0".to_string(), "NG".to_string()]),
+            "expected -ing phones at end: {:?}",
+            result.pronunciation.symbols
+        );
+        // Stem's primary stress must be preserved in the derived form.
+        let has_primary = result
+            .pronunciation
+            .stress_by_phone
+            .iter()
+            .any(|s| *s == Some(PhonologicalStress::Primary));
+        assert!(has_primary, "primary stress from stem must survive in -ing derived form");
+        // Provenance must carry eSpeak attribution.
+        assert!(
+            result
+                .analysis
+                .rule_provenance
+                .iter()
+                .any(|p| p.source == "espeak-ng-derived"),
+            "rule_provenance should contain eSpeak provenance"
+        );
+    }
+
+    /// Verify that `"-ing"` morpheme exposes the expected POS-hint tags.
+    #[test]
+    fn ing_morpheme_exposes_pos_hint_tags() {
+        let result = analyze_word("plopping");
+        let ing_morpheme = result
+            .analysis
+            .morphemes
+            .iter()
+            .find(|m| m.surface == "-ing")
+            .expect("-ing morpheme must be present");
+        assert!(
+            ing_morpheme.features.tags.iter().any(|t| t == "progressive" || t == "gerund"),
+            "expected progressive/gerund tag on -ing morpheme"
+        );
+    }
+
+    /// `"woodenly"` is not in CMUdict; the `-ly` rule resolves stem `"wooden"`
+    /// directly (no spelling repair needed) and preserves its stress.
+    #[test]
+    fn analyzes_woodenly_with_stress_preservation() {
+        let result = analyze_word("woodenly");
+        let morphemes: Vec<&str> = result
+            .analysis
+            .morphemes
+            .iter()
+            .map(|m| m.surface.as_str())
+            .collect();
+        assert_eq!(morphemes, vec!["wooden", "-ly"]);
+
+        // Stem "wooden" = W UH1 D AH0 N — primary stress on UH1.
+        // After appending L IY0 the primary stress index must still refer to UH1.
+        let stem_primary_idx = result
+            .pronunciation
+            .stress_by_phone
+            .iter()
+            .position(|s| *s == Some(PhonologicalStress::Primary))
+            .expect("derived form must have a primary-stress phone");
+
+        // The suffix phones (L IY0) are appended after the stem, so the primary
+        // stress must fall within the stem portion.
+        let stem_len = result.pronunciation.symbols.len().saturating_sub(2); // L IY0
+        assert!(
+            stem_primary_idx < stem_len,
+            "primary stress should be in stem, not suffix: idx={stem_primary_idx}, stem_len={stem_len}"
+        );
     }
 }

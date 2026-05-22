@@ -24,12 +24,23 @@ pub use echo::{
 pub use encoder::PiperEncoder;
 pub use espeak_ng_rules::{
     EspeakNgSeedRuleTable, ImportedEnvironmentRule, LexicalProsodyFlag, LexicalProsodyFlagFact,
-    LinguisticVarieties, LinguisticVarietyRuleTable, PhonemeMappingRule, PronunciationOverrideRule,
-    PunctuationProsodyRule, RuleContextConstraint, RuleOutput, RuleProvenance, StressRule,
+    LinguisticVarieties, LinguisticVarietyRuleTable, MorphophonologyOutput, MorphophonologyRule,
+    PhonemeMappingRule, PronunciationOverrideRule, PunctuationProsodyRule, RuleContextConstraint,
+    RuleOutput, RuleProvenance, SpellingRepairHint, StressRule, StemRetranslationPolicy,
     ToRuleDescriptor, VoiceVariantRule, WeakFormRule, convert_punctuation_prosody_rule,
     convert_weak_form_rule, english_imported_punctuation_rules, english_imported_weak_form_rules,
-    english_lexical_flag_facts_for_rule, export_rule_table_to_json, import_rule_table_from_str,
-    load_seed_rule_table, rule_matches_context,
+    english_lexical_flag_facts_for_rule, english_native_morphophonology_rules,
+    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
+    rule_matches_context,
+    LinguisticVarieties, LinguisticVarietyRuleTable, MatchedWordSpan, MultiWordPronunciationRule,
+    MultiWordRuleMatch, MultiWordRuleOutput, MultiWordSeedRule, PhonemeMappingRule,
+    PronunciationOverrideRule, PunctuationProsodyRule, RuleContextConstraint, RuleOutput,
+    RuleProvenance, StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule,
+    convert_multi_word_rule, convert_punctuation_prosody_rule, convert_weak_form_rule,
+    english_imported_multi_word_rules, english_imported_punctuation_rules,
+    english_imported_weak_form_rules, english_lexical_flag_facts_for_rule,
+    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
+    match_multi_word_rule, rule_matches_context,
 };
 pub use evidence::{
     AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimId, ClaimKind, ClaimValue,
@@ -73,6 +84,10 @@ pub use sentence_analysis::{
     PartOfSpeech, ProsodicRole, ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic,
     ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind,
     SyntacticLinkParse, SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex,
+    ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, PartOfSpeech, ProsodicRole,
+    ProsodyEnvironmentFacts, ReductionClass, ReductionDiagnostic, ReductionStatus,
+    SentenceAnalysis, SentenceAnalyzer, SyntacticLink, SyntacticLinkKind, SyntacticLinkParse,
+    SyntacticLinkSource, SyntacticRole, TokenAnalysis, WordIndex, WordSyntaxFacts,
 };
 pub use text::{
     NormalizedText, NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment,
