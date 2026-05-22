@@ -1811,8 +1811,8 @@ mod tests {
         assert!(
             rule.output.suppressible_by.is_empty(),
             "question-mark pause must not be suppressible"
-      );
-  }
+        );
+    }
     // --- MorphophonologyRule tests ---
 
     #[test]
@@ -1821,8 +1821,9 @@ mod tests {
         assert!(
             !rules.is_empty(),
             "should have at least one English native morphophonology rule"
-          );
-  }
+        );
+    }
+
     #[test]
     fn bulk_english_multi_word_rules_are_imported_as_phrase_level_rules() {
         let rules = english_imported_multi_word_rules();
@@ -2042,6 +2043,9 @@ mod tests {
                 | StressEffect::Neutral => true,
             };
         }
+    }
+
+    #[test]
     fn morphophonology_rules_cover_required_affixes() {
         let rules = english_native_morphophonology_rules();
         let ids: Vec<&str> = rules.iter().map(|r| r.id.as_str()).collect();
@@ -2131,8 +2135,9 @@ mod tests {
                 panic!("-ed rule must have SpellingRepair policy");
             }
         }
-  }
-  #[test]
+    }
+
+    #[test]
     fn multi_word_rule_matches_normalized_span_and_preserves_source_spans() {
         let normalizer = TextNormalizer::default();
         let source = "kind of odd";

@@ -450,7 +450,7 @@ fn continuous_target_rms(target: &PhoneRenderTarget) -> f32 {
         {
             vowel_region_target_rms(filter) * amplitude
         } else if target.filter.is_some() {
-            0.058 * amplitude
+            0.063 * amplitude
         } else {
             0.030 * amplitude
         }
@@ -463,18 +463,18 @@ fn continuous_target_rms(target: &PhoneRenderTarget) -> f32 {
 
 fn vowel_region_target_rms(filter: &VocalTractFilterTarget) -> f32 {
     if filter.f2_hz < 1_150.0 {
-        0.034
+        0.037
     } else if filter.f1_hz >= 550.0 && filter.f2_hz >= 1_350.0 {
-        0.260
+        0.282
     } else if filter.f1_hz >= 550.0 {
-        0.038
+        0.041
     } else if (450.0..=540.0).contains(&filter.f1_hz) && (1_300.0..=1_700.0).contains(&filter.f2_hz)
     {
-        0.040
+        0.043
     } else if filter.f1_hz < 430.0 && filter.f2_hz >= 1_800.0 {
-        0.032
+        0.035
     } else {
-        0.070
+        0.076
     }
 }
 
