@@ -1,4 +1,6 @@
-use super::phonology::{PhonemeClass, PhonemeSchema, default_phone_string_for_arpabet};
+use super::phonology::{
+    PhonemeClass, PhonemeSchema, default_phone_string_for_arpabet, feature_bundle_for_arpabet,
+};
 use super::rule_registry::RuleRegistry;
 
 pub use super::phonology::{PhonemeDefinition, PhonemeId, PhonemicInventory, SourceSymbol};
@@ -87,6 +89,7 @@ pub(crate) fn english_phoneme_table() -> Vec<PhonemeDefinition> {
                 ],
                 default_phone_string,
                 classes,
+                features: feature_bundle_for_arpabet(arpabet),
             }
         })
         .collect()

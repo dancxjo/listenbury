@@ -26,8 +26,7 @@ use listenbury::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
 use listenbury::prosody::vibrato::Vibrato;
 use listenbury::time::ExactTimestamp;
 use listenbury::voice::articulator::{
-    ArticulatorPlan, SungBackendKind, articulate, backend_detail_expectation,
-    klatt_targets_from_articulator_plan,
+    RenderPlan, SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
 };
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::default_english_phone_targets;
@@ -38,6 +37,8 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let backend = command.selected_backend();
     let backend_kind = backend.as_backend_kind();
     let detail = backend_detail_expectation(backend_kind);
+    let target_table = default_english_phone_targets();
+    let render_plan = render_plan_for_backend(backend_kind, &plan, 0.7, &target_table);
     println!("sing-demo backend: {backend:?} ({detail:?})");
 
     for note in backend_degradation_notes(backend) {
@@ -45,9 +46,9 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     }
 
     let frames = match backend {
-        SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(&plan)?,
-        SingDemoBackendOption::Riper => synthesize_riper_from_plan(&plan, &command)?,
-        SingDemoBackendOption::Piper => synthesize_piper_from_plan(&plan, &command)?,
+        SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(render_plan)?,
+        SingDemoBackendOption::Riper => synthesize_riper_from_plan(render_plan, &command)?,
+        SingDemoBackendOption::Piper => synthesize_piper_from_plan(render_plan, &command)?,
     };
 
     let output_path = command
@@ -61,10 +62,12 @@ fn default_output_wav_path(backend: SingDemoBackendOption) -> PathBuf {
     PathBuf::from(format!("out/hello-ragtime-{}.wav", backend.as_str()))
 }
 
-fn synthesize_klatt_from_plan(plan: &ArticulatorPlan) -> Result<Vec<AudioFrame>> {
+fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
     let config = KlattRenderConfig::default();
     let target_table = default_english_phone_targets();
-    let targets = klatt_targets_from_articulator_plan(plan, 0.7, &target_table);
+    let RenderPlan::PhoneTimed(targets) = plan else {
+        anyhow::bail!("Klatt backend requires a phone-timed render plan");
+    };
     anyhow::ensure!(
         !targets.is_empty(),
         "listenbury dev sing-demo --backend klatt produced an empty phone target plan"
@@ -97,7 +100,7 @@ fn synthesize_klatt_from_plan(plan: &ArticulatorPlan) -> Result<Vec<AudioFrame>>
 }
 
 fn synthesize_riper_from_plan(
-    plan: &ArticulatorPlan,
+    plan: RenderPlan,
     command: &SingDemoCommand,
 ) -> Result<Vec<AudioFrame>> {
     #[cfg(not(feature = "tts-piper"))]
@@ -124,7 +127,7 @@ fn synthesize_riper_from_plan(
 }
 
 fn synthesize_piper_from_plan(
-    plan: &ArticulatorPlan,
+    plan: RenderPlan,
     command: &SingDemoCommand,
 ) -> Result<Vec<AudioFrame>> {
     #[cfg(not(feature = "tts-piper"))]
@@ -148,11 +151,11 @@ fn synthesize_piper_from_plan(
 
 #[cfg(all(feature = "tts-piper", feature = "tts-riper"))]
 fn synthesize_piper_text_from_plan(
-    plan: &ArticulatorPlan,
+    plan: RenderPlan,
     command: &SingDemoCommand,
     preference: Option<PiperBackendPreference>,
 ) -> Result<Vec<AudioFrame>> {
-    let text = ragtime_text_from_shared_plan(plan);
+    let text = text_from_text_render_plan(plan)?;
     let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
     let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
     let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
@@ -169,10 +172,10 @@ fn synthesize_piper_text_from_plan(
 
 #[cfg(all(feature = "tts-piper", not(feature = "tts-riper")))]
 fn synthesize_piper_text_from_plan(
-    plan: &ArticulatorPlan,
+    plan: RenderPlan,
     command: &SingDemoCommand,
 ) -> Result<Vec<AudioFrame>> {
-    let text = ragtime_text_from_shared_plan(plan);
+    let text = text_from_text_render_plan(plan)?;
     let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
     let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
     let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
@@ -181,12 +184,13 @@ fn synthesize_piper_text_from_plan(
     collect_tts_audio(&mut tts, Duration::from_secs(30))
 }
 
-fn ragtime_text_from_shared_plan(plan: &ArticulatorPlan) -> String {
-    plan.syllables
-        .iter()
-        .map(|syllable| syllable.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+fn text_from_text_render_plan(plan: RenderPlan) -> Result<String> {
+    match plan {
+        RenderPlan::PartialProsody { text, .. } | RenderPlan::CoarseText { text, .. } => Ok(text),
+        RenderPlan::PhoneTimed(_) => {
+            anyhow::bail!("text backend requires a degraded text render plan")
+        }
+    }
 }
 
 fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'static str] {
@@ -589,7 +593,11 @@ mod tests {
     fn klatt_demo_plan_renders_non_empty_audio() {
         let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
         let plan = articulate(&phrase);
-        let frames = synthesize_klatt_from_plan(&plan).expect("klatt sing-demo should synthesize");
+        let target_table = default_english_phone_targets();
+        let render_plan =
+            render_plan_for_backend(SungBackendKind::Klatt, &plan, 0.7, &target_table);
+        let frames =
+            synthesize_klatt_from_plan(render_plan).expect("klatt sing-demo should synthesize");
         let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
         assert!(!frames.is_empty(), "klatt sing-demo should emit frames");
         assert!(

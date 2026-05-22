@@ -449,6 +449,8 @@ pub struct PhonemeDefinition {
     pub default_phone_string: PhoneString,
     /// Broad phonological class(es) for this phoneme.
     pub classes: Vec<PhonemeClass>,
+    /// Distinctive-feature bundle used for environment matching.
+    pub features: FeatureBundle,
 }
 
 impl PhonemeDefinition {
@@ -493,7 +495,7 @@ impl PhonemicInventory {
     pub fn phonemes_of_class(&self, class: PhonemeClass) -> Vec<&PhonemeDefinition> {
         self.phonemes
             .iter()
-            .filter(|def| def.classes.contains(&class))
+            .filter(|def| def.classes.contains(&class) || def.features.matches_class(class, None))
             .collect()
     }
 
@@ -550,6 +552,149 @@ pub enum PhonemeClass {
     AlveolarNasal,
     VelarStop,
     VelarConsonant,
+    Sonorant,
+    Obstruent,
+    Continuant,
+    Coronal,
+    Dorsal,
+    Labial,
+    Nasal,
+    Liquid,
+    Glide,
+    Sibilant,
+    HighVowel,
+    UnstressedVowel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MajorClass {
+    Vowel,
+    Consonant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Place {
+    Bilabial,
+    Labiodental,
+    Dental,
+    Alveolar,
+    Postalveolar,
+    Palatal,
+    Velar,
+    Glottal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Manner {
+    Stop,
+    Nasal,
+    Fricative,
+    Affricate,
+    Liquid,
+    Glide,
+    Vowel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Voicing {
+    Voiced,
+    Voiceless,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeatureBundle {
+    pub major: MajorClass,
+    pub place: Option<Place>,
+    pub manner: Option<Manner>,
+    pub voicing: Option<Voicing>,
+    pub syllabic: bool,
+}
+
+impl FeatureBundle {
+    pub fn matches_class(self, class: PhonemeClass, stress: Option<Stress>) -> bool {
+        match class {
+            PhonemeClass::Vowel => self.major == MajorClass::Vowel,
+            PhonemeClass::Consonant => self.major == MajorClass::Consonant,
+            PhonemeClass::AlveolarStop => {
+                self.place == Some(Place::Alveolar) && self.manner == Some(Manner::Stop)
+            }
+            PhonemeClass::AlveolarNasal => {
+                self.place == Some(Place::Alveolar) && self.manner == Some(Manner::Nasal)
+            }
+            PhonemeClass::VelarStop => {
+                self.place == Some(Place::Velar) && self.manner == Some(Manner::Stop)
+            }
+            PhonemeClass::VelarConsonant => {
+                self.major == MajorClass::Consonant && self.place == Some(Place::Velar)
+            }
+            PhonemeClass::Sonorant => self.is_sonorant(),
+            PhonemeClass::Obstruent => self.is_obstruent(),
+            PhonemeClass::Continuant => self.is_continuant(),
+            PhonemeClass::Coronal => self.is_coronal(),
+            PhonemeClass::Dorsal => self.is_dorsal(),
+            PhonemeClass::Labial => self.is_labial(),
+            PhonemeClass::Nasal => self.manner == Some(Manner::Nasal),
+            PhonemeClass::Liquid => self.manner == Some(Manner::Liquid),
+            PhonemeClass::Glide => self.manner == Some(Manner::Glide),
+            PhonemeClass::Sibilant => self.is_sibilant(),
+            PhonemeClass::HighVowel => self.is_high_vowel(),
+            PhonemeClass::UnstressedVowel => {
+                self.major == MajorClass::Vowel && stress == Some(Stress::Unstressed)
+            }
+        }
+    }
+
+    pub fn is_sonorant(self) -> bool {
+        self.major == MajorClass::Vowel
+            || matches!(
+                self.manner,
+                Some(Manner::Nasal | Manner::Liquid | Manner::Glide)
+            )
+    }
+
+    pub fn is_obstruent(self) -> bool {
+        self.major == MajorClass::Consonant
+            && matches!(
+                self.manner,
+                Some(Manner::Stop | Manner::Fricative | Manner::Affricate)
+            )
+    }
+
+    pub fn is_continuant(self) -> bool {
+        matches!(
+            self.manner,
+            Some(Manner::Fricative | Manner::Liquid | Manner::Glide | Manner::Vowel)
+        )
+    }
+
+    pub fn is_coronal(self) -> bool {
+        matches!(
+            self.place,
+            Some(Place::Dental | Place::Alveolar | Place::Postalveolar)
+        )
+    }
+
+    pub fn is_dorsal(self) -> bool {
+        matches!(self.place, Some(Place::Palatal | Place::Velar))
+    }
+
+    pub fn is_labial(self) -> bool {
+        matches!(self.place, Some(Place::Bilabial | Place::Labiodental))
+    }
+
+    pub fn is_sibilant(self) -> bool {
+        matches!(self.place, Some(Place::Alveolar | Place::Postalveolar))
+            && matches!(self.manner, Some(Manner::Fricative | Manner::Affricate))
+    }
+
+    pub fn is_high_vowel(self) -> bool {
+        self.major == MajorClass::Vowel && matches!(self.place, Some(Place::Palatal | Place::Velar))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -901,6 +1046,7 @@ pub struct Phoneme {
     pub source_symbol: String,
     pub source: String,
     pub stress: Option<Stress>,
+    pub features: FeatureBundle,
     pub default_phone_string: PhoneString,
     pub realization: Realization,
 }
@@ -974,11 +1120,13 @@ pub fn phoneme_from_arpabet(symbol: &str, source: &str) -> Phoneme {
     let (base, stress) = split_arpabet_symbol(symbol);
     let default_phone_string = default_phone_string_for_arpabet(&base, symbol);
     let ipa = default_phone_string.to_ipa();
+    let features = feature_bundle_for_arpabet(&base);
     Phoneme {
         symbol: base,
         source_symbol: symbol.to_string(),
         source: source.to_string(),
         stress,
+        features,
         default_phone_string: default_phone_string.clone(),
         realization: Realization {
             phone_string: default_phone_string.clone(),
@@ -1292,16 +1440,64 @@ fn stress_pattern_matches(pattern: StressPattern, stress: Option<Stress>) -> boo
     }
 }
 
-fn classify_symbol(base: &str) -> PhonemeClass {
-    if is_vowel_symbol(base) {
-        return PhonemeClass::Vowel;
-    }
+pub fn feature_bundle_for_arpabet(base: &str) -> FeatureBundle {
     match base {
-        "T" | "D" => PhonemeClass::AlveolarStop,
-        "N" => PhonemeClass::AlveolarNasal,
-        "K" | "G" => PhonemeClass::VelarStop,
-        "NG" => PhonemeClass::VelarConsonant,
-        _ => PhonemeClass::Consonant,
+        "AA" | "AO" => vowel_features(Place::Glottal),
+        "AE" | "EH" | "ER" | "EY" | "IH" | "IY" | "AY" | "OY" => {
+            vowel_features(Place::Palatal)
+        }
+        "AH" => vowel_features(Place::Glottal),
+        "AW" | "OW" | "UH" | "UW" => vowel_features(Place::Velar),
+        "P" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiceless),
+        "B" => consonant_features(Place::Bilabial, Manner::Stop, Voicing::Voiced),
+        "M" => consonant_features(Place::Bilabial, Manner::Nasal, Voicing::Voiced),
+        "F" => consonant_features(Place::Labiodental, Manner::Fricative, Voicing::Voiceless),
+        "V" => consonant_features(Place::Labiodental, Manner::Fricative, Voicing::Voiced),
+        "TH" => consonant_features(Place::Dental, Manner::Fricative, Voicing::Voiceless),
+        "DH" => consonant_features(Place::Dental, Manner::Fricative, Voicing::Voiced),
+        "T" => consonant_features(Place::Alveolar, Manner::Stop, Voicing::Voiceless),
+        "D" => consonant_features(Place::Alveolar, Manner::Stop, Voicing::Voiced),
+        "N" => consonant_features(Place::Alveolar, Manner::Nasal, Voicing::Voiced),
+        "S" => consonant_features(Place::Alveolar, Manner::Fricative, Voicing::Voiceless),
+        "Z" => consonant_features(Place::Alveolar, Manner::Fricative, Voicing::Voiced),
+        "L" | "R" => consonant_features(Place::Alveolar, Manner::Liquid, Voicing::Voiced),
+        "CH" => consonant_features(Place::Postalveolar, Manner::Affricate, Voicing::Voiceless),
+        "JH" => consonant_features(Place::Postalveolar, Manner::Affricate, Voicing::Voiced),
+        "SH" => consonant_features(Place::Postalveolar, Manner::Fricative, Voicing::Voiceless),
+        "ZH" => consonant_features(Place::Postalveolar, Manner::Fricative, Voicing::Voiced),
+        "Y" => consonant_features(Place::Palatal, Manner::Glide, Voicing::Voiced),
+        "K" => consonant_features(Place::Velar, Manner::Stop, Voicing::Voiceless),
+        "G" => consonant_features(Place::Velar, Manner::Stop, Voicing::Voiced),
+        "NG" => consonant_features(Place::Velar, Manner::Nasal, Voicing::Voiced),
+        "W" => consonant_features(Place::Velar, Manner::Glide, Voicing::Voiced),
+        "HH" => consonant_features(Place::Glottal, Manner::Fricative, Voicing::Voiceless),
+        _ => FeatureBundle {
+            major: MajorClass::Consonant,
+            place: None,
+            manner: None,
+            voicing: None,
+            syllabic: false,
+        },
+    }
+}
+
+fn vowel_features(place: Place) -> FeatureBundle {
+    FeatureBundle {
+        major: MajorClass::Vowel,
+        place: Some(place),
+        manner: Some(Manner::Vowel),
+        voicing: Some(Voicing::Voiced),
+        syllabic: true,
+    }
+}
+
+fn consonant_features(place: Place, manner: Manner, voicing: Voicing) -> FeatureBundle {
+    FeatureBundle {
+        major: MajorClass::Consonant,
+        place: Some(place),
+        manner: Some(manner),
+        voicing: Some(voicing),
+        syllabic: false,
     }
 }
 
@@ -1313,33 +1509,43 @@ fn phoneme_class_name(class: PhonemeClass) -> &'static str {
         PhonemeClass::AlveolarNasal => "alveolar_nasal",
         PhonemeClass::VelarStop => "velar_stop",
         PhonemeClass::VelarConsonant => "velar_consonant",
+        PhonemeClass::Sonorant => "sonorant",
+        PhonemeClass::Obstruent => "obstruent",
+        PhonemeClass::Continuant => "continuant",
+        PhonemeClass::Coronal => "coronal",
+        PhonemeClass::Dorsal => "dorsal",
+        PhonemeClass::Labial => "labial",
+        PhonemeClass::Nasal => "nasal",
+        PhonemeClass::Liquid => "liquid",
+        PhonemeClass::Glide => "glide",
+        PhonemeClass::Sibilant => "sibilant",
+        PhonemeClass::HighVowel => "high_vowel",
+        PhonemeClass::UnstressedVowel => "unstressed_vowel",
     }
 }
 
 fn phoneme_class_label(phoneme: &Phoneme) -> String {
-    phoneme_class_name(classify_symbol(&phoneme.symbol)).to_string()
+    phoneme_class_name(primary_phoneme_class(phoneme)).to_string()
 }
 
 fn phoneme_class_matches(class: PhonemeClass, phoneme: &Phoneme) -> bool {
-    let actual = classify_symbol(&phoneme.symbol);
-    let actual_is_consonant = matches!(
-        actual,
+    phoneme.features.matches_class(class, phoneme.stress)
+}
+
+fn primary_phoneme_class(phoneme: &Phoneme) -> PhonemeClass {
+    if phoneme.features.major == MajorClass::Vowel {
+        PhonemeClass::Vowel
+    } else if phoneme.features.matches_class(PhonemeClass::AlveolarNasal, phoneme.stress) {
+        PhonemeClass::AlveolarNasal
+    } else if phoneme.features.matches_class(PhonemeClass::AlveolarStop, phoneme.stress) {
+        PhonemeClass::AlveolarStop
+    } else if phoneme.features.matches_class(PhonemeClass::VelarStop, phoneme.stress) {
+        PhonemeClass::VelarStop
+    } else if phoneme.features.matches_class(PhonemeClass::VelarConsonant, phoneme.stress) {
+        PhonemeClass::VelarConsonant
+    } else {
         PhonemeClass::Consonant
-            | PhonemeClass::AlveolarStop
-            | PhonemeClass::AlveolarNasal
-            | PhonemeClass::VelarStop
-            | PhonemeClass::VelarConsonant
-    );
-    matches!(
-        (class, actual),
-        (PhonemeClass::Vowel, PhonemeClass::Vowel)
-            | (PhonemeClass::AlveolarStop, PhonemeClass::AlveolarStop)
-            | (PhonemeClass::AlveolarNasal, PhonemeClass::AlveolarNasal)
-            | (PhonemeClass::VelarStop, PhonemeClass::VelarStop)
-            | (PhonemeClass::VelarConsonant, PhonemeClass::VelarConsonant)
-            // VelarConsonant intentionally includes velar stops as a subtype.
-            | (PhonemeClass::VelarConsonant, PhonemeClass::VelarStop)
-    ) || (class == PhonemeClass::Consonant && actual_is_consonant)
+    }
 }
 
 fn word_position(index: usize, len: usize) -> WordPosition {

@@ -4,6 +4,7 @@ use super::inventory::english_phoneme_table;
 use super::phonology::{
     Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeClass,
     PhonemeDefinition, PhonemeId, PhonemeSchema, PhonemicInventory, SourceSymbol, VarietyId,
+    feature_bundle_for_arpabet,
 };
 use crate::prosody::phonotactics::tables::{
     illegal_single_onsets, legal_coda_clusters, legal_onset_clusters,
@@ -593,6 +594,7 @@ fn esperanto_phonemes() -> Vec<PhonemeDefinition> {
                     }],
                 },
                 classes,
+                features: feature_bundle_for_arpabet(symbol),
             }
         })
         .collect()

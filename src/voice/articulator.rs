@@ -199,6 +199,52 @@ pub enum SungBackendDetail {
     CoarseHintsOnly,
 }
 
+/// Backend-specific render contract derived from the shared sung plan.
+///
+/// The variants intentionally encode the amount of detail a backend may
+/// consume.  Adapters should accept this type rather than a full
+/// [`ArticulatorPlan`] when degradation is expected.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RenderPlan {
+    /// Full phone-timed targets for deterministic source/filter rendering.
+    PhoneTimed(Vec<PhoneRenderTarget>),
+    /// Text plus phone/prosody hints for backends with a partial control
+    /// surface, such as the Riper path.
+    PartialProsody {
+        text: String,
+        phones: Vec<PartialProsodyPhone>,
+        pitch_hints: Vec<PitchHint>,
+    },
+    /// Coarse text-only rendering for TTS backends that cannot honor phone
+    /// timing.  `ssml_hint` is advisory when a process backend supports it.
+    CoarseText {
+        text: String,
+        ssml_hint: Option<String>,
+    },
+}
+
+/// Per-phone hint preserved for partially controllable backends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartialProsodyPhone {
+    pub phone: String,
+    pub onset_ms: u64,
+    pub duration_ms: u64,
+    pub is_voiced: bool,
+    pub role: PhoneRole,
+}
+
+/// Pitch hint sampled from the phrase pitch curve for a pitch-bearing phone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PitchHint {
+    pub phone_index: usize,
+    pub onset_ms: u64,
+    pub duration_ms: u64,
+    pub f0_hz: f32,
+}
+
 /// Describe how a backend is expected to consume this shared plan.
 pub fn backend_detail_expectation(kind: SungBackendKind) -> SungBackendDetail {
     match kind {
@@ -206,6 +252,82 @@ pub fn backend_detail_expectation(kind: SungBackendKind) -> SungBackendDetail {
         SungBackendKind::Riper => SungBackendDetail::PartialPhoneProsody,
         SungBackendKind::Piper => SungBackendDetail::CoarseHintsOnly,
     }
+}
+
+/// Build the explicit degraded render contract for a backend.
+pub fn render_plan_for_backend(
+    kind: SungBackendKind,
+    plan: &ArticulatorPlan,
+    amplitude: f32,
+    targets: &HashMap<String, PhoneAcousticTarget>,
+) -> RenderPlan {
+    match kind {
+        SungBackendKind::Klatt => RenderPlan::PhoneTimed(klatt_targets_from_articulator_plan(
+            plan, amplitude, targets,
+        )),
+        SungBackendKind::Riper => partial_prosody_render_plan(plan),
+        SungBackendKind::Piper => coarse_text_render_plan(plan),
+    }
+}
+
+/// Build a partially degraded phone/prosody plan for the Riper adapter.
+pub fn partial_prosody_render_plan(plan: &ArticulatorPlan) -> RenderPlan {
+    let phones = plan
+        .gestures
+        .gestures
+        .iter()
+        .map(|gesture| PartialProsodyPhone {
+            phone: gesture.phone.clone(),
+            onset_ms: gesture.onset_ms,
+            duration_ms: gesture.duration_ms,
+            is_voiced: gesture.is_voiced,
+            role: gesture.role,
+        })
+        .collect();
+    RenderPlan::PartialProsody {
+        text: render_text_from_plan(plan),
+        phones,
+        pitch_hints: pitch_hints_from_plan(plan),
+    }
+}
+
+/// Build a coarse text-only plan for the process Piper adapter.
+pub fn coarse_text_render_plan(plan: &ArticulatorPlan) -> RenderPlan {
+    RenderPlan::CoarseText {
+        text: render_text_from_plan(plan),
+        ssml_hint: None,
+    }
+}
+
+fn render_text_from_plan(plan: &ArticulatorPlan) -> String {
+    plan.syllables
+        .iter()
+        .map(|syllable| syllable.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn pitch_hints_from_plan(plan: &ArticulatorPlan) -> Vec<PitchHint> {
+    let Some(curve) = &plan.pitch_curve else {
+        return Vec::new();
+    };
+    plan.gestures
+        .gestures
+        .iter()
+        .enumerate()
+        .filter_map(|(phone_index, gesture)| {
+            if gesture.role != PhoneRole::Nucleus || !gesture.is_voiced {
+                return None;
+            }
+            let midpoint = gesture.onset_ms + (gesture.duration_ms / 2);
+            Some(PitchHint {
+                phone_index,
+                onset_ms: gesture.onset_ms,
+                duration_ms: gesture.duration_ms,
+                f0_hz: curve.sample_hz(Duration::from_millis(midpoint)),
+            })
+        })
+        .collect()
 }
 
 // ─── Voicing heuristic ───────────────────────────────────────────────────────
@@ -817,6 +939,57 @@ mod tests {
         assert_eq!(
             backend_detail_expectation(SungBackendKind::Piper),
             SungBackendDetail::CoarseHintsOnly
+        );
+    }
+
+    #[test]
+    fn backend_render_plans_encode_degradation_in_data() {
+        let plan = articulate(&hello_phrase(true));
+        let table = crate::voice::tract::default_english_phone_targets();
+
+        let klatt = render_plan_for_backend(SungBackendKind::Klatt, &plan, 0.7, &table);
+        let RenderPlan::PhoneTimed(targets) = klatt else {
+            panic!("Klatt should receive a phone-timed render plan");
+        };
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.phone.ipa.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "ɛ", "l", "oʊ"]
+        );
+
+        let riper = render_plan_for_backend(SungBackendKind::Riper, &plan, 0.7, &table);
+        let RenderPlan::PartialProsody {
+            text,
+            phones,
+            pitch_hints,
+        } = riper
+        else {
+            panic!("Riper should receive a partial prosody render plan");
+        };
+        assert_eq!(text, "hel lo");
+        assert_eq!(
+            phones
+                .iter()
+                .map(|phone| phone.phone.as_str())
+                .collect::<Vec<_>>(),
+            vec!["h", "ɛ", "l", "oʊ"]
+        );
+        assert!(
+            pitch_hints
+                .iter()
+                .any(|hint| phones[hint.phone_index].phone == "ɛ"),
+            "Riper should get advisory nucleus pitch hints"
+        );
+
+        let piper = render_plan_for_backend(SungBackendKind::Piper, &plan, 0.7, &table);
+        assert_eq!(
+            piper,
+            RenderPlan::CoarseText {
+                text: "hel lo".to_string(),
+                ssml_hint: None,
+            }
         );
     }
 }
