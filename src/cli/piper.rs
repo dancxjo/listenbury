@@ -61,8 +61,10 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
 
     #[cfg(not(feature = "tts-riper"))]
-    if piper_args.riper || piper_args.klatt {
-        anyhow::bail!("listenbury say --riper/--klatt requires the `tts-riper` feature");
+    if piper_args.riper {
+        anyhow::bail!(
+            "listenbury say --riper requires the `tts-riper` feature (--klatt is only available with --riper)"
+        );
     }
 
     let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
@@ -836,7 +838,7 @@ impl SayArgs {
 }
 
 fn should_use_klatt_backend(args: &SayArgs) -> bool {
-    args.riper && args.klatt
+    args.klatt
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
