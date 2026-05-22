@@ -30,6 +30,8 @@ enum Command {
     Transcribe(TranscribeCommand),
     #[command(about = "Speak text aloud")]
     Say(SayCommand),
+    #[command(about = "Sing the ragtime demo phrase")]
+    Sing(SingDemoCommand),
     #[command(
         alias = "piper-compare",
         about = "Compare process-backed Piper and Riper synthesis"
@@ -257,14 +259,30 @@ pub(crate) struct ProsodyPlanCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct SingDemoCommand {
-    #[arg(long, value_enum, default_value_t = SingDemoBackendOption::Klatt)]
-    pub(crate) backend: SingDemoBackendOption,
+    #[arg(long, value_enum, conflicts_with = "riper")]
+    pub(crate) backend: Option<SingDemoBackendOption>,
+    #[arg(long, conflicts_with = "backend")]
+    pub(crate) riper: bool,
+    #[arg(long, requires = "riper")]
+    pub(crate) klatt: bool,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) piper_voice: Option<PathBuf>,
+}
+
+impl SingDemoCommand {
+    pub(crate) fn selected_backend(&self) -> SingDemoBackendOption {
+        if self.klatt {
+            SingDemoBackendOption::Klatt
+        } else if self.riper {
+            SingDemoBackendOption::Riper
+        } else {
+            self.backend.unwrap_or_default()
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -583,6 +601,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
+        Command::Sing(cmd) => commands::run_sing_demo(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
         Command::Echo(cmd) => commands::run_echo(cmd),
         Command::Listen(cmd) => run_live_session(LiveSessionConfig::from_listen_command(cmd)),
@@ -1492,7 +1511,8 @@ mod tests {
         else {
             panic!("expected sing-demo command");
         };
-        assert_eq!(command.backend, SingDemoBackendOption::Riper);
+        assert_eq!(command.backend, Some(SingDemoBackendOption::Riper));
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
         assert_eq!(
             command.output_wav,
             Some(PathBuf::from("out/hello-ragtime-riper.wav"))
@@ -1511,8 +1531,69 @@ mod tests {
         else {
             panic!("expected sing-demo command");
         };
-        assert_eq!(command.backend, SingDemoBackendOption::Klatt);
+        assert_eq!(command.backend, None);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Klatt);
         assert!(command.output_wav.is_none());
+    }
+
+    #[test]
+    fn dev_sing_demo_accepts_riper_and_klatt_flags() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--riper", "--klatt"])
+            .expect("sing-demo should parse combined riper/klatt flags");
+
+        let Some(Command::Dev {
+            command: DevCommand::SingDemo(command),
+        }) = cli.command
+        else {
+            panic!("expected sing-demo command");
+        };
+        assert!(command.riper);
+        assert!(command.klatt);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Klatt);
+    }
+
+    #[test]
+    fn dev_sing_demo_accepts_riper_without_klatt() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--riper"])
+            .expect("sing-demo should parse riper flag");
+
+        let Some(Command::Dev {
+            command: DevCommand::SingDemo(command),
+        }) = cli.command
+        else {
+            panic!("expected sing-demo command");
+        };
+        assert!(command.riper);
+        assert!(!command.klatt);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
+    }
+
+    #[test]
+    fn dev_sing_demo_rejects_klatt_without_riper() {
+        let error = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--klatt"])
+            .expect_err("sing-demo should require --riper when --klatt is set");
+        assert!(
+            error.to_string().contains("--riper"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn sing_routes_to_shared_sing_demo_command() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "sing",
+            "--riper",
+            "--output-wav",
+            "out/sing.wav",
+        ])
+        .expect("top-level sing should parse sing-demo flags");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
+        assert_eq!(command.output_wav, Some(PathBuf::from("out/sing.wav")));
     }
 
     #[test]

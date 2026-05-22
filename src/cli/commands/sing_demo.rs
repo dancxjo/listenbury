@@ -35,15 +35,16 @@ use listenbury::voice::tract::targets::default_english_phone_targets;
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
     let plan = articulate(&phrase);
-    let backend_kind = command.backend.as_backend_kind();
+    let backend = command.selected_backend();
+    let backend_kind = backend.as_backend_kind();
     let detail = backend_detail_expectation(backend_kind);
-    println!("sing-demo backend: {:?} ({detail:?})", command.backend);
+    println!("sing-demo backend: {backend:?} ({detail:?})");
 
-    for note in backend_degradation_notes(command.backend) {
+    for note in backend_degradation_notes(backend) {
         println!("sing-demo note: {note}");
     }
 
-    let frames = match command.backend {
+    let frames = match backend {
         SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(&plan)?,
         SingDemoBackendOption::Riper => synthesize_riper_from_plan(&plan, &command)?,
         SingDemoBackendOption::Piper => synthesize_piper_from_plan(&plan, &command)?,
@@ -51,7 +52,7 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
 
     let output_path = command
         .output_wav
-        .unwrap_or_else(|| default_output_wav_path(command.backend));
+        .unwrap_or_else(|| default_output_wav_path(backend));
     write_demo_wav(&output_path, &frames)?;
     Ok(())
 }
