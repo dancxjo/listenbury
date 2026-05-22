@@ -118,7 +118,7 @@ impl SourceAttributedTranscript {
     /// When the segment is indistinct the text is rendered as `[indistinct]`.
     pub fn screenplay_line(&self) -> String {
         let label = self.display_label();
-        let body = if self.is_indistinct() && self.text.is_empty() {
+        let body = if self.is_indistinct() {
             "[indistinct]".to_string()
         } else {
             self.text.clone()
@@ -221,19 +221,35 @@ mod tests {
         );
         assert!(event.is_overlapped());
         assert!(event.is_indistinct(), "overlapped segments are always treated as indistinct");
+        // Even when the ASR returned text, overlap forces [indistinct] rendering.
+        assert_eq!(event.screenplay_line(), "_UNKNOWN VOICE #1_: [indistinct]");
     }
 
     #[test]
-    fn indistinct_empty_text_renders_placeholder() {
+    fn indistinct_renders_placeholder_regardless_of_text() {
         let mixture_id = AcousticMixtureId::new();
-        let event = make_transcript(
+        // Empty text + overlap
+        let empty = make_transcript(
             SourceLabel::BackgroundVoice { ordinal: 1 },
             "",
             0.20,
             0.50,
             Some(mixture_id),
         );
-        assert_eq!(event.screenplay_line(), "_BACKGROUND VOICE #1_: [indistinct]");
+        assert_eq!(empty.screenplay_line(), "_BACKGROUND VOICE #1_: [indistinct]");
+        // Non-empty text + low confidence
+        let low_conf = make_transcript(
+            SourceLabel::BackgroundVoice { ordinal: 1 },
+            "some partial words",
+            0.30,
+            0.50,
+            None,
+        );
+        assert_eq!(
+            low_conf.screenplay_line(),
+            "_BACKGROUND VOICE #1_: [indistinct]",
+            "low confidence should override text in screenplay rendering"
+        );
     }
 
     #[test]

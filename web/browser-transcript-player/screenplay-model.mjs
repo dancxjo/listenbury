@@ -529,7 +529,7 @@ function applySourceAttributedTranscript(session, turn, event) {
     : 1.0;
   const isOverlapped = event.overlap != null;
   const isIndistinct = transcriptConfidence < 0.4 || isOverlapped;
-  const resolvedText = (isIndistinct && !rawText) ? "[indistinct]" : rawText;
+  const resolvedText = isIndistinct ? "[indistinct]" : rawText;
 
   if (!resolvedText) {
     return;

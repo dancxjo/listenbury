@@ -403,8 +403,9 @@ test("source_attributed_transcript: background voice with low confidence renders
 
 test("source_attributed_transcript: overlapped source renders as indistinct even with text", () => {
   const session = createNarrativeSession();
+  // Even with text and high transcript_confidence, overlap forces [indistinct]
   reduceNarrativeEvent(session, mkEvent("source_attributed_transcript", 1, 100, {
-    text: "",
+    text: "something audible",
     source_label: { UnknownVoice: { ordinal: 1 } },
     transcript_confidence: 0.80,
     attribution_confidence: 0.55,
@@ -415,7 +416,7 @@ test("source_attributed_transcript: overlapped source renders as indistinct even
   const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
 
   assert.ok(voiceBeat, "voice beat should exist for overlapped source");
-  assert.equal(voiceBeat.text, "[indistinct]");
+  assert.equal(voiceBeat.text, "[indistinct]", "overlap should override text with [indistinct]");
 });
 
 test("source_attributed_transcript: multiple sources in same session produce distinct cues", () => {
