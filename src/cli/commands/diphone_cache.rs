@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -295,6 +295,7 @@ fn run_audit_plan(cmd: DiphoneAuditPlanCommand) -> Result<()> {
     let pairs = plan_pairs(&plan);
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut non_exact = Vec::new();
+    let mut generatable_cache: HashMap<(String, String), bool> = HashMap::new();
 
     println!("=== Diphone Plan Audit ===");
     println!("Plan pairs : {}", pairs.len());
@@ -318,7 +319,10 @@ fn run_audit_plan(cmd: DiphoneAuditPlanCommand) -> Result<()> {
             CacheLookup::Hit
         ) {
             "cache-hit"
-        } else if is_generatable_pair(&config, &left, &right) {
+        } else if *generatable_cache
+            .entry((left.clone(), right.clone()))
+            .or_insert_with(|| is_generatable_pair(&config, &left, &right))
+        {
             "neural-forge"
         } else {
             "fallback"
@@ -551,7 +555,15 @@ fn maybe_write_debug_outputs(
     let pre_normalized = carrier_samples
         .get(forged.segmentation.source_start_sample..forged.segmentation.source_end_sample)
         .map(|slice| slice.to_vec())
-        .unwrap_or_else(|| forged.unit.samples.clone());
+        .unwrap_or_else(|| {
+            eprintln!(
+                "warning: invalid segmentation range {}..{} for debug extraction (carrier samples={}); using normalized samples",
+                forged.segmentation.source_start_sample,
+                forged.segmentation.source_end_sample,
+                carrier_samples.len()
+            );
+            forged.unit.samples.clone()
+        });
     write_debug_wav(&extracted_path, &pre_normalized, forged.unit.sample_rate_hz)?;
     write_debug_wav(
         &normalized_path,
@@ -638,6 +650,7 @@ fn resolved_model_license(config: &listenbury::mouth::riper::PiperVoiceConfig) -
 
 fn duration_ms(sample_count: usize, sample_rate_hz: u32) -> f32 {
     if sample_rate_hz == 0 {
+        eprintln!("warning: sample_rate_hz=0; duration calculation returns 0.0");
         return 0.0;
     }
     (sample_count as f32 * 1000.0) / sample_rate_hz as f32
@@ -676,6 +689,7 @@ fn parse_inventory_lines(text: &str) -> Vec<String> {
 
 fn builtin_inventory(name: &str) -> Option<&'static [&'static str]> {
     match name {
+        // IPA/espeak-ish symbols chosen as a compact US-English baseline for cache prewarm.
         "en-us-basic" => Some(&[
             "_", "a", "e", "i", "o", "u", "@", "p", "b", "t", "d", "k", "g", "f", "v", "s", "z",
             "h", "m", "n", "l", "r", "w", "j",
