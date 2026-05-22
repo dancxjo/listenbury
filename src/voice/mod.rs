@@ -16,6 +16,7 @@
 
 pub mod articulator;
 pub mod coarticulation;
+pub mod diphone;
 pub mod mbrola;
 pub mod tract;
 pub mod vocal_plausibility;

@@ -17,7 +17,7 @@ pub mod voice;
 pub use database::{MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone};
 pub use diphone_provider::{
     DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
-    DiphoneUnitSource, MbrolaDiphoneProvider,
+    DiphoneUnitSource, ForgeProvenance, MbrolaDiphoneProvider,
 };
 pub use fallback::{FallbackReason, FallbackResult, fallback_warning, resolve_left_half, resolve_right_half};
 pub use manifest::{ManifestError, VoiceManifest};
