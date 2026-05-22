@@ -604,6 +604,293 @@ pub fn convert_punctuation_prosody_rule(
 }
 
 // ---------------------------------------------------------------------------
+// Structured boundary prosody rule types
+// ---------------------------------------------------------------------------
+
+/// The pattern that triggers a [`BoundaryProsodyRule`] — either a specific
+/// punctuation character or a clause/utterance position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryPattern {
+    /// A specific punctuation character (e.g. `'!'`, `'?'`, `','`).
+    Punctuation(char),
+    /// The end of a complete clause or sentence (any final-boundary position).
+    ClauseEnd,
+    /// The start of a clause or sentence.
+    ClauseStart,
+    /// The very end of the utterance string — stronger than `ClauseEnd`.
+    UtteranceEnd,
+    /// Any major phrase boundary, regardless of punctuation.
+    AnyMajorBoundary,
+    /// Any minor phrase boundary, regardless of punctuation.
+    AnyMinorBoundary,
+}
+
+/// Phrase boundary strength for a [`BoundaryProsodyRule`] output.
+///
+/// This is a prosody-level classification and is intentionally kept separate
+/// from [`ling_env::PhraseBoundaryKind`] (which covers only `None/Minor/Major`)
+/// to allow richer downstream discrimination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryKind {
+    None,
+    Minor,
+    Major,
+}
+
+/// Pitch movement direction at a prosodic boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PitchDirection {
+    /// Falling pitch at the end of a declarative sentence.
+    FinalFalling,
+    /// Rising pitch at the end of a question.
+    FinalRising,
+    /// High/expanded pitch associated with exclamations.
+    Exclamation,
+    /// Level or neutral pitch — continuation or parenthetical.
+    Level,
+}
+
+/// Stress effect at a clause boundary position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StressEffect {
+    /// The final stressed syllable before the boundary receives extra prominence.
+    ClauseFinalStress,
+    /// Stress is reduced or relaxed — typical for parentheticals or appositives.
+    StressRelaxation,
+    /// No special stress adjustment.
+    Neutral,
+}
+
+/// Context evidence that can suppress or soften a comma pause.
+///
+/// When any of these conditions hold at the comma site, the minor-phrase pause
+/// should be shortened or omitted, matching eSpeak-ng's vocative/appositive
+/// comma suppression behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SuppressibleBy {
+    /// A vocative (direct-address) construction is present at the comma site.
+    VocativeContext,
+    /// A non-restrictive appositive phrase flanks the comma.
+    AppositiveContext,
+    /// A parenthetical aside is delimited by the comma.
+    ParentheticalContext,
+    /// A tight syntactic dependency (e.g. determiner–noun, auxiliary–verb)
+    /// crosses the comma, indicating the pause is prosodically inappropriate.
+    TightSyntacticLink,
+}
+
+/// Structured prosodic effect produced when a [`BoundaryProsodyRule`] fires.
+///
+/// All fields are optional; `None` means "do not modify the default".  A rule
+/// may influence only the boundary strength while leaving pitch and stress to
+/// downstream defaults, for example.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryProsodyEffect {
+    /// The phrase boundary strength that applies at this position.
+    pub boundary_kind: BoundaryKind,
+    /// The pitch contour direction at this boundary, if specified.
+    pub pitch_direction: Option<PitchDirection>,
+    /// Additional pause duration in milliseconds (relative to the baseline
+    /// pause for this boundary kind).  Positive values extend the pause;
+    /// negative values shorten it.
+    pub pause_delta_ms: Option<i32>,
+    /// Pitch range multiplier: `1.0` is neutral, `> 1.0` widens the range
+    /// (excited/exclamation), `< 1.0` narrows it.
+    pub pitch_range_factor: Option<f32>,
+    /// Clause-boundary stress adjustment.
+    pub stress_effect: StressEffect,
+    /// Evidence kinds that can suppress or soften this boundary's pause.
+    /// Empty means the pause is unconditional.
+    pub suppressible_by: Vec<SuppressibleBy>,
+}
+
+/// A structured boundary/prosody rule derived from eSpeak-ng clause-position
+/// and punctuation prosody rules.
+///
+/// Unlike [`ImportedEnvironmentRule`], which stores the output as an opaque
+/// `contour: Option<String>`, `BoundaryProsodyRule` encodes every prosodic
+/// dimension as a typed field so that downstream renderers can act on them
+/// without parsing strings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryProsodyRule {
+    /// Unique identifier, copied from the originating seed rule's `rule_id`.
+    pub id: String,
+    /// What position or punctuation character triggers this rule.
+    pub boundary_pattern: BoundaryPattern,
+    /// The structured prosodic effect when the rule fires.
+    pub output: BoundaryProsodyEffect,
+    /// Higher values take precedence when multiple rules match.
+    pub priority: i32,
+    /// Normalised confidence in `[0, 1]`.
+    pub confidence: f32,
+    /// Trace back to the originating eSpeak-ng source file and license.
+    pub provenance: RuleProvenance,
+}
+
+// ---------------------------------------------------------------------------
+// Conversion: PunctuationProsodyRule → BoundaryProsodyRule
+// ---------------------------------------------------------------------------
+
+/// Derive the [`BoundaryKind`] and [`PitchDirection`] from an
+/// `output_transformation` string such as `"boundary:exclamation"`.
+fn structured_boundary_output(
+    output: &str,
+) -> (BoundaryKind, Option<PitchDirection>, Option<f32>, StressEffect) {
+    if let Some(label) = output.strip_prefix("boundary:") {
+        match label {
+            "none" => (BoundaryKind::None, None, None, StressEffect::Neutral),
+            "minor" => (BoundaryKind::Minor, Some(PitchDirection::Level), None, StressEffect::Neutral),
+            "major" => (BoundaryKind::Major, Some(PitchDirection::Level), None, StressEffect::ClauseFinalStress),
+            "final_falling" => (BoundaryKind::Major, Some(PitchDirection::FinalFalling), None, StressEffect::ClauseFinalStress),
+            "final_rising" => (BoundaryKind::Major, Some(PitchDirection::FinalRising), None, StressEffect::ClauseFinalStress),
+            "exclamation" => (BoundaryKind::Major, Some(PitchDirection::Exclamation), Some(1.25), StressEffect::ClauseFinalStress),
+            _ => (BoundaryKind::Major, None, None, StressEffect::Neutral),
+        }
+    } else {
+        (BoundaryKind::Major, None, None, StressEffect::Neutral)
+    }
+}
+
+/// Derive which context evidence can suppress this punctuation's pause.
+///
+/// Comma pauses can be suppressed by vocative/appositive/parenthetical
+/// evidence; sentence-final punctuation (`!`, `?`, `.`) is never suppressible.
+fn suppressible_by_for_punctuation(match_pattern: &str) -> Vec<SuppressibleBy> {
+    match match_pattern {
+        "," => vec![
+            SuppressibleBy::VocativeContext,
+            SuppressibleBy::AppositiveContext,
+            SuppressibleBy::ParentheticalContext,
+            SuppressibleBy::TightSyntacticLink,
+        ],
+        // Semicolons and colons can be softened when a tight link is present
+        // (e.g. a colon introducing a list where the first item follows immediately).
+        ";" | ":" => vec![SuppressibleBy::TightSyntacticLink],
+        _ => vec![],
+    }
+}
+
+/// Convert a [`PunctuationProsodyRule`] into a structured [`BoundaryProsodyRule`].
+///
+/// Unlike [`convert_punctuation_prosody_rule`] which produces an
+/// [`ImportedEnvironmentRule`] with a string `contour` field, this function
+/// produces fully typed output that does not depend on string parsing downstream.
+pub fn convert_to_boundary_prosody_rule(rule: &PunctuationProsodyRule) -> BoundaryProsodyRule {
+    let confidence = confidence_from_seed(rule.confidence);
+    let pattern_char = rule.match_pattern.chars().next();
+    let boundary_pattern = match pattern_char {
+        Some(ch) => BoundaryPattern::Punctuation(ch),
+        None => BoundaryPattern::AnyMajorBoundary,
+    };
+    let (boundary_kind, pitch_direction, pitch_range_factor, stress_effect) =
+        structured_boundary_output(&rule.output_transformation);
+    let suppressible_by = suppressible_by_for_punctuation(&rule.match_pattern);
+
+    BoundaryProsodyRule {
+        id: rule.rule_id.clone(),
+        boundary_pattern,
+        output: BoundaryProsodyEffect {
+            boundary_kind,
+            pitch_direction,
+            pause_delta_ms: None,
+            pitch_range_factor,
+            stress_effect,
+            suppressible_by,
+        },
+        priority: rule.priority,
+        confidence,
+        provenance: rule.provenance.clone(),
+    }
+}
+
+/// Return whether a [`BoundaryProsodyRule`]'s comma pause is suppressed by the
+/// given context evidence.
+///
+/// Returns `true` if at least one of the rule's [`SuppressibleBy`] kinds is
+/// present in `active_suppressors`.  A `false` result means the pause should
+/// proceed at full strength.
+pub fn is_comma_pause_suppressed(
+    rule: &BoundaryProsodyRule,
+    active_suppressors: &[SuppressibleBy],
+) -> bool {
+    rule.output
+        .suppressible_by
+        .iter()
+        .any(|kind| active_suppressors.contains(kind))
+}
+
+// ---------------------------------------------------------------------------
+// Clause-position boundary rules
+// ---------------------------------------------------------------------------
+
+/// Build a hardcoded set of clause-position [`BoundaryProsodyRule`]s that
+/// capture start-of-clause, end-of-clause, and end-of-utterance behaviour
+/// independently of any specific punctuation character.
+///
+/// These supplement the punctuation-derived rules with position-based prosodic
+/// effects such as utterance-final falling cadence and clause-start freshness.
+pub fn clause_position_boundary_rules() -> Vec<BoundaryProsodyRule> {
+    let provenance = RuleProvenance {
+        source: "espeak-ng-derived".to_string(),
+        source_file: "dictsource/en_rules, phsource/prosody".to_string(),
+        source_license: "GPL-3.0-or-later".to_string(),
+        imported_at: "2026-05-21T00:23:41Z".to_string(),
+    };
+    vec![
+        BoundaryProsodyRule {
+            id: "clause_utterance_end_falling".to_string(),
+            boundary_pattern: BoundaryPattern::UtteranceEnd,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+                suppressible_by: vec![],
+            },
+            priority: 110,
+            confidence: 0.92,
+            provenance: provenance.clone(),
+        },
+        BoundaryProsodyRule {
+            id: "clause_end_falling".to_string(),
+            boundary_pattern: BoundaryPattern::ClauseEnd,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::Major,
+                pitch_direction: Some(PitchDirection::FinalFalling),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::ClauseFinalStress,
+                suppressible_by: vec![],
+            },
+            priority: 100,
+            confidence: 0.85,
+            provenance: provenance.clone(),
+        },
+        BoundaryProsodyRule {
+            id: "clause_start_level".to_string(),
+            boundary_pattern: BoundaryPattern::ClauseStart,
+            output: BoundaryProsodyEffect {
+                boundary_kind: BoundaryKind::None,
+                pitch_direction: Some(PitchDirection::Level),
+                pause_delta_ms: None,
+                pitch_range_factor: None,
+                stress_effect: StressEffect::Neutral,
+                suppressible_by: vec![],
+            },
+            priority: 90,
+            confidence: 0.80,
+            provenance,
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Bulk converters for the bundled English variety
 // ---------------------------------------------------------------------------
 
@@ -625,6 +912,27 @@ pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
         .iter()
         .map(|r| convert_punctuation_prosody_rule(r, "en", "american_english"))
         .collect()
+}
+
+/// Return all structured [`BoundaryProsodyRule`]s for the bundled English
+/// (US, General American) variety.
+///
+/// The result combines:
+/// 1. Punctuation-derived rules converted from the seed JSON via
+///    [`convert_to_boundary_prosody_rule`].
+/// 2. Clause-position rules from [`clause_position_boundary_rules`].
+///
+/// Rules are returned sorted by descending priority so callers may apply them
+/// in order, stopping at the first match.
+pub fn english_boundary_prosody_rules() -> Vec<BoundaryProsodyRule> {
+    let mut rules: Vec<BoundaryProsodyRule> = english_seed_variety()
+        .punctuation_prosody_rules
+        .iter()
+        .map(convert_to_boundary_prosody_rule)
+        .collect();
+    rules.extend(clause_position_boundary_rules());
+    rules.sort_unstable_by(|a, b| b.priority.cmp(&a.priority));
+    rules
 }
 
 // ---------------------------------------------------------------------------
@@ -984,6 +1292,260 @@ mod tests {
                 "punctuation rule {} output should be a ProsodyBoundary",
                 rule.id
             );
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // BoundaryProsodyRule tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn boundary_prosody_rule_exclamation_has_structured_effect() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_exclamation_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('!'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::Exclamation));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.pitch_range_factor.map_or(false, |f| f > 1.0),
+            "exclamation should have expanded pitch range"
+        );
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "exclamation pause must not be suppressible"
+        );
+        assert_eq!(rule.provenance.source, "espeak-ng-derived");
+    }
+
+    #[test]
+    fn boundary_prosody_rule_question_has_final_rising_direction() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "?")
+            .expect("question mark rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_question_rising_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('?'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalRising));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "question-mark pause must not be suppressible"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_rule_period_has_final_falling_direction() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ".")
+            .expect("period rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_period_final_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('.'));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(rule.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(rule.output.stress_effect, StressEffect::ClauseFinalStress);
+        assert!(
+            rule.output.suppressible_by.is_empty(),
+            "period pause must not be suppressible"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_rule_comma_is_minor_and_suppressible() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ",")
+            .expect("comma rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        assert_eq!(rule.id, "punctuation_comma_minor_boundary");
+        assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation(','));
+        assert_eq!(rule.output.boundary_kind, BoundaryKind::Minor);
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::VocativeContext),
+            "comma should be suppressible by vocative context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::AppositiveContext),
+            "comma should be suppressible by appositive context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::ParentheticalContext),
+            "comma should be suppressible by parenthetical context"
+        );
+        assert!(
+            rule.output.suppressible_by.contains(&SuppressibleBy::TightSyntacticLink),
+            "comma should be suppressible by tight syntactic link"
+        );
+    }
+
+    #[test]
+    fn comma_pause_suppression_by_vocative_evidence() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == ",")
+            .expect("comma rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        // Vocative context suppresses the pause.
+        assert!(
+            is_comma_pause_suppressed(&rule, &[SuppressibleBy::VocativeContext]),
+            "vocative context should suppress comma pause"
+        );
+        // Appositive context also suppresses the pause.
+        assert!(
+            is_comma_pause_suppressed(&rule, &[SuppressibleBy::AppositiveContext]),
+            "appositive context should suppress comma pause"
+        );
+        // No active suppressors → pause proceeds.
+        assert!(
+            !is_comma_pause_suppressed(&rule, &[]),
+            "comma pause should not be suppressed without context evidence"
+        );
+    }
+
+    #[test]
+    fn exclamation_pause_is_never_suppressed() {
+        let seed_rule = english_seed_variety()
+            .punctuation_prosody_rules
+            .iter()
+            .find(|r| r.match_pattern == "!")
+            .expect("exclamation rule must exist");
+
+        let rule = convert_to_boundary_prosody_rule(seed_rule);
+
+        // Even with every possible suppressor, exclamation is never suppressed.
+        assert!(
+            !is_comma_pause_suppressed(
+                &rule,
+                &[
+                    SuppressibleBy::VocativeContext,
+                    SuppressibleBy::AppositiveContext,
+                    SuppressibleBy::ParentheticalContext,
+                    SuppressibleBy::TightSyntacticLink,
+                ]
+            ),
+            "exclamation pause must never be suppressed"
+        );
+    }
+
+    #[test]
+    fn clause_position_rules_cover_utterance_end_clause_end_and_start() {
+        let rules = clause_position_boundary_rules();
+
+        let utterance_end = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd)
+            .expect("utterance-end clause rule must exist");
+        assert_eq!(utterance_end.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(utterance_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
+        assert_eq!(utterance_end.output.stress_effect, StressEffect::ClauseFinalStress);
+
+        let clause_end = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd)
+            .expect("clause-end rule must exist");
+        assert_eq!(clause_end.output.boundary_kind, BoundaryKind::Major);
+        assert_eq!(clause_end.output.pitch_direction, Some(PitchDirection::FinalFalling));
+
+        let clause_start = rules
+            .iter()
+            .find(|r| r.boundary_pattern == BoundaryPattern::ClauseStart)
+            .expect("clause-start rule must exist");
+        assert_eq!(clause_start.output.boundary_kind, BoundaryKind::None);
+        assert_eq!(clause_start.output.stress_effect, StressEffect::Neutral);
+    }
+
+    #[test]
+    fn english_boundary_prosody_rules_covers_all_seed_punctuation_and_clause_positions() {
+        let rules = english_boundary_prosody_rules();
+
+        assert!(!rules.is_empty(), "bulk rules must not be empty");
+
+        // All seed punctuation rules appear.
+        for ch in ['!', '?', '.', ',', ';', ':'] {
+            assert!(
+                rules
+                    .iter()
+                    .any(|r| r.boundary_pattern == BoundaryPattern::Punctuation(ch)),
+                "bulk rules must include punctuation rule for '{ch}'"
+            );
+        }
+
+        // Clause-position rules are present.
+        assert!(
+            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::UtteranceEnd),
+            "bulk rules must include utterance-end clause rule"
+        );
+        assert!(
+            rules.iter().any(|r| r.boundary_pattern == BoundaryPattern::ClauseEnd),
+            "bulk rules must include clause-end rule"
+        );
+
+        // All rules have espeak provenance.
+        for rule in &rules {
+            assert_eq!(
+                rule.provenance.source, "espeak-ng-derived",
+                "rule {} provenance should be espeak-ng-derived",
+                rule.id
+            );
+        }
+
+        // Rules are sorted by descending priority.
+        let priorities: Vec<i32> = rules.iter().map(|r| r.priority).collect();
+        let mut sorted = priorities.clone();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        assert_eq!(
+            priorities, sorted,
+            "english_boundary_prosody_rules() must return rules sorted by descending priority"
+        );
+    }
+
+    #[test]
+    fn boundary_prosody_effects_are_structurally_typed_not_strings() {
+        // Every BoundaryProsodyRule output uses typed enums, not opaque strings.
+        // This is the core acceptance criterion: effects are structural, not string hacks.
+        for rule in english_boundary_prosody_rules() {
+            // boundary_kind is a typed enum variant — not a String
+            let _ = match rule.output.boundary_kind {
+                BoundaryKind::None | BoundaryKind::Minor | BoundaryKind::Major => true,
+            };
+            // pitch_direction is a typed Option<PitchDirection>
+            if let Some(dir) = rule.output.pitch_direction {
+                let _ = match dir {
+                    PitchDirection::FinalFalling
+                    | PitchDirection::FinalRising
+                    | PitchDirection::Exclamation
+                    | PitchDirection::Level => true,
+                };
+            }
+            // stress_effect is a typed enum variant
+            let _ = match rule.output.stress_effect {
+                StressEffect::ClauseFinalStress
+                | StressEffect::StressRelaxation
+                | StressEffect::Neutral => true,
+            };
         }
     }
 }
