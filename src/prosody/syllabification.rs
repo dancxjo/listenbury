@@ -7,6 +7,28 @@
 //! string with stress marks (`ˈ` primary, `ˌ` secondary) and syllable
 //! boundaries (`.`).
 //!
+//! # Phonotactic layer
+//!
+//! **Syllabification and phonotactics always operate over broad phonemic
+//! phones** ([`PhoneDecompositionPolicy::KeepPhonemic`]).  This means:
+//!
+//! - Affricates `/tʃ/` (ARPABET `CH`) and `/dʒ/` (ARPABET `JH`) are treated
+//!   as single phonotactic units when checking onset and coda legality.
+//! - Diphthongs such as `/oʊ/`, `/aɪ/` remain single nucleus phones.
+//!
+//! This keeps the legal-onset and legal-coda tables linguistically stable.
+//! For example, the coda `/ntʃ/` ("inch") and `/ndʒ/` ("lunge") appear in
+//! the phonotactic tables as two-phone sequences `[n, tʃ]` and `[n, dʒ]`,
+//! which match only when affricates are kept whole.
+//!
+//! Decomposition for singing or acoustic rendering happens **downstream**,
+//! after syllable structure is established:
+//!
+//! - [`crate::prosody::syllable::SungSyllable::with_decomposition_policy`]
+//!   splits phones within an already-structured syllable.
+//! - [`syllabify_with_decomposition_policy`] is available when callers
+//!   explicitly need syllabification over a different phone surface.
+//!
 //! # Algorithm
 //!
 //! 1. Derive realized phone tokens from phonemes, preserving the source phoneme
@@ -752,12 +774,66 @@ mod tests {
 
     #[test]
     fn affricate_coda_stays_broad_for_phonotactics() {
+        // "inch" = IH1 N CH → /ˈɪntʃ/; CH must stay as /tʃ/ for [n, tʃ] coda to match.
         let s = syllabify(&seq(&["IH1", "N", "CH"]), &ga());
 
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].coda.ipa_segments().to_vec(), vec!["n", "tʃ"]);
         assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
         assert_eq!(syllables_to_ipa(&s), "ˈɪntʃ");
+    }
+
+    #[test]
+    fn jh_affricate_coda_stays_broad_for_phonotactics() {
+        // "lunge" = L AH1 N JH → /ˈlʌndʒ/; JH must stay as /dʒ/ for [n, dʒ] coda to match.
+        let s = syllabify(&seq(&["L", "AH1", "N", "JH"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].coda.ipa_segments().to_vec(), vec!["n", "dʒ"]);
+        assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
+        assert_eq!(syllables_to_ipa(&s), "ˈlʌndʒ");
+    }
+
+    #[test]
+    fn ch_affricate_as_simple_coda_stays_broad() {
+        // "each" = IY1 CH → /ˈiːtʃ/; single /tʃ/ coda.
+        let s = syllabify(&seq(&["IY1", "CH"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].coda.ipa_segments().to_vec(), vec!["tʃ"]);
+        assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
+        assert_eq!(syllables_to_ipa(&s), "ˈiːtʃ");
+    }
+
+    #[test]
+    fn jh_affricate_as_simple_coda_stays_broad() {
+        // "age" = EY1 JH → /ˈeɪdʒ/; single /dʒ/ coda.
+        let s = syllabify(&seq(&["EY1", "JH"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].coda.ipa_segments().to_vec(), vec!["dʒ"]);
+        assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
+        assert_eq!(syllables_to_ipa(&s), "ˈeɪdʒ");
+    }
+
+    #[test]
+    fn ch_affricate_as_onset_stays_broad() {
+        // "chin" = CH IH1 N → /ˈtʃɪn/; CH is a single onset unit.
+        let s = syllabify(&seq(&["CH", "IH1", "N"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.ipa_segments().to_vec(), vec!["tʃ"]);
+        assert_eq!(syllables_to_ipa(&s), "ˈtʃɪn");
+    }
+
+    #[test]
+    fn jh_affricate_as_onset_stays_broad() {
+        // "jump" = JH AH1 M P → /ˈdʒʌmp/; JH is a single onset unit.
+        let s = syllabify(&seq(&["JH", "AH1", "M", "P"]), &ga());
+
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].onset.ipa_segments().to_vec(), vec!["dʒ"]);
+        assert_eq!(syllables_to_ipa(&s), "ˈdʒʌmp");
     }
 
     #[test]

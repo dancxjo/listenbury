@@ -289,6 +289,60 @@ fn known_coda_clusters_are_legal() {
     assert!(p.is_legal_coda(&refs(&ndzh)));
 }
 
+// ── Affricate coda clusters (broad phonemic layer) ───────────────────────
+//
+// Affricates /tʃ/ and /dʒ/ must be treated as single phonotactic units so
+// that composite coda sequences such as [n, tʃ] ("inch") and [n, dʒ]
+// ("lunge") are found in the legal-coda table.  Decomposing CH → [t, ʃ]
+// before consulting the table would make these entries invisible.
+
+#[test]
+fn single_ch_affricate_is_legal_coda() {
+    // "each" /iːtʃ/ — single /tʃ/ coda
+    let tsh = phones(&["tʃ"]);
+    assert!(ga().is_legal_coda(&refs(&tsh)), "/tʃ/ alone should be a legal coda");
+}
+
+#[test]
+fn single_jh_affricate_is_legal_coda() {
+    // "age" /eɪdʒ/ — single /dʒ/ coda
+    let dzh = phones(&["dʒ"]);
+    assert!(ga().is_legal_coda(&refs(&dzh)), "/dʒ/ alone should be a legal coda");
+}
+
+#[test]
+fn affricate_coda_clusters_with_nasals_are_legal() {
+    // "inch" /ɪntʃ/ and "lunge" /lʌndʒ/
+    let p = ga();
+    let ntsh = phones(&["n", "tʃ"]);
+    let ndzh = phones(&["n", "dʒ"]);
+    assert!(p.is_legal_coda(&refs(&ntsh)), "/ntʃ/ should be a legal coda");
+    assert!(p.is_legal_coda(&refs(&ndzh)), "/ndʒ/ should be a legal coda");
+}
+
+#[test]
+fn affricate_coda_clusters_with_liquids_are_legal() {
+    // "belch" /bɛltʃ/ and "arch" /ɑɹtʃ/
+    let p = ga();
+    let ltsh = phones(&["l", "tʃ"]);
+    let rtsh = phones(&["ɹ", "tʃ"]);
+    assert!(p.is_legal_coda(&refs(&ltsh)), "/ltʃ/ should be a legal coda");
+    assert!(p.is_legal_coda(&refs(&rtsh)), "/ɹtʃ/ should be a legal coda");
+}
+
+#[test]
+fn decomposed_affricate_is_not_a_legal_two_phone_coda() {
+    // If CH were decomposed to [t, ʃ], the resulting cluster /tʃ/ interpreted
+    // as two separate phones would NOT appear in the two-phone coda table.
+    // This confirms the table uses broad /tʃ/ as a single unit.
+    let p = ga();
+    let t_sh = phones(&["t", "ʃ"]);
+    assert!(
+        !p.is_legal_coda(&refs(&t_sh)),
+        "/t/ + /ʃ/ as two separate phones should not be a legal coda cluster"
+    );
+}
+
 // ── Phone equality ───────────────────────────────────────────────────────
 
 #[test]
