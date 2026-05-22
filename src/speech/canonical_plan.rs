@@ -10,6 +10,8 @@ use crate::speech::prosody_timing::{
 };
 use crate::voice::mbrola::{MbrolaPhone, MbrolaPitchTarget, MbrolaSymbolMap, PhoneTimedPlan};
 
+const DEFAULT_NUCLEUS_PITCH_TARGETS: &[(u8, f32)] = &[(0, 125.0), (60, 135.0), (100, 128.0)];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanonicalSpeechPlan {
@@ -239,20 +241,13 @@ pub fn canonical_speech_plan_to_phone_timed_plan(
                 MbrolaPhone::new(symbol_map.map_phone(&phone.symbol)?, duration_ms);
             if phone.pitch.targets.is_empty() {
                 if phone.nucleus {
-                    mbrola_phone.pitch_targets = vec![
-                        MbrolaPitchTarget {
-                            percent: 0,
-                            hz: 125.0,
-                        },
-                        MbrolaPitchTarget {
-                            percent: 60,
-                            hz: 135.0,
-                        },
-                        MbrolaPitchTarget {
-                            percent: 100,
-                            hz: 128.0,
-                        },
-                    ];
+                    mbrola_phone.pitch_targets = DEFAULT_NUCLEUS_PITCH_TARGETS
+                        .iter()
+                        .map(|(percent, hz)| MbrolaPitchTarget {
+                            percent: *percent,
+                            hz: *hz,
+                        })
+                        .collect();
                 }
             } else {
                 mbrola_phone.pitch_targets = phone
