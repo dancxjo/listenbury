@@ -231,26 +231,34 @@ fn next_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
 }
 
 fn diphone_left_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
-    let diphone =
-        database
-            .diphone(left, right)
-            .ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
-                left: left.to_string(),
-                right: right.to_string(),
-            })?;
+    let diphone = database.diphone(left, right).or_else(|| {
+        if left != "_" && right != "_" {
+            database.diphone(left, "_")
+        } else {
+            None
+        }
+    });
+    let diphone = diphone.ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
+        left: left.to_string(),
+        right: right.to_string(),
+    })?;
     let samples = database.samples_for_diphone(diphone)?;
     let split = diphone.halfseg_samples.min(samples.len());
     Ok(samples[..split].to_vec())
 }
 
 fn diphone_right_half(database: &MbrolaDatabase, left: &str, right: &str) -> Result<Vec<f32>> {
-    let diphone =
-        database
-            .diphone(left, right)
-            .ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
-                left: left.to_string(),
-                right: right.to_string(),
-            })?;
+    let diphone = database.diphone(left, right).or_else(|| {
+        if left != "_" && right != "_" {
+            database.diphone("_", right)
+        } else {
+            None
+        }
+    });
+    let diphone = diphone.ok_or_else(|| MbrolaDatabaseError::MissingDiphone {
+        left: left.to_string(),
+        right: right.to_string(),
+    })?;
     let samples = database.samples_for_diphone(diphone)?;
     let split = diphone.halfseg_samples.min(samples.len());
     Ok(samples[split..].to_vec())
@@ -486,6 +494,7 @@ fn remove_dc(samples: &mut [f32]) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::pho::MbrolaPhone;
     use super::*;
 
     #[test]
@@ -542,6 +551,46 @@ mod tests {
         );
 
         assert!((curve.hz_at(50, 101) - 150.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn native_renderer_bridges_missing_inner_diphone_with_silence_halves() {
+        let path = PathBuf::from("data/mbrola/us3/us3");
+        if !path.is_file() {
+            eprintln!("skipping us3 missing-diphone bridge test; run `just fetch`");
+            return;
+        }
+
+        let database = MbrolaDatabase::load(&path).expect("load us3 database");
+        if database.diphone("h", "j").is_some() {
+            eprintln!("skipping us3 h-j bridge test; fetched voice already has h-j");
+            return;
+        }
+
+        assert!(database.diphone("h", "_").is_some());
+        assert!(database.diphone("_", "j").is_some());
+
+        let plan = PhoneTimedPlan::new(vec![
+            MbrolaPhone::new("h", 75),
+            MbrolaPhone::new("j", 75),
+            MbrolaPhone::new("u", 145).with_pitch_targets(vec![
+                MbrolaPitchTarget {
+                    percent: 0,
+                    hz: 125.0,
+                },
+                MbrolaPitchTarget {
+                    percent: 100,
+                    hz: 128.0,
+                },
+            ]),
+            MbrolaPhone::new("_", 120),
+        ]);
+
+        let frames = render_native_diphone_frames(&plan, &database).expect("render h-j fallback");
+
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].sample_rate_hz, 16_000);
+        assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.001));
     }
 
     fn sine(hz: f32, len: usize, sample_rate_hz: u32) -> Vec<f32> {
