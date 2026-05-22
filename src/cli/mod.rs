@@ -309,7 +309,7 @@ pub(crate) struct SayCommand {
     pub(crate) output_wav: Option<PathBuf>,
     #[arg(long)]
     pub(crate) riper: bool,
-    #[arg(long)]
+    #[arg(long, requires = "riper")]
     pub(crate) klatt: bool,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
@@ -766,16 +766,13 @@ mod tests {
     }
 
     #[test]
-    fn say_accepts_klatt_flag_before_text() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--klatt", "hello", "there"])
-            .expect("say should parse Klatt mode before text");
-
-        let Some(Command::Say(command)) = cli.command else {
-            panic!("expected say command");
-        };
-        assert!(!command.riper);
-        assert!(command.klatt);
-        assert_eq!(command.words, ["hello", "there"]);
+    fn say_rejects_klatt_without_riper() {
+        let error = Cli::try_parse_from(["listenbury", "say", "--klatt", "hello", "there"])
+            .expect_err("say should require --riper when --klatt is set");
+        assert!(
+            error.to_string().contains("--riper"),
+            "expected clap requires error, got: {error}"
+        );
     }
 
     #[test]

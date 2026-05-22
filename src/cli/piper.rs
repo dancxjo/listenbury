@@ -61,8 +61,8 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
 
     #[cfg(not(feature = "tts-riper"))]
-    if piper_args.riper {
-        anyhow::bail!("listenbury say --riper requires the `tts-riper` feature");
+    if piper_args.riper || piper_args.klatt {
+        anyhow::bail!("listenbury say --riper/--klatt requires the `tts-riper` feature");
     }
 
     let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
@@ -820,12 +820,8 @@ impl SayArgs {
 
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
-            !klatt || piper_bin.is_none(),
-            "listenbury say: cannot use --piper-bin with --klatt"
-        );
-        anyhow::ensure!(
-            !klatt || piper_voice.is_none(),
-            "listenbury say: cannot use --model-path/--piper-voice with --klatt"
+            !klatt || riper,
+            "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
         );
 
         Ok(Self {
@@ -840,7 +836,7 @@ impl SayArgs {
 }
 
 fn should_use_klatt_backend(args: &SayArgs) -> bool {
-    args.klatt
+    args.riper && args.klatt
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
@@ -1241,7 +1237,7 @@ mod tests {
 
     #[test]
     fn say_args_accepts_trailing_klatt_flag() {
-        let args = SayArgs::from_command(SayCommand {
+        let error = SayArgs::from_command(SayCommand {
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
@@ -1249,11 +1245,13 @@ mod tests {
             klatt: false,
             words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
         })
-        .expect("trailing Klatt flag should be accepted");
-
-        assert!(!args.riper);
-        assert!(args.klatt);
-        assert_eq!(args.text, "hello my");
+        .expect_err("klatt should require riper");
+        assert!(
+            error
+                .to_string()
+                .contains("pass --riper --klatt"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1266,7 +1264,7 @@ mod tests {
             klatt: true,
             words: vec!["hello".to_string()],
         })
-        .expect("riper+klatt should parse, with klatt taking synthesis path");
+        .expect("riper+klatt should parse, with klatt selecting the non-ONNX backend");
         assert!(args.riper);
         assert!(args.klatt);
         assert!(should_use_klatt_backend(&args));
