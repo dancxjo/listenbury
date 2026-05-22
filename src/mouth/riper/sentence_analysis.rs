@@ -37,6 +37,87 @@ const AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE: f32 = 0.44;
 const COMMON_LINK_ADJECTIVES: &[&str] = &[
     "small", "big", "good", "bad", "bright", "dark", "quick", "slow", "new", "old", "young",
 ];
+const PARENTHETICAL_CUE_WORDS: &[&str] = &[
+    "actually",
+    "basically",
+    "frankly",
+    "honestly",
+    "however",
+    "meanwhile",
+    "nevertheless",
+    "unfortunately",
+];
+const US_STATE_NAMES: &[&str] = &[
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "florida",
+    "georgia",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "new hampshire",
+    "new jersey",
+    "new mexico",
+    "new york",
+    "north carolina",
+    "north dakota",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "rhode island",
+    "south carolina",
+    "south dakota",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "washington",
+    "west virginia",
+    "wisconsin",
+    "wyoming",
+];
+const PLACE_APPOSITION_WORDS: &[&str] = &[
+    "america",
+    "canada",
+    "mexico",
+    "england",
+    "scotland",
+    "wales",
+    "ireland",
+    "france",
+    "germany",
+    "italy",
+    "spain",
+    "china",
+    "japan",
+    "korea",
+    "india",
+    "australia",
+    "zealand",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentenceAnalysis {
@@ -528,6 +609,7 @@ fn boundary_after_word(parse: &SyntacticLinkParse, word_index: usize) -> PhraseB
         })
         .and_then(|(_, boundary)| match boundary {
             "VocativeCommaPauseSuppressed" => Some(PhraseBoundaryKind::Vocative),
+            "AppositivePhrase" => Some(PhraseBoundaryKind::MinorPhrase),
             "Coordination" => Some(PhraseBoundaryKind::MinorPhrase),
             "PrepositionalPhrase" => Some(PhraseBoundaryKind::MinorPhrase),
             "MajorPhrasePause" => Some(PhraseBoundaryKind::MajorPhrase),
@@ -539,12 +621,15 @@ fn boundary_after_word(parse: &SyntacticLinkParse, word_index: usize) -> PhraseB
     }
     if parse.links.iter().any(|link| {
         (link.left == word_index || link.right == word_index)
-            && matches!(
-                link.kind,
-                SyntacticLinkKind::Parenthetical | SyntacticLinkKind::Apposition
-            )
+            && matches!(link.kind, SyntacticLinkKind::Parenthetical)
     }) {
         return PhraseBoundaryKind::Parenthetical;
+    }
+    if parse.links.iter().any(|link| {
+        (link.left == word_index || link.right == word_index)
+            && matches!(link.kind, SyntacticLinkKind::Apposition)
+    }) {
+        return PhraseBoundaryKind::MinorPhrase;
     }
     PhraseBoundaryKind::None
 }
@@ -848,7 +933,9 @@ fn build_link_parses(
             .first()
             .and_then(|idx| words.get(*idx).copied())
             .is_some_and(|word| matches!(word, "who" | "which" | "that" | "whom"));
-        if is_apposition {
+        let is_place_apposition =
+            is_place_name_apposition(&words, source_words, left_anchor, &between);
+        if is_apposition || is_place_apposition {
             let target = between[0];
             push_link(
                 &mut links,
@@ -866,11 +953,41 @@ fn build_link_parses(
                 ClaimValue::Syntactic,
                 AnalysisSourceKind::SyntaxRule,
                 APPOSITION_LINK_CONFIDENCE,
-                "relative clause introduced by who/which/that/whom",
+                if is_place_apposition {
+                    "place-name apposition between commas"
+                } else {
+                    "relative clause introduced by who/which/that/whom"
+                },
             ));
+            claims.push(AnalysisClaim::new(
+                AnalysisTarget::Boundary {
+                    left_word: left_break.1,
+                    right_word: Some(target),
+                },
+                ClaimKind::BoundaryKind,
+                ClaimValue::BoundaryKind("AppositivePhrase".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                APPOSITION_LINK_CONFIDENCE,
+                "appositive comma uses phrase timing without parenthetical de-emphasis",
+            ));
+            if let Some(&last_between) = between.last() {
+                claims.push(AnalysisClaim::new(
+                    AnalysisTarget::Boundary {
+                        left_word: Some(last_between),
+                        right_word: right_break.2,
+                    },
+                    ClaimKind::BoundaryKind,
+                    ClaimValue::BoundaryKind("AppositivePhrase".to_string()),
+                    AnalysisSourceKind::SyntaxRule,
+                    APPOSITION_LINK_CONFIDENCE,
+                    "appositive comma uses phrase timing without parenthetical de-emphasis",
+                ));
+            }
             continue;
         }
-        if let Some(right_anchor) = right_break.2 {
+        if let Some(right_anchor) = right_break.2
+            && is_parenthetical_comma_island(&words, &between)
+        {
             push_link(
                 &mut links,
                 SyntacticLink {
@@ -1082,6 +1199,48 @@ fn push_link(links: &mut Vec<SyntacticLink>, candidate: SyntacticLink) {
         return;
     }
     links.push(candidate);
+}
+
+fn is_parenthetical_comma_island(words: &[&str], between: &[usize]) -> bool {
+    let Some(&first) = between.first() else {
+        return false;
+    };
+    let Some(first_word) = words.get(first).copied() else {
+        return false;
+    };
+    PARENTHETICAL_CUE_WORDS.contains(&first_word)
+}
+
+fn is_place_name_apposition(
+    words: &[&str],
+    source_words: &[String],
+    left_anchor: usize,
+    between: &[usize],
+) -> bool {
+    if between.is_empty() || !source_word_looks_like_proper_name(source_words, left_anchor) {
+        return false;
+    }
+    let place_words = between
+        .iter()
+        .filter_map(|idx| words.get(*idx).copied())
+        .collect::<Vec<_>>();
+    if place_words.is_empty() || place_words.len() > 3 {
+        return false;
+    }
+    let joined = place_words.join(" ");
+    US_STATE_NAMES.contains(&joined.as_str())
+        || PLACE_APPOSITION_WORDS.contains(&joined.as_str())
+        || place_words
+            .iter()
+            .all(|word| PLACE_APPOSITION_WORDS.contains(word))
+}
+
+fn source_word_looks_like_proper_name(source_words: &[String], word_index: usize) -> bool {
+    source_words.get(word_index).is_some_and(|word| {
+        word.chars()
+            .find(|ch| ch.is_ascii_alphabetic())
+            .is_some_and(|ch| ch.is_ascii_uppercase())
+    })
 }
 
 fn push_determiner_phrase_links(
@@ -2157,6 +2316,25 @@ mod tests {
     }
 
     #[test]
+    fn fixture_links_comma_surrounded_direct_address_without_parenthetical() {
+        let analysis = analyze("Thank you, Dave, I appreciate it.");
+        let parse = analysis.link_parses.first().expect("link parse");
+        let you = word_index(&analysis, "you");
+        let dave = word_index(&analysis, "dave");
+        assert!(has_link(parse, you, dave, SyntacticLinkKind::Vocative));
+        assert!(
+            !parse
+                .links
+                .iter()
+                .any(|link| link.kind == SyntacticLinkKind::Parenthetical)
+        );
+        let facts = analysis
+            .prosody_environment_facts_for_word(you)
+            .expect("you facts");
+        assert_eq!(facts.phrase_boundary_after, PhraseBoundaryKind::Vocative);
+    }
+
+    #[test]
     fn detects_vocative_span_boundaries() {
         let spans = detect_vocative_spans("Thank you, Dave.");
         assert_eq!(spans.len(), 1);
@@ -2219,6 +2397,40 @@ mod tests {
                 .claims
                 .iter()
                 .any(|claim| claim.kind == ClaimKind::AppositionBoundary)
+        );
+    }
+
+    #[test]
+    fn fixture_keeps_place_apposition_out_of_parenthetical_prosody() {
+        let analysis = analyze("Seattle, Washington, a great city");
+        let parse = analysis.link_parses.first().expect("link parse");
+        let seattle = word_index(&analysis, "seattle");
+        let washington = word_index(&analysis, "washington");
+        assert!(has_link(
+            parse,
+            seattle,
+            washington,
+            SyntacticLinkKind::Apposition
+        ));
+        assert!(
+            !parse
+                .links
+                .iter()
+                .any(|link| link.kind == SyntacticLinkKind::Parenthetical)
+        );
+        let seattle_facts = analysis
+            .prosody_environment_facts_for_word(seattle)
+            .expect("seattle facts");
+        let washington_facts = analysis
+            .prosody_environment_facts_for_word(washington)
+            .expect("washington facts");
+        assert_eq!(
+            seattle_facts.phrase_boundary_after,
+            PhraseBoundaryKind::MinorPhrase
+        );
+        assert_eq!(
+            washington_facts.phrase_boundary_after,
+            PhraseBoundaryKind::MinorPhrase
         );
     }
 

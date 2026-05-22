@@ -23,8 +23,8 @@
 //! # Entry points
 //!
 //! * [`render_phone`] — render a single [`PhoneRenderTarget`] to mono PCM.
-//! * [`render_phone_string`] — render a sequence with short inter-phone
-//!   crossfades to avoid discontinuity clicks.
+//! * [`render_phone_string`] — render a sequence as a continuous smoothed
+//!   parameter trajectory.
 //!
 //! # Realtime safety
 //!
@@ -47,8 +47,9 @@ mod trajectory;
 pub struct KlattRenderConfig {
     /// Output sample rate in Hz.
     pub sample_rate: u32,
-    /// Length of the cosine crossfade applied between adjacent phones in
-    /// milliseconds.  Set to zero to disable crossfading.
+    /// Legacy sequence-renderer crossfade length in milliseconds.  The
+    /// default multi-phone path renders a continuous parameter trajectory
+    /// instead of crossfading independently-rendered chunks.
     pub crossfade_ms: f32,
     /// Overall gain applied to the output (linear, 0.0–1.0).
     pub gain: f32,
@@ -97,16 +98,29 @@ impl FormantResonator {
     /// Create a resonator tuned to `freq_hz` with bandwidth `bw_hz` at
     /// the given `sample_rate`.
     fn new(freq_hz: f32, bw_hz: f32, sample_rate: u32) -> Self {
-        let sr = sample_rate as f32;
-        let r = (-std::f32::consts::PI * bw_hz / sr).exp();
-        let omega = 2.0 * std::f32::consts::PI * freq_hz / sr;
+        let (b0, a1, a2) = Self::coefficients(freq_hz, bw_hz, sample_rate);
         Self {
-            b0: 1.0 - r,
-            a1: -2.0 * r * omega.cos(),
-            a2: r * r,
+            b0,
+            a1,
+            a2,
             y1: 0.0,
             y2: 0.0,
         }
+    }
+
+    fn coefficients(freq_hz: f32, bw_hz: f32, sample_rate: u32) -> (f32, f32, f32) {
+        let sr = sample_rate as f32;
+        let r = (-std::f32::consts::PI * bw_hz / sr).exp();
+        let omega = 2.0 * std::f32::consts::PI * freq_hz / sr;
+        (1.0 - r, -2.0 * r * omega.cos(), r * r)
+    }
+
+    /// Retune the resonator while preserving its delay-line state.
+    fn retune(&mut self, freq_hz: f32, bw_hz: f32, sample_rate: u32) {
+        let (b0, a1, a2) = Self::coefficients(freq_hz, bw_hz, sample_rate);
+        self.b0 = b0;
+        self.a1 = a1;
+        self.a2 = a2;
     }
 
     /// Process one sample through the resonator and advance internal state.
@@ -123,6 +137,27 @@ impl FormantResonator {
     fn reset(&mut self) {
         self.y1 = 0.0;
         self.y2 = 0.0;
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ContinuousRenderState {
+    glottal_phase_samples: f32,
+    noise_state: u32,
+    tilt_state: f32,
+    lowpass_state: f32,
+    resonators: Vec<FormantResonator>,
+}
+
+impl ContinuousRenderState {
+    fn new() -> Self {
+        Self {
+            glottal_phase_samples: 0.0,
+            noise_state: 0x51A7_EED5,
+            tilt_state: 0.0,
+            lowpass_state: 0.0,
+            resonators: Vec::new(),
+        }
     }
 }
 
@@ -299,12 +334,231 @@ fn db_to_linear(db: f32) -> f32 {
     10.0f32.powf(db / 20.0)
 }
 
+fn render_phone_continuous(
+    target: &PhoneRenderTarget,
+    config: &KlattRenderConfig,
+    state: &mut ContinuousRenderState,
+) -> Vec<f32> {
+    let sr = config.sample_rate;
+    let n_samples = ((target.duration_ms as f32 / 1000.0) * sr as f32).round() as usize;
+    if n_samples == 0 {
+        return Vec::new();
+    }
+
+    let source = target.source.as_ref();
+    let breathiness = source.map(|s| s.breathiness).unwrap_or(0.0).clamp(0.0, 1.0);
+    let open_quotient = source
+        .map(|s| s.open_quotient)
+        .unwrap_or(0.5)
+        .clamp(0.2, 0.9);
+    let spectral_tilt = source
+        .map(|s| s.spectral_tilt_db_per_octave)
+        .unwrap_or(-6.0);
+
+    let mut source_samples = Vec::with_capacity(n_samples);
+    for _ in 0..n_samples {
+        let voiced = target
+            .f0_hz
+            .map(|f0| next_glottal_sample(state, f0.max(20.0), open_quotient, sr))
+            .unwrap_or(0.0);
+        let noise = next_noise_sample(state);
+        let (voiced_gain, noise_gain) = continuous_source_mix(target, breathiness);
+        let mixed = voiced * voiced_gain + noise * noise_gain;
+        source_samples.push(apply_spectral_tilt_sample(mixed, spectral_tilt, state));
+    }
+
+    let mut filtered =
+        apply_formant_cascade_continuous(&source_samples, target.filter.as_ref(), config, state);
+    let makeup_gain = continuous_makeup_gain(target, breathiness);
+    for sample in &mut filtered {
+        *sample *= target.amplitude * makeup_gain;
+    }
+    filtered
+}
+
+fn continuous_source_mix(target: &PhoneRenderTarget, breathiness: f32) -> (f32, f32) {
+    let breathiness = breathiness.clamp(0.0, 1.0);
+    if target.f0_hz.is_some() {
+        if is_vowel_like_filter(target.filter.as_ref()) {
+            // Table vowel breathiness is a color, not a second equal-loudness
+            // source. Keep the modal tone dominant in continuous rendering.
+            (1.25, breathiness * 0.08)
+        } else {
+            (1.05, breathiness * 0.25)
+        }
+    } else if target.filter.is_some() {
+        (0.0, breathiness.max(0.2) * 0.25)
+    } else {
+        (0.0, breathiness.max(0.2) * 0.2)
+    }
+}
+
+fn continuous_makeup_gain(target: &PhoneRenderTarget, breathiness: f32) -> f32 {
+    match (target.f0_hz, target.filter.as_ref()) {
+        (Some(_), Some(filter)) => {
+            let modal_source = 1.0 - breathiness.clamp(0.0, 1.0);
+            if is_vowel_like_filter(Some(filter)) {
+                110.0 * modal_source.max(0.35)
+            } else {
+                16.0 * modal_source.max(0.25)
+            }
+        }
+        (Some(_), None) => 4.0,
+        (None, Some(filter)) if filter.f1_amp_db <= -8.0 => 0.35,
+        _ => 1.0,
+    }
+}
+
+fn is_vowel_like_filter(filter: Option<&VocalTractFilterTarget>) -> bool {
+    filter.is_some_and(|filter| filter.f1_amp_db >= -4.5 && filter.f2_amp_db >= -6.0)
+}
+
+fn next_glottal_sample(
+    state: &mut ContinuousRenderState,
+    f0_hz: f32,
+    open_quotient: f32,
+    sample_rate: u32,
+) -> f32 {
+    let period = sample_rate as f32 / f0_hz;
+    let phase = (state.glottal_phase_samples / period).clamp(0.0, 1.0);
+    let closing_fraction = (1.0 - open_quotient).min(0.18).max(0.05);
+    let closing_end = (open_quotient + closing_fraction).min(1.0);
+
+    let pulse = if phase < open_quotient {
+        0.5 - 0.5 * (std::f32::consts::PI * phase / open_quotient).cos()
+    } else if phase < closing_end {
+        let rel = (phase - open_quotient) / (closing_end - open_quotient);
+        0.5 + 0.5 * (std::f32::consts::PI * rel).cos()
+    } else {
+        0.0
+    };
+
+    state.glottal_phase_samples += 1.0;
+    while state.glottal_phase_samples >= period {
+        state.glottal_phase_samples -= period;
+    }
+
+    pulse * 2.0 - 0.6
+}
+
+fn next_noise_sample(state: &mut ContinuousRenderState) -> f32 {
+    state.noise_state = state
+        .noise_state
+        .wrapping_mul(1_664_525)
+        .wrapping_add(1_013_904_223);
+    (state.noise_state as f32 / u32::MAX as f32) * 2.0 - 1.0
+}
+
+fn apply_spectral_tilt_sample(
+    x: f32,
+    spectral_tilt: f32,
+    state: &mut ContinuousRenderState,
+) -> f32 {
+    let tilt_coeff = (spectral_tilt / 40.0).clamp(-0.95, 0.0);
+    let tilt_b0 = 1.0 + tilt_coeff;
+    let tilt_a1 = -tilt_coeff;
+    let y = tilt_b0 * x + tilt_a1 * state.tilt_state;
+    state.tilt_state = y;
+    y
+}
+
+fn apply_formant_cascade_continuous(
+    input: &[f32],
+    filter: Option<&VocalTractFilterTarget>,
+    config: &KlattRenderConfig,
+    state: &mut ContinuousRenderState,
+) -> Vec<f32> {
+    let Some(f) = filter else {
+        return apply_simple_lowpass_continuous(input, 4000.0, config.sample_rate, state);
+    };
+
+    let specs = formant_specs(f);
+    if state.resonators.len() != specs.len() {
+        state.resonators = specs
+            .iter()
+            .map(|(hz, bw, _)| FormantResonator::new(*hz, *bw, config.sample_rate))
+            .collect();
+    } else {
+        for (resonator, (hz, bw, _)) in state.resonators.iter_mut().zip(specs.iter()) {
+            resonator.retune(*hz, *bw, config.sample_rate);
+        }
+    }
+
+    let mut signal = input.to_vec();
+    for (resonator, (_, _, amp)) in state.resonators.iter_mut().zip(specs.iter()) {
+        signal = signal
+            .iter()
+            .map(|&x| resonator.process(x) * *amp)
+            .collect();
+    }
+    signal
+}
+
+fn formant_specs(filter: &VocalTractFilterTarget) -> Vec<(f32, f32, f32)> {
+    let mut specs = vec![
+        (
+            filter.f1_hz,
+            filter.f1_bw_hz.max(10.0),
+            db_to_linear(filter.f1_amp_db),
+        ),
+        (
+            filter.f2_hz,
+            filter.f2_bw_hz.max(10.0),
+            db_to_linear(filter.f2_amp_db),
+        ),
+        (
+            filter.f3_hz,
+            filter.f3_bw_hz.max(10.0),
+            db_to_linear(filter.f3_amp_db),
+        ),
+    ];
+    if let (Some(f4_hz), Some(f4_bw)) = (filter.f4_hz, filter.f4_bw_hz) {
+        specs.push((
+            f4_hz,
+            f4_bw.max(10.0),
+            db_to_linear(filter.f4_amp_db.unwrap_or(0.0)),
+        ));
+    }
+    specs
+}
+
+fn apply_simple_lowpass_continuous(
+    input: &[f32],
+    cutoff_hz: f32,
+    sample_rate: u32,
+    state: &mut ContinuousRenderState,
+) -> Vec<f32> {
+    let sr = sample_rate as f32;
+    let rc = 1.0 / (2.0 * std::f32::consts::PI * cutoff_hz);
+    let dt = 1.0 / sr;
+    let alpha = dt / (rc + dt);
+    input
+        .iter()
+        .map(|&x| {
+            let y = alpha * x + (1.0 - alpha) * state.lowpass_state;
+            state.lowpass_state = y;
+            y
+        })
+        .collect()
+}
+
+fn normalize_complete_utterance(output: &mut [f32], config: &KlattRenderConfig) {
+    let peak = output.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    if peak <= 1e-6 {
+        return;
+    }
+    let scale = config.gain.clamp(0.0, 1.0) / peak;
+    for sample in output {
+        *sample *= scale;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Multi-phone rendering with crossfade
 // ---------------------------------------------------------------------------
 
-/// Render a sequence of phones to mono PCM, applying cosine crossfades
-/// between adjacent phones to suppress discontinuity clicks.
+/// Render a sequence of phones to mono PCM as one continuous parameter
+/// trajectory.
 ///
 /// The total duration is the sum of all individual `duration_ms` values.
 pub fn render_phone_string(targets: &[PhoneRenderTarget], config: &KlattRenderConfig) -> Vec<f32> {
@@ -313,62 +567,19 @@ pub fn render_phone_string(targets: &[PhoneRenderTarget], config: &KlattRenderCo
         &coarticulated,
         trajectory::TrajectoryConfig::default(),
     );
-    let mut trajectory_config = config.clone();
-    trajectory_config.crossfade_ms = trajectory_config.crossfade_ms.min(4.0);
-    render_phone_sequence(&trajectory, &trajectory_config)
+    render_phone_trajectory_continuous(&trajectory, config)
 }
 
-fn render_phone_sequence(targets: &[PhoneRenderTarget], config: &KlattRenderConfig) -> Vec<f32> {
-    if targets.is_empty() {
-        return vec![];
+fn render_phone_trajectory_continuous(
+    targets: &[PhoneRenderTarget],
+    config: &KlattRenderConfig,
+) -> Vec<f32> {
+    let mut state = ContinuousRenderState::new();
+    let mut output = Vec::new();
+    for target in targets {
+        output.extend(render_phone_continuous(target, config, &mut state));
     }
-
-    let sr = config.sample_rate;
-    let crossfade_samples = ((config.crossfade_ms / 1000.0) * sr as f32).round() as usize;
-
-    // Render all phones individually
-    let segments: Vec<Vec<f32>> = targets.iter().map(|t| render_phone(t, config)).collect();
-
-    // Total output length
-    let total_samples: usize = segments.iter().map(|s| s.len()).sum();
-    if total_samples == 0 {
-        return vec![];
-    }
-
-    let mut output = vec![0.0f32; total_samples];
-    let mut write_pos = 0usize;
-
-    for (idx, seg) in segments.iter().enumerate() {
-        let n = seg.len();
-        // Apply fade-in ramp at the start of each segment (except the first)
-        // and fade-out ramp at the end (except the last).
-        let fade_in = if idx > 0 { crossfade_samples.min(n) } else { 0 };
-        let fade_out = if idx < segments.len() - 1 {
-            crossfade_samples.min(n)
-        } else {
-            0
-        };
-
-        for (i, &sample) in seg.iter().enumerate() {
-            let gain = if i < fade_in {
-                // Cosine fade-in: 0 → 1 over fade_in samples
-                let t = i as f32 / fade_in as f32;
-                0.5 * (1.0 - (std::f32::consts::PI * (1.0 - t)).cos())
-            } else if i >= n - fade_out {
-                // Cosine fade-out: 1 → 0 over fade_out samples
-                let t = (i - (n - fade_out)) as f32 / fade_out as f32;
-                0.5 * (1.0 + (std::f32::consts::PI * t).cos())
-            } else {
-                1.0
-            };
-            let out_idx = write_pos + i;
-            if out_idx < output.len() {
-                output[out_idx] += sample * gain;
-            }
-        }
-        write_pos += n;
-    }
-
+    normalize_complete_utterance(&mut output, config);
     output
 }
 
@@ -461,6 +672,81 @@ mod tests {
     fn render_fricative_has_no_required_f0() {
         let target = fricative_target();
         assert!(target.f0_hz.is_none(), "/s/ should be unvoiced (no F0)");
+    }
+
+    #[test]
+    fn sustained_vowel_trajectory_does_not_scallop_at_frame_boundaries() {
+        let config = KlattRenderConfig::default();
+        let mut target = vowel_target(150.0);
+        target.duration_ms = 240;
+        let pcm = render_phone_string(&[target], &config);
+
+        let frame_samples = ((5.0 / 1000.0) * config.sample_rate as f32).round() as usize;
+        let half_window = ((0.5 / 1000.0) * config.sample_rate as f32).round() as usize;
+        let mid_offset = frame_samples / 2;
+        let mut ratios = Vec::new();
+        for boundary in
+            (frame_samples * 8..pcm.len().saturating_sub(frame_samples * 8)).step_by(frame_samples)
+        {
+            let boundary_energy = mean_abs(&pcm[boundary - half_window..boundary + half_window]);
+            let mid_start = boundary + mid_offset - half_window;
+            let mid_energy = mean_abs(&pcm[mid_start..mid_start + half_window * 2]);
+            if mid_energy > 1e-6 {
+                ratios.push(boundary_energy / mid_energy);
+            }
+        }
+        ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_ratio = ratios[ratios.len() / 2];
+        assert!(
+            median_ratio > 0.35,
+            "continuous trajectory should not introduce repeated fade dips; median boundary/mid ratio={median_ratio}"
+        );
+    }
+
+    #[test]
+    fn phone_string_is_limited_once_at_complete_utterance_level() {
+        let config = KlattRenderConfig::default();
+        let mut targets = targets_for_ipa_sequence(&["ɑ", "t", "ɑ"], Some(150.0));
+        targets[0].duration_ms = 120;
+        targets[1].duration_ms = 90;
+        targets[2].duration_ms = 120;
+
+        let pcm = render_phone_string(&targets, &config);
+        let peak = pcm.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(
+            peak <= config.gain + 1e-5,
+            "utterance-level limiter should keep peak under configured gain"
+        );
+        assert!(
+            peak > config.gain * 0.95,
+            "utterance-level limiter should use available headroom"
+        );
+    }
+
+    #[test]
+    fn vowels_remain_audible_next_to_consonant_bursts() {
+        let config = KlattRenderConfig::default();
+        let mut targets = targets_for_ipa_sequence(&["ɑ", "t", "ɑ"], Some(150.0));
+        targets[0].duration_ms = 120;
+        targets[1].duration_ms = 90;
+        targets[2].duration_ms = 120;
+
+        let pcm = render_phone_string(&targets, &config);
+        let sr = config.sample_rate as usize;
+        let vowel_window = (0.040 * sr as f32).round() as usize;
+        let first_vowel_start = (0.035 * sr as f32).round() as usize;
+        let second_vowel_start = (0.245 * sr as f32).round() as usize;
+        let consonant_start = (0.130 * sr as f32).round() as usize;
+        let consonant_window = (0.050 * sr as f32).round() as usize;
+
+        let vowel_rms = (rms(&pcm[first_vowel_start..first_vowel_start + vowel_window])
+            + rms(&pcm[second_vowel_start..second_vowel_start + vowel_window]))
+            * 0.5;
+        let consonant_rms = rms(&pcm[consonant_start..consonant_start + consonant_window]);
+        assert!(
+            vowel_rms > consonant_rms * 0.6,
+            "vowels should not be buried by consonant bursts; vowel_rms={vowel_rms}, consonant_rms={consonant_rms}"
+        );
     }
 
     #[test]
@@ -591,5 +877,13 @@ mod tests {
                 "demo render should keep consonant-heavy energy regions"
             );
         }
+    }
+
+    fn mean_abs(samples: &[f32]) -> f32 {
+        samples.iter().map(|sample| sample.abs()).sum::<f32>() / samples.len() as f32
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt()
     }
 }

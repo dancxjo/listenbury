@@ -397,6 +397,7 @@ fn detect_vocative(trimmed: &str, trim_offset: usize) -> VocativeDetection {
         && trimmed[first_comma + 1..]
             .chars()
             .any(|ch| ch.is_ascii_alphabetic())
+        && !comma_followed_by_place_name(trimmed, first_comma)
         && let Some(vocative_span) = detect_initial_addressee_span(&trimmed[..first_comma])
     {
         let start = trim_offset + vocative_span.start;
@@ -407,12 +408,17 @@ fn detect_vocative(trimmed: &str, trim_offset: usize) -> VocativeDetection {
 
     for window in comma_offsets.windows(2) {
         let [left_comma, right_comma] = [window[0], window[1]];
-        if !has_discourse_cue(&trimmed[..left_comma]) {
+        let prefix = &trimmed[..left_comma];
+        let segment = &trimmed[left_comma + 1..right_comma];
+        let has_discourse_cue = has_discourse_cue(prefix);
+        let has_direct_address_context =
+            has_discourse_cue || has_mid_sentence_direct_address_context(prefix);
+        if !has_direct_address_context
+            || (!has_discourse_cue && is_likely_place_name_segment(segment))
+        {
             continue;
         }
-        if let Some(vocative_span) =
-            detect_addressee_span(&trimmed[left_comma + 1..right_comma], false)
-        {
+        if let Some(vocative_span) = detect_addressee_span(segment, false) {
             let start = trim_offset + left_comma + 1 + vocative_span.start;
             let end = trim_offset + left_comma + 1 + vocative_span.end;
             spans.push(start..end);
@@ -513,11 +519,12 @@ fn detect_initial_addressee_span(segment: &str) -> Option<std::ops::Range<usize>
     let has_vocative_noun = lower_words
         .iter()
         .any(|word| is_likely_vocative_noun(word.as_str()));
-    let looks_like_proper_name = !trimmed.contains('.') && words.iter().all(|word| {
-        word.chars()
-            .find(|ch| ch.is_ascii_alphabetic())
-            .is_some_and(|ch| ch.is_ascii_uppercase())
-    });
+    let looks_like_proper_name = !trimmed.contains('.')
+        && words.iter().all(|word| {
+            word.chars()
+                .find(|ch| ch.is_ascii_alphabetic())
+                .is_some_and(|ch| ch.is_ascii_uppercase())
+        });
     (has_vocative_noun || looks_like_proper_name).then_some(span)
 }
 
@@ -536,14 +543,88 @@ fn has_discourse_cue(prefix: &str) -> bool {
     matches!(
         words.last().map(String::as_str),
         Some(
-            "listen" | "look" | "see" | "hey" | "hello" | "hi" | "well" | "ok" | "okay" | "yes"
+            "listen"
+                | "look"
+                | "see"
+                | "hey"
+                | "hello"
+                | "hi"
+                | "well"
+                | "ok"
+                | "okay"
+                | "yes"
                 | "no"
         )
     ) || matches!(words.as_slice(), [.., prev, last] if prev == "you" && last == "see")
 }
 
+fn has_mid_sentence_direct_address_context(prefix: &str) -> bool {
+    let words = prefix
+        .split_ascii_whitespace()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return false;
+    }
+
+    matches!(
+        words.last().map(String::as_str),
+        Some("sorry" | "thanks" | "please" | "yes" | "no" | "ok" | "okay")
+    ) || matches!(words.as_slice(), [.., prev, last] if prev == "thank" && last == "you")
+        || matches!(
+            words.as_slice(),
+            [first, .., last]
+                if matches!(first.as_str(), "i" | "we")
+                    && matches!(
+                        last.as_str(),
+                        "agree"
+                            | "know"
+                            | "think"
+                            | "mean"
+                            | "suppose"
+                            | "believe"
+                            | "understand"
+                            | "appreciate"
+                            | "hear"
+                    )
+        )
+}
+
 fn is_likely_vocative_noun(word: &str) -> bool {
     COMMON_VOCATIVE_NOUNS.contains(&word)
+}
+
+fn is_likely_place_name_segment(segment: &str) -> bool {
+    let words = segment
+        .split_ascii_whitespace()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+                .to_ascii_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return false;
+    }
+
+    let joined = words.join(" ");
+    US_STATE_NAMES.contains(&joined.as_str())
+        || PLACE_NAME_WORDS.contains(&joined.as_str())
+        || words
+            .iter()
+            .all(|word| PLACE_NAME_WORDS.contains(&word.as_str()))
+}
+
+fn comma_followed_by_place_name(trimmed: &str, comma_offset: usize) -> bool {
+    let next_segment_end = trimmed[comma_offset + 1..]
+        .find(',')
+        .map(|offset| comma_offset + 1 + offset)
+        .unwrap_or(trimmed.len());
+    is_likely_place_name_segment(&trimmed[comma_offset + 1..next_segment_end])
 }
 
 fn is_addressee_blocked_word(word: &str) -> bool {
@@ -615,6 +696,79 @@ fn is_initial_vocative_blocked_word(word: &str) -> bool {
             | "december"
     )
 }
+
+const US_STATE_NAMES: &[&str] = &[
+    "alabama",
+    "alaska",
+    "arizona",
+    "arkansas",
+    "california",
+    "colorado",
+    "connecticut",
+    "delaware",
+    "florida",
+    "georgia",
+    "hawaii",
+    "idaho",
+    "illinois",
+    "indiana",
+    "iowa",
+    "kansas",
+    "kentucky",
+    "louisiana",
+    "maine",
+    "maryland",
+    "massachusetts",
+    "michigan",
+    "minnesota",
+    "mississippi",
+    "missouri",
+    "montana",
+    "nebraska",
+    "nevada",
+    "new hampshire",
+    "new jersey",
+    "new mexico",
+    "new york",
+    "north carolina",
+    "north dakota",
+    "ohio",
+    "oklahoma",
+    "oregon",
+    "pennsylvania",
+    "rhode island",
+    "south carolina",
+    "south dakota",
+    "tennessee",
+    "texas",
+    "utah",
+    "vermont",
+    "virginia",
+    "washington",
+    "west virginia",
+    "wisconsin",
+    "wyoming",
+];
+
+const PLACE_NAME_WORDS: &[&str] = &[
+    "america",
+    "canada",
+    "mexico",
+    "england",
+    "scotland",
+    "wales",
+    "ireland",
+    "france",
+    "germany",
+    "italy",
+    "spain",
+    "china",
+    "japan",
+    "korea",
+    "india",
+    "australia",
+    "zealand",
+];
 
 fn is_quote_or_bracket(ch: char) -> bool {
     matches!(
@@ -902,6 +1056,17 @@ mod tests {
                 .iter()
                 .any(|token| matches!(token, NormalizedToken::PhraseBreak))
         );
+
+        let thanks = TextNormalizer
+            .normalize("Thank you, Dave, I appreciate it.")
+            .expect("normalize");
+        assert_eq!(thanks.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert!(
+            !thanks
+                .tokens
+                .iter()
+                .any(|token| matches!(token, NormalizedToken::PhraseBreak))
+        );
     }
 
     #[test]
@@ -917,6 +1082,22 @@ mod tests {
                 "non-vocative leading comma should remain a phrase break: {fixture}"
             );
         }
+    }
+
+    #[test]
+    fn keeps_place_apposition_commas_as_phrase_breaks_not_vocatives() {
+        let normalized = TextNormalizer
+            .normalize("Seattle, Washington, a great city")
+            .expect("normalize");
+        assert_ne!(normalized.boundary_kind, PhraseBoundaryKind::Vocative);
+        assert_eq!(
+            normalized
+                .tokens
+                .iter()
+                .filter(|token| matches!(token, NormalizedToken::PhraseBreak))
+                .count(),
+            2
+        );
     }
 
     #[test]
