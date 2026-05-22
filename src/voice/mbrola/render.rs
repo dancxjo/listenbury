@@ -7,14 +7,16 @@ use crate::audio::{frame::AudioFrame, write_wav};
 use crate::time::ExactTimestamp;
 
 use super::database::MbrolaDatabase;
-use super::diphone_provider::{
-    DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
-    DiphoneUnitSource, MbrolaDiphoneProvider,
-};
+use super::diphone_provider::{DiphoneProvider, DiphoneUnitSource, MbrolaDiphoneProvider};
+use super::fallback::{fallback_warning, resolve_left_half, resolve_right_half};
 use super::pho::{MbrolaPitchTarget, PhoneTimedPlan, write_pho_file};
+use super::units::{assemble_unit, left_half_samples, right_half_samples};
 use super::voice::MbrolaVoice;
 
 const MIN_PSOLA_GRAINS: usize = 2;
+/// Number of samples on each side of the diphone join to use for the
+/// equal-power crossfade.  Set to 0 to disable crossfade.
+const CROSSFADE_SAMPLES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MbrolaRendererConfig {
@@ -246,20 +248,43 @@ fn render_native_diphone_frames_with_provider(
         }
         let prev = previous_symbol(plan, index).unwrap_or("_");
         let next = next_symbol(plan, index).unwrap_or("_");
-        let mut unit = Vec::new();
-        let right = diphone_right_half(provider, prev, &phone.symbol)?;
-        record_diphone_unit(&mut source_counts, &mut warnings, &right.unit);
-        unit.extend(right_half_samples(&right.unit));
-        let left = diphone_left_half(provider, &phone.symbol, next)?;
-        record_diphone_unit(&mut source_counts, &mut warnings, &left.unit);
-        unit.extend(left_half_samples(&left.unit));
+
+        let right_result = resolve_right_half(provider, prev, &phone.symbol, sample_rate_hz, source_period_samples);
+        let left_result = resolve_left_half(provider, &phone.symbol, next, sample_rate_hz, source_period_samples);
+
+        for result in [&right_result, &left_result] {
+            *source_counts.entry(result.lookup.unit.source).or_insert(0) += 1;
+            // Prefer the embedded metadata warning (more specific, includes actual unit used),
+            // fall back to the generic fallback description for sources without embedded warnings.
+            let warning = result
+                .lookup
+                .unit
+                .metadata
+                .warning
+                .clone()
+                .or_else(|| fallback_warning(
+                    result.lookup.unit.key.left.as_str(),
+                    result.lookup.unit.key.right.as_str(),
+                    &result.reason,
+                ));
+            if let Some(w) = warning {
+                if !warnings.contains(&w) {
+                    warnings.push(w);
+                }
+            }
+        }
+
+        let right_half = right_half_samples(&right_result.lookup.unit).to_vec();
+        let left_half = left_half_samples(&left_result.lookup.unit).to_vec();
+
+        let (unit, _assembly_report) = assemble_unit(&right_half, &left_half, CROSSFADE_SAMPLES, true);
+
         if unit.is_empty() {
             return Err(anyhow::anyhow!(
                 "MBROLA diphone material for phone `{}` was empty",
                 phone.symbol
             ));
         }
-        remove_dc(&mut unit);
         samples.extend(psola_synthesize(
             &unit,
             phone.duration_ms,
@@ -294,89 +319,6 @@ fn next_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
         .get(index + 1)
         .map(|phone| phone.symbol.as_str())
         .or(Some("_"))
-}
-
-fn diphone_left_half(
-    provider: &mut impl DiphoneProvider,
-    left: &str,
-    right: &str,
-) -> Result<DiphoneLookup> {
-    provider.get_diphone(left, right).or_else(|error| {
-        if left != "_" && right != "_" {
-            provider
-                .get_diphone(left, "_")
-                .map(|lookup| boundary_fallback_lookup(lookup.unit, left, right))
-        } else {
-            Err(error)
-        }
-    })
-}
-
-fn diphone_right_half(
-    provider: &mut impl DiphoneProvider,
-    left: &str,
-    right: &str,
-) -> Result<DiphoneLookup> {
-    provider.get_diphone(left, right).or_else(|error| {
-        if left != "_" && right != "_" {
-            provider
-                .get_diphone("_", right)
-                .map(|lookup| boundary_fallback_lookup(lookup.unit, left, right))
-        } else {
-            Err(error)
-        }
-    })
-}
-
-fn boundary_fallback_lookup(
-    unit: DiphoneUnit,
-    requested_left: &str,
-    requested_right: &str,
-) -> DiphoneLookup {
-    let warning = format!(
-        "used boundary fallback diphone {}-{} for requested {}-{}",
-        unit.key.left, unit.key.right, requested_left, requested_right
-    );
-    DiphoneLookup {
-        unit: DiphoneUnit {
-            source: DiphoneUnitSource::MbrolaBoundaryFallback,
-            metadata: DiphoneUnitMetadata {
-                requested_key: Some(DiphoneKey::new(requested_left, requested_right)),
-                warning: Some(warning),
-            },
-            ..unit
-        },
-    }
-}
-
-fn left_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
-    let split = halfseg_split(unit);
-    unit.samples[..split].to_vec()
-}
-
-fn right_half_samples(unit: &DiphoneUnit) -> Vec<f32> {
-    let split = halfseg_split(unit);
-    unit.samples[split..].to_vec()
-}
-
-fn halfseg_split(unit: &DiphoneUnit) -> usize {
-    unit.halfseg_samples.min(unit.samples.len())
-}
-
-fn record_diphone_unit(
-    source_counts: &mut BTreeMap<DiphoneUnitSource, usize>,
-    warnings: &mut Vec<String>,
-    unit: &DiphoneUnit,
-) {
-    *source_counts.entry(unit.source).or_insert(0) += 1;
-    if unit.source != DiphoneUnitSource::MbrolaExact {
-        warnings.push(
-            unit.metadata
-                .warning
-                .clone()
-                .unwrap_or_else(|| format!("non-exact diphone source used: {:?}", unit.source)),
-        );
-    }
 }
 
 fn duration_samples(duration_ms: u32, sample_rate_hz: u32) -> usize {
@@ -597,21 +539,15 @@ impl PitchTargetCurve {
     }
 }
 
-fn remove_dc(samples: &mut [f32]) {
-    if samples.is_empty() {
-        return;
-    }
-    let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-    for sample in samples {
-        *sample = (*sample - mean).clamp(-1.0, 1.0);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::diphone_provider::{
+        DiphoneKey, DiphoneLookup, DiphoneUnit, DiphoneUnitMetadata, DiphoneUnitSource,
+    };
     use super::super::pho::MbrolaPhone;
     use anyhow::{Result, anyhow};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     use super::*;
 

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::path::PathBuf;
 
 use super::database::{MbrolaDatabase, MbrolaDatabaseError};
 
@@ -88,6 +87,8 @@ impl DiphoneProvider for MbrolaDiphoneProvider<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]

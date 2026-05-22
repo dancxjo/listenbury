@@ -104,9 +104,12 @@ pub use vision::{
     VisualSpeechClaim, VisualSpeechClaimKind, VisualSpeechFrame, VisualSpeechTrace, VowelShape,
 };
 pub use voice::mbrola::{
-    MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, MbrolaRendererConfig, MbrolaSymbolMap,
-    MbrolaVoice, PhoneTimedPlan, PhoneTimedRenderer, RenderReport, phone_timed_plan_to_pho,
-    prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,
+    FallbackReason, FallbackResult, JoinPoint, ManifestError, MbrolaDatabase, MbrolaPhone,
+    MbrolaPitchTarget, MbrolaRenderer, MbrolaRendererConfig, MbrolaSymbolMap, MbrolaVoice,
+    PhoneTimedPlan, PhoneTimedRenderer, RenderReport, UnitAssemblyReport, VoiceManifest,
+    assemble_unit, fallback_warning, left_half_samples, phone_timed_plan_to_pho,
+    prosody_timing_plan_to_phone_timed_plan, read_pho_file, resolve_left_half,
+    resolve_right_half, right_half_samples, write_pho_file,
 };
 pub use voice::tract::{
     FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
