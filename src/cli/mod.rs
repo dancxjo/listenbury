@@ -94,6 +94,14 @@ enum DevCommand {
         #[command(subcommand)]
         command: SpeechCacheCommand,
     },
+    #[command(
+        about = "Inspect a MBROLA voice database: inventory, statistics, and license manifest status"
+    )]
+    MbrolaInventory(MbrolaInventoryCommand),
+    #[command(
+        about = "Audit a MBROLA voice database against a .pho plan: check diphone coverage and fallback strategies"
+    )]
+    MbrolaAudit(MbrolaAuditCommand),
 }
 
 #[derive(Debug, Args)]
@@ -366,6 +374,23 @@ pub(crate) struct MbrolaRenderCommand {
     pub(crate) phones: PathBuf,
     #[arg(long)]
     pub(crate) out: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MbrolaInventoryCommand {
+    /// Path to the MBROLA voice database file.
+    #[arg(long)]
+    pub(crate) voice: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MbrolaAuditCommand {
+    /// Path to the MBROLA voice database file.
+    #[arg(long)]
+    pub(crate) voice: PathBuf,
+    /// Path to the MBROLA `.pho` plan to audit against.
+    #[arg(long)]
+    pub(crate) plan: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -664,6 +689,8 @@ fn run_dev(command: DevCommand) -> Result<()> {
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         DevCommand::SoundscapeDebug(cmd) => commands::run_soundscape_debug(cmd),
         DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
+        DevCommand::MbrolaInventory(cmd) => commands::run_mbrola_inventory(cmd),
+        DevCommand::MbrolaAudit(cmd) => commands::run_mbrola_audit(cmd),
     }
 }
 
