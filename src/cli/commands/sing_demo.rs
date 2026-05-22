@@ -134,32 +134,48 @@ fn synthesize_piper_from_plan(
 
     #[cfg(feature = "tts-piper")]
     {
-        synthesize_piper_text_from_plan(plan, command, None)
+        #[cfg(feature = "tts-riper")]
+        {
+            synthesize_piper_text_from_plan(plan, command, None)
+        }
+        #[cfg(not(feature = "tts-riper"))]
+        {
+            synthesize_piper_text_from_plan(plan, command)
+        }
     }
 }
 
-#[cfg(feature = "tts-piper")]
+#[cfg(all(feature = "tts-piper", feature = "tts-riper"))]
 fn synthesize_piper_text_from_plan(
     plan: &ArticulatorPlan,
     command: &SingDemoCommand,
-    #[cfg(feature = "tts-riper")] preference: Option<PiperBackendPreference>,
-    #[cfg(not(feature = "tts-riper"))] _preference: Option<()>,
+    preference: Option<PiperBackendPreference>,
 ) -> Result<Vec<AudioFrame>> {
     let text = ragtime_text_from_shared_plan(plan);
     let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
     let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
     let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
 
-    #[cfg(feature = "tts-riper")]
     let mut tts = if let Some(preference) = preference {
         PiperTextToSpeech::new_with_backend_preference(piper_config, preference)
     } else {
         PiperTextToSpeech::new(piper_config)
     };
 
-    #[cfg(not(feature = "tts-riper"))]
-    let mut tts = PiperTextToSpeech::new(piper_config);
+    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
+    collect_tts_audio(&mut tts, Duration::from_secs(30))
+}
 
+#[cfg(all(feature = "tts-piper", not(feature = "tts-riper")))]
+fn synthesize_piper_text_from_plan(
+    plan: &ArticulatorPlan,
+    command: &SingDemoCommand,
+) -> Result<Vec<AudioFrame>> {
+    let text = ragtime_text_from_shared_plan(plan);
+    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
+    let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
+    let mut tts = PiperTextToSpeech::new(piper_config);
     tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
     collect_tts_audio(&mut tts, Duration::from_secs(30))
 }
@@ -229,11 +245,14 @@ fn note_target(midi: u8, onset_ms: u64, duration_ms: u64) -> Result<NoteTarget> 
     })
 }
 
+/// `(IPA phone, duration_ms)` for one timed phone segment inside a syllable.
+type PhoneSegment<'a> = (&'a str, u64);
+
 fn push_syllable(
     phrase: &mut SungPhrase,
     start_ms: u64,
     text: &str,
-    phone_segments: &[(&str, u64)],
+    phone_segments: &[PhoneSegment<'_>],
     onset_end: usize,
     nucleus_end: usize,
     midi: u8,
@@ -438,7 +457,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         64,
         None,
     )?;
-    let _ = push_syllable(
+    t = push_syllable(
         &mut phrase,
         t,
         "gaaaaaal",
@@ -447,13 +466,14 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         2,
         62,
         Some(Vibrato::new(
-            5.0,
-            25.0,
-            Duration::from_millis(300),
-            Duration::from_millis(180),
-            0.0,
+            5.0,                        // rate_hz
+            25.0,                       // depth_cents
+            Duration::from_millis(300), // onset
+            Duration::from_millis(180), // ramp
+            0.0,                        // phase
         )),
     )?;
+    let _ = t;
 
     Ok(phrase)
 }
