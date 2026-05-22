@@ -201,6 +201,22 @@ impl MbrolaDatabase {
         total
     }
 
+    pub fn frame_center_samples(&self, diphone: &MbrolaDiphone) -> Vec<usize> {
+        let mut centers = Vec::with_capacity(diphone.logical_frames);
+        let mut real_frame = 1usize;
+        let mut pred_type = V_REG;
+        for frame in 1..=diphone.logical_frames {
+            let mark = self.pitch_mark(diphone, frame);
+            if pred_type & VOICING_MASK == 0 && mark & VOICING_MASK != 0 {
+                real_frame += 1;
+            }
+            centers.push((real_frame - 1) * self.mbr_period + self.mbr_period);
+            real_frame += 1;
+            pred_type = mark;
+        }
+        centers
+    }
+
     fn pitch_mark(&self, diphone: &MbrolaDiphone, one_based_frame: usize) -> u8 {
         let idx = diphone.pos_pitch_mark + one_based_frame.saturating_sub(1);
         let byte = self.pitch_marks[idx / 4];

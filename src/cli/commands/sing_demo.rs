@@ -235,7 +235,7 @@ fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'stat
         ],
         SingDemoBackendOption::Mbrola => &[
             "MBROLA loads a real voice database and validates the shared phone-timed plan against its symbol map.",
-            "Native MBROLA PSOLA prosody matching is incomplete; this diphone path stitches real database waveforms without calling Klatt or the mbrola binary.",
+            "Native MBROLA TD-PSOLA now matches shared phone durations and pitch targets while stitching real database waveforms without calling Klatt or the mbrola binary.",
         ],
         SingDemoBackendOption::Piper => &[
             "Piper currently consumes only coarse shared-plan text hints.",

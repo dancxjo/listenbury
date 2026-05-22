@@ -30,3 +30,6 @@ neo4j_data
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 voices
+
+# Neural diphone cache – generated locally, do not commit
+diphone-cache/

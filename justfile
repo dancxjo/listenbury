@@ -22,6 +22,14 @@ say-mbrola text:
 sing-mbrola:
     cargo run -- sing --riper --mbrola
 
+# Inspect a MBROLA voice database: phoneme inventory, diphone count, halfseg stats, and license manifest status.
+mbrola-inventory voice:
+    cargo run -- dev mbrola-inventory --voice "{{voice}}"
+
+# Audit a MBROLA voice database against a .pho plan: check diphone coverage and fallback strategies.
+mbrola-audit voice plan:
+    cargo run -- dev mbrola-audit --voice "{{voice}}" --plan "{{plan}}"
+
 # Start the live PETE listening loop.
 listen *args:
     cargo run -- listen "$@"

@@ -6,20 +6,26 @@
 
 pub mod database;
 pub mod diphone_provider;
+pub mod fallback;
+pub mod manifest;
 pub mod pho;
 pub mod render;
 pub mod symbols;
+pub mod units;
 pub mod voice;
 
 pub use database::{MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone};
 pub use diphone_provider::{
     DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
-    DiphoneUnitSource, MbrolaDiphoneProvider,
+    DiphoneUnitSource, ForgeProvenance, MbrolaDiphoneProvider,
 };
+pub use fallback::{FallbackReason, FallbackResult, fallback_warning, resolve_left_half, resolve_right_half};
+pub use manifest::{ManifestError, VoiceManifest};
 pub use pho::{
     MbrolaPhoParseError, MbrolaPhone, MbrolaPitchTarget, PhoneTimedPlan, phone_timed_plan_to_pho,
     prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,
 };
 pub use render::{MbrolaRenderer, MbrolaRendererConfig, PhoneTimedRenderer, RenderReport};
 pub use symbols::{MbrolaSymbolMap, UnmappedPhone};
+pub use units::{JoinPoint, UnitAssemblyReport, assemble_unit, left_half_samples, right_half_samples};
 pub use voice::MbrolaVoice;

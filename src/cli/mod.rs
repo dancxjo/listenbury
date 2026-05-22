@@ -94,6 +94,19 @@ enum DevCommand {
         #[command(subcommand)]
         command: SpeechCacheCommand,
     },
+    #[command(about = "Build or inspect the neural diphone cache (requires tts-riper)")]
+    DiphoneCache {
+        #[command(subcommand)]
+        command: DiphoneCacheCommand,
+    },
+    #[command(
+        about = "Inspect a MBROLA voice database: inventory, statistics, and license manifest status"
+    )]
+    MbrolaInventory(MbrolaInventoryCommand),
+    #[command(
+        about = "Audit a MBROLA voice database against a .pho plan: check diphone coverage and fallback strategies"
+    )]
+    MbrolaAudit(MbrolaAuditCommand),
 }
 
 #[derive(Debug, Args)]
@@ -369,6 +382,23 @@ pub(crate) struct MbrolaRenderCommand {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct MbrolaInventoryCommand {
+    /// Path to the MBROLA voice database file.
+    #[arg(long)]
+    pub(crate) voice: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MbrolaAuditCommand {
+    /// Path to the MBROLA voice database file.
+    #[arg(long)]
+    pub(crate) voice: PathBuf,
+    /// Path to the MBROLA `.pho` plan to audit against.
+    #[arg(long)]
+    pub(crate) plan: PathBuf,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct RiperCompareCommand {
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
@@ -607,6 +637,50 @@ pub(crate) struct SoundscapeDebugCommand {
     pub(crate) pretty: bool,
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum DiphoneCacheCommand {
+    /// Forge a single diphone and store it in the cache.
+    Forge(DiphoneCacheForgeCommand),
+    /// Build a full diphone inventory cache from a phone list file.
+    Build(DiphoneCacheBuildCommand),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneCacheForgeCommand {
+    /// Path to the Piper ONNX model file.
+    #[arg(long)]
+    pub(crate) model: PathBuf,
+    /// Path to the Piper voice config JSON.
+    #[arg(long)]
+    pub(crate) config: PathBuf,
+    /// Left phone symbol of the diphone to forge (e.g. `h`).
+    #[arg(long)]
+    pub(crate) left: String,
+    /// Right phone symbol of the diphone to forge (e.g. `@`).
+    #[arg(long)]
+    pub(crate) right: String,
+    /// Directory for the diphone cache (defaults to `./diphone-cache`).
+    #[arg(long, default_value = "diphone-cache")]
+    pub(crate) cache_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneCacheBuildCommand {
+    /// Path to the Piper ONNX model file.
+    #[arg(long)]
+    pub(crate) model: PathBuf,
+    /// Path to the Piper voice config JSON.
+    #[arg(long)]
+    pub(crate) config: PathBuf,
+    /// Text file listing phone symbols to include, one per line.
+    #[arg(long)]
+    pub(crate) inventory: PathBuf,
+    /// Directory for the diphone cache (defaults to `./diphone-cache`).
+    #[arg(long, default_value = "diphone-cache")]
+    pub(crate) cache_dir: PathBuf,
+}
+
+
 pub(crate) fn run() -> Result<()> {
     let cli = Cli::parse();
     let Some(command) = cli.command else {
@@ -664,6 +738,9 @@ fn run_dev(command: DevCommand) -> Result<()> {
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         DevCommand::SoundscapeDebug(cmd) => commands::run_soundscape_debug(cmd),
         DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
+        DevCommand::DiphoneCache { command } => commands::run_diphone_cache(command),
+        DevCommand::MbrolaInventory(cmd) => commands::run_mbrola_inventory(cmd),
+        DevCommand::MbrolaAudit(cmd) => commands::run_mbrola_audit(cmd),
     }
 }
 
