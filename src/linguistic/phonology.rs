@@ -5,8 +5,10 @@ pub use crate::linguistic::environment::*;
 pub use crate::linguistic::inventory::*;
 pub use crate::linguistic::phone::*;
 pub use crate::linguistic::phoneme::Phoneme;
+#[allow(deprecated)]
+pub use crate::linguistic::realization::AllophoneRule;
 pub use crate::linguistic::realization::{
-    AllophoneRule, Realization, RealizationConfig, RealizationMethod, realize_sequence,
+    LegacyAllophoneRule, Realization, RealizationConfig, RealizationMethod, realize_sequence,
     realize_sequence_as_schema,
 };
 

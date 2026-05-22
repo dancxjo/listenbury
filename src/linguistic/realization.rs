@@ -5,14 +5,26 @@ use crate::linguistic::inventory::{MajorClass, PhonemeClass, PhonemeSchema, Word
 use crate::linguistic::phone::{Phone, PhoneStatus, PhoneString, Stress};
 use crate::linguistic::phoneme::Phoneme;
 
+/// Legacy descriptive allophone rule metadata.
+///
+/// Runtime allophone matching is performed by private declarative rules with
+/// structured [`EnvironmentPattern`] values. This type is kept for callers that
+/// still serialize the older hint-oriented shape; it is not the canonical rule
+/// matcher input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AllophoneRule {
+pub struct LegacyAllophoneRule {
     pub id: String,
     pub applies_to_symbols: Vec<String>,
-    pub output_ipa: String,
+    pub output_phone_string: PhoneString,
     pub environment_hint: String,
 }
+
+#[deprecated(
+    since = "0.1.0",
+    note = "use LegacyAllophoneRule for the compatibility shape; runtime matching uses structured EnvironmentPattern rules"
+)]
+pub type AllophoneRule = LegacyAllophoneRule;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,20 +96,8 @@ pub fn realize_sequence(sequence: &[Phoneme], config: &RealizationConfig) -> Vec
                         Some("between stressed vowel and unstressed vowel".to_string());
                 }
 
-                realized[i].realization = Realization {
-                    phone_string: PhoneString {
-                        phones: vec![Phone {
-                            ipa: rule.output_ipa.clone(),
-                            source_symbol: Some(realized[i].source_symbol.clone()),
-                            status: PhoneStatus::Mapped,
-                        }],
-                    },
-                    ipa: rule.output_ipa.clone(),
-                    method: RealizationMethod::AllophoneRule,
-                    rule: Some(rule.id.clone()),
-                    environment: Some(environment_match.matched_environment.clone()),
-                    environment_match: Some(environment_match),
-                };
+                realized[i].realization =
+                    realization_from_rule_output(rule, &realized[i], environment_match);
                 break;
             }
         }
@@ -118,7 +118,7 @@ pub fn realize_sequence_as_schema(
 #[derive(Debug, Clone)]
 struct DeclarativeAllophoneRule {
     id: String,
-    output_ipa: String,
+    output_phone_string: PhoneString,
     pattern: EnvironmentPattern,
 }
 
@@ -126,7 +126,7 @@ fn declarative_environment_rules(config: &RealizationConfig) -> Vec<DeclarativeA
     vec![
         DeclarativeAllophoneRule {
             id: "american_english_intervocalic_flapping".to_string(),
-            output_ipa: "ɾ".to_string(),
+            output_phone_string: mapped_phone_string(&["ɾ"]),
             pattern: EnvironmentPattern {
                 target: TargetPattern::Symbol("T".to_string()),
                 left: vec![
@@ -150,7 +150,7 @@ fn declarative_environment_rules(config: &RealizationConfig) -> Vec<DeclarativeA
         },
         DeclarativeAllophoneRule {
             id: "alveolar_nasal_velar_assimilation".to_string(),
-            output_ipa: "ŋ".to_string(),
+            output_phone_string: mapped_phone_string(&["ŋ"]),
             pattern: EnvironmentPattern {
                 target: TargetPattern::PhonemeClass(PhonemeClass::AlveolarNasal),
                 left: Vec::new(),
@@ -167,6 +167,50 @@ fn declarative_environment_rules(config: &RealizationConfig) -> Vec<DeclarativeA
             },
         },
     ]
+}
+
+fn mapped_phone_string(ipa_segments: &[&str]) -> PhoneString {
+    PhoneString {
+        phones: ipa_segments
+            .iter()
+            .map(|ipa| Phone {
+                ipa: (*ipa).to_string(),
+                source_symbol: None,
+                status: PhoneStatus::Mapped,
+            })
+            .collect(),
+    }
+}
+
+fn realization_from_rule_output(
+    rule: &DeclarativeAllophoneRule,
+    target: &Phoneme,
+    environment_match: EnvironmentMatch,
+) -> Realization {
+    let phone_string = rule_phone_string_for_target(rule, target);
+    Realization {
+        ipa: phone_string.to_ipa(),
+        phone_string,
+        method: RealizationMethod::AllophoneRule,
+        rule: Some(rule.id.clone()),
+        environment: Some(environment_match.matched_environment.clone()),
+        environment_match: Some(environment_match),
+    }
+}
+
+fn rule_phone_string_for_target(rule: &DeclarativeAllophoneRule, target: &Phoneme) -> PhoneString {
+    PhoneString {
+        phones: rule
+            .output_phone_string
+            .phones
+            .iter()
+            .cloned()
+            .map(|mut phone| {
+                phone.source_symbol = Some(target.source_symbol.clone());
+                phone
+            })
+            .collect(),
+    }
 }
 
 fn match_environment_pattern(
@@ -290,7 +334,7 @@ fn match_environment_pattern(
         matched_environment,
         matched_predicates: diagnostics,
         commitment: context.commitment(),
-        result: rule.output_ipa.clone(),
+        result: rule.output_phone_string.to_ipa(),
     })
 }
 
@@ -431,5 +475,56 @@ fn word_position(index: usize, len: usize) -> WordPosition {
         WordPosition::WordFinal
     } else {
         WordPosition::WordMedial
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linguistic::arpabet::phoneme_from_arpabet;
+
+    #[test]
+    fn rule_output_can_realize_multiple_structural_phones() {
+        let target = phoneme_from_arpabet("T", "cmudict");
+        let rule = DeclarativeAllophoneRule {
+            id: "test_affrication".to_string(),
+            output_phone_string: mapped_phone_string(&["t", "s"]),
+            pattern: EnvironmentPattern {
+                target: TargetPattern::Symbol("T".to_string()),
+                left: Vec::new(),
+                right: Vec::new(),
+                contains: Vec::new(),
+                overlaps: Vec::new(),
+                word_position: None,
+                syllable_position: None,
+                phrase_position: None,
+                stress: None,
+                language: None,
+                variety: None,
+                timing: Vec::new(),
+            },
+        };
+        let environment_match = EnvironmentMatch {
+            rule: rule.id.clone(),
+            target: target.symbol.clone(),
+            matched_environment: Environment::default(),
+            matched_predicates: Vec::new(),
+            commitment: MatchCommitment::Committed,
+            result: rule.output_phone_string.to_ipa(),
+        };
+
+        let realization = realization_from_rule_output(&rule, &target, environment_match);
+
+        assert_eq!(realization.ipa, "ts");
+        assert_eq!(realization.phone_string.ipa_segments(), vec!["t", "s"]);
+        assert_eq!(
+            realization
+                .phone_string
+                .phones
+                .iter()
+                .map(|phone| phone.source_symbol.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("T"), Some("T")]
+        );
     }
 }

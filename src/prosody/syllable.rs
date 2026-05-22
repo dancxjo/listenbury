@@ -156,6 +156,20 @@ pub enum NucleusSpanError {
     NonContiguousStructure,
 }
 
+/// Boundary that follows a sung syllable in source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FollowingBoundary {
+    /// The next syllable continues the same word.
+    #[default]
+    None,
+    /// The next syllable begins a new word.
+    Word,
+    /// The next syllable begins a new phrase.
+    Phrase,
+    /// A rest or audible silence follows this syllable.
+    Rest,
+}
+
 /// Singable syllable with phone timing and optional musical targets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SungSyllable {
@@ -169,6 +183,8 @@ pub struct SungSyllable {
     pub nucleus: PhoneSpan,
     /// Coda phone span in `phones`.
     pub coda: PhoneSpan,
+    /// Source-text boundary after this syllable.
+    pub following_boundary: FollowingBoundary,
     /// Stress metadata, when available.
     pub stress: Option<Stress>,
     /// Optional note target for sung realization.
@@ -223,6 +239,7 @@ impl SungSyllable {
             onset,
             nucleus,
             coda,
+            following_boundary: FollowingBoundary::None,
             stress,
             note,
             pitch_curve: None,
@@ -313,6 +330,7 @@ impl SungSyllable {
             self.stress,
             self.note.clone(),
         )?;
+        decomposed.following_boundary = self.following_boundary;
         decomposed.pitch_curve = self.pitch_curve.clone();
         decomposed.vibrato = self.vibrato.clone();
         Ok(decomposed)
@@ -340,6 +358,12 @@ impl SungSyllable {
     /// Attach an optional pitch curve.
     pub fn with_pitch_curve(mut self, pitch_curve: Option<PitchCurve>) -> Self {
         self.pitch_curve = pitch_curve;
+        self
+    }
+
+    /// Attach source-text boundary metadata for the next syllable.
+    pub fn with_following_boundary(mut self, boundary: FollowingBoundary) -> Self {
+        self.following_boundary = boundary;
         self
     }
 

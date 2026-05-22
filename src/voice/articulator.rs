@@ -34,6 +34,8 @@
 //! - an [`EnergyCurve`] representing phrase energy/intensity over time.
 
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -42,7 +44,7 @@ use crate::linguistic::phonology::{Phone, PhoneDecompositionPolicy, PhonemicInve
 use crate::linguistic::variety::EnglishVariety;
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
-use crate::prosody::syllable::PhoneSpan;
+use crate::prosody::syllable::{FollowingBoundary, NucleusSpanError, PhoneSpan};
 use crate::voice::coarticulation::{PhoneGesture, PhoneRole, VocalGesturePlan};
 use crate::voice::tract::{PhoneAcousticTarget, PhoneRenderTarget};
 
@@ -174,6 +176,7 @@ pub struct GestureSpan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyllableRenderSpan {
     pub text: String,
+    pub following_boundary: FollowingBoundary,
     pub gesture_span: GestureSpan,
     pub onset: GestureSpan,
     pub nucleus: GestureSpan,
@@ -199,6 +202,33 @@ pub enum SungBackendDetail {
     /// Explicitly degraded to coarse text/phoneme hints.
     CoarseHintsOnly,
 }
+
+/// Errors from strict articulator-plan construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArticulationError {
+    DecompositionFailed {
+        syllable_text: String,
+        policy: PhoneDecompositionPolicy,
+        source: NucleusSpanError,
+    },
+}
+
+impl fmt::Display for ArticulationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DecompositionFailed {
+                syllable_text,
+                policy,
+                source,
+            } => write!(
+                f,
+                "phone decomposition failed for syllable `{syllable_text}` with {policy:?}: {source:?}"
+            ),
+        }
+    }
+}
+
+impl Error for ArticulationError {}
 
 /// Backend-specific render contract derived from the shared sung plan.
 ///
@@ -301,11 +331,30 @@ pub fn coarse_text_render_plan(plan: &ArticulatorPlan) -> RenderPlan {
 }
 
 fn render_text_from_plan(plan: &ArticulatorPlan) -> String {
-    plan.syllables
-        .iter()
-        .map(|syllable| syllable.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut text = String::new();
+    for syllable in &plan.syllables {
+        text.push_str(&syllable.text);
+        append_following_boundary(&mut text, syllable.following_boundary);
+    }
+    text.trim_end().to_string()
+}
+
+fn append_following_boundary(text: &mut String, boundary: FollowingBoundary) {
+    match boundary {
+        FollowingBoundary::None => {}
+        FollowingBoundary::Word => text.push(' '),
+        FollowingBoundary::Phrase => {
+            if !text
+                .chars()
+                .last()
+                .is_some_and(|c| matches!(c, '.' | '!' | '?' | ',' | ';' | ':'))
+            {
+                text.push('.');
+            }
+            text.push(' ');
+        }
+        FollowingBoundary::Rest => text.push_str(" ... "),
+    }
 }
 
 fn pitch_hints_from_plan(plan: &ArticulatorPlan) -> Vec<PitchHint> {
@@ -409,6 +458,27 @@ pub fn articulate_with_inventory_and_decomposition_policy(
     inventory: &PhonemicInventory,
     policy: PhoneDecompositionPolicy,
 ) -> ArticulatorPlan {
+    build_articulator_plan(phrase, inventory, policy, true)
+        .expect("fallback mode should recover from decomposition errors")
+}
+
+/// Try to convert a [`SungPhrase`] with explicit inventory and decomposition
+/// policy, returning structural decomposition errors instead of silently
+/// falling back to broad phonemic phones.
+pub fn try_articulate_with_inventory_and_decomposition_policy(
+    phrase: &SungPhrase,
+    inventory: &PhonemicInventory,
+    policy: PhoneDecompositionPolicy,
+) -> Result<ArticulatorPlan, ArticulationError> {
+    build_articulator_plan(phrase, inventory, policy, false)
+}
+
+fn build_articulator_plan(
+    phrase: &SungPhrase,
+    inventory: &PhonemicInventory,
+    policy: PhoneDecompositionPolicy,
+    fallback_on_decomposition_error: bool,
+) -> Result<ArticulatorPlan, ArticulationError> {
     let mut phone_gestures: Vec<PhoneGesture> = Vec::new();
     let mut energy_points: Vec<EnergyPoint> = Vec::new();
     let mut syllable_spans: Vec<SyllableRenderSpan> = Vec::new();
@@ -418,10 +488,28 @@ pub fn articulate_with_inventory_and_decomposition_policy(
         let syllable = if policy == PhoneDecompositionPolicy::KeepPhonemic {
             syllable
         } else {
-            decomposed = syllable
-                .with_decomposition_policy(policy)
-                .unwrap_or_else(|_| syllable.clone());
-            &decomposed
+            match syllable.with_decomposition_policy(policy) {
+                Ok(next) => {
+                    decomposed = next;
+                    &decomposed
+                }
+                Err(source) if fallback_on_decomposition_error => {
+                    tracing::warn!(
+                        syllable_text = %syllable.text,
+                        ?policy,
+                        error = ?source,
+                        "phone decomposition failed; falling back to broad phonemic syllable"
+                    );
+                    syllable
+                }
+                Err(source) => {
+                    return Err(ArticulationError::DecompositionFailed {
+                        syllable_text: syllable.text.clone(),
+                        policy,
+                        source,
+                    });
+                }
+            }
         };
         // ── Collect phone gestures ────────────────────────────────────────
         let phones = &syllable.phones;
@@ -474,6 +562,7 @@ pub fn articulate_with_inventory_and_decomposition_policy(
             .collect();
         syllable_spans.push(SyllableRenderSpan {
             text: syllable.text.clone(),
+            following_boundary: syllable.following_boundary,
             gesture_span: GestureSpan {
                 start: gesture_start,
                 end: gesture_end,
@@ -498,12 +587,12 @@ pub fn articulate_with_inventory_and_decomposition_policy(
     let pitch_curve = phrase.phrase_pitch_curve(Interpolation::Linear);
     let energy_curve = EnergyCurve::new(energy_points);
 
-    ArticulatorPlan {
+    Ok(ArticulatorPlan {
         gestures,
         pitch_curve,
         energy_curve,
         syllables: syllable_spans,
-    }
+    })
 }
 
 /// Build Klatt phone render targets from the shared sung plan.
@@ -941,6 +1030,69 @@ mod tests {
     }
 
     #[test]
+    fn try_articulate_reports_decomposition_failure() {
+        let malformed = SungSyllable {
+            text: "bad".to_string(),
+            phones: vec![timed("aɪ", 0, 100)],
+            onset: PhoneSpan { start: 1, end: 0 },
+            nucleus: PhoneSpan { start: 0, end: 1 },
+            coda: PhoneSpan { start: 1, end: 1 },
+            following_boundary: crate::prosody::syllable::FollowingBoundary::None,
+            stress: None,
+            note: None,
+            pitch_curve: None,
+            vibrato: None,
+        };
+        let phrase = SungPhrase {
+            syllables: vec![malformed],
+        };
+        let inventory = EnglishVariety::GeneralAmerican.phonemic_inventory();
+
+        let err = try_articulate_with_inventory_and_decomposition_policy(
+            &phrase,
+            &inventory,
+            PhoneDecompositionPolicy::SplitForSinging,
+        )
+        .expect_err("strict articulation should surface decomposition errors");
+
+        assert_eq!(
+            err,
+            ArticulationError::DecompositionFailed {
+                syllable_text: "bad".to_string(),
+                policy: PhoneDecompositionPolicy::SplitForSinging,
+                source: NucleusSpanError::Inverted,
+            }
+        );
+    }
+
+    #[test]
+    fn convenience_articulate_logs_and_falls_back_on_decomposition_failure() {
+        let malformed = SungSyllable {
+            text: "bad".to_string(),
+            phones: vec![timed("aɪ", 0, 100)],
+            onset: PhoneSpan { start: 1, end: 0 },
+            nucleus: PhoneSpan { start: 0, end: 1 },
+            coda: PhoneSpan { start: 1, end: 1 },
+            following_boundary: crate::prosody::syllable::FollowingBoundary::None,
+            stress: None,
+            note: None,
+            pitch_curve: None,
+            vibrato: None,
+        };
+        let phrase = SungPhrase {
+            syllables: vec![malformed],
+        };
+
+        let plan = articulate_with_decomposition_policy(
+            &phrase,
+            PhoneDecompositionPolicy::SplitForSinging,
+        );
+
+        assert_eq!(plan.gestures.gestures.len(), 1);
+        assert_eq!(plan.gestures.gestures[0].phone, "aɪ");
+    }
+
+    #[test]
     fn klatt_adapter_keeps_unvoiced_phone_unpitched() {
         let plan = articulate(&hello_phrase(true));
         let table = crate::voice::tract::default_english_phone_targets();
@@ -993,7 +1145,7 @@ mod tests {
         else {
             panic!("Riper should receive a partial prosody render plan");
         };
-        assert_eq!(text, "hel lo");
+        assert_eq!(text, "hello");
         assert_eq!(
             phones
                 .iter()
@@ -1012,9 +1164,56 @@ mod tests {
         assert_eq!(
             piper,
             RenderPlan::CoarseText {
-                text: "hel lo".to_string(),
+                text: "hello".to_string(),
                 ssml_hint: None,
             }
         );
+    }
+
+    #[test]
+    fn degraded_text_uses_explicit_syllable_boundaries() {
+        let mut phrase = SungPhrase::new();
+        phrase
+            .push(hel_syllable(false).with_following_boundary(FollowingBoundary::None))
+            .unwrap();
+        phrase
+            .push(lo_syllable(false).with_following_boundary(FollowingBoundary::Word))
+            .unwrap();
+        phrase
+            .push(
+                SungSyllable::new(
+                    "world",
+                    vec![timed("w", 500, 540), timed("ɝ", 540, 720)],
+                    PhoneSpan::new(0, 1).unwrap(),
+                    PhoneSpan::new(1, 2).unwrap(),
+                    PhoneSpan::new(2, 2).unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .with_following_boundary(FollowingBoundary::Phrase),
+            )
+            .unwrap();
+        phrase
+            .push(
+                SungSyllable::new(
+                    "again",
+                    vec![timed("ə", 780, 880), timed("ɡ", 880, 930)],
+                    PhoneSpan::new(0, 0).unwrap(),
+                    PhoneSpan::new(0, 1).unwrap(),
+                    PhoneSpan::new(1, 2).unwrap(),
+                    None,
+                    None,
+                )
+                .unwrap()
+                .with_following_boundary(FollowingBoundary::Rest),
+            )
+            .unwrap();
+
+        let RenderPlan::CoarseText { text, .. } = coarse_text_render_plan(&articulate(&phrase))
+        else {
+            panic!("expected coarse text render plan");
+        };
+        assert_eq!(text, "hello world. again ...");
     }
 }
