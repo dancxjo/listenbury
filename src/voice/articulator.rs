@@ -186,6 +186,7 @@ pub struct SyllableRenderSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SungBackendKind {
     Klatt,
+    Mbrola,
     Riper,
     Piper,
 }
@@ -278,6 +279,7 @@ pub struct PitchHint {
 pub fn backend_detail_expectation(kind: SungBackendKind) -> SungBackendDetail {
     match kind {
         SungBackendKind::Klatt => SungBackendDetail::PhoneTimed,
+        SungBackendKind::Mbrola => SungBackendDetail::PhoneTimed,
         SungBackendKind::Riper => SungBackendDetail::PartialPhoneProsody,
         SungBackendKind::Piper => SungBackendDetail::CoarseHintsOnly,
     }
@@ -292,6 +294,9 @@ pub fn render_plan_for_backend(
 ) -> RenderPlan {
     match kind {
         SungBackendKind::Klatt => RenderPlan::PhoneTimed(klatt_targets_from_articulator_plan(
+            plan, amplitude, targets,
+        )),
+        SungBackendKind::Mbrola => RenderPlan::PhoneTimed(klatt_targets_from_articulator_plan(
             plan, amplitude, targets,
         )),
         SungBackendKind::Riper => partial_prosody_render_plan(plan),
@@ -1108,6 +1113,10 @@ mod tests {
             SungBackendDetail::PhoneTimed
         );
         assert_eq!(
+            backend_detail_expectation(SungBackendKind::Mbrola),
+            SungBackendDetail::PhoneTimed
+        );
+        assert_eq!(
             backend_detail_expectation(SungBackendKind::Riper),
             SungBackendDetail::PartialPhoneProsody
         );
@@ -1123,15 +1132,24 @@ mod tests {
         let table = crate::voice::tract::default_english_phone_targets();
 
         let klatt = render_plan_for_backend(SungBackendKind::Klatt, &plan, 0.7, &table);
-        let RenderPlan::PhoneTimed(targets) = klatt else {
+        let RenderPlan::PhoneTimed(klatt_targets) = klatt else {
             panic!("Klatt should receive a phone-timed render plan");
         };
         assert_eq!(
-            targets
+            klatt_targets
                 .iter()
                 .map(|target| target.phone.ipa.as_str())
                 .collect::<Vec<_>>(),
             vec!["h", "ɛ", "l", "l", "oʊ"]
+        );
+
+        let mbrola = render_plan_for_backend(SungBackendKind::Mbrola, &plan, 0.7, &table);
+        let RenderPlan::PhoneTimed(mbrola_targets) = mbrola else {
+            panic!("MBROLA should receive a phone-timed render plan");
+        };
+        assert_eq!(
+            mbrola_targets, klatt_targets,
+            "MBROLA should consume the same shared phone-timed plan as Klatt"
         );
 
         let riper = render_plan_for_backend(SungBackendKind::Riper, &plan, 0.7, &table);
