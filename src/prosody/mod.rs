@@ -13,3 +13,4 @@ pub mod pitch_curve;
 pub mod syllable;
 pub mod phonotactics;
 pub mod syllabification;
+pub mod vibrato;
