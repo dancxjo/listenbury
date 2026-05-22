@@ -33,13 +33,17 @@
 //!   target), and
 //! - an [`EnergyCurve`] representing phrase energy/intensity over time.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::linguistic::phonology::Phone;
 use crate::prosody::pitch_curve::{Interpolation, PitchCurve};
 use crate::prosody::singing::SungPhrase;
+use crate::prosody::syllable::PhoneSpan;
 use crate::voice::coarticulation::{PhoneGesture, PhoneRole, VocalGesturePlan};
+use crate::voice::tract::{PhoneAcousticTarget, PhoneRenderTarget};
 
 // ─── EnergyCurve ─────────────────────────────────────────────────────────────
 
@@ -154,6 +158,54 @@ pub struct ArticulatorPlan {
     pub pitch_curve: Option<PitchCurve>,
     /// Phrase energy/intensity curve, separate from pitch.
     pub energy_curve: EnergyCurve,
+    /// Per-syllable span metadata preserved for backend adapters.
+    pub syllables: Vec<SyllableRenderSpan>,
+}
+
+/// A half-open gesture index span in an [`ArticulatorPlan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GestureSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Preserved per-syllable gesture spans in the shared sung plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyllableRenderSpan {
+    pub text: String,
+    pub gesture_span: GestureSpan,
+    pub onset: GestureSpan,
+    pub nucleus: GestureSpan,
+    pub coda: GestureSpan,
+    pub pitch_bearing_spans: Vec<GestureSpan>,
+}
+
+/// Backends expected to consume/degrade the shared sung plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SungBackendKind {
+    Klatt,
+    Riper,
+    Piper,
+}
+
+/// Expected level of sung-detail fidelity by backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SungBackendDetail {
+    /// Full phone timings + pitch-bearing durations/F0 where supported.
+    PhoneTimed,
+    /// Partial phone/prosody fidelity based on backend control surface.
+    PartialPhoneProsody,
+    /// Explicitly degraded to coarse text/phoneme hints.
+    CoarseHintsOnly,
+}
+
+/// Describe how a backend is expected to consume this shared plan.
+pub fn backend_detail_expectation(kind: SungBackendKind) -> SungBackendDetail {
+    match kind {
+        SungBackendKind::Klatt => SungBackendDetail::PhoneTimed,
+        SungBackendKind::Riper => SungBackendDetail::PartialPhoneProsody,
+        SungBackendKind::Piper => SungBackendDetail::CoarseHintsOnly,
+    }
 }
 
 // ─── Voicing heuristic ───────────────────────────────────────────────────────
@@ -169,8 +221,7 @@ pub struct ArticulatorPlan {
 pub fn is_phone_voiced(ipa: &str) -> bool {
     // Well-known unvoiced consonant IPA symbols (including common digraphs).
     const UNVOICED: &[&str] = &[
-        "p", "t", "k", "f", "s", "ʃ", "θ", "h", "x", "ç", "ʔ",
-        // affricates
+        "p", "t", "k", "f", "s", "ʃ", "θ", "h", "x", "ç", "ʔ", // affricates
         "tʃ", "ts", "pf", "t͡ʃ", "t͡s",
         // aspirated stops (X-SAMPA / borrowed representations)
         "pʰ", "tʰ", "kʰ",
@@ -193,7 +244,7 @@ pub fn is_phone_voiced(ipa: &str) -> bool {
 /// - Phones in the **onset span** become [`PhoneRole::Onset`] gestures;
 ///   their voicing is inferred from the IPA label.
 /// - Phones in the **nucleus span** become [`PhoneRole::Nucleus`] gestures
-///   and are always marked voiced (nuclei are inherently pitch-bearing).
+///   and preserve phone voicing while remaining the pitch-bearing span.
 /// - Phones in the **coda span** become [`PhoneRole::Coda`] gestures;
 ///   their voicing is again inferred from the IPA label.
 ///
@@ -214,53 +265,69 @@ pub fn is_phone_voiced(ipa: &str) -> bool {
 pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
     let mut phone_gestures: Vec<PhoneGesture> = Vec::new();
     let mut energy_points: Vec<EnergyPoint> = Vec::new();
+    let mut syllable_spans: Vec<SyllableRenderSpan> = Vec::new();
 
     for syllable in &phrase.syllables {
         // ── Collect phone gestures ────────────────────────────────────────
         let phones = &syllable.phones;
-
-        // Onset phones (attack consonants).
-        for idx in syllable.onset.start..syllable.onset.end {
-            if let Some(tpr) = phones.get(idx) {
-                phone_gestures.push(PhoneGesture {
-                    phone: tpr.phone.ipa.clone(),
-                    onset_ms: tpr.start.millis,
-                    duration_ms: tpr.end.millis.saturating_sub(tpr.start.millis),
-                    is_voiced: is_phone_voiced(&tpr.phone.ipa),
-                    role: PhoneRole::Onset,
-                    is_legato_context: false,
-                });
-            }
+        if phones.is_empty() {
+            continue;
+        }
+        let base_start_ms = phones[0].start.millis;
+        let explicit_duration_ms = phones
+            .last()
+            .map(|p| p.end.millis.saturating_sub(base_start_ms))
+            .unwrap_or(0);
+        let mut durations_ms: Vec<u64> = phones
+            .iter()
+            .map(|tpr| tpr.end.millis.saturating_sub(tpr.start.millis))
+            .collect();
+        let note_duration_ms = syllable
+            .note
+            .as_ref()
+            .map(|n| n.duration.millis)
+            .unwrap_or(0);
+        if note_duration_ms > explicit_duration_ms {
+            let extra = note_duration_ms - explicit_duration_ms;
+            let pitch_spans = syllable.pitch_bearing_spans();
+            stretch_pitch_bearing_durations(&mut durations_ms, extra, &pitch_spans);
         }
 
-        // Nucleus phones (pitch-bearing vowel material).
-        for idx in syllable.nucleus.start..syllable.nucleus.end {
-            if let Some(tpr) = phones.get(idx) {
-                phone_gestures.push(PhoneGesture {
-                    phone: tpr.phone.ipa.clone(),
-                    onset_ms: tpr.start.millis,
-                    duration_ms: tpr.end.millis.saturating_sub(tpr.start.millis),
-                    // Nuclei are always voiced: they are the pitch-bearing core.
-                    is_voiced: true,
-                    role: PhoneRole::Nucleus,
-                    is_legato_context: false,
-                });
-            }
+        let gesture_start = phone_gestures.len();
+        let mut onset_ms = base_start_ms;
+        for (idx, tpr) in phones.iter().enumerate() {
+            let role = role_for_index(idx, syllable.onset, syllable.nucleus, syllable.coda);
+            let duration_ms = durations_ms
+                .get(idx)
+                .copied()
+                .unwrap_or_else(|| tpr.end.millis.saturating_sub(tpr.start.millis).max(1));
+            phone_gestures.push(PhoneGesture {
+                phone: tpr.phone.ipa.clone(),
+                onset_ms,
+                duration_ms,
+                is_voiced: is_phone_voiced(&tpr.phone.ipa),
+                role,
+                is_legato_context: false,
+            });
+            onset_ms = onset_ms.saturating_add(duration_ms);
         }
-
-        // Coda phones (release consonants).
-        for idx in syllable.coda.start..syllable.coda.end {
-            if let Some(tpr) = phones.get(idx) {
-                phone_gestures.push(PhoneGesture {
-                    phone: tpr.phone.ipa.clone(),
-                    onset_ms: tpr.start.millis,
-                    duration_ms: tpr.end.millis.saturating_sub(tpr.start.millis),
-                    is_voiced: is_phone_voiced(&tpr.phone.ipa),
-                    role: PhoneRole::Coda,
-                    is_legato_context: false,
-                });
-            }
-        }
+        let gesture_end = phone_gestures.len();
+        let pitch_bearing_spans = syllable
+            .pitch_bearing_spans()
+            .iter()
+            .map(|span| gesture_span_from_phone_span(gesture_start, *span))
+            .collect();
+        syllable_spans.push(SyllableRenderSpan {
+            text: syllable.text.clone(),
+            gesture_span: GestureSpan {
+                start: gesture_start,
+                end: gesture_end,
+            },
+            onset: gesture_span_from_phone_span(gesture_start, syllable.onset),
+            nucleus: gesture_span_from_phone_span(gesture_start, syllable.nucleus),
+            coda: gesture_span_from_phone_span(gesture_start, syllable.coda),
+            pitch_bearing_spans,
+        });
 
         // ── Energy point from note velocity ───────────────────────────────
         if let Some(note) = &syllable.note {
@@ -280,7 +347,105 @@ pub fn articulate(phrase: &SungPhrase) -> ArticulatorPlan {
         gestures,
         pitch_curve,
         energy_curve,
+        syllables: syllable_spans,
     }
+}
+
+/// Build Klatt phone render targets from the shared sung plan.
+///
+/// This adapter preserves per-phone durations from the shared plan and samples
+/// F0 only for voiced nucleus phones.
+pub fn klatt_targets_from_articulator_plan(
+    plan: &ArticulatorPlan,
+    amplitude: f32,
+    targets: &HashMap<String, PhoneAcousticTarget>,
+) -> Vec<PhoneRenderTarget> {
+    plan.gestures
+        .gestures
+        .iter()
+        .map(|gesture| {
+            let table_entry = targets.get(gesture.phone.as_str());
+            let f0_hz = if gesture.role == PhoneRole::Nucleus && gesture.is_voiced {
+                plan.pitch_curve.as_ref().map(|curve| {
+                    let midpoint = gesture.onset_ms + (gesture.duration_ms / 2);
+                    curve.sample_hz(Duration::from_millis(midpoint))
+                })
+            } else {
+                None
+            };
+            PhoneRenderTarget {
+                phone: Phone::new_ipa(&gesture.phone),
+                duration_ms: gesture.duration_ms,
+                f0_hz: match table_entry {
+                    Some(t) if !t.voiced => None,
+                    _ => f0_hz,
+                },
+                amplitude,
+                source: table_entry.map(|t| t.source.clone()),
+                filter: table_entry.and_then(|t| t.filter.clone()),
+            }
+        })
+        .collect()
+}
+
+fn role_for_index(idx: usize, onset: PhoneSpan, nucleus: PhoneSpan, _coda: PhoneSpan) -> PhoneRole {
+    if idx < onset.end {
+        PhoneRole::Onset
+    } else if idx < nucleus.end {
+        PhoneRole::Nucleus
+    } else {
+        PhoneRole::Coda
+    }
+}
+
+fn gesture_span_from_phone_span(base: usize, span: PhoneSpan) -> GestureSpan {
+    GestureSpan {
+        start: base + span.start,
+        end: base + span.end,
+    }
+}
+
+fn stretch_pitch_bearing_durations(
+    durations: &mut [u64],
+    extra_ms: u64,
+    pitch_spans: &[PhoneSpan],
+) {
+    if extra_ms == 0 {
+        return;
+    }
+    let mut pitch_indices = Vec::new();
+    for span in pitch_spans {
+        for idx in span.start..span.end {
+            if idx < durations.len() {
+                pitch_indices.push(idx);
+            }
+        }
+    }
+    if pitch_indices.is_empty() {
+        return;
+    }
+
+    let base_total: u128 = pitch_indices
+        .iter()
+        .map(|idx| durations[*idx] as u128)
+        .sum();
+    if base_total == 0 {
+        let last = *pitch_indices.last().expect("checked non-empty");
+        durations[last] = durations[last].saturating_add(extra_ms);
+        return;
+    }
+
+    let mut remaining = extra_ms;
+    for idx in pitch_indices
+        .iter()
+        .take(pitch_indices.len().saturating_sub(1))
+    {
+        let add = ((extra_ms as u128) * (durations[*idx] as u128) / base_total) as u64;
+        durations[*idx] = durations[*idx].saturating_add(add);
+        remaining = remaining.saturating_sub(add);
+    }
+    let last = *pitch_indices.last().expect("checked non-empty");
+    durations[last] = durations[last].saturating_add(remaining);
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -324,7 +489,11 @@ mod tests {
             PhoneSpan::new(1, 2).unwrap(),
             PhoneSpan::new(2, 3).unwrap(),
             None,
-            if with_note { Some(note(60, 0, 240)) } else { None },
+            if with_note {
+                Some(note(60, 0, 240))
+            } else {
+                None
+            },
         )
         .unwrap()
     }
@@ -338,7 +507,11 @@ mod tests {
             PhoneSpan::new(1, 2).unwrap(),
             PhoneSpan::new(2, 2).unwrap(),
             None,
-            if with_note { Some(note(67, 240, 250)) } else { None },
+            if with_note {
+                Some(note(67, 240, 250))
+            } else {
+                None
+            },
         )
         .unwrap()
     }
@@ -487,17 +660,13 @@ mod tests {
     fn voicing_heuristic_classifies_phones() {
         // Unvoiced consonants
         for ipa in &["p", "t", "k", "f", "s", "ʃ", "θ", "h"] {
-            assert!(
-                !is_phone_voiced(ipa),
-                "/{ipa}/ should be unvoiced"
-            );
+            assert!(!is_phone_voiced(ipa), "/{ipa}/ should be unvoiced");
         }
         // Voiced sounds (consonants + vowels)
-        for ipa in &["b", "d", "g", "v", "z", "m", "n", "l", "ɹ", "a", "ɛ", "oʊ", "eɪ"] {
-            assert!(
-                is_phone_voiced(ipa),
-                "/{ipa}/ should be voiced"
-            );
+        for ipa in &[
+            "b", "d", "g", "v", "z", "m", "n", "l", "ɹ", "a", "ɛ", "oʊ", "eɪ",
+        ] {
+            assert!(is_phone_voiced(ipa), "/{ipa}/ should be voiced");
         }
     }
 
@@ -519,5 +688,64 @@ mod tests {
         assert!(plan.gestures.gestures.is_empty());
         assert!(plan.pitch_curve.is_none());
         assert!(plan.energy_curve.points.is_empty());
+        assert!(plan.syllables.is_empty());
+    }
+
+    #[test]
+    fn long_gal_note_stretches_nucleus_not_consonants() {
+        let gal = SungSyllable::new(
+            "gal",
+            vec![timed("ɡ", 0, 40), timed("æ", 40, 120), timed("l", 120, 160)],
+            PhoneSpan::new(0, 1).unwrap(),
+            PhoneSpan::new(1, 2).unwrap(),
+            PhoneSpan::new(2, 3).unwrap(),
+            None,
+            Some(note(60, 0, 1000)),
+        )
+        .unwrap();
+        let mut phrase = SungPhrase::new();
+        phrase.push(gal).unwrap();
+        let plan = articulate(&phrase);
+        let gestures = &plan.gestures.gestures;
+        assert_eq!(gestures.len(), 3);
+        assert_eq!(gestures[0].duration_ms, 40, "onset should stay short");
+        assert_eq!(gestures[2].duration_ms, 40, "coda should stay short");
+        assert!(
+            gestures[1].duration_ms > 800,
+            "nucleus should absorb most of note sustain"
+        );
+        let end_ms = gestures
+            .last()
+            .map(|g| g.onset_ms + g.duration_ms)
+            .unwrap_or_default();
+        assert_eq!(end_ms, 1000, "note duration should shape total plan");
+        assert_eq!(plan.syllables[0].nucleus, GestureSpan { start: 1, end: 2 });
+    }
+
+    #[test]
+    fn klatt_adapter_keeps_unvoiced_phone_unpitched() {
+        let plan = articulate(&hello_phrase(true));
+        let table = crate::voice::tract::default_english_phone_targets();
+        let targets = klatt_targets_from_articulator_plan(&plan, 0.7, &table);
+        assert_eq!(targets[0].phone.ipa, "h");
+        assert!(targets[0].f0_hz.is_none(), "unvoiced /h/ must not get F0");
+        assert_eq!(targets[1].phone.ipa, "ɛ");
+        assert!(targets[1].f0_hz.is_some(), "nucleus vowel should carry F0");
+    }
+
+    #[test]
+    fn backend_degradation_expectations_are_explicit() {
+        assert_eq!(
+            backend_detail_expectation(SungBackendKind::Klatt),
+            SungBackendDetail::PhoneTimed
+        );
+        assert_eq!(
+            backend_detail_expectation(SungBackendKind::Riper),
+            SungBackendDetail::PartialPhoneProsody
+        );
+        assert_eq!(
+            backend_detail_expectation(SungBackendKind::Piper),
+            SungBackendDetail::CoarseHintsOnly
+        );
     }
 }
