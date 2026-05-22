@@ -42,7 +42,7 @@ mod trajectory;
 // Configuration
 // ---------------------------------------------------------------------------
 
-const CONTINUOUS_VOWEL_BLEND_GAIN: f32 = 1.02;
+const CONTINUOUS_CONSONANT_BLEND_GAIN: f32 = 0.98;
 
 /// Renderer configuration shared across a synthesis session.
 #[derive(Debug, Clone, PartialEq)]
@@ -450,16 +450,16 @@ fn continuous_target_rms(target: &PhoneRenderTarget) -> f32 {
             .as_ref()
             .filter(|filter| is_vowel_like_filter(Some(filter)))
         {
-            vowel_region_target_rms(filter) * CONTINUOUS_VOWEL_BLEND_GAIN * amplitude
+            vowel_region_target_rms(filter) * amplitude
         } else if target.filter.is_some() {
-            0.063 * amplitude
+            0.063 * CONTINUOUS_CONSONANT_BLEND_GAIN * amplitude
         } else {
-            0.030 * amplitude
+            0.030 * CONTINUOUS_CONSONANT_BLEND_GAIN * amplitude
         }
     } else if target.filter.is_some() {
-        0.045 * amplitude
+        0.045 * CONTINUOUS_CONSONANT_BLEND_GAIN * amplitude
     } else {
-        0.025 * amplitude
+        0.025 * CONTINUOUS_CONSONANT_BLEND_GAIN * amplitude
     }
 }
 
