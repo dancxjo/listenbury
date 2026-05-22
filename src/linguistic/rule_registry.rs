@@ -351,7 +351,11 @@ struct RuleFragmentSpec {
 }
 
 /// Static-lifetime analogue of [`VarietyImplementationStatus`] used in the
-/// compile-time variety spec table.
+/// internal `VARIETY_RULES` table.  This type exists solely to allow `'static`
+/// string literals in the table; it converts to the public
+/// [`VarietyImplementationStatus`] at registry build time via
+/// [`ImplementationStatusSpec::to_status`].  Adding a new variety entry means
+/// choosing a variant here and the runtime enum is produced automatically.
 enum ImplementationStatusSpec {
     Complete,
     StubDerivedFrom(&'static str),
