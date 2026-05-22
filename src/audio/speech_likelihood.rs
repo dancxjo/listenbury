@@ -52,7 +52,7 @@ pub fn build_speech_likelihood_stream(
     let mut provisional = Vec::with_capacity(frame_count);
     let mut nuclei = vec![false; frame_count];
 
-    for idx in 0..frame_count {
+    for (idx, nucleus) in nuclei.iter_mut().enumerate().take(frame_count) {
         let frame = &features.frames[idx];
         let sf = source_filter_track.and_then(|track| track.frames.get(idx));
         let voiced = voiced_confidence(sf);
@@ -61,7 +61,7 @@ pub fn build_speech_likelihood_stream(
         let vowel =
             ((voiced * 0.45) + (formant * 0.40) + low_band_dominance_confidence(frame) * 0.15)
                 .clamp(0.0, 1.0);
-        nuclei[idx] = vowel >= config.vowel_nucleus_threshold;
+        *nucleus = vowel >= config.vowel_nucleus_threshold;
         provisional.push((energy, voiced, formant, vowel));
     }
 

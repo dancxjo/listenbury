@@ -252,8 +252,8 @@ pub fn coarticulate(plan: &VocalGesturePlan) -> CoarticulatedPlan {
     }
 
     // ── Pass 3: coda time borrowing from preceding nucleus ──────────────────
-    for i in 1..n {
-        if plan.gestures[i].role == PhoneRole::Coda {
+    for (i, gesture) in plan.gestures.iter().enumerate().take(n).skip(1) {
+        if gesture.role == PhoneRole::Coda {
             // Find the most recent nucleus before this coda.
             if let Some(nucleus_idx) = (0..i)
                 .rev()

@@ -141,11 +141,11 @@ fn collect_tempo_events(smf: &Smf<'_>) -> Vec<(u64, u32)> {
 
     let mut deduped = Vec::new();
     for (tick, tempo) in tempo_events {
-        if let Some((last_tick, last_tempo)) = deduped.last_mut() {
-            if *last_tick == tick {
-                *last_tempo = tempo;
-                continue;
-            }
+        if let Some((last_tick, last_tempo)) = deduped.last_mut()
+            && *last_tick == tick
+        {
+            *last_tempo = tempo;
+            continue;
         }
         deduped.push((tick, tempo));
     }

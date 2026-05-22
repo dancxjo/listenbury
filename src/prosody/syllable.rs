@@ -332,7 +332,7 @@ impl SungSyllable {
         )?;
         decomposed.following_boundary = self.following_boundary;
         decomposed.pitch_curve = self.pitch_curve.clone();
-        decomposed.vibrato = self.vibrato.clone();
+        decomposed.vibrato = self.vibrato;
         Ok(decomposed)
     }
 
@@ -389,26 +389,22 @@ fn decomposed_durations(
         let main = ((total_ms as u128) * 4 / 5) as u64;
         durations[0] = main;
         let mut remaining = total_ms.saturating_sub(main);
-        for idx in 1..part_count {
+        for (idx, duration_slot) in durations.iter_mut().enumerate().take(part_count).skip(1) {
             let slots = (part_count - idx) as u64;
-            let duration = if slots == 0 {
-                remaining
-            } else {
-                remaining / slots
-            };
-            durations[idx] = duration;
+            let duration = remaining.checked_div(slots).unwrap_or(remaining);
+            *duration_slot = duration;
             remaining = remaining.saturating_sub(duration);
         }
     } else {
         let base = total_ms / part_count as u64;
         let mut remaining = total_ms;
-        for idx in 0..part_count {
+        for (idx, duration_slot) in durations.iter_mut().enumerate().take(part_count) {
             let duration = if idx + 1 == part_count {
                 remaining
             } else {
                 base
             };
-            durations[idx] = duration;
+            *duration_slot = duration;
             remaining = remaining.saturating_sub(duration);
         }
     }

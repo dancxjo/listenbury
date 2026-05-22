@@ -150,7 +150,7 @@ fn search_source_lines(needle: &str, limit: usize, literal: bool) -> String {
     let max_results = limit.clamp(1, 30);
     let folded_needle = needle.to_lowercase();
     let mut files: Vec<_> = source_bundle().iter().collect();
-    files.sort_by(|(left, _), (right, _)| left.cmp(right));
+    files.sort_by_key(|(file, _)| *file);
 
     let mut results = Vec::new();
     for (file, content) in files {

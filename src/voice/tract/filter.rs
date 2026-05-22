@@ -29,7 +29,7 @@ pub struct FormantEstimation {
 /// The four formant slots map to the conventional acoustic phonetics labels
 /// F1–F4.  Any slot may be `None` when the analysis has insufficient evidence
 /// to place a peak there.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VocalTractFilterEstimate {
     /// F1 – first formant (≈ 300–1 000 Hz for most vowels).
@@ -43,18 +43,6 @@ pub struct VocalTractFilterEstimate {
     /// Nasality placeholder (0.0 = oral, 1.0 = maximally nasal).
     /// `None` when no nasality detector is active.
     pub nasality: Option<f32>,
-}
-
-impl Default for VocalTractFilterEstimate {
-    fn default() -> Self {
-        Self {
-            f1: None,
-            f2: None,
-            f3: None,
-            f4: None,
-            nasality: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

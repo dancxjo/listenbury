@@ -27,20 +27,15 @@ impl PitchPoint {
 }
 
 /// Interpolation strategy between neighboring [`PitchPoint`] values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Interpolation {
     /// Hold each point value until the next point (mechanical / step behavior).
     Step,
     /// Linear interpolation between adjacent points.
     Linear,
     /// Smoothed interpolation using a `smoothstep` easing curve.
+    #[default]
     Smooth,
-}
-
-impl Default for Interpolation {
-    fn default() -> Self {
-        Self::Smooth
-    }
 }
 
 /// Continuous pitch trajectory represented by time-ordered points.
@@ -166,11 +161,11 @@ impl PitchCurve {
 }
 
 fn push_or_replace(points: &mut Vec<PitchPoint>, point: PitchPoint) {
-    if let Some(prev) = points.last_mut() {
-        if prev.t == point.t {
-            *prev = point;
-            return;
-        }
+    if let Some(prev) = points.last_mut()
+        && prev.t == point.t
+    {
+        *prev = point;
+        return;
     }
     points.push(point);
 }

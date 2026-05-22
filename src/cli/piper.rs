@@ -1196,12 +1196,12 @@ fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
 fn klatt_phone_string_for_text(text: &str) -> Result<PhoneString> {
     #[cfg(feature = "tts-riper")]
     {
-        return klatt_phone_string_from_riper(text);
+        klatt_phone_string_from_riper(text)
     }
 
     #[cfg(not(feature = "tts-riper"))]
     {
-        return klatt_phone_string_from_demo_lexicon(text);
+        klatt_phone_string_from_demo_lexicon(text)
     }
 }
 

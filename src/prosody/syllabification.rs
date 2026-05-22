@@ -755,14 +755,7 @@ mod tests {
         let s = syllabify(&seq(&["IH1", "N", "CH"]), &ga());
 
         assert_eq!(s.len(), 1);
-        assert_eq!(
-            s[0].coda
-                .ipa_segments()
-                .iter()
-                .map(|ipa| *ipa)
-                .collect::<Vec<_>>(),
-            vec!["n", "tʃ"]
-        );
+        assert_eq!(s[0].coda.ipa_segments().to_vec(), vec!["n", "tʃ"]);
         assert!(ga().is_legal_coda(&s[0].coda.phones.iter().collect::<Vec<_>>()));
         assert_eq!(syllables_to_ipa(&s), "ˈɪntʃ");
     }

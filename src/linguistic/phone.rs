@@ -355,15 +355,15 @@ pub fn phone_comparison_key(phone: &Phone, options: &PhoneEqualityOptions) -> St
     let mut s = phone.ipa.clone();
     if options.ignore_stress {
         // ˈ U+02C8, ˌ U+02CC
-        s = s.replace('\u{02C8}', "").replace('\u{02CC}', "");
+        s = s.replace(['\u{02C8}', '\u{02CC}'], "");
     }
     if options.ignore_length {
         // ː U+02D0, ˑ U+02D1
-        s = s.replace('\u{02D0}', "").replace('\u{02D1}', "");
+        s = s.replace(['\u{02D0}', '\u{02D1}'], "");
     }
     if options.ignore_tie_bars {
         // ͡ U+0361, ͜ U+035C
-        s = s.replace('\u{0361}', "").replace('\u{035C}', "");
+        s = s.replace(['\u{0361}', '\u{035C}'], "");
     }
     if options.ignore_diacritics {
         // Strip superscript modifier letters (U+02B0..=U+02FF) and combining

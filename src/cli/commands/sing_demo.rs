@@ -288,11 +288,11 @@ fn push_syllable(
     start_ms: u64,
     text: &str,
     phone_segments: &[PhoneSegment<'_>],
-    onset_end: usize,
-    nucleus_end: usize,
+    constituent_ends: (usize, usize),
     midi: u8,
     vibrato: Option<Vibrato>,
 ) -> Result<u64> {
+    let (onset_end, nucleus_end) = constituent_ends;
     let mut cursor = start_ms;
     let mut phones = Vec::with_capacity(phone_segments.len());
     for (ipa, duration_ms) in phone_segments {
@@ -347,8 +347,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "hel",
         &[("h", 40), ("ɛ", 120), ("l", 60)],
-        1,
-        2,
+        (1, 2),
         60,
         None,
     )?;
@@ -357,8 +356,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "lo",
         &[("l", 40), ("oʊ", 220)],
-        1,
-        2,
+        (1, 2),
         64,
         None,
     )?;
@@ -367,8 +365,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "my",
         &[("m", 60), ("ɑɪ", 180)],
-        1,
-        2,
+        (1, 2),
         67,
         None,
     )?;
@@ -377,8 +374,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "ba",
         &[("b", 40), ("eɪ", 160)],
-        1,
-        2,
+        (1, 2),
         69,
         None,
     )?;
@@ -387,8 +383,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "by",
         &[("b", 40), ("i", 220)],
-        1,
-        2,
+        (1, 2),
         67,
         None,
     )?;
@@ -397,8 +392,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "hel",
         &[("h", 40), ("ɛ", 120), ("l", 60)],
-        1,
-        2,
+        (1, 2),
         60,
         None,
     )?;
@@ -407,8 +401,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "lo",
         &[("l", 40), ("oʊ", 220)],
-        1,
-        2,
+        (1, 2),
         64,
         None,
     )?;
@@ -417,8 +410,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "my",
         &[("m", 60), ("ɑɪ", 180)],
-        1,
-        2,
+        (1, 2),
         67,
         None,
     )?;
@@ -427,8 +419,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "dar",
         &[("d", 40), ("ɑ", 120), ("ɹ", 60)],
-        1,
-        2,
+        (1, 2),
         69,
         None,
     )?;
@@ -437,8 +428,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "ling",
         &[("l", 40), ("ɪ", 100), ("ŋ", 80)],
-        1,
-        2,
+        (1, 2),
         67,
         None,
     )?;
@@ -447,8 +437,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "hel",
         &[("h", 40), ("ɛ", 120), ("l", 60)],
-        1,
-        2,
+        (1, 2),
         60,
         None,
     )?;
@@ -457,8 +446,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "lo",
         &[("l", 40), ("oʊ", 220)],
-        1,
-        2,
+        (1, 2),
         64,
         None,
     )?;
@@ -467,8 +455,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "my",
         &[("m", 60), ("ɑɪ", 180)],
-        1,
-        2,
+        (1, 2),
         67,
         None,
     )?;
@@ -477,8 +464,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "rag",
         &[("ɹ", 40), ("æ", 120), ("ɡ", 80)],
-        1,
-        2,
+        (1, 2),
         65,
         None,
     )?;
@@ -487,8 +473,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "time",
         &[("t", 50), ("ɑɪ", 170), ("m", 80)],
-        1,
-        2,
+        (1, 2),
         64,
         None,
     )?;
@@ -497,8 +482,7 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
         t,
         "gaaaaaal",
         &[("ɡ", 60), ("æ", 960), ("l", 100)],
-        1,
-        2,
+        (1, 2),
         62,
         Some(Vibrato::new(
             5.0,                        // rate_hz

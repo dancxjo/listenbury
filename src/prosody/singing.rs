@@ -190,13 +190,13 @@ impl SungPhrase {
         let mut result = Vec::new();
         for pair in self.syllables.windows(2) {
             let (a, b) = (&pair[0], &pair[1]);
-            if let (Some(a_end), Some(b_start)) = (a.end_time(), b.start_time()) {
-                if b_start.millis > a_end.millis {
-                    result.push(PhraseGap {
-                        start: a_end,
-                        end: b_start,
-                    });
-                }
+            if let (Some(a_end), Some(b_start)) = (a.end_time(), b.start_time())
+                && b_start.millis > a_end.millis
+            {
+                result.push(PhraseGap {
+                    start: a_end,
+                    end: b_start,
+                });
             }
         }
         result

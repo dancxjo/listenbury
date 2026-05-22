@@ -557,7 +557,7 @@ fn median_f0_of_frames(frames: &[SourceFilterFrame]) -> Option<f32> {
     }
     values.sort_by(|a, b| a.total_cmp(b));
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         Some((values[mid - 1] + values[mid]) / 2.0)
     } else {
         Some(values[mid])
@@ -578,7 +578,7 @@ fn median_formant_hz(frames: &[SourceFilterFrame], index: FormantIndex) -> Optio
     }
     values.sort_by(|a, b| a.total_cmp(b));
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         Some((values[mid - 1] + values[mid]) / 2.0)
     } else {
         Some(values[mid])

@@ -497,7 +497,11 @@ mod tests {
         let mut samples = vec![0.0; count];
         let step = (sample_rate / 20) as usize;
         for idx in (0..count).step_by(step.max(1)) {
-            samples[idx] = if (idx / step) % 2 == 0 { 0.9 } else { -0.9 };
+            samples[idx] = if (idx / step).is_multiple_of(2) {
+                0.9
+            } else {
+                -0.9
+            };
         }
         samples
     }

@@ -167,7 +167,7 @@ fn ranges_overlap(left: TimeRange, right: TimeRange) -> bool {
     left.start.millis < right.end.millis && right.start.millis < left.end.millis
 }
 
-fn find(parent: &mut Vec<usize>, i: usize) -> usize {
+fn find(parent: &mut [usize], i: usize) -> usize {
     let mut root = i;
     while parent[root] != root {
         root = parent[root];
@@ -182,7 +182,7 @@ fn find(parent: &mut Vec<usize>, i: usize) -> usize {
     root
 }
 
-fn union(parent: &mut Vec<usize>, a: usize, b: usize) {
+fn union(parent: &mut [usize], a: usize, b: usize) {
     let ra = find(parent, a);
     let rb = find(parent, b);
     if ra != rb {

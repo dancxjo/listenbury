@@ -114,14 +114,12 @@ impl EnergyCurve {
             return 0.5;
         }
         // Find the last point whose timestamp ≤ t.
-        let level = self
-            .points
+        self.points
             .iter()
             .rev()
             .find(|p| p.t <= t)
             .map(|p| p.level)
-            .unwrap_or(self.points[0].level);
-        level
+            .unwrap_or(self.points[0].level)
     }
 }
 

@@ -224,7 +224,7 @@ impl Velocity {
     /// Returns `None` if `value` is 0 or greater than 127.
     #[inline]
     pub fn new(value: u8) -> Option<Self> {
-        if value >= 1 && value <= 127 {
+        if (1..=127).contains(&value) {
             Some(Self(value))
         } else {
             None
@@ -262,10 +262,11 @@ impl Default for Velocity {
 ///
 /// These values convey vocal intent to a future voice renderer. They do not
 /// prescribe a specific audio synthesis strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoteArticulation {
     /// Default articulation – no special treatment.
+    #[default]
     Neutral,
     /// Smooth connection to the following note.
     Legato,
@@ -275,12 +276,6 @@ pub enum NoteArticulation {
     Accented,
     /// Held for full written value without a hard release.
     Tenuto,
-}
-
-impl Default for NoteArticulation {
-    fn default() -> Self {
-        Self::Neutral
-    }
 }
 
 // ─── NoteTarget ──────────────────────────────────────────────────────────────

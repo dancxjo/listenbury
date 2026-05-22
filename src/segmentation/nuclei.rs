@@ -183,9 +183,7 @@ fn build_candidate(
 
     let start_time = frames.first().map_or(0.0, |f| f.frame_start_ms as f32);
     let end_time = frames.last().map_or(0.0, |f| f.frame_end_ms as f32);
-    let peak_time = frames
-        .get(peak_local)
-        .map_or(start_time, |f| midpoint_ms(f));
+    let peak_time = frames.get(peak_local).map_or(start_time, midpoint_ms);
 
     let confidence = scores.iter().cloned().fold(0.0_f32, f32::max);
 
