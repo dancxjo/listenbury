@@ -246,7 +246,7 @@ fn is_voice_like(hypothesis: &SourceHypothesis) -> bool {
 }
 
 fn ranges_overlap(left: TimeRange, right: TimeRange) -> bool {
-    left.start.millis <= right.end.millis && right.start.millis <= left.end.millis
+    left.start.millis < right.end.millis && right.start.millis < left.end.millis
 }
 
 fn max_overlapping_voices(
@@ -254,29 +254,44 @@ fn max_overlapping_voices(
     keys: &[ResolvedSourceKey],
     range: TimeRange,
 ) -> usize {
-    let mut boundaries = Vec::with_capacity(hypotheses.len() * 2);
+    let mut spans = Vec::with_capacity(hypotheses.len());
     for (hypothesis, key) in hypotheses.iter().zip(keys.iter()) {
         let clipped_start = hypothesis.range.start.millis.max(range.start.millis);
         let clipped_end = hypothesis.range.end.millis.min(range.end.millis);
-        if clipped_start > clipped_end {
+        if clipped_start >= clipped_end {
             continue;
         }
-        boundaries.push((clipped_start, true, *key));
-        boundaries.push((clipped_end, false, *key));
+        spans.push((clipped_start, clipped_end, *key));
     }
 
-    boundaries.sort_by_key(|(millis, is_start, _)| (*millis, !*is_start));
+    if spans.is_empty() {
+        return 0;
+    }
 
-    let mut active = HashSet::new();
+    let mut boundaries = Vec::with_capacity(spans.len() * 2);
+    for (start, end, _) in &spans {
+        boundaries.push(*start);
+        boundaries.push(*end);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
     let mut max_active = 0usize;
 
-    for (_, is_start, key) in boundaries {
-        if is_start {
-            active.insert(key);
-            max_active = max_active.max(active.len());
-        } else {
-            active.remove(&key);
+    for window in boundaries.windows(2) {
+        let window_start = window[0];
+        let window_end = window[1];
+        if window_start >= window_end {
+            continue;
         }
+
+        let mut active = HashSet::new();
+        for (start, end, key) in &spans {
+            if *start < window_end && window_start < *end {
+                active.insert(*key);
+            }
+        }
+        max_active = max_active.max(active.len());
     }
 
     max_active
