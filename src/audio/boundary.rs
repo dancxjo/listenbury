@@ -3,12 +3,11 @@
 //! Converts the energy-landmark outputs already computed by
 //! [`crate::audio::acoustic`] into [`SpanHypothesis`] values:
 //!
-//! | Landmark type | Hypothesis kind       | Label                |
-//! |---------------|-----------------------|----------------------|
-//! | onset         | `SpeechBoundary`      | `speech_start`       |
-//! | offset        | `SpeechBoundary`      | `speech_end`         |
-//! | silence       | `PauseCandidate`      | `pause`              |
-//! | valley        | `SpeechBoundary`      | `boundary_candidate` |
+//! | Landmark type | Hypothesis kind       | Label(s)                                 |
+//! |---------------|-----------------------|------------------------------------------|
+//! | onset/offset  | `SpeechBoundary`      | `speech_start` / `speech_end` / `speech_region` |
+//! | silence       | `PauseCandidate`      | `pause`                                  |
+//! | valley        | `SpeechBoundary`      | `boundary_candidate`                     |
 
 use serde_json::json;
 
@@ -16,6 +15,9 @@ use crate::audio::acoustic::EnergyLandmarks;
 use crate::audio::features::AcousticFeatureStream;
 use crate::audio::hypothesis::{
     HypothesisSource, HypothesisStatus, SpanHypothesis, SpanHypothesisId, SpanHypothesisKind,
+};
+use crate::segmentation::{
+    BoundaryEvidence, BoundaryHypothesis, BoundaryKind, generate_landmark_hypotheses,
 };
 
 // ---------------------------------------------------------------------------
@@ -30,81 +32,10 @@ pub fn generate_boundary_hypotheses(
     landmarks: &EnergyLandmarks,
     features: Option<&AcousticFeatureStream>,
 ) -> Vec<SpanHypothesis> {
-    let mut hyps = Vec::new();
-
-    for &ms in &landmarks.onsets {
-        let conf = energy_confidence_at(features, ms).unwrap_or(0.65);
-        hyps.push(SpanHypothesis {
-            id: SpanHypothesisId::new(),
-            kind: SpanHypothesisKind::SpeechBoundary,
-            label: "speech_start".to_string(),
-            start_ms: ms,
-            end_ms: ms,
-            score: 0.75,
-            confidence: conf,
-            source: HypothesisSource::EndpointDetector,
-            features_used: vec!["energy.onset".to_string()],
-            status: HypothesisStatus::Provisional,
-            provenance: json!({ "type": "onset", "ms": ms }),
-        });
-    }
-
-    for &ms in &landmarks.offsets {
-        let conf = energy_confidence_at(features, ms).unwrap_or(0.60);
-        hyps.push(SpanHypothesis {
-            id: SpanHypothesisId::new(),
-            kind: SpanHypothesisKind::SpeechBoundary,
-            label: "speech_end".to_string(),
-            start_ms: ms,
-            end_ms: ms,
-            score: 0.70,
-            confidence: conf,
-            source: HypothesisSource::EndpointDetector,
-            features_used: vec!["energy.offset".to_string()],
-            status: HypothesisStatus::Provisional,
-            provenance: json!({ "type": "offset", "ms": ms }),
-        });
-    }
-
-    for silence in &landmarks.silences {
-        let duration_ms = silence.end_ms.saturating_sub(silence.start_ms);
-        hyps.push(SpanHypothesis {
-            id: SpanHypothesisId::new(),
-            kind: SpanHypothesisKind::PauseCandidate,
-            label: "pause".to_string(),
-            start_ms: silence.start_ms,
-            end_ms: silence.end_ms,
-            score: 0.80,
-            confidence: confidence_for_pause_duration(duration_ms),
-            source: HypothesisSource::EndpointDetector,
-            features_used: vec!["energy.silence".to_string()],
-            status: HypothesisStatus::Provisional,
-            provenance: json!({
-                "type": "silence",
-                "start_ms": silence.start_ms,
-                "end_ms": silence.end_ms,
-                "duration_ms": duration_ms,
-            }),
-        });
-    }
-
-    for &ms in &landmarks.valleys {
-        hyps.push(SpanHypothesis {
-            id: SpanHypothesisId::new(),
-            kind: SpanHypothesisKind::SpeechBoundary,
-            label: "boundary_candidate".to_string(),
-            start_ms: ms,
-            end_ms: ms,
-            score: 0.45,
-            confidence: 0.40,
-            source: HypothesisSource::EndpointDetector,
-            features_used: vec!["energy.valley".to_string()],
-            status: HypothesisStatus::Provisional,
-            provenance: json!({ "type": "valley", "ms": ms }),
-        });
-    }
-
-    hyps
+    generate_landmark_hypotheses(landmarks, features)
+        .into_iter()
+        .map(boundary_to_span_hypothesis)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -112,24 +43,100 @@ pub fn generate_boundary_hypotheses(
 // ---------------------------------------------------------------------------
 
 /// Derive a confidence score from the RMS energy around `ms`.
-fn energy_confidence_at(features: Option<&AcousticFeatureStream>, ms: u64) -> Option<f32> {
-    let stream = features?;
-    let frame = stream
-        .frames
+fn boundary_to_span_hypothesis(hypothesis: BoundaryHypothesis) -> SpanHypothesis {
+    let kind = to_span_kind(&hypothesis);
+    let label = compatibility_label(&hypothesis);
+    let start_ms = hypothesis.start_time.max(0.0).round() as u64;
+    let end_ms = hypothesis.end_time.max(0.0).round() as u64;
+    let confidence = hypothesis.confidence.clamp(0.0, 1.0);
+    let features_used = hypothesis
+        .evidence
         .iter()
-        .find(|f| f.frame_start_ms <= ms && f.frame_end_ms >= ms)?;
-    Some((frame.rms_energy * 8.0).clamp(0.25, 0.92))
+        .map(boundary_evidence_to_feature)
+        .collect::<Vec<_>>();
+    let score = confidence;
+
+    SpanHypothesis {
+        id: SpanHypothesisId::new(),
+        kind,
+        label,
+        start_ms,
+        end_ms,
+        score,
+        confidence,
+        source: HypothesisSource::EndpointDetector,
+        features_used,
+        status: HypothesisStatus::Provisional,
+        provenance: json!({
+            "kind": hypothesis.kind,
+            "evidence": hypothesis.evidence,
+        }),
+    }
 }
 
-/// Longer pauses get slightly higher confidence (true silence vs. brief dip).
-fn confidence_for_pause_duration(duration_ms: u64) -> f32 {
-    if duration_ms >= 400 {
-        0.88
-    } else if duration_ms >= 150 {
-        0.75
-    } else {
-        0.55
+fn to_span_kind(hypothesis: &BoundaryHypothesis) -> SpanHypothesisKind {
+    match hypothesis.kind {
+        BoundaryKind::SpeechRegion => SpanHypothesisKind::SpeechBoundary,
+        BoundaryKind::SyllableIsland => SpanHypothesisKind::SyllableCandidate,
+        BoundaryKind::PossibleWordRegion => SpanHypothesisKind::WordCandidate,
+        BoundaryKind::NoiseEvent => {
+            if hypothesis.evidence.contains(&BoundaryEvidence::SilenceGap) {
+                SpanHypothesisKind::PauseCandidate
+            } else {
+                SpanHypothesisKind::SpeechBoundary
+            }
+        }
     }
+}
+
+fn compatibility_label(hypothesis: &BoundaryHypothesis) -> String {
+    match hypothesis.kind {
+        BoundaryKind::SpeechRegion => {
+            if hypothesis
+                .evidence
+                .contains(&BoundaryEvidence::EnergyRise)
+                && !hypothesis.evidence.contains(&BoundaryEvidence::EnergyFall)
+            {
+                "speech_start".to_string()
+            } else if hypothesis
+                .evidence
+                .contains(&BoundaryEvidence::EnergyFall)
+                && !hypothesis.evidence.contains(&BoundaryEvidence::EnergyRise)
+            {
+                "speech_end".to_string()
+            } else if (hypothesis.start_time - hypothesis.end_time).abs() < f32::EPSILON {
+                "speech_start".to_string()
+            } else {
+                "speech_region".to_string()
+            }
+        }
+        BoundaryKind::SyllableIsland => "syllable_island".to_string(),
+        BoundaryKind::PossibleWordRegion => "possible_word_region".to_string(),
+        BoundaryKind::NoiseEvent => {
+            if hypothesis.evidence.contains(&BoundaryEvidence::SilenceGap) {
+                "pause".to_string()
+            } else {
+                "boundary_candidate".to_string()
+            }
+        }
+    }
+}
+
+fn boundary_evidence_to_feature(evidence: &BoundaryEvidence) -> String {
+    match evidence {
+        BoundaryEvidence::EnergyRise => "energy.onset",
+        BoundaryEvidence::EnergyFall => "energy.offset",
+        BoundaryEvidence::VoicingOnset => "voicing.onset",
+        BoundaryEvidence::VoicingOffset => "voicing.offset",
+        BoundaryEvidence::FormantOnset => "formant.onset",
+        BoundaryEvidence::FormantOffset => "formant.offset",
+        BoundaryEvidence::VowelNucleus => "vowel.nucleus",
+        BoundaryEvidence::SpectralFluxPeak => "spectral.flux_peak",
+        BoundaryEvidence::SilenceGap => "energy.silence",
+        BoundaryEvidence::NoiseRejected => "noise.rejected",
+        BoundaryEvidence::MatchesExpectedPhoneShape => "phone.shape_match",
+    }
+    .to_string()
 }
 
 // ---------------------------------------------------------------------------

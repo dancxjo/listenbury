@@ -136,6 +136,16 @@ pub fn generate_landmark_hypotheses(
         });
     }
 
+    for &offset in &landmarks.offsets {
+        hypotheses.push(BoundaryHypothesis {
+            start_time: offset as f32,
+            end_time: offset as f32,
+            kind: BoundaryKind::SpeechRegion,
+            confidence: span_energy_confidence(features, offset, offset),
+            evidence: vec![BoundaryEvidence::EnergyFall],
+        });
+    }
+
     for silence in &landmarks.silences {
         let duration_ms = silence.end_ms.saturating_sub(silence.start_ms);
         hypotheses.push(BoundaryHypothesis {
