@@ -5,9 +5,11 @@
 //! timeline.
 
 pub mod attribution;
+pub mod criteria;
 pub mod event;
 pub mod expected;
 pub mod frame;
+pub mod isolation;
 pub mod source;
 pub mod time;
 
@@ -19,6 +21,7 @@ use crate::audio::VoiceSignatureId;
 pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
 };
+pub use criteria::{IsolationPolicy, SourceCriterion, SourceOperation};
 pub use event::{
     AcousticContribution, AcousticMixture, EventId, MixtureId, SoundEvent, SoundEventKind,
 };
@@ -27,6 +30,10 @@ pub use expected::{
     playback_match_evidence,
 };
 pub use frame::SoundscapeFrame;
+pub use isolation::{
+    IsolationEvaluation, SuppressionTarget, TrackingTarget, evaluate_policies,
+    self_hearing_suppression_policy,
+};
 pub use source::{SoundSource, SourceId, SourceKind, SourceLabel};
 pub use time::{TimePoint, TimeRange};
 
