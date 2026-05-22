@@ -29,6 +29,15 @@ pub struct PhoneString {
     pub phones: Vec<Phone>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealizedPhone {
+    pub phone: Phone,
+    pub source_phoneme_index: usize,
+    pub source_symbol: String,
+    pub stress: Option<Stress>,
+}
+
 impl Phone {
     /// Construct a [`Phone`] directly from an IPA string with no source symbol.
     ///
@@ -112,15 +121,42 @@ impl PhoneString {
     /// representation used by the syllabifier.
     pub fn from_phoneme_slice(phonemes: &[Phoneme]) -> Self {
         Self {
-            phones: phonemes
-                .iter()
-                .map(|p| Phone {
-                    ipa: p.realization.ipa.clone(),
-                    source_symbol: Some(p.source_symbol.clone()),
-                    status: PhoneStatus::Mapped,
-                })
+            phones: RealizedPhone::from_phoneme_slice(phonemes)
+                .into_iter()
+                .map(|realized| realized.phone)
                 .collect(),
         }
+    }
+}
+
+impl RealizedPhone {
+    /// Build realized phone tokens from one [`Phoneme`], preserving the source
+    /// phoneme metadata that would be lost in a bare [`PhoneString`].
+    pub fn from_phoneme(index: usize, phoneme: &Phoneme) -> Vec<Self> {
+        vec![Self {
+            phone: Phone {
+                ipa: phoneme.realization.ipa.clone(),
+                source_symbol: Some(phoneme.source_symbol.clone()),
+                status: PhoneStatus::Mapped,
+            },
+            source_phoneme_index: index,
+            source_symbol: phoneme.source_symbol.clone(),
+            stress: phoneme.stress,
+        }]
+    }
+
+    /// Build realized phone tokens from a phoneme slice.
+    ///
+    /// Today each phoneme contributes one token because [`Realization`] stores
+    /// one IPA string.  When realizations grow into multi-phone outputs, this
+    /// is the bridge that should expand one phoneme into multiple tokens while
+    /// keeping source indexes and stress attached to each emitted phone.
+    pub fn from_phoneme_slice(phonemes: &[Phoneme]) -> Vec<Self> {
+        phonemes
+            .iter()
+            .enumerate()
+            .flat_map(|(index, phoneme)| Self::from_phoneme(index, phoneme))
+            .collect()
     }
 }
 
@@ -1308,6 +1344,26 @@ mod tests {
         assert_eq!(phoneme.default_phone_string.phones[0].ipa, "iː");
         assert_eq!(phoneme.realization.ipa, "iː");
         assert_eq!(phoneme.realization.method, RealizationMethod::Default);
+    }
+
+    #[test]
+    fn realized_phone_tokens_preserve_source_metadata() {
+        let phonemes = vec![
+            phoneme_from_arpabet("IY1", "cmudict"),
+            phoneme_from_arpabet("T", "cmudict"),
+        ];
+
+        let realized = RealizedPhone::from_phoneme_slice(&phonemes);
+
+        assert_eq!(realized.len(), 2);
+        assert_eq!(realized[0].phone.ipa, "iː");
+        assert_eq!(realized[0].source_phoneme_index, 0);
+        assert_eq!(realized[0].source_symbol, "IY1");
+        assert_eq!(realized[0].stress, Some(Stress::Primary));
+        assert_eq!(realized[1].phone.ipa, "t");
+        assert_eq!(realized[1].source_phoneme_index, 1);
+        assert_eq!(realized[1].source_symbol, "T");
+        assert_eq!(realized[1].stress, None);
     }
 
     #[test]

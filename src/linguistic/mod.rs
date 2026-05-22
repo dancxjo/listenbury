@@ -15,7 +15,8 @@ pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use phonology::{
     Phone, PhoneComparisonMode, PhoneEqualityOptions, PhoneStatus, PhoneString, PhonemeDefinition,
-    PhonemeId, PhonemicInventory, SourceSymbol, VarietyId, phone_comparison_key, phones_equivalent,
+    PhonemeId, PhonemicInventory, RealizedPhone, SourceSymbol, VarietyId, phone_comparison_key,
+    phones_equivalent,
 };
 pub use pronounce::{OrthographyToPhonemes, PhonologyError};
 pub use rule_registry::{

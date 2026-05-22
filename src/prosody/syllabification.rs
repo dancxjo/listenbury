@@ -9,7 +9,8 @@
 //!
 //! # Algorithm
 //!
-//! 1. Derive one [`Phone`] per [`Phoneme`] from `phoneme.realization.ipa`.
+//! 1. Derive realized phone tokens from phonemes, preserving the source phoneme
+//!    index and stress for each emitted phone.
 //! 2. Scan for nucleus positions (phones where [`PhonotacticProfile::is_nucleus`]
 //!    returns `true`).
 //! 3. For each inter-nuclear consonant cluster, apply the **Maximum Onset
@@ -41,7 +42,7 @@
 //! assert_eq!(syllables_to_ipa(&syllables), "ˈɛk.stɹʌ");
 //! ```
 
-use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, Stress};
+use crate::linguistic::phonology::{Phone, PhoneString, Phoneme, RealizedPhone, Stress};
 use crate::prosody::phonotactics::PhonotacticProfile;
 use crate::prosody::syllable::{DiagnosticKind, SourceSpan, Syllable, SyllableDiagnostic};
 
@@ -60,21 +61,21 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         return vec![];
     }
 
-    // Derive realized phones from phoneme realizations.
-    let phones: Vec<Phone> = PhoneString::from_phoneme_slice(phonemes).phones;
+    // Derive realized phone tokens from phoneme realizations.
+    let realized_phones = RealizedPhone::from_phoneme_slice(phonemes);
 
     // Find all nucleus positions.
-    let nucleus_indices: Vec<usize> = phones
+    let nucleus_indices: Vec<usize> = realized_phones
         .iter()
         .enumerate()
-        .filter(|(_, ph)| profile.is_nucleus(ph))
+        .filter(|(_, ph)| profile.is_nucleus(&ph.phone))
         .map(|(i, _)| i)
         .collect();
 
     if nucleus_indices.is_empty() {
         // No vowel found: return a single degenerate syllable.
         let all = PhoneString {
-            phones: phones.clone(),
+            phones: phones_from_tokens(&realized_phones),
         };
         return vec![Syllable {
             onset: all,
@@ -107,14 +108,17 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
 
         // Consonant cluster between prev_end and nuc_pos.
         let cluster_range = prev_end..nuc_pos;
-        let cluster: Vec<&Phone> = phones[cluster_range.clone()].iter().collect();
+        let cluster: Vec<&Phone> = realized_phones[cluster_range.clone()]
+            .iter()
+            .map(|token| &token.phone)
+            .collect();
 
         let (onset_phones, coda_phones, mut diagnostics) = if syl_idx == 0 {
             let diagnostics = initial_onset_diagnostics(&cluster, profile);
-            let onset_phones = phones[cluster_range.clone()].to_vec();
+            let onset_phones = phones_from_tokens(&realized_phones[cluster_range.clone()]);
             (onset_phones, vec![], diagnostics)
         } else {
-            split_mop(&cluster, profile, &phones[cluster_range.start..nuc_pos])
+            split_mop(&cluster, profile)
         };
 
         // Source span for this syllable: onset_start..nuc_end.
@@ -129,15 +133,23 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
             prev.coda = PhoneString {
                 phones: coda_phones.clone(),
             };
-            prev.source_span.end = onset_start;
+            prev.source_span.end = if coda_phones.is_empty() {
+                source_start_for_token(&realized_phones, onset_start)
+            } else {
+                source_end_for_token(&realized_phones, onset_start - 1)
+            };
         }
         // Leading consonants before the first nucleus are always onset
         // material. MOP is only used between nuclei, where a coda can be
         // assigned to a preceding syllable.
 
-        let source_start = if syl_idx == 0 { 0 } else { onset_start };
+        let source_start = if syl_idx == 0 {
+            0
+        } else {
+            source_start_for_token(&realized_phones, onset_start)
+        };
 
-        let stress = phonemes[nuc_pos].stress;
+        let stress = realized_phones[nuc_pos].stress;
 
         // Check if this syllable's onset decision was variety-specific.
         if !diagnostics.is_empty() {
@@ -158,12 +170,12 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
                 phones: onset_phones,
             },
             nucleus: PhoneString {
-                phones: phones[nuc_pos..nuc_end].to_vec(),
+                phones: phones_from_tokens(&realized_phones[nuc_pos..nuc_end]),
             },
             coda: PhoneString::empty(), // filled in by next iteration
             source_span: SourceSpan {
                 start: source_start,
-                end: nuc_end,
+                end: source_end_for_token(&realized_phones, nuc_end - 1),
             },
             stress,
             variety: profile.variety_name().to_string(),
@@ -176,8 +188,8 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
     // Handle trailing consonants after the last nucleus: they become the coda
     // of the last syllable.
     let last = syllables.last_mut().unwrap();
-    if prev_end < phones.len() {
-        let trailing: Vec<Phone> = phones[prev_end..].to_vec();
+    if prev_end < realized_phones.len() {
+        let trailing = phones_from_tokens(&realized_phones[prev_end..]);
         last.coda = PhoneString { phones: trailing };
     }
 
@@ -247,7 +259,6 @@ pub fn syllables_to_ipa(syllables: &[Syllable]) -> String {
 fn split_mop<P: PhonotacticProfile>(
     cluster: &[&Phone],
     profile: &P,
-    _source_phones: &[Phone],
 ) -> (Vec<Phone>, Vec<Phone>, Vec<SyllableDiagnostic>) {
     if cluster.is_empty() {
         return (vec![], vec![], vec![]);
@@ -307,6 +318,26 @@ fn initial_onset_diagnostics<P: PhonotacticProfile>(
     } else {
         vec![verdict.as_diagnostic()]
     }
+}
+
+fn phones_from_tokens(tokens: &[RealizedPhone]) -> Vec<Phone> {
+    tokens.iter().map(|token| token.phone.clone()).collect()
+}
+
+fn source_start_for_token(tokens: &[RealizedPhone], token_index: usize) -> usize {
+    tokens
+        .get(token_index)
+        .map(|token| token.source_phoneme_index)
+        .unwrap_or_else(|| {
+            tokens
+                .last()
+                .map(|token| token.source_phoneme_index + 1)
+                .unwrap_or(0)
+        })
+}
+
+fn source_end_for_token(tokens: &[RealizedPhone], token_index: usize) -> usize {
+    tokens[token_index].source_phoneme_index + 1
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
