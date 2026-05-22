@@ -11,16 +11,12 @@ pub(crate) fn run_diphone_cache(command: DiphoneCacheCommand) -> Result<()> {
 
 #[cfg(feature = "tts-riper")]
 fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
-    use listenbury::voice::diphone::{DiphoneCache, ForgeSettings};
-    use listenbury::voice::diphone::forge::forge_diphone;
     use listenbury::mouth::riper::{PiperVoiceConfig, RiperBackend};
+    use listenbury::voice::diphone::forge::forge_diphone;
+    use listenbury::voice::diphone::{DiphoneCache, ForgeSettings};
 
-    let config_json = std::fs::read_to_string(&cmd.config).with_context(|| {
-        format!(
-            "failed to read Piper voice config {}",
-            cmd.config.display()
-        )
-    })?;
+    let config_json = std::fs::read_to_string(&cmd.config)
+        .with_context(|| format!("failed to read Piper voice config {}", cmd.config.display()))?;
     let config = PiperVoiceConfig::from_json_str(&config_json).with_context(|| {
         format!(
             "failed to parse Piper voice config {}",
@@ -32,18 +28,15 @@ fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
         .with_context(|| format!("failed to load Riper backend from {}", cmd.model.display()))?;
 
     let cache = DiphoneCache::open(&cmd.cache_dir).with_context(|| {
-        format!("failed to open diphone cache at {}", cmd.cache_dir.display())
+        format!(
+            "failed to open diphone cache at {}",
+            cmd.cache_dir.display()
+        )
     })?;
 
     let settings = ForgeSettings::default();
-    let forged = forge_diphone(&mut backend, &cmd.left, &cmd.right, &settings).with_context(
-        || {
-            format!(
-                "failed to forge diphone {}-{}",
-                cmd.left, cmd.right
-            )
-        },
-    )?;
+    let forged = forge_diphone(&mut backend, &cmd.left, &cmd.right, &settings)
+        .with_context(|| format!("failed to forge diphone {}-{}", cmd.left, cmd.right))?;
 
     // Store in cache
     use listenbury::voice::diphone::cache::{CacheEntryMetadata, CacheKey};
@@ -77,7 +70,10 @@ fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
         halfseg_samples: forged.unit.halfseg_samples,
         segmentation_confidence: forged.segmentation_confidence,
         sample_count: forged.unit.samples.len(),
-        license_note: concat!(
+        extraction_start_sample: 0,
+        extraction_end_sample: forged.unit.samples.len(),
+        model_license: "unknown".to_string(),
+        provenance_note: concat!(
             "Generated locally from a Piper ONNX model. ",
             "Do not redistribute without checking the model license."
         )
@@ -105,20 +101,16 @@ fn run_forge(_cmd: DiphoneCacheForgeCommand) -> Result<()> {
 
 #[cfg(feature = "tts-riper")]
 fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
-    use listenbury::voice::diphone::{DiphoneCache, ForgeSettings};
+    use listenbury::mouth::riper::{PiperVoiceConfig, RiperBackend};
     use listenbury::voice::diphone::cache::{CacheEntryMetadata, CacheKey};
     use listenbury::voice::diphone::forge::{
         CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, NORMALIZATION_VERSION,
         fingerprint_config, fingerprint_path, forge_diphone,
     };
-    use listenbury::mouth::riper::{PiperVoiceConfig, RiperBackend};
+    use listenbury::voice::diphone::{DiphoneCache, ForgeSettings};
 
-    let config_json = std::fs::read_to_string(&cmd.config).with_context(|| {
-        format!(
-            "failed to read Piper voice config {}",
-            cmd.config.display()
-        )
-    })?;
+    let config_json = std::fs::read_to_string(&cmd.config)
+        .with_context(|| format!("failed to read Piper voice config {}", cmd.config.display()))?;
     let config = PiperVoiceConfig::from_json_str(&config_json).with_context(|| {
         format!(
             "failed to parse Piper voice config {}",
@@ -130,7 +122,10 @@ fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
         .with_context(|| format!("failed to load Riper backend from {}", cmd.model.display()))?;
 
     let cache = DiphoneCache::open(&cmd.cache_dir).with_context(|| {
-        format!("failed to open diphone cache at {}", cmd.cache_dir.display())
+        format!(
+            "failed to open diphone cache at {}",
+            cmd.cache_dir.display()
+        )
     })?;
 
     let inventory_text = std::fs::read_to_string(&cmd.inventory).with_context(|| {
@@ -207,7 +202,10 @@ fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
                         halfseg_samples: forged.unit.halfseg_samples,
                         segmentation_confidence: forged.segmentation_confidence,
                         sample_count: forged.unit.samples.len(),
-                        license_note: concat!(
+                        extraction_start_sample: 0,
+                        extraction_end_sample: forged.unit.samples.len(),
+                        model_license: "unknown".to_string(),
+                        provenance_note: concat!(
                             "Generated locally from a Piper ONNX model. ",
                             "Do not redistribute without checking the model license."
                         )

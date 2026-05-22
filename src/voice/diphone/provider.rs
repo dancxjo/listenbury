@@ -16,7 +16,7 @@ use crate::voice::mbrola::diphone_provider::{DiphoneLookup, DiphoneProvider};
 
 use super::cache::{CacheEntryMetadata, CacheKey, DiphoneCache};
 use super::forge::{
-    CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, NORMALIZATION_VERSION, ForgeSettings,
+    CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, ForgeSettings, NORMALIZATION_VERSION,
     fingerprint_config, fingerprint_path,
 };
 
@@ -45,10 +45,7 @@ pub struct NeuralDiphoneProvider {
 #[cfg(feature = "tts-riper")]
 impl NeuralDiphoneProvider {
     /// Create a new provider backed by `backend` and `cache`.
-    pub fn new(
-        backend: crate::mouth::riper::backend::RiperBackend,
-        cache: DiphoneCache,
-    ) -> Self {
+    pub fn new(backend: crate::mouth::riper::backend::RiperBackend, cache: DiphoneCache) -> Self {
         Self {
             backend,
             cache,
@@ -111,7 +108,10 @@ impl DiphoneProvider for NeuralDiphoneProvider {
             halfseg_samples: forged.unit.halfseg_samples,
             segmentation_confidence: forged.segmentation_confidence,
             sample_count: forged.unit.samples.len(),
-            license_note: concat!(
+            extraction_start_sample: 0,
+            extraction_end_sample: forged.unit.samples.len(),
+            model_license: "unknown".to_string(),
+            provenance_note: concat!(
                 "Generated locally from a Piper ONNX model. ",
                 "Do not redistribute without checking the model license."
             )

@@ -16,11 +16,11 @@
 //! model.  Do not redistribute cache entries without checking whether the model
 //! license permits redistribution of derived audio.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::io::Read as _;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::voice::mbrola::diphone_provider::{
@@ -61,8 +61,8 @@ impl PhoneClass {
     pub fn of(symbol: &str) -> Self {
         match symbol {
             "_" | "#" | "pau" => Self::Silence,
-            "i" | "ɪ" | "e" | "ɛ" | "æ" | "ɑ" | "ɔ" | "ʌ" | "ə" | "ɚ" | "u" | "ʊ" | "o"
-            | "a" | "ø" | "y" | "ɐ" | "ɜ" | "ɞ" | "@" => Self::Vowel,
+            "i" | "ɪ" | "e" | "ɛ" | "æ" | "ɑ" | "ɔ" | "ʌ" | "ə" | "ɚ" | "u" | "ʊ" | "o" | "a"
+            | "ø" | "y" | "ɐ" | "ɜ" | "ɞ" | "@" => Self::Vowel,
             "p" | "b" | "t" | "d" | "k" | "ɡ" | "g" | "ʔ" => Self::StopConsonant,
             "f" | "v" | "θ" | "ð" | "s" | "z" | "ʃ" | "ʒ" | "h" | "x" | "ç" => {
                 Self::FricativeConsonant
@@ -156,9 +156,7 @@ pub fn forge_diphone(
         })?;
 
     let pcm = backend.synthesize_ids(&ids).with_context(|| {
-        format!(
-            "Riper ONNX synthesis failed for carrier diphone {left}-{right}"
-        )
+        format!("Riper ONNX synthesis failed for carrier diphone {left}-{right}")
     })?;
 
     if pcm.samples.len() < settings.min_samples {
@@ -290,17 +288,51 @@ fn energy_confidence(samples: &[f32], midpoint: usize, frame_size: usize) -> f32
 
 /// Fingerprint a model path as a short hex string (deterministic for the same path).
 pub fn fingerprint_path(path: &Path) -> String {
-    let mut hasher = DefaultHasher::new();
-    path.to_string_lossy().hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    const LARGE_MODEL_THRESHOLD_BYTES: u64 = 128 * 1024 * 1024;
+
+    let mut hasher = Sha256::new();
+    let meta = std::fs::metadata(path);
+    match meta {
+        Ok(meta) if meta.len() <= LARGE_MODEL_THRESHOLD_BYTES => match std::fs::File::open(path) {
+            Ok(mut f) => {
+                let mut buf = [0_u8; 64 * 1024];
+                loop {
+                    match f.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(_) => break,
+                    }
+                }
+            }
+            Err(_) => {
+                hasher.update(path.to_string_lossy().as_bytes());
+            }
+        },
+        Ok(meta) => {
+            // Cheaper fallback for very large models.
+            hasher.update(path.to_string_lossy().as_bytes());
+            hasher.update(meta.len().to_le_bytes());
+            if let Ok(modified) = meta.modified()
+                && let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                hasher.update(duration.as_secs().to_le_bytes());
+                hasher.update(duration.subsec_nanos().to_le_bytes());
+            }
+        }
+        Err(_) => {
+            hasher.update(path.to_string_lossy().as_bytes());
+        }
+    }
+    hex_sha256_digest(hasher.finalize())
 }
 
 /// Fingerprint the voice config via its phoneme map size and sample rate.
 pub fn fingerprint_config(config: &crate::mouth::riper::config::PiperVoiceConfig) -> String {
-    let mut hasher = DefaultHasher::new();
-    config.sample_rate_hz.hash(&mut hasher);
-    config.phoneme_id_map.len().hash(&mut hasher);
-    // Hash sorted phoneme IDs for stability
+    let mut hasher = Sha256::new();
+    hasher.update(config.sample_rate_hz.to_le_bytes());
+    hasher.update(config.phoneme_id_map.len().to_le_bytes());
+
+    // Hash sorted phoneme IDs for deterministic output.
     let mut phonemes: Vec<(&str, &Vec<i64>)> = config
         .phoneme_id_map
         .iter()
@@ -308,15 +340,29 @@ pub fn fingerprint_config(config: &crate::mouth::riper::config::PiperVoiceConfig
         .collect();
     phonemes.sort_by_key(|(k, _)| *k);
     for (k, v) in phonemes {
-        k.hash(&mut hasher);
-        v.hash(&mut hasher);
+        hasher.update(k.as_bytes());
+        hasher.update([0_u8]);
+        hasher.update(v.len().to_le_bytes());
+        for id in v {
+            hasher.update(id.to_le_bytes());
+        }
     }
-    format!("{:016x}", hasher.finish())
+    hex_sha256_digest(hasher.finalize())
 }
 
 fn now_iso8601() -> String {
     // Use a simple RFC 3339 format.  chrono is already a dependency.
     chrono::Utc::now().to_rfc3339()
+}
+
+fn hex_sha256_digest(digest: impl AsRef<[u8]>) -> String {
+    let bytes = digest.as_ref();
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]
