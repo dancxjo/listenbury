@@ -3,6 +3,13 @@ use uuid::Uuid;
 
 use crate::soundscape::SourceId;
 
+const PITCH_DISTANCE_SCALE_HZ: f32 = 120.0;
+const SPEAKING_RATE_DISTANCE_SCALE: f32 = 3.0;
+const EMBEDDING_WEIGHT: f32 = 0.45;
+const PITCH_WEIGHT: f32 = 0.30;
+const SPEAKING_RATE_WEIGHT: f32 = 0.25;
+const NORM_EPSILON: f32 = 1e-10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VoiceSignatureId(pub Uuid);
 
@@ -122,9 +129,9 @@ impl VoiceSignature {
         }
 
         let bounded = observation.confidence.clamp(0.0, 1.0);
+        let previous_count = self.sample_count as f32;
         self.sample_count += 1;
-        self.confidence = ((self.confidence * (self.sample_count as f32 - 1.0)) + bounded)
-            / self.sample_count as f32;
+        self.confidence = ((self.confidence * previous_count) + bounded) / self.sample_count as f32;
     }
 
     pub fn compare(&self, other: &Self) -> VoiceSignatureMatch {
@@ -137,14 +144,14 @@ impl VoiceSignature {
         let pitch_similarity = match (&self.pitch_profile, &other.pitch_profile) {
             (Some(left), Some(right)) => Some(similarity_from_distance(
                 (left.median_hz - right.median_hz).abs(),
-                120.0,
+                PITCH_DISTANCE_SCALE_HZ,
             )),
             _ => None,
         };
         let speaking_rate_similarity = match (&self.speaking_rate, &other.speaking_rate) {
             (Some(left), Some(right)) => Some(similarity_from_distance(
                 (left.syllables_per_second - right.syllables_per_second).abs(),
-                3.0,
+                SPEAKING_RATE_DISTANCE_SCALE,
             )),
             _ => None,
         };
@@ -152,16 +159,16 @@ impl VoiceSignature {
         let mut weighted = 0.0;
         let mut total_weight = 0.0;
         if let Some(value) = embedding_similarity {
-            weighted += value * 0.45;
-            total_weight += 0.45;
+            weighted += value * EMBEDDING_WEIGHT;
+            total_weight += EMBEDDING_WEIGHT;
         }
         if let Some(value) = pitch_similarity {
-            weighted += value * 0.30;
-            total_weight += 0.30;
+            weighted += value * PITCH_WEIGHT;
+            total_weight += PITCH_WEIGHT;
         }
         if let Some(value) = speaking_rate_similarity {
-            weighted += value * 0.25;
-            total_weight += 0.25;
+            weighted += value * SPEAKING_RATE_WEIGHT;
+            total_weight += SPEAKING_RATE_WEIGHT;
         }
 
         let score = if total_weight > 0.0 {
@@ -188,10 +195,12 @@ fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
         left_norm += a * a;
         right_norm += b * b;
     }
-    if left_norm == 0.0 || right_norm == 0.0 {
+    let left_magnitude = left_norm.sqrt();
+    let right_magnitude = right_norm.sqrt();
+    if left_magnitude <= NORM_EPSILON || right_magnitude <= NORM_EPSILON {
         return 0.0;
     }
-    ((dot / (left_norm.sqrt() * right_norm.sqrt())) + 1.0) / 2.0
+    ((dot / (left_magnitude * right_magnitude)) + 1.0) / 2.0
 }
 
 fn similarity_from_distance(distance: f32, scale: f32) -> f32 {
