@@ -17,6 +17,7 @@
 pub mod articulator;
 pub mod coarticulation;
 pub mod tract;
+pub mod vocal_plausibility;
 
 pub use articulator::{ArticulatorPlan, EnergyCurve, EnergyPoint, articulate, is_phone_voiced};
 pub use coarticulation::{
@@ -31,4 +32,7 @@ pub use tract::{
     render_phone, render_phone_string, render_targets_from_sung_syllable,
     render_targets_from_syllable, source_filter_track_from_acoustic,
     source_filter_track_from_acoustic_full,
+};
+pub use vocal_plausibility::{
+    VocalPlausibility, VocalPlausibilityConfig, assess_vocal_plausibility,
 };

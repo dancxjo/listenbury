@@ -31,6 +31,7 @@ pub use audio::frame::AudioFrame;
 pub use audio::{
     AcousticAnalysis, AudioInput, AudioOutput, VoiceSignature, VoiceSignatureId,
     VoiceSignatureLabel, VoiceSignatureSource, analyze_audio_frames, analyze_mono_samples,
+    build_speech_likelihood_stream, SpeechLikelihood, SpeechLikelihoodConfig,
 };
 pub use diagnostics::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use event::{
@@ -103,4 +104,7 @@ pub use voice::tract::{
     render_phone, render_phone_string, render_targets_from_sung_syllable,
     render_targets_from_syllable, source_filter_track_from_acoustic,
     source_filter_track_from_acoustic_full,
+};
+pub use voice::vocal_plausibility::{
+    VocalPlausibility, VocalPlausibilityConfig, assess_vocal_plausibility,
 };

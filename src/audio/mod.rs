@@ -13,6 +13,7 @@ pub mod lattice;
 pub mod noise_floor;
 pub mod phone_class;
 pub mod ring;
+pub mod speech_likelihood;
 pub mod streaming_prosody;
 pub mod viterbi;
 pub mod voice_signature;
@@ -36,6 +37,9 @@ pub use lattice::{
 };
 pub use noise_floor::{AdaptiveNoiseFloor, NoiseFloorConfig, NoiseFloorObservation};
 pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};
+pub use speech_likelihood::{
+    SpeechLikelihood, SpeechLikelihoodConfig, build_speech_likelihood_stream,
+};
 pub use viterbi::{PhoneState, viterbi_align_pronunciation};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
