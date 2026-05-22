@@ -1,5 +1,4 @@
 use anyhow::Result;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -69,6 +68,7 @@ pub struct DiphoneUnit {
     pub samples: Vec<f32>,
     pub sample_rate_hz: u32,
     pub halfseg_samples: usize,
+    pub frame_center_samples: Vec<usize>,
     pub source: DiphoneUnitSource,
     pub metadata: DiphoneUnitMetadata,
 }
@@ -107,6 +107,7 @@ impl DiphoneProvider for MbrolaDiphoneProvider<'_> {
                 samples,
                 sample_rate_hz: self.database.sample_rate_hz,
                 halfseg_samples: diphone.halfseg_samples,
+                frame_center_samples: self.database.frame_center_samples(diphone),
                 source: DiphoneUnitSource::MbrolaExact,
                 metadata: DiphoneUnitMetadata::default(),
             },
@@ -116,6 +117,8 @@ impl DiphoneProvider for MbrolaDiphoneProvider<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]

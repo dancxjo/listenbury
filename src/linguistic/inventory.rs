@@ -74,6 +74,32 @@ impl PhonemeDefinition {
     }
 }
 
+/// Describes how complete a variety's phonological implementation is.
+///
+/// A variety can have a distinct label and a distinct [`VarietyId`] without
+/// having a distinct phonological implementation.  This enum makes that
+/// explicit at the data layer so that metadata consumers can detect stubs
+/// without inspecting inventory contents.
+///
+/// Contributors should advance a variety's status by adding real phonological
+/// differences — new inventory phonemes, allophone rules, or distinct
+/// phonotactic tables — rather than hard-coded special-case functions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type", content = "data")]
+pub enum VarietyImplementationStatus {
+    /// Full phonological implementation with its own distinct inventory and
+    /// rules.  This variety's behaviour is not derived from another variety.
+    Complete,
+    /// Uses the inventory and rules of another variety as a placeholder until
+    /// real phonological differences are modelled.  The wrapped [`VarietyId`]
+    /// identifies the source variety.
+    StubDerivedFrom(VarietyId),
+    /// Intentionally relaxed or permissive profile (e.g. for singing or poetic
+    /// scansion).  This is not a dialect stub — the permissiveness is by
+    /// design.
+    PermissiveProfile,
+}
+
 /// The phoneme inventory and phone comparison policy for a specific linguistic
 /// variety.
 ///
@@ -96,6 +122,11 @@ pub struct PhonemicInventory {
     pub phonemes: Vec<PhonemeDefinition>,
     /// Phone comparison policy.
     pub phone_equality: PhoneEqualityOptions,
+    /// How complete this variety's phonological implementation is.
+    ///
+    /// Check this before treating a variety as having a real phonological
+    /// implementation distinct from another variety.
+    pub implementation_status: VarietyImplementationStatus,
 }
 
 impl PhonemicInventory {
