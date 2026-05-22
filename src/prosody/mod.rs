@@ -9,9 +9,9 @@
 //! duration, velocity, and articulation.
 
 pub mod note_target;
+pub mod phonotactics;
 pub mod pitch_curve;
 pub mod singing;
-pub mod syllable;
-pub mod phonotactics;
 pub mod syllabification;
+pub mod syllable;
 pub mod vibrato;

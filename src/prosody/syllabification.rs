@@ -118,25 +118,26 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         // syllable's coda with these phones.
         if syl_idx > 0 {
             let prev = syllables.last_mut().unwrap();
-            prev.coda = PhoneString { phones: coda_phones.clone() };
+            prev.coda = PhoneString {
+                phones: coda_phones.clone(),
+            };
         }
         // The initial coda (before the first nucleus) is dropped — it becomes
         // a leading onset for the very first syllable.
 
         // Source span for this syllable: onset_start..nuc_end.
         let onset_start = nuc_pos - onset_phones.len();
-        let source_start = if syl_idx == 0 {
-            0
-        } else {
-            onset_start
-        };
+        let source_start = if syl_idx == 0 { 0 } else { onset_start };
 
         let stress = phonemes[nuc_pos].stress;
 
         // Check if this syllable's onset decision was variety-specific.
         if !diagnostics.is_empty() {
             if let Some(d) = diagnostics.last_mut() {
-                if matches!(d.kind, DiagnosticKind::RejectedOnset | DiagnosticKind::LegalOnset) {
+                if matches!(
+                    d.kind,
+                    DiagnosticKind::RejectedOnset | DiagnosticKind::LegalOnset
+                ) {
                     // Mark as variety-specific if the decision differs from a
                     // permissive profile (not implemented here; placeholder).
                     // Future: compare against PermissiveProfile verdict.
@@ -145,7 +146,9 @@ pub fn syllabify<P: PhonotacticProfile>(phonemes: &[Phoneme], profile: &P) -> Ve
         }
 
         syllables.push(Syllable {
-            onset: PhoneString { phones: onset_phones },
+            onset: PhoneString {
+                phones: onset_phones,
+            },
             nucleus: PhoneString {
                 phones: phones[nuc_pos..nuc_end].to_vec(),
             },
@@ -300,7 +303,10 @@ mod tests {
 
     // Helper: build phoneme sequence from ARPABET strings.
     fn seq(symbols: &[&str]) -> Vec<Phoneme> {
-        symbols.iter().map(|s| phoneme_from_arpabet(s, "test")).collect()
+        symbols
+            .iter()
+            .map(|s| phoneme_from_arpabet(s, "test"))
+            .collect()
     }
 
     // ── Core IPA output ──────────────────────────────────────────────────────
@@ -376,7 +382,10 @@ mod tests {
         let s = syllabify(&seq(&["S", "T", "R", "EH1", "NG", "K", "TH", "S"]), &ga());
         // Just check it produces output without panicking and contains IPA.
         let ipa = syllables_to_ipa(&s);
-        assert!(ipa.contains("ɛ"), "expected nucleus ɛ in strengths, got: {ipa}");
+        assert!(
+            ipa.contains("ɛ"),
+            "expected nucleus ɛ in strengths, got: {ipa}"
+        );
     }
 
     #[test]
@@ -385,7 +394,11 @@ mod tests {
         // to the following onset.
         let s = syllabify(&seq(&["AE1", "T", "L", "AH0"]), &PermissiveProfile);
         // /tl/ is accepted → coda of first syllable is empty
-        assert_eq!(s[0].coda.to_ipa(), "", "expected empty coda with permissive profile");
+        assert_eq!(
+            s[0].coda.to_ipa(),
+            "",
+            "expected empty coda with permissive profile"
+        );
     }
 
     // ── Syllable structure ───────────────────────────────────────────────────

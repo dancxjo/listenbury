@@ -206,7 +206,10 @@ mod tests {
             None,
         );
         assert_eq!(event.display_label(), "_BACKGROUND VOICE #2_");
-        assert!(event.is_indistinct(), "low transcript confidence should mark as indistinct");
+        assert!(
+            event.is_indistinct(),
+            "low transcript confidence should mark as indistinct"
+        );
     }
 
     #[test]
@@ -220,7 +223,10 @@ mod tests {
             Some(mixture_id),
         );
         assert!(event.is_overlapped());
-        assert!(event.is_indistinct(), "overlapped segments are always treated as indistinct");
+        assert!(
+            event.is_indistinct(),
+            "overlapped segments are always treated as indistinct"
+        );
         // Even when the ASR returned text, overlap forces [indistinct] rendering.
         assert_eq!(event.screenplay_line(), "_UNKNOWN VOICE #1_: [indistinct]");
     }
@@ -236,7 +242,10 @@ mod tests {
             0.50,
             Some(mixture_id),
         );
-        assert_eq!(empty.screenplay_line(), "_BACKGROUND VOICE #1_: [indistinct]");
+        assert_eq!(
+            empty.screenplay_line(),
+            "_BACKGROUND VOICE #1_: [indistinct]"
+        );
         // Non-empty text + low confidence
         let low_conf = make_transcript(
             SourceLabel::BackgroundVoice { ordinal: 1 },
@@ -262,7 +271,10 @@ mod tests {
             None,
         );
         // High transcript confidence but low attribution confidence.
-        assert!(!event.is_indistinct(), "high transcript confidence should not be indistinct even with low attribution confidence");
+        assert!(
+            !event.is_indistinct(),
+            "high transcript confidence should not be indistinct even with low attribution confidence"
+        );
         assert_eq!(event.transcript_confidence, 0.90);
         assert_eq!(event.attribution_confidence, 0.30);
     }

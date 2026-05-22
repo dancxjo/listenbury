@@ -92,15 +92,11 @@ fn to_span_kind(hypothesis: &BoundaryHypothesis) -> SpanHypothesisKind {
 fn compatibility_label(hypothesis: &BoundaryHypothesis) -> String {
     match hypothesis.kind {
         BoundaryKind::SpeechRegion => {
-            if hypothesis
-                .evidence
-                .contains(&BoundaryEvidence::EnergyRise)
+            if hypothesis.evidence.contains(&BoundaryEvidence::EnergyRise)
                 && !hypothesis.evidence.contains(&BoundaryEvidence::EnergyFall)
             {
                 "speech_start".to_string()
-            } else if hypothesis
-                .evidence
-                .contains(&BoundaryEvidence::EnergyFall)
+            } else if hypothesis.evidence.contains(&BoundaryEvidence::EnergyFall)
                 && !hypothesis.evidence.contains(&BoundaryEvidence::EnergyRise)
             {
                 "speech_end".to_string()

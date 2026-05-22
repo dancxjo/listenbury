@@ -1,8 +1,8 @@
 use anyhow::Result;
 use listenbury::soundscape::{
-    SoundscapeDebugView, SoundscapeFrame, SourceAttributedTranscript, SourceHypothesis, SourceId,
-    SourceKind, SourceLabel, SoundSource, TimePoint, TimeRange, VoiceCount, VoiceSignatureId,
-    AttributionEvidence, detect_overlaps,
+    AttributionEvidence, SoundSource, SoundscapeDebugView, SoundscapeFrame,
+    SourceAttributedTranscript, SourceHypothesis, SourceId, SourceKind, SourceLabel, TimePoint,
+    TimeRange, VoiceCount, VoiceSignatureId, detect_overlaps,
 };
 
 use crate::cli::SoundscapeDebugCommand;
@@ -53,7 +53,10 @@ pub(crate) fn run_soundscape_debug(cmd: SoundscapeDebugCommand) -> Result<()> {
 
 fn build_sample_view() -> SoundscapeDebugView {
     let pete_id = SourceId::new();
-    let range = TimeRange::new(TimePoint::from_millis(12_000), TimePoint::from_millis(15_000));
+    let range = TimeRange::new(
+        TimePoint::from_millis(12_000),
+        TimePoint::from_millis(15_000),
+    );
 
     let frame = SoundscapeFrame {
         range,
@@ -110,7 +113,10 @@ fn build_sample_view() -> SoundscapeDebugView {
     let overlaps = detect_overlaps(&hypotheses);
 
     let transcripts = vec![SourceAttributedTranscript {
-        range: TimeRange::new(TimePoint::from_millis(14_000), TimePoint::from_millis(15_000)),
+        range: TimeRange::new(
+            TimePoint::from_millis(14_000),
+            TimePoint::from_millis(15_000),
+        ),
         source_hypothesis: hypotheses[1].clone(),
         source_label: SourceLabel::UnknownVoice { ordinal: 1 },
         text: "wait, what?".to_string(),

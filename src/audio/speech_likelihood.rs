@@ -206,8 +206,8 @@ mod tests {
         (0..len)
             .map(|_| {
                 state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
-                let unit = ((state >> PRECISION_SHIFT) as f32)
-                    / ((u32::MAX >> PRECISION_SHIFT) as f32);
+                let unit =
+                    ((state >> PRECISION_SHIFT) as f32) / ((u32::MAX >> PRECISION_SHIFT) as f32);
                 (unit * 2.0 - 1.0) * 0.20
             })
             .collect()

@@ -187,10 +187,7 @@ fn build_candidate(
         .get(peak_local)
         .map_or(start_time, |f| midpoint_ms(f));
 
-    let confidence = scores
-        .iter()
-        .cloned()
-        .fold(0.0_f32, f32::max);
+    let confidence = scores.iter().cloned().fold(0.0_f32, f32::max);
 
     let evidence = collect_evidence(likelihoods, config);
 
@@ -275,7 +272,10 @@ mod tests {
         vec![0.0_f32; (sample_rate as f32 * seconds).round() as usize]
     }
 
-    fn pipeline(samples: &[f32], sample_rate: u32) -> (AcousticFeatureStream, Vec<SpeechLikelihood>) {
+    fn pipeline(
+        samples: &[f32],
+        sample_rate: u32,
+    ) -> (AcousticFeatureStream, Vec<SpeechLikelihood>) {
         let analysis = analyze_mono_samples(samples, sample_rate);
         let features = build_feature_stream(
             samples,
@@ -301,8 +301,7 @@ mod tests {
         let samples = vowelish_harmonic(sample_rate, vowel_duration_s);
 
         let (features, likelihoods) = pipeline(&samples, sample_rate);
-        let candidates =
-            detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
+        let candidates = detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
 
         assert!(
             !candidates.is_empty(),
@@ -330,8 +329,7 @@ mod tests {
         let samples = click_burst(sample_rate, 0.40);
 
         let (features, likelihoods) = pipeline(&samples, sample_rate);
-        let candidates =
-            detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
+        let candidates = detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
 
         assert!(
             candidates.is_empty(),
@@ -351,8 +349,7 @@ mod tests {
         samples.extend(vowelish_harmonic(sample_rate, 0.20));
 
         let (features, likelihoods) = pipeline(&samples, sample_rate);
-        let candidates =
-            detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
+        let candidates = detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
 
         assert!(
             candidates.len() >= 2,
@@ -383,8 +380,7 @@ mod tests {
         let samples = vowelish_harmonic(sample_rate, 0.25);
 
         let (features, likelihoods) = pipeline(&samples, sample_rate);
-        let candidates =
-            detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
+        let candidates = detect_nuclei(&likelihoods, &features, &NucleusDetectionConfig::default());
 
         let has_vowel_evidence = candidates
             .iter()

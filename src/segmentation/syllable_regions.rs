@@ -96,10 +96,20 @@ pub fn extract_syllable_islands(
     nuclei
         .iter()
         .map(|nucleus| {
-            let start_time =
-                expand_left(nucleus.start_time, likelihoods, &features.frames, config, frame_count);
-            let end_time =
-                expand_right(nucleus.end_time, likelihoods, &features.frames, config, frame_count);
+            let start_time = expand_left(
+                nucleus.start_time,
+                likelihoods,
+                &features.frames,
+                config,
+                frame_count,
+            );
+            let end_time = expand_right(
+                nucleus.end_time,
+                likelihoods,
+                &features.frames,
+                config,
+                frame_count,
+            );
             SyllableIsland {
                 start_time,
                 nucleus: nucleus.clone(),
@@ -191,11 +201,7 @@ fn first_frame_at_or_after(
 }
 
 /// Index of the first frame whose `frame_start_ms > time_ms`.
-fn first_frame_after(
-    frames: &[AcousticFeatureFrame],
-    time_ms: f32,
-    frame_count: usize,
-) -> usize {
+fn first_frame_after(frames: &[AcousticFeatureFrame], time_ms: f32, frame_count: usize) -> usize {
     frames[..frame_count]
         .iter()
         .position(|f| f.frame_start_ms as f32 > time_ms)

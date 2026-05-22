@@ -212,8 +212,8 @@ fn evidence_label(ev: &AttributionEvidence) -> String {
 mod tests {
     use super::*;
     use crate::soundscape::{
-        MixtureComponent, SoundSource, SoundscapeFrame, SourceAttributedTranscript,
-        SourceId, SourceLabel, TimePoint, TimeRange,
+        MixtureComponent, SoundSource, SoundscapeFrame, SourceAttributedTranscript, SourceId,
+        SourceLabel, TimePoint, TimeRange,
     };
 
     fn range(start_ms: u64, end_ms: u64) -> TimeRange {
@@ -284,8 +284,7 @@ mod tests {
             unknown: 1,
             confidence: 0.74,
         };
-        let view =
-            SoundscapeDebugView::from_components(&frame, voice_count, &[], &[], &[]);
+        let view = SoundscapeDebugView::from_components(&frame, voice_count, &[], &[], &[]);
         assert_eq!(view.sources.len(), 2);
         assert_eq!(view.sources[0].label, "_PETE VOICE_");
         assert_eq!(view.sources[0].kind, SourceKind::KnownSelfVoice);
@@ -406,9 +405,11 @@ mod tests {
         assert!(view.overlaps[0].is_overlapping);
         assert_eq!(view.overlaps[0].voice_count, 2);
         assert_eq!(view.overlaps[0].components.len(), 2);
-        assert!(view.overlaps[0].components[0]
-            .evidence
-            .contains(&"OverlapDetected".to_string()));
+        assert!(
+            view.overlaps[0].components[0]
+                .evidence
+                .contains(&"OverlapDetected".to_string())
+        );
     }
 
     #[test]

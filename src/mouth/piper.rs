@@ -18,6 +18,13 @@ use crate::mouth::riper::{
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
 
+#[cfg(feature = "tts-riper")]
+const RIPER_TEXT_OUTPUT_GAIN: f32 = 1.5;
+#[cfg(feature = "tts-riper")]
+const RIPER_SENTENCE_PAUSE_MS: u64 = 260;
+#[cfg(feature = "tts-riper")]
+const RIPER_CHANNELS: u16 = 1;
+
 #[derive(Debug, Clone)]
 pub struct PiperConfig {
     pub executable: PathBuf,
@@ -108,6 +115,7 @@ impl PiperBackendPreference {
 struct RiperTextBackend {
     backend: RiperBackend,
     phonemizer: SimpleEnglishG2p,
+    frame_samples: usize,
 }
 
 #[cfg(feature = "tts-riper")]
@@ -141,6 +149,7 @@ impl RiperTextBackend {
         Ok(Self {
             backend,
             phonemizer: SimpleEnglishG2p::default(),
+            frame_samples: config.frame_samples,
         })
     }
 }
@@ -149,23 +158,149 @@ impl RiperTextBackend {
 impl TtsBackend for RiperTextBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let t0 = Instant::now();
-        let phonemes = self
-            .phonemizer
-            .phonemize_unit(text)
-            .with_context(|| format!("failed to realize Riper phonemes for text `{text}`"))?
-            .phonemes;
-        let ids = phonemes.to_riper_text_ids(self.backend.config(), self.backend.model_path())?;
-        let frames = self
-            .backend
-            .synthesize_id_frames(&ids)
-            .with_context(|| format!("Riper synthesis failed for text `{text}`"))?;
+        let chunks = riper_sentence_chunks(text);
+        let mut frames = Vec::new();
+        for chunk in &chunks {
+            let phonemes = self
+                .phonemizer
+                .phonemize_unit(chunk.text)
+                .with_context(|| {
+                    format!("failed to realize Riper phonemes for text `{}`", chunk.text)
+                })?
+                .phonemes;
+            let ids =
+                phonemes.to_riper_text_ids(self.backend.config(), self.backend.model_path())?;
+            frames.extend(
+                self.backend
+                    .synthesize_id_frames(&ids)
+                    .with_context(|| format!("Riper synthesis failed for text `{}`", chunk.text))?,
+            );
+            if chunk.sentence_final {
+                frames.extend(riper_silence_frames(
+                    self.backend.config().sample_rate_hz,
+                    RIPER_CHANNELS,
+                    self.frame_samples,
+                    RIPER_SENTENCE_PAUSE_MS,
+                ));
+            }
+        }
+        apply_frame_gain(&mut frames, RIPER_TEXT_OUTPUT_GAIN);
         debug!(
             backend = "riper",
             chars = text.len(),
+            chunks = chunks.len(),
+            output_gain = RIPER_TEXT_OUTPUT_GAIN,
+            sentence_pause_ms = RIPER_SENTENCE_PAUSE_MS,
             elapsed_ms = t0.elapsed().as_millis(),
             "RiperTextBackend synthesis complete"
         );
         Ok(frames)
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RiperTextChunk<'a> {
+    text: &'a str,
+    sentence_final: bool,
+}
+
+#[cfg(feature = "tts-riper")]
+fn riper_sentence_chunks(text: &str) -> Vec<RiperTextChunk<'_>> {
+    let mut chunks = Vec::new();
+    let mut start = 0usize;
+
+    for (idx, ch) in text.char_indices() {
+        if !is_riper_sentence_terminal(ch) {
+            continue;
+        }
+        let end = idx + ch.len_utf8();
+        if let Some(chunk) = riper_text_chunk(text, start, end, true) {
+            chunks.push(chunk);
+        }
+        start = end;
+        while start < text.len() {
+            let Some(next) = text[start..].chars().next() else {
+                break;
+            };
+            if !next.is_whitespace() && !matches!(next, '"' | '\'' | ')' | ']' | '}') {
+                break;
+            }
+            start += next.len_utf8();
+        }
+    }
+
+    if let Some(chunk) = riper_text_chunk(text, start, text.len(), false) {
+        chunks.push(chunk);
+    }
+    if chunks.is_empty() {
+        chunks.push(RiperTextChunk {
+            text: text.trim(),
+            sentence_final: false,
+        });
+    }
+
+    chunks
+}
+
+#[cfg(feature = "tts-riper")]
+fn riper_text_chunk(
+    text: &str,
+    start: usize,
+    end: usize,
+    sentence_final: bool,
+) -> Option<RiperTextChunk<'_>> {
+    let chunk = text.get(start..end)?.trim();
+    (!chunk.is_empty()).then_some(RiperTextChunk {
+        text: chunk,
+        sentence_final,
+    })
+}
+
+#[cfg(feature = "tts-riper")]
+fn is_riper_sentence_terminal(ch: char) -> bool {
+    matches!(ch, '.' | '!' | '?')
+}
+
+#[cfg(feature = "tts-riper")]
+fn riper_silence_frames(
+    sample_rate_hz: u32,
+    channels: u16,
+    frame_samples: usize,
+    pause_ms: u64,
+) -> Vec<AudioFrame> {
+    let channels = channels.max(1);
+    let total_samples = pause_ms
+        .saturating_mul(u64::from(sample_rate_hz))
+        .saturating_mul(u64::from(channels))
+        / 1000;
+    let Ok(total_samples) = usize::try_from(total_samples) else {
+        return Vec::new();
+    };
+    let frame_samples = frame_samples.max(1);
+    let mut remaining = total_samples;
+    let mut frames = Vec::new();
+    while remaining > 0 {
+        let len = remaining.min(frame_samples);
+        frames.push(AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz,
+            channels,
+            samples: vec![0.0; len],
+            voice_signatures: Vec::new(),
+        });
+        remaining -= len;
+    }
+    frames
+}
+
+#[cfg(feature = "tts-riper")]
+fn apply_frame_gain(frames: &mut [AudioFrame], gain: f32) {
+    if (gain - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for sample in frames.iter_mut().flat_map(|frame| frame.samples.iter_mut()) {
+        *sample = (*sample * gain).clamp(-1.0, 1.0);
     }
 }
 
@@ -619,6 +754,80 @@ mod tests {
             self.calls += 1;
             anyhow::bail!("riper boom");
         }
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn riper_sentence_chunks_split_sentence_final_text() {
+        let chunks = riper_sentence_chunks("Okay. Again? Done!");
+
+        assert_eq!(
+            chunks,
+            vec![
+                RiperTextChunk {
+                    text: "Okay.",
+                    sentence_final: true,
+                },
+                RiperTextChunk {
+                    text: "Again?",
+                    sentence_final: true,
+                },
+                RiperTextChunk {
+                    text: "Done!",
+                    sentence_final: true,
+                },
+            ]
+        );
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn riper_sentence_chunks_leave_trailing_fragment_without_pause() {
+        let chunks = riper_sentence_chunks("Okay. still thinking");
+
+        assert_eq!(
+            chunks,
+            vec![
+                RiperTextChunk {
+                    text: "Okay.",
+                    sentence_final: true,
+                },
+                RiperTextChunk {
+                    text: "still thinking",
+                    sentence_final: false,
+                },
+            ]
+        );
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn riper_silence_frames_match_pause_duration() {
+        let frames = riper_silence_frames(1_000, 1, 128, 260);
+        let total_samples = frames
+            .iter()
+            .map(|frame| frame.samples.len())
+            .sum::<usize>();
+
+        assert_eq!(total_samples, 260);
+        assert!(frames.iter().all(|frame| frame.sample_rate_hz == 1_000));
+        assert!(frames.iter().all(|frame| frame.channels == 1));
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn apply_frame_gain_boosts_and_clips_samples() {
+        let mut frames = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 22_050,
+            channels: 1,
+            samples: vec![0.2, -0.5, 0.8, -0.9],
+            voice_signatures: Vec::new(),
+        }];
+
+        apply_frame_gain(&mut frames, 1.5);
+
+        assert_eq!(frames[0].samples, vec![0.3, -0.75, 1.0, -1.0]);
     }
 
     #[cfg(feature = "tts-riper")]

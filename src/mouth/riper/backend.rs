@@ -458,8 +458,10 @@ fn home_onnxruntime_search_dirs(home: &Path) -> Vec<PathBuf> {
         }));
     }
 
-    for extensions_dir in [home.join(".vscode/extensions"), home.join(".vscode-server/extensions")]
-    {
+    for extensions_dir in [
+        home.join(".vscode/extensions"),
+        home.join(".vscode-server/extensions"),
+    ] {
         if let Ok(entries) = std::fs::read_dir(extensions_dir) {
             dirs.extend(entries.flatten().filter_map(|entry| {
                 let file_name = entry.file_name();
@@ -939,10 +941,8 @@ mod tests {
 
     #[test]
     fn home_onnxruntime_search_dirs_include_python_and_vscode_locations() {
-        let home = std::env::temp_dir().join(format!(
-            "listenbury-riper-ort-home-{}",
-            std::process::id()
-        ));
+        let home =
+            std::env::temp_dir().join(format!("listenbury-riper-ort-home-{}", std::process::id()));
         let _ = fs::remove_dir_all(&home);
         fs::create_dir_all(home.join(".local/lib/python3.12")).expect("create python lib dir");
         fs::create_dir_all(
@@ -953,17 +953,21 @@ mod tests {
 
         let dirs = home_onnxruntime_search_dirs(&home);
 
-        assert!(dirs.contains(
-            &home
-                .join(".local/lib/python3.12")
-                .join("site-packages/onnxruntime/capi")
-        ));
-        assert!(dirs.contains(
-            &home
-                .join(".vscode/extensions")
-                .join("ms-windows-ai-studio.windows-ai-studio-1.2.1-linux-x64")
-                .join("bin")
-        ));
+        assert!(
+            dirs.contains(
+                &home
+                    .join(".local/lib/python3.12")
+                    .join("site-packages/onnxruntime/capi")
+            )
+        );
+        assert!(
+            dirs.contains(
+                &home
+                    .join(".vscode/extensions")
+                    .join("ms-windows-ai-studio.windows-ai-studio-1.2.1-linux-x64")
+                    .join("bin")
+            )
+        );
 
         let _ = fs::remove_dir_all(home);
     }

@@ -20,23 +20,23 @@ pub mod tract;
 pub mod vocal_plausibility;
 
 pub use articulator::{
-    articulate, backend_detail_expectation, is_phone_voiced, klatt_targets_from_articulator_plan,
     ArticulatorPlan, EnergyCurve, EnergyPoint, GestureSpan, SungBackendDetail, SungBackendKind,
-    SyllableRenderSpan,
+    SyllableRenderSpan, articulate, backend_detail_expectation, is_phone_voiced,
+    klatt_targets_from_articulator_plan,
 };
 pub use coarticulation::{
-    coarticulate, BoundaryKind, CoarticulatedPlan, PhoneGesture, PhoneRole, RefinedGesture,
-    VocalGesturePlan,
+    BoundaryKind, CoarticulatedPlan, PhoneGesture, PhoneRole, RefinedGesture, VocalGesturePlan,
+    coarticulate,
 };
 pub use tract::{
+    FormantEstimation, GlottalSourceEstimate, GlottalSourceTarget, KlattRenderConfig,
+    NoiseEstimate, PhoneAcousticTarget, PhoneRenderTarget, SourceFilterFrame, SourceFilterTrack,
+    VocalTractFilterEstimate, VocalTractFilterTarget, VoicingEstimate,
     default_english_phone_targets, estimate_f0_autocorrelation, phone_render_targets_from_string,
     render_phone, render_phone_string, render_targets_from_sung_syllable,
     render_targets_from_syllable, source_filter_track_from_acoustic,
-    source_filter_track_from_acoustic_full, FormantEstimation, GlottalSourceEstimate,
-    GlottalSourceTarget, KlattRenderConfig, NoiseEstimate, PhoneAcousticTarget, PhoneRenderTarget,
-    SourceFilterFrame, SourceFilterTrack, VocalTractFilterEstimate, VocalTractFilterTarget,
-    VoicingEstimate,
+    source_filter_track_from_acoustic_full,
 };
 pub use vocal_plausibility::{
-    assess_vocal_plausibility, VocalPlausibility, VocalPlausibilityConfig,
+    VocalPlausibility, VocalPlausibilityConfig, assess_vocal_plausibility,
 };

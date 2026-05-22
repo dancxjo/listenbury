@@ -137,8 +137,7 @@ pub fn rank_word_region_hypotheses(
                 evidence.push(BoundaryEvidence::NoiseRejected);
                 (
                     BoundaryKind::NoiseEvent,
-                    (raw_confidence * NOISE_DEMOTION_FACTOR)
-                        .clamp(0.0, NOISE_EVENT_MAX_CONFIDENCE),
+                    (raw_confidence * NOISE_DEMOTION_FACTOR).clamp(0.0, NOISE_EVENT_MAX_CONFIDENCE),
                 )
             };
 
@@ -201,11 +200,11 @@ fn has_silence_gap_around(
 mod tests {
     use super::*;
     use crate::audio::acoustic::analyze_mono_samples;
-    use crate::audio::features::{build_feature_stream, AcousticFeatureFrame};
-    use crate::audio::speech_likelihood::{build_speech_likelihood_stream, SpeechLikelihoodConfig};
-    use crate::segmentation::nuclei::{detect_nuclei, NucleusDetectionConfig};
+    use crate::audio::features::{AcousticFeatureFrame, build_feature_stream};
+    use crate::audio::speech_likelihood::{SpeechLikelihoodConfig, build_speech_likelihood_stream};
+    use crate::segmentation::nuclei::{NucleusDetectionConfig, detect_nuclei};
     use crate::segmentation::syllable_regions::{
-        extract_syllable_islands, SyllableExpansionConfig,
+        SyllableExpansionConfig, extract_syllable_islands,
     };
     use crate::voice::tract::source_filter_track_from_acoustic_full;
 

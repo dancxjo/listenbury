@@ -76,10 +76,8 @@ impl OverlapMixture {
 /// The returned vector is unordered; each entry covers a disjoint time span
 /// of potentially-concurrent activity.
 pub fn detect_overlaps(hypotheses: &[SourceHypothesis]) -> Vec<OverlapMixture> {
-    let voice_like: Vec<&SourceHypothesis> = hypotheses
-        .iter()
-        .filter(|h| is_voice_like(h))
-        .collect();
+    let voice_like: Vec<&SourceHypothesis> =
+        hypotheses.iter().filter(|h| is_voice_like(h)).collect();
 
     if voice_like.is_empty() {
         return Vec::new();
@@ -125,10 +123,7 @@ pub fn detect_overlaps(hypotheses: &[SourceHypothesis]) -> Vec<OverlapMixture> {
                 .map(|c| c.source_hypothesis.range.end.millis)
                 .max()
                 .unwrap_or(0);
-            let range = TimeRange::new(
-                TimePoint::from_millis(start),
-                TimePoint::from_millis(end),
-            );
+            let range = TimeRange::new(TimePoint::from_millis(start), TimePoint::from_millis(end));
 
             let mean_confidence = components
                 .iter()
@@ -349,10 +344,8 @@ mod tests {
     fn known_source_ids_are_preserved_in_components() {
         let id_a = SourceId::new();
         let id_b = SourceId::new();
-        let mixtures = detect_overlaps(&[
-            voice_with_id(id_a, 0, 500),
-            voice_with_id(id_b, 300, 800),
-        ]);
+        let mixtures =
+            detect_overlaps(&[voice_with_id(id_a, 0, 500), voice_with_id(id_b, 300, 800)]);
 
         assert_eq!(mixtures.len(), 1);
         let ids: Vec<Option<SourceId>> = mixtures[0]

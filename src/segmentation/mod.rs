@@ -26,9 +26,9 @@ pub mod syllable_regions;
 pub mod word_regions;
 
 pub use boundary_hypotheses::{
-    emit_ranked_boundary_hypotheses, generate_landmark_hypotheses, BoundaryEvidence,
-    BoundaryHypothesis, BoundaryHypothesisConfig, BoundaryKind,
+    BoundaryEvidence, BoundaryHypothesis, BoundaryHypothesisConfig, BoundaryKind,
+    emit_ranked_boundary_hypotheses, generate_landmark_hypotheses,
 };
-pub use nuclei::{detect_nuclei, NucleusDetectionConfig, NucleusEvidence, VowelNucleusCandidate};
-pub use syllable_regions::{extract_syllable_islands, SyllableExpansionConfig, SyllableIsland};
-pub use word_regions::{rank_word_region_hypotheses, WordRegionConfig};
+pub use nuclei::{NucleusDetectionConfig, NucleusEvidence, VowelNucleusCandidate, detect_nuclei};
+pub use syllable_regions::{SyllableExpansionConfig, SyllableIsland, extract_syllable_islands};
+pub use word_regions::{WordRegionConfig, rank_word_region_hypotheses};

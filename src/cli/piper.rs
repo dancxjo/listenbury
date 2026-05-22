@@ -1565,11 +1565,7 @@ mod tests {
     fn klatt_phrase_unknown_word_reports_clear_error() {
         let error = synthesize_klatt_for_say("Hello 💥")
             .expect_err("unsupported text should produce a clear error");
-        assert!(
-            error
-                .to_string()
-                .contains("could not phonemize")
-        );
+        assert!(error.to_string().contains("could not phonemize"));
     }
 
     #[test]

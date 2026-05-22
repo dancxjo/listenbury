@@ -172,11 +172,7 @@ pub fn render_phone(target: &PhoneRenderTarget, config: &KlattRenderConfig) -> V
         return vec![];
     }
 
-    let breathiness = target
-        .source
-        .as_ref()
-        .map(|s| s.breathiness)
-        .unwrap_or(0.0);
+    let breathiness = target.source.as_ref().map(|s| s.breathiness).unwrap_or(0.0);
     let spectral_tilt = target
         .source
         .as_ref()
@@ -229,10 +225,7 @@ pub fn render_phone(target: &PhoneRenderTarget, config: &KlattRenderConfig) -> V
     let filtered = apply_formant_cascade(&tilted, target.filter.as_ref(), config);
 
     // --- Amplitude scaling ---
-    let peak = filtered
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0f32, f32::max);
+    let peak = filtered.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     let norm = if peak > 1e-6 { 1.0 / peak } else { 1.0 };
 
     filtered
@@ -310,10 +303,7 @@ fn db_to_linear(db: f32) -> f32 {
 /// between adjacent phones to suppress discontinuity clicks.
 ///
 /// The total duration is the sum of all individual `duration_ms` values.
-pub fn render_phone_string(
-    targets: &[PhoneRenderTarget],
-    config: &KlattRenderConfig,
-) -> Vec<f32> {
+pub fn render_phone_string(targets: &[PhoneRenderTarget], config: &KlattRenderConfig) -> Vec<f32> {
     if targets.is_empty() {
         return vec![];
     }
@@ -322,10 +312,7 @@ pub fn render_phone_string(
     let crossfade_samples = ((config.crossfade_ms / 1000.0) * sr as f32).round() as usize;
 
     // Render all phones individually
-    let segments: Vec<Vec<f32>> = targets
-        .iter()
-        .map(|t| render_phone(t, config))
-        .collect();
+    let segments: Vec<Vec<f32>> = targets.iter().map(|t| render_phone(t, config)).collect();
 
     // Total output length
     let total_samples: usize = segments.iter().map(|s| s.len()).sum();
@@ -378,11 +365,11 @@ pub fn render_phone_string(
 mod tests {
     use super::*;
     use crate::linguistic::phonology::Phone;
+    use crate::linguistic::phonology::PhoneString;
     use crate::voice::tract::targets::{
         GlottalSourceTarget, VocalTractFilterTarget, default_english_phone_targets,
         phone_render_targets_from_string,
     };
-    use crate::linguistic::phonology::PhoneString;
 
     fn vowel_target(f0: f32) -> PhoneRenderTarget {
         let table = default_english_phone_targets();
@@ -412,7 +399,11 @@ mod tests {
         let target = vowel_target(150.0);
         let pcm = render_phone(&target, &config);
         let expected_samples = ((100.0 / 1000.0) * config.sample_rate as f32).round() as usize;
-        assert_eq!(pcm.len(), expected_samples, "PCM length should match duration");
+        assert_eq!(
+            pcm.len(),
+            expected_samples,
+            "PCM length should match duration"
+        );
         assert!(!pcm.is_empty());
     }
 
@@ -422,7 +413,10 @@ mod tests {
         let target = vowel_target(150.0);
         let pcm = render_phone(&target, &config);
         let rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / pcm.len() as f32).sqrt();
-        assert!(rms > 0.01, "vowel should have significant energy, got rms={rms}");
+        assert!(
+            rms > 0.01,
+            "vowel should have significant energy, got rms={rms}"
+        );
     }
 
     #[test]

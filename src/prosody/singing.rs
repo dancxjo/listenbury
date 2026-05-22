@@ -313,15 +313,7 @@ mod tests {
     #[test]
     fn two_syllable_melody_hel_c4_lo_g4() {
         // "hel" on C4 (MIDI 60), "lo" on G4 (MIDI 67)
-        let hel = make_syllable(
-            "hel",
-            "h",
-            "ɛ",
-            "l",
-            0,
-            240,
-            Some(make_note(60, 0, 240)),
-        );
+        let hel = make_syllable("hel", "h", "ɛ", "l", 0, 240, Some(make_note(60, 0, 240)));
         let lo = make_cv_syllable("lo", "l", "oʊ", 240, 490, Some(make_note(67, 240, 250)));
 
         let mut phrase = SungPhrase::new();
@@ -355,15 +347,7 @@ mod tests {
         use std::time::Duration;
 
         // C4 = MIDI 60 ≈ 261.63 Hz, G4 = MIDI 67 ≈ 392.00 Hz
-        let hel = make_syllable(
-            "hel",
-            "h",
-            "ɛ",
-            "l",
-            0,
-            240,
-            Some(make_note(60, 0, 240)),
-        );
+        let hel = make_syllable("hel", "h", "ɛ", "l", 0, 240, Some(make_note(60, 0, 240)));
         let lo = make_cv_syllable("lo", "l", "oʊ", 240, 490, Some(make_note(67, 240, 250)));
 
         let mut phrase = SungPhrase::new();

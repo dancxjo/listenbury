@@ -161,10 +161,13 @@ fn build_voicing_estimate(
         };
     // Voicing probability heuristic: low ZCR + low-band energy dominance
     let zcr_score = (0.1 - zcr).clamp(0.0, 0.1) / 0.1;
-    let band_score =
-        ((low_band_db - high_band_db + 15.0) / 30.0).clamp(0.0, 1.0);
+    let band_score = ((low_band_db - high_band_db + 15.0) / 30.0).clamp(0.0, 1.0);
     let base_prob = (0.5 * zcr_score + 0.5 * band_score).clamp(0.0, 1.0);
-    let voicing_probability = if f0_hz.is_some() { base_prob } else { base_prob * 0.4 };
+    let voicing_probability = if f0_hz.is_some() {
+        base_prob
+    } else {
+        base_prob * 0.4
+    };
     // HNR proxy from autocorrelation confidence
     let hnr_db = if f0_confidence > 0.0 {
         let ratio = (f0_confidence / (1.0 - f0_confidence + 1e-6)).max(0.01);
@@ -207,8 +210,7 @@ fn build_noise_estimate(
     spectral_flux: f32,
 ) -> NoiseEstimate {
     let band_ratio = ((high_band_db - low_band_db + 30.0) / 60.0).clamp(0.0, 1.0);
-    let frication_energy =
-        ((zcr / 0.3).min(1.0) * 0.5 + band_ratio * 0.5).clamp(0.0, 1.0);
+    let frication_energy = ((zcr / 0.3).min(1.0) * 0.5 + band_ratio * 0.5).clamp(0.0, 1.0);
     let noise_ratio = ((zcr * 2.0) + spectral_flux).clamp(0.0, 1.0);
     NoiseEstimate {
         frication_energy,
@@ -218,12 +220,16 @@ fn build_noise_estimate(
 
 fn filter_estimate_from_formant_frame(frame: &FormantFrame) -> VocalTractFilterEstimate {
     let lookup = |label: &str| -> Option<FormantEstimation> {
-        frame.formants.iter().find(|f| f.label == label).map(|f| FormantEstimation {
-            frequency_hz: f.frequency_hz,
-            bandwidth_hz: f.bandwidth_hz,
-            amplitude_db: f.amplitude_db,
-            confidence: f.confidence,
-        })
+        frame
+            .formants
+            .iter()
+            .find(|f| f.label == label)
+            .map(|f| FormantEstimation {
+                frequency_hz: f.frequency_hz,
+                bandwidth_hz: f.bandwidth_hz,
+                amplitude_db: f.amplitude_db,
+                confidence: f.confidence,
+            })
     };
     VocalTractFilterEstimate {
         f1: lookup("F1"),
@@ -251,10 +257,8 @@ pub fn source_filter_track_from_acoustic(
     let sample_rate = analysis.sample_rate;
     let hop_ms = analysis.formant_tracks.hop_ms;
     let window_ms = analysis.formant_tracks.window_ms;
-    let window_samples =
-        ((sample_rate as f32 * window_ms) / 1000.0).round().max(1.0) as usize;
-    let hop_samples =
-        ((sample_rate as f32 * hop_ms) / 1000.0).round().max(1.0) as usize;
+    let window_samples = ((sample_rate as f32 * window_ms) / 1000.0).round().max(1.0) as usize;
+    let hop_samples = ((sample_rate as f32 * hop_ms) / 1000.0).round().max(1.0) as usize;
 
     let energy_frames = &analysis.energy_envelope.frames;
 
@@ -336,10 +340,8 @@ pub fn source_filter_track_from_acoustic_full(
     let sample_rate = analysis.sample_rate;
     let hop_ms = analysis.formant_tracks.hop_ms;
     let window_ms = analysis.formant_tracks.window_ms;
-    let window_samples =
-        ((sample_rate as f32 * window_ms) / 1000.0).round().max(1.0) as usize;
-    let hop_samples =
-        ((sample_rate as f32 * hop_ms) / 1000.0).round().max(1.0) as usize;
+    let window_samples = ((sample_rate as f32 * window_ms) / 1000.0).round().max(1.0) as usize;
+    let hop_samples = ((sample_rate as f32 * hop_ms) / 1000.0).round().max(1.0) as usize;
 
     let energy_frames = &analysis.energy_envelope.frames;
     let spec_level = analysis
@@ -373,60 +375,58 @@ pub fn source_filter_track_from_acoustic_full(
 
             let zcr = compute_zero_crossing_rate(frame_samples);
 
-            let (low_band_db, high_band_db, spectral_flux) =
-                if let Some(level) = spec_level {
-                    let spec_idx = if level.hop_ms >= MIN_HOP_MS {
-                        (formant_frame.frame_start_ms as f32 / level.hop_ms).floor() as usize
+            let (low_band_db, high_band_db, spectral_flux) = if let Some(level) = spec_level {
+                let spec_idx = if level.hop_ms >= MIN_HOP_MS {
+                    (formant_frame.frame_start_ms as f32 / level.hop_ms).floor() as usize
+                } else {
+                    0
+                };
+                let spec_frame = level.frames.get(spec_idx).cloned();
+                let (low, high) = if let Some(ref sf) = spec_frame {
+                    let bin_hz = level.bin_hz;
+                    let low_max = ((LOW_BAND_MAX_HZ / bin_hz).floor() as usize)
+                        .min(sf.len().saturating_sub(1));
+                    let high_min = ((HIGH_BAND_MIN_HZ / bin_hz).floor() as usize)
+                        .min(sf.len().saturating_sub(1));
+                    let high_max = ((HIGH_BAND_MAX_HZ / bin_hz).floor() as usize)
+                        .min(sf.len().saturating_sub(1));
+                    let l = if low_max >= 1 {
+                        sf[1..=low_max].iter().copied().sum::<f32>() / low_max as f32
                     } else {
-                        0
+                        -60.0
                     };
-                    let spec_frame = level.frames.get(spec_idx).cloned();
-                    let (low, high) = if let Some(ref sf) = spec_frame {
-                        let bin_hz = level.bin_hz;
-                        let low_max = ((LOW_BAND_MAX_HZ / bin_hz).floor() as usize)
-                            .min(sf.len().saturating_sub(1));
-                        let high_min = ((HIGH_BAND_MIN_HZ / bin_hz).floor() as usize)
-                            .min(sf.len().saturating_sub(1));
-                        let high_max = ((HIGH_BAND_MAX_HZ / bin_hz).floor() as usize)
-                            .min(sf.len().saturating_sub(1));
-                        let l = if low_max >= 1 {
-                            sf[1..=low_max].iter().copied().sum::<f32>() / low_max as f32
-                        } else {
-                            -60.0
-                        };
-                        let h = if high_min <= high_max {
-                            let count = high_max - high_min + 1;
-                            sf[high_min..=high_max].iter().copied().sum::<f32>()
-                                / count as f32
-                        } else {
-                            -60.0
-                        };
-                        (l, h)
+                    let h = if high_min <= high_max {
+                        let count = high_max - high_min + 1;
+                        sf[high_min..=high_max].iter().copied().sum::<f32>() / count as f32
                     } else {
-                        (-60.0, -60.0)
+                        -60.0
                     };
-                    let flux = if let (Some(cur), Some(prev)) =
-                        (spec_frame.as_deref(), prev_spec.as_deref())
-                    {
-                        if cur.len() == prev.len() && !cur.is_empty() {
-                            let sum: f32 = cur
-                                .iter()
-                                .zip(prev.iter())
-                                .map(|(c, p)| (c - p).abs())
-                                .sum();
-                            (sum / cur.len() as f32).clamp(0.0, 1.0)
-                        } else {
-                            0.0
-                        }
+                    (l, h)
+                } else {
+                    (-60.0, -60.0)
+                };
+                let flux = if let (Some(cur), Some(prev)) =
+                    (spec_frame.as_deref(), prev_spec.as_deref())
+                {
+                    if cur.len() == prev.len() && !cur.is_empty() {
+                        let sum: f32 = cur
+                            .iter()
+                            .zip(prev.iter())
+                            .map(|(c, p)| (c - p).abs())
+                            .sum();
+                        (sum / cur.len() as f32).clamp(0.0, 1.0)
                     } else {
                         0.0
-                    };
-                    prev_spec = spec_frame;
-                    (low, high, flux)
+                    }
                 } else {
-                    prev_spec = None;
-                    (-20.0, -30.0, 0.0)
+                    0.0
                 };
+                prev_spec = spec_frame;
+                (low, high, flux)
+            } else {
+                prev_spec = None;
+                (-20.0, -30.0, 0.0)
+            };
 
             let voicing = build_voicing_estimate(
                 frame_samples,
@@ -686,7 +686,10 @@ mod tests {
         let (track, _) = build_track_from_vowel();
         let avg_conf: f32 =
             track.frames.iter().map(|f| f.confidence).sum::<f32>() / track.frames.len() as f32;
-        assert!(avg_conf > 0.1, "expected non-trivial confidence, got {avg_conf}");
+        assert!(
+            avg_conf > 0.1,
+            "expected non-trivial confidence, got {avg_conf}"
+        );
     }
 
     #[test]
@@ -695,7 +698,10 @@ mod tests {
         let analysis = crate::audio::acoustic::analyze_mono_samples(&samples, SAMPLE_RATE);
         let track = source_filter_track_from_acoustic(&analysis, &samples);
         let ratio = track.voicing_ratio();
-        assert!(ratio < 0.3, "silence voicing ratio should be low, got {ratio}");
+        assert!(
+            ratio < 0.3,
+            "silence voicing ratio should be low, got {ratio}"
+        );
     }
 
     #[test]
@@ -706,7 +712,11 @@ mod tests {
         let avg_frication: f32 = if track.frames.is_empty() {
             0.0
         } else {
-            track.frames.iter().map(|f| f.noise.frication_energy).sum::<f32>()
+            track
+                .frames
+                .iter()
+                .map(|f| f.noise.frication_energy)
+                .sum::<f32>()
                 / track.frames.len() as f32
         };
         let vowel_samples = make_vowel_samples(150.0, DURATION_SAMPLES);

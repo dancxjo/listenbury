@@ -5,7 +5,7 @@ use crate::audio::features::{AcousticFeatureFrame, AcousticFeatureStream};
 use crate::audio::speech_likelihood::SpeechLikelihood;
 use crate::segmentation::nuclei::{NucleusEvidence, VowelNucleusCandidate};
 use crate::segmentation::syllable_regions::SyllableIsland;
-use crate::segmentation::word_regions::{rank_word_region_hypotheses, WordRegionConfig};
+use crate::segmentation::word_regions::{WordRegionConfig, rank_word_region_hypotheses};
 
 const ENERGY_CONFIDENCE_SCALE: f32 = 8.0;
 
@@ -343,12 +343,12 @@ fn silence_confidence(duration_ms: u64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::acoustic::{analyze_mono_samples, EnergySilence};
+    use crate::audio::acoustic::{EnergySilence, analyze_mono_samples};
     use crate::audio::features::build_feature_stream;
-    use crate::audio::speech_likelihood::{build_speech_likelihood_stream, SpeechLikelihoodConfig};
-    use crate::segmentation::nuclei::{detect_nuclei, NucleusDetectionConfig};
+    use crate::audio::speech_likelihood::{SpeechLikelihoodConfig, build_speech_likelihood_stream};
+    use crate::segmentation::nuclei::{NucleusDetectionConfig, detect_nuclei};
     use crate::segmentation::syllable_regions::{
-        extract_syllable_islands, SyllableExpansionConfig,
+        SyllableExpansionConfig, extract_syllable_islands,
     };
     use crate::voice::tract::source_filter_track_from_acoustic_full;
 
@@ -458,15 +458,21 @@ mod tests {
         );
 
         assert!(!hypotheses.is_empty(), "expected ranked hypotheses");
-        assert!(hypotheses
-            .iter()
-            .any(|candidate| candidate.kind == BoundaryKind::SpeechRegion));
-        assert!(hypotheses
-            .iter()
-            .any(|candidate| candidate.kind == BoundaryKind::SyllableIsland));
-        assert!(hypotheses
-            .iter()
-            .any(|candidate| candidate.kind == BoundaryKind::PossibleWordRegion));
+        assert!(
+            hypotheses
+                .iter()
+                .any(|candidate| candidate.kind == BoundaryKind::SpeechRegion)
+        );
+        assert!(
+            hypotheses
+                .iter()
+                .any(|candidate| candidate.kind == BoundaryKind::SyllableIsland)
+        );
+        assert!(
+            hypotheses
+                .iter()
+                .any(|candidate| candidate.kind == BoundaryKind::PossibleWordRegion)
+        );
 
         for pair in hypotheses.windows(2) {
             assert!(

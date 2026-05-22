@@ -233,9 +233,7 @@ pub fn coarticulate(plan: &VocalGesturePlan) -> CoarticulatedPlan {
     let mut duration_ms: Vec<u64> = plan.gestures.iter().map(|g| g.duration_ms).collect();
 
     // ── Pass 1: infer boundary kinds ────────────────────────────────────────
-    let mut boundaries: Vec<BoundaryKind> = (0..n)
-        .map(|i| infer_boundary(plan, i))
-        .collect();
+    let mut boundaries: Vec<BoundaryKind> = (0..n).map(|i| infer_boundary(plan, i)).collect();
     // Last gesture always ends at a hard break (silence / end of phrase).
     if n > 0 {
         boundaries[n - 1] = BoundaryKind::HardBreak;
@@ -247,9 +245,8 @@ pub fn coarticulate(plan: &VocalGesturePlan) -> CoarticulatedPlan {
             && plan.gestures[i].role == PhoneRole::Nucleus
             && plan.gestures[i + 1].role == PhoneRole::Nucleus
         {
-            let donation = LEGATO_TRANSITION_WINDOW_MS.min(
-                duration_ms[i].saturating_sub(MIN_NUCLEUS_DURATION_MS),
-            );
+            let donation = LEGATO_TRANSITION_WINDOW_MS
+                .min(duration_ms[i].saturating_sub(MIN_NUCLEUS_DURATION_MS));
             duration_ms[i] = duration_ms[i].saturating_sub(donation);
         }
     }
@@ -262,12 +259,10 @@ pub fn coarticulate(plan: &VocalGesturePlan) -> CoarticulatedPlan {
                 .rev()
                 .find(|&j| plan.gestures[j].role == PhoneRole::Nucleus)
             {
-                let available =
-                    duration_ms[nucleus_idx].saturating_sub(MIN_NUCLEUS_DURATION_MS);
-                let borrow = ((duration_ms[nucleus_idx] as f64 * CODA_BORROW_RATIO) as u64)
-                    .min(available);
-                duration_ms[nucleus_idx] =
-                    duration_ms[nucleus_idx].saturating_sub(borrow);
+                let available = duration_ms[nucleus_idx].saturating_sub(MIN_NUCLEUS_DURATION_MS);
+                let borrow =
+                    ((duration_ms[nucleus_idx] as f64 * CODA_BORROW_RATIO) as u64).min(available);
+                duration_ms[nucleus_idx] = duration_ms[nucleus_idx].saturating_sub(borrow);
                 // The onset of the coda is moved earlier by `borrow` ms.
                 onset_ms[i] = onset_ms[i].saturating_sub(borrow);
             }
@@ -379,10 +374,7 @@ mod tests {
     #[test]
     fn hard_boundary_leaves_timings_mostly_unchanged() {
         let plan = VocalGesturePlan {
-            gestures: vec![
-                nucleus("a", 0, 200),
-                nucleus("e", 200, 200),
-            ],
+            gestures: vec![nucleus("a", 0, 200), nucleus("e", 200, 200)],
         };
         let result = coarticulate(&plan);
         // Last gesture → hard break, no time donation possible across it.
@@ -413,10 +405,7 @@ mod tests {
     #[test]
     fn legato_vowel_to_vowel_produces_legato_boundary_and_adjusted_timing() {
         let plan = VocalGesturePlan {
-            gestures: vec![
-                nucleus_legato("a", 0, 200),
-                nucleus_legato("e", 200, 200),
-            ],
+            gestures: vec![nucleus_legato("a", 0, 200), nucleus_legato("e", 200, 200)],
         };
         let result = coarticulate(&plan);
         assert_eq!(result.gestures[0].boundary, BoundaryKind::Legato);
@@ -433,10 +422,7 @@ mod tests {
     fn legato_donation_is_clamped_to_min_nucleus_duration() {
         let plan = VocalGesturePlan {
             // Vowel is only 50 ms – barely above MIN_NUCLEUS_DURATION_MS.
-            gestures: vec![
-                nucleus_legato("a", 0, 50),
-                nucleus_legato("e", 50, 200),
-            ],
+            gestures: vec![nucleus_legato("a", 0, 50), nucleus_legato("e", 50, 200)],
         };
         let result = coarticulate(&plan);
         assert_eq!(result.gestures[0].boundary, BoundaryKind::Legato);
@@ -457,7 +443,10 @@ mod tests {
         let result = coarticulate(&plan);
         let s = &result.gestures[0];
         assert!(!s.is_voiced);
-        assert!(!s.pitch_active, "unvoiced /s/ must have pitch_active = false");
+        assert!(
+            !s.pitch_active,
+            "unvoiced /s/ must have pitch_active = false"
+        );
     }
 
     /// Voiced consonants must have `pitch_active = true`.
@@ -494,10 +483,7 @@ mod tests {
     #[test]
     fn coda_consonant_does_not_produce_negative_duration() {
         let plan = VocalGesturePlan {
-            gestures: vec![
-                nucleus("a", 0, 200),
-                coda_consonant("t", 200, 60, false),
-            ],
+            gestures: vec![nucleus("a", 0, 200), coda_consonant("t", 200, 60, false)],
         };
         let result = coarticulate(&plan);
         for g in &result.gestures {
@@ -514,10 +500,7 @@ mod tests {
     #[test]
     fn coda_consonant_preserves_ordering() {
         let plan = VocalGesturePlan {
-            gestures: vec![
-                nucleus("a", 0, 200),
-                coda_consonant("t", 200, 60, false),
-            ],
+            gestures: vec![nucleus("a", 0, 200), coda_consonant("t", 200, 60, false)],
         };
         let result = coarticulate(&plan);
         assert_eq!(result.gestures.len(), 2);

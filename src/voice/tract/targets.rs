@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::linguistic::phonology::{Phone, PhoneString};
-use crate::prosody::syllable::{Syllable, SungSyllable};
+use crate::prosody::syllable::{SungSyllable, Syllable};
 
 // ---------------------------------------------------------------------------
 // Synthesis parameter types
@@ -137,13 +137,7 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
 
     // --- Helpers ------------------------------------------------------------
 
-    fn vowel(
-        ipa: &str,
-        f1: f32,
-        f2: f32,
-        f3: f32,
-        dur_ms: u64,
-    ) -> PhoneAcousticTarget {
+    fn vowel(ipa: &str, f1: f32, f2: f32, f3: f32, dur_ms: u64) -> PhoneAcousticTarget {
         PhoneAcousticTarget {
             ipa: ipa.to_string(),
             voiced: true,
@@ -239,11 +233,7 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
         }
     }
 
-    fn fricative(
-        ipa: &str,
-        voiced: bool,
-        f2_noise_hz: Option<f32>,
-    ) -> PhoneAcousticTarget {
+    fn fricative(ipa: &str, voiced: bool, f2_noise_hz: Option<f32>) -> PhoneAcousticTarget {
         PhoneAcousticTarget {
             ipa: ipa.to_string(),
             voiced,
@@ -297,18 +287,18 @@ pub fn default_english_phone_targets() -> HashMap<String, PhoneAcousticTarget> {
     // --- Vowels (General American targets) ----------------------------------
 
     for t in [
-        vowel("i", 280.0, 2250.0, 2900.0, 90),   // heed
-        vowel("ɪ", 400.0, 1920.0, 2550.0, 80),   // hid
-        vowel("e", 370.0, 2080.0, 2750.0, 90),   // hay (monophthong)
-        vowel("ɛ", 580.0, 1820.0, 2650.0, 85),   // head
-        vowel("æ", 700.0, 1660.0, 2430.0, 100),  // had
-        vowel("ə", 500.0, 1500.0, 2500.0, 60),   // schwa
-        vowel("ʌ", 640.0, 1200.0, 2400.0, 80),   // hud
-        vowel("ɑ", 730.0, 1090.0, 2440.0, 100),  // hot / father
-        vowel("ɔ", 570.0, 840.0, 2410.0, 90),    // saw
-        vowel("o", 360.0, 640.0, 2500.0, 90),    // hoe (monophthong)
-        vowel("ʊ", 440.0, 1020.0, 2240.0, 80),   // hood
-        vowel("u", 310.0, 870.0, 2250.0, 90),    // hoot
+        vowel("i", 280.0, 2250.0, 2900.0, 90),  // heed
+        vowel("ɪ", 400.0, 1920.0, 2550.0, 80),  // hid
+        vowel("e", 370.0, 2080.0, 2750.0, 90),  // hay (monophthong)
+        vowel("ɛ", 580.0, 1820.0, 2650.0, 85),  // head
+        vowel("æ", 700.0, 1660.0, 2430.0, 100), // had
+        vowel("ə", 500.0, 1500.0, 2500.0, 60),  // schwa
+        vowel("ʌ", 640.0, 1200.0, 2400.0, 80),  // hud
+        vowel("ɑ", 730.0, 1090.0, 2440.0, 100), // hot / father
+        vowel("ɔ", 570.0, 840.0, 2410.0, 90),   // saw
+        vowel("o", 360.0, 640.0, 2500.0, 90),   // hoe (monophthong)
+        vowel("ʊ", 440.0, 1020.0, 2240.0, 80),  // hood
+        vowel("u", 310.0, 870.0, 2250.0, 90),   // hoot
     ] {
         map.insert(t.ipa.clone(), t);
     }
@@ -464,10 +454,7 @@ mod tests {
     fn default_table_covers_core_vowels() {
         let table = default_english_phone_targets();
         for ipa in ["i", "ɪ", "ɛ", "æ", "ə", "ʌ", "ɑ", "u"] {
-            assert!(
-                table.contains_key(ipa),
-                "expected table to contain /{ipa}/"
-            );
+            assert!(table.contains_key(ipa), "expected table to contain /{ipa}/");
         }
     }
 
@@ -475,10 +462,7 @@ mod tests {
     fn default_table_covers_core_consonants() {
         let table = default_english_phone_targets();
         for ipa in ["m", "n", "ŋ", "s", "z", "p", "b", "t", "d", "k"] {
-            assert!(
-                table.contains_key(ipa),
-                "expected table to contain /{ipa}/"
-            );
+            assert!(table.contains_key(ipa), "expected table to contain /{ipa}/");
         }
     }
 

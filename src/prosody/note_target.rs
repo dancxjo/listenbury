@@ -347,7 +347,11 @@ mod tests {
         let a4 = MidiNote::new(69).unwrap();
         let a5 = MidiNote::new(81).unwrap();
         let ratio = a5.to_hz() / a4.to_hz();
-        assert!((ratio - 2.0).abs() < 1e-9, "expected ratio 2.0, got {}", ratio);
+        assert!(
+            (ratio - 2.0).abs() < 1e-9,
+            "expected ratio 2.0, got {}",
+            ratio
+        );
     }
 
     #[test]
@@ -355,7 +359,11 @@ mod tests {
         let a4 = MidiNote::new(69).unwrap();
         let a3 = MidiNote::new(57).unwrap();
         let ratio = a4.to_hz() / a3.to_hz();
-        assert!((ratio - 2.0).abs() < 1e-9, "expected ratio 2.0, got {}", ratio);
+        assert!(
+            (ratio - 2.0).abs() < 1e-9,
+            "expected ratio 2.0, got {}",
+            ratio
+        );
     }
 
     #[test]
@@ -369,8 +377,7 @@ mod tests {
 
     #[test]
     fn cents_offset_negative_50_is_quarter_tone_below() {
-        let a4_flat =
-            PitchTarget::with_tuning(MidiNote::new(69).unwrap(), CentsOffset::new(-50.0));
+        let a4_flat = PitchTarget::with_tuning(MidiNote::new(69).unwrap(), CentsOffset::new(-50.0));
         let a4 = PitchTarget::new(MidiNote::new(69).unwrap());
         // Flattened by half a semitone → ratio should be 2^(-50/1200)
         let expected_ratio = 2.0_f64.powf(-50.0 / 1200.0);
@@ -423,7 +430,10 @@ mod tests {
 
     #[test]
     fn velocity_128_is_invalid() {
-        assert!(Velocity::new(128).is_none(), "velocity 128 should be rejected");
+        assert!(
+            Velocity::new(128).is_none(),
+            "velocity 128 should be rejected"
+        );
     }
 
     #[test]

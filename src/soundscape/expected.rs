@@ -157,8 +157,8 @@ fn sample_correlation(expected: &[f32], observed: &[f32]) -> f32 {
 mod tests {
     use crate::audio::AudioFrame;
     use crate::soundscape::{
-        expected::{playback_match_evidence, ExpectedSound, ObservedSound, PlaybackMatchConfig},
         AttributionEvidence, SourceId, TimePoint, TimeRange,
+        expected::{ExpectedSound, ObservedSound, PlaybackMatchConfig, playback_match_evidence},
     };
     use crate::time::ExactTimestamp;
 
