@@ -1,6 +1,9 @@
 use crate::audio::frame::AudioFrame;
 use crate::developer_diagnostics_enabled;
-use crate::speech::recognizer::SpeechRecognizer;
+use crate::speech::recognizer::{
+    SpeechRecognizer, StreamingPartialKind, StreamingRecognition, StreamingRecognizerBackend,
+    StreamingSpeechRecognizer,
+};
 use crate::speech::transcript::{
     TranscriptCandidateEvent, TranscriptCandidateTracker, TranscriptChunk,
 };
@@ -24,6 +27,10 @@ pub struct WhisperSpeechRecognizer {
 }
 
 const DEFAULT_INPUT_SILENCE_PADDING_MS: u64 = 250;
+const WHISPER_ROLLING_WINDOW_BACKEND: StreamingRecognizerBackend = StreamingRecognizerBackend {
+    source: "whisper_rolling_window",
+    partial_kind: StreamingPartialKind::Approximate,
+};
 
 impl WhisperSpeechRecognizer {
     pub fn new(model_path: impl AsRef<std::path::Path>) -> anyhow::Result<Self> {
@@ -118,9 +125,10 @@ impl WhisperSpeechRecognizer {
 
     /// Emits candidate lifecycle events for recognized audio.
     ///
-    /// The current Whisper integration is final-only, so each recognition result maps to
-    /// `CandidateStarted -> CandidateFinalized`. This method is the seam for future
-    /// partial/streaming ASR to emit updates and replacements.
+    /// This Whisper integration approximates streaming ASR by repeatedly re-running
+    /// recognition over rolling audio snapshots and diffing them into candidate lifecycle
+    /// events. Diagnostics should treat the backend as `whisper_rolling_window` with
+    /// `partial_kind=approximate`.
     ///
     /// ⚠️ This method and `poll_chunks` consume the same pending audio.
     /// Callers must treat them as alternative polling APIs and should not call both expecting
@@ -133,26 +141,14 @@ impl WhisperSpeechRecognizer {
         &mut self,
         is_final: bool,
     ) -> anyhow::Result<Vec<TranscriptCandidateEvent>> {
-        let Some(transcript) = self.poll_transcript()? else {
-            return Ok(Vec::new());
-        };
-
-        Ok(self
-            .candidate_tracker
-            .ingest_candidate(transcript.text, None, is_final))
+        Ok(self.poll_streaming(is_final)?.candidate_events)
     }
 
     pub fn poll_timed_transcript_with_finality(
         &mut self,
         is_final: bool,
-    ) -> anyhow::Result<Option<(WhisperTranscript, Vec<TranscriptCandidateEvent>)>> {
-        let Some(transcript) = self.poll_transcript()? else {
-            return Ok(None);
-        };
-        let events =
-            self.candidate_tracker
-                .ingest_candidate(transcript.text.clone(), None, is_final);
-        Ok(Some((transcript, events)))
+    ) -> anyhow::Result<StreamingRecognition> {
+        self.poll_streaming(is_final)
     }
 }
 
@@ -249,14 +245,43 @@ impl SpeechRecognizer for WhisperSpeechRecognizer {
     /// Prefer `poll_candidate_events` for new integrations and use this method as
     /// compatibility sugar until a unified transcript event stream fully replaces chunk polling.
     fn poll_chunks(&mut self) -> anyhow::Result<Vec<TranscriptChunk>> {
-        let Some(transcript) = self.poll_transcript()? else {
+        let output = self.flush()?;
+        if output.text.is_empty() {
             return Ok(Vec::new());
-        };
+        }
 
         Ok(vec![TranscriptChunk {
-            text: transcript.text,
+            text: output.text,
             is_final: true,
         }])
+    }
+}
+
+impl StreamingSpeechRecognizer for WhisperSpeechRecognizer {
+    fn poll_streaming(&mut self, is_final: bool) -> anyhow::Result<StreamingRecognition> {
+        let transcript = self.poll_transcript()?;
+        let (text, words) = transcript
+            .as_ref()
+            .map(|transcript| (transcript.text.clone(), transcript.words.clone()))
+            .unwrap_or_default();
+        let candidate_events = if transcript.is_some() {
+            self.candidate_tracker
+                .ingest_candidate(text.clone(), None, is_final)
+        } else if is_final {
+            self.candidate_tracker.cancel_active()
+        } else {
+            Vec::new()
+        };
+        Ok(StreamingRecognition {
+            text,
+            words,
+            candidate_events,
+            backend: self.backend(),
+        })
+    }
+
+    fn backend(&self) -> StreamingRecognizerBackend {
+        WHISPER_ROLLING_WINDOW_BACKEND
     }
 }
 

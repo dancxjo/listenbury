@@ -30,9 +30,11 @@ use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_pr
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::live_trace::{LiveTraceRecorder, SseBroadcaster};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::speech::recognizer::SpeechRecognizer;
+use listenbury::speech::recognizer::{
+    SpeechRecognizer, StreamingRecognizerBackend, StreamingSpeechRecognizer,
+};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::speech::transcript::TranscriptCandidateEvent;
+use listenbury::speech::transcript::{TranscriptCandidateEvent, TranscriptStabilityState};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::word::{
     TimedWordStream, TranscriptWord, WordStreamId, WordStreamSource,
@@ -73,19 +75,20 @@ const WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS: u64 = 350;
 struct MicTranscribeState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
-    active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
+    active_groups: HashMap<BreathGroupId, ActiveTranscriptGroup>,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
     groups_closed: usize,
     transcripts_emitted: usize,
     recognizer: WhisperSpeechRecognizer,
+    candidate_planner: WebTranscriptSpeculativePlanner,
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct WebTranscribeState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
-    active_groups: HashMap<BreathGroupId, ActiveWebTranscribeGroup>,
+    active_groups: HashMap<BreathGroupId, ActiveTranscriptGroup>,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
     groups_closed: usize,
@@ -105,7 +108,7 @@ struct WebTranscribeState {
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-struct ActiveWebTranscribeGroup {
+struct ActiveTranscriptGroup {
     frames: Vec<AudioFrame>,
     opened_at_ms: u64,
     next_prospective_at_ms: u64,
@@ -120,7 +123,7 @@ struct FinalizedAsrSegment {
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-impl ActiveWebTranscribeGroup {
+impl ActiveTranscriptGroup {
     fn new(opened_at_ms: u64) -> Self {
         Self {
             frames: Vec::new(),
@@ -140,13 +143,7 @@ struct RefinementWorkItem {
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-#[derive(Debug, Clone)]
-struct WebTranscriptStabilityState {
-    candidate_id: listenbury::speech::transcript::TranscriptCandidateId,
-    stable_text: String,
-    unstable_text: String,
-    confidence: Option<f32>,
-}
+type WebTranscriptStabilityState = TranscriptStabilityState;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 #[derive(Debug, Default)]
@@ -169,7 +166,7 @@ impl WebTranscriptSpeculativePlanner {
                 confidence,
             } => {
                 self.active_candidate = Some(*id);
-                Some(WebTranscriptStabilityState::from_parts(
+                Some(TranscriptStabilityState::from_parts(
                     *id,
                     text,
                     *stable_prefix_len,
@@ -188,7 +185,7 @@ impl WebTranscriptSpeculativePlanner {
                 if self.active_candidate == Some(*id) {
                     self.active_candidate = None;
                 }
-                Some(WebTranscriptStabilityState::from_parts(
+                Some(TranscriptStabilityState::from_parts(
                     *id,
                     text,
                     text.len(),
@@ -201,35 +198,6 @@ impl WebTranscriptSpeculativePlanner {
                 }
                 None
             }
-        }
-    }
-}
-
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-impl WebTranscriptStabilityState {
-    fn from_parts(
-        candidate_id: listenbury::speech::transcript::TranscriptCandidateId,
-        text: &str,
-        stable_prefix_len: usize,
-        confidence: Option<f32>,
-    ) -> Self {
-        let split = stable_prefix_len.min(text.len());
-        let split = if text.is_char_boundary(split) {
-            split
-        } else {
-            text.char_indices()
-                .find_map(|(idx, ch)| {
-                    let end = idx + ch.len_utf8();
-                    (end >= split).then_some(end)
-                })
-                .unwrap_or(text.len())
-        };
-        let (stable_text, unstable_text) = text.split_at(split);
-        Self {
-            candidate_id,
-            stable_text: stable_text.to_string(),
-            unstable_text: unstable_text.to_string(),
-            confidence,
         }
     }
 }
@@ -395,6 +363,7 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         groups_closed: 0,
         transcripts_emitted: 0,
         recognizer,
+        candidate_planner: WebTranscriptSpeculativePlanner::default(),
     };
 
     loop {
@@ -456,10 +425,17 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
             state.active_groups.len()
         );
     }
-    for (id, frames) in state.active_groups.drain() {
+    for (id, group) in state.active_groups.drain() {
         state.groups_closed += 1;
         println!("breath-group forced-close id={id:?} reason=shutdown");
-        let text = transcribe_group(&frames, &mut state.recognizer)?.text;
+        let output = transcribe_group(&group.frames, &mut state.recognizer)?;
+        emit_live_candidate_updates(
+            &mut state.candidate_planner,
+            &output,
+            &group.frames,
+            ExactTimestamp::now(),
+        );
+        let text = output.text;
         if text.is_empty() {
             println!("transcript group={} text=<empty>", state.groups_closed);
         } else {
@@ -815,12 +791,32 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
     for event in &events {
         if let HearingEvent::BreathGroupOpened { id } = event {
             println!("breath-group open id={id:?} t_ms={}", state.frame_time_ms);
-            state.active_groups.entry(*id).or_default();
+            state
+                .active_groups
+                .entry(*id)
+                .or_insert_with(|| ActiveTranscriptGroup::new(state.frame_time_ms));
         }
     }
 
+    let frame_end_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+    let mut prospective_groups = Vec::new();
     for group in state.active_groups.values_mut() {
-        group.push(frame.clone());
+        group.frames.push(frame.clone());
+        if frame_end_ms >= group.next_prospective_at_ms {
+            prospective_groups.push(group.frames.clone());
+            group.next_prospective_at_ms =
+                frame_end_ms.saturating_add(WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS);
+        }
+    }
+
+    for frames in prospective_groups {
+        let output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
+        emit_live_candidate_updates(
+            &mut state.candidate_planner,
+            &output,
+            &frames,
+            ExactTimestamp::now(),
+        );
     }
 
     for event in events {
@@ -830,8 +826,15 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
                 "breath-group close id={id:?} t_ms={} reason={reason:?}",
                 state.frame_time_ms.saturating_add(frame_duration_ms)
             );
-            if let Some(group_frames) = state.active_groups.remove(&id) {
-                let text = transcribe_group(&group_frames, &mut state.recognizer)?.text;
+            if let Some(group) = state.active_groups.remove(&id) {
+                let output = transcribe_group(&group.frames, &mut state.recognizer)?;
+                emit_live_candidate_updates(
+                    &mut state.candidate_planner,
+                    &output,
+                    &group.frames,
+                    ExactTimestamp::now(),
+                );
+                let text = output.text;
                 if text.is_empty() {
                     println!("transcript group={} text=<empty>", state.groups_closed);
                 } else {
@@ -852,10 +855,81 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn emit_live_candidate_updates(
+    planner: &mut WebTranscriptSpeculativePlanner,
+    output: &TranscribeGroupOutput,
+    audio_frames: &[AudioFrame],
+    occurred_at: ExactTimestamp,
+) {
+    let latency_ms = candidate_latency_ms(audio_frames, occurred_at);
+    for event in &output.candidate_events {
+        let stability = planner.observe(event);
+        println!(
+            "{}",
+            candidate_console_message(event, stability.as_ref(), output.backend, latency_ms)
+        );
+    }
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn candidate_console_message(
+    event: &TranscriptCandidateEvent,
+    stability: Option<&WebTranscriptStabilityState>,
+    backend: StreamingRecognizerBackend,
+    latency_ms: u64,
+) -> String {
+    match event {
+        TranscriptCandidateEvent::CandidateStarted { id } => format!(
+            "candidate_started id={} source={} partial_kind={} latency_ms={latency_ms}",
+            id.0,
+            backend.source,
+            backend.partial_kind.as_str(),
+        ),
+        TranscriptCandidateEvent::CandidateUpdated { id, .. }
+        | TranscriptCandidateEvent::CandidateFinalized { id, .. } => {
+            if let Some(stability) = stability {
+                format!(
+                    "candidate_state id={} stable={:?} unstable={:?} stable_word_prefix={:?} stable_word_count={} confidence={:?} source={} partial_kind={} latency_ms={latency_ms}",
+                    id.0,
+                    stability.stable_text,
+                    stability.unstable_text,
+                    stability.stable_word_prefix,
+                    stability.stable_word_count,
+                    stability.confidence,
+                    backend.source,
+                    backend.partial_kind.as_str(),
+                )
+            } else {
+                format!(
+                    "candidate_state id={} source={} partial_kind={} latency_ms={latency_ms}",
+                    id.0,
+                    backend.source,
+                    backend.partial_kind.as_str(),
+                )
+            }
+        }
+        TranscriptCandidateEvent::CandidateReplaced { old, new, reason } => format!(
+            "candidate_replaced old={} new={} reason={reason:?} source={} partial_kind={} latency_ms={latency_ms}",
+            old.0,
+            new.0,
+            backend.source,
+            backend.partial_kind.as_str(),
+        ),
+        TranscriptCandidateEvent::CandidateCancelled { id } => format!(
+            "candidate_cancelled id={} source={} partial_kind={} latency_ms={latency_ms}",
+            id.0,
+            backend.source,
+            backend.partial_kind.as_str(),
+        ),
+    }
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 pub(super) struct TranscribeGroupOutput {
     pub(super) text: String,
     pub(super) words: Vec<TranscriptWord>,
     pub(super) candidate_events: Vec<TranscriptCandidateEvent>,
+    pub(super) backend: StreamingRecognizerBackend,
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -878,21 +952,15 @@ pub(super) fn transcribe_group_with_finality(
             text: String::new(),
             words: Vec::new(),
             candidate_events: Vec::new(),
+            backend: recognizer.backend(),
         });
     }
     for frame in &whisper_frames {
         recognizer.push_frame(frame)?;
     }
-    let Some((transcript, candidate_events)) =
-        recognizer.poll_timed_transcript_with_finality(is_final)?
-    else {
-        return Ok(TranscribeGroupOutput {
-            text: String::new(),
-            words: Vec::new(),
-            candidate_events: Vec::new(),
-        });
-    };
-    let text = candidate_events
+    let output = recognizer.poll_timed_transcript_with_finality(is_final)?;
+    let text = output
+        .candidate_events
         .iter()
         .filter_map(|event| match event {
             TranscriptCandidateEvent::CandidateFinalized { text, .. } => Some(text.as_str()),
@@ -902,8 +970,9 @@ pub(super) fn transcribe_group_with_finality(
         .join(" ");
     Ok(TranscribeGroupOutput {
         text: text.trim().to_string(),
-        words: transcript.words,
-        candidate_events,
+        words: output.words,
+        candidate_events: output.candidate_events,
+        backend: output.backend,
     })
 }
 
@@ -1022,7 +1091,7 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
             state
                 .active_groups
                 .entry(*id)
-                .or_insert_with(|| ActiveWebTranscribeGroup::new(state.frame_time_ms));
+                .or_insert_with(|| ActiveTranscriptGroup::new(state.frame_time_ms));
         }
     }
 
@@ -1103,13 +1172,16 @@ fn emit_web_transcribe_output(
     occurred_at: ExactTimestamp,
 ) -> Result<()> {
     let turn = state.live_trace_turn.saturating_add(1);
-    for event in output.candidate_events {
-        let stability = state.candidate_planner.observe(&event);
+    let latency_ms = candidate_latency_ms(audio_frames, occurred_at);
+    for event in &output.candidate_events {
+        let stability = state.candidate_planner.observe(event);
         emit_web_candidate_trace_event(
             &mut state.live_trace,
             turn,
-            &event,
+            event,
             stability.as_ref(),
+            output.backend,
+            latency_ms,
             occurred_at,
         )?;
     }
@@ -1206,6 +1278,8 @@ fn emit_web_candidate_trace_event(
     turn: u64,
     event: &TranscriptCandidateEvent,
     stability: Option<&WebTranscriptStabilityState>,
+    backend: StreamingRecognizerBackend,
+    latency_ms: u64,
     occurred_at: ExactTimestamp,
 ) -> Result<()> {
     let mut candidate_event = trace.event(turn, "transcript_candidate", occurred_at);
@@ -1229,16 +1303,55 @@ fn emit_web_candidate_trace_event(
             format!("candidate_cancelled id={}", id.0)
         }
     });
-    if let Some(stability) = stability {
-        candidate_event.artifact = Some(json!({
-            "candidate_id": stability.candidate_id.0,
-            "stable_text": stability.stable_text,
-            "unstable_text": stability.unstable_text,
-            "confidence": stability.confidence,
-            "source": "fast",
-        }));
-    }
+    candidate_event.artifact = Some(candidate_trace_artifact(stability, backend, latency_ms));
     trace.emit(candidate_event)
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn candidate_trace_artifact(
+    stability: Option<&WebTranscriptStabilityState>,
+    backend: StreamingRecognizerBackend,
+    latency_ms: u64,
+) -> serde_json::Value {
+    let mut artifact = json!({
+        "backend": backend.source,
+        "source": backend.source,
+        "partial_kind": backend.partial_kind.as_str(),
+        "latency_ms": latency_ms,
+    });
+    if let Some(stability) = stability
+        && let Some(object) = artifact.as_object_mut()
+    {
+        object.insert("candidate_id".to_string(), json!(stability.candidate_id.0));
+        object.insert("text".to_string(), json!(stability.text));
+        object.insert(
+            "stable_prefix_len".to_string(),
+            json!(stability.stable_prefix_len),
+        );
+        object.insert("stable_text".to_string(), json!(stability.stable_text));
+        object.insert("unstable_text".to_string(), json!(stability.unstable_text));
+        object.insert(
+            "stable_word_prefix".to_string(),
+            json!(stability.stable_word_prefix),
+        );
+        object.insert(
+            "stable_word_count".to_string(),
+            json!(stability.stable_word_count),
+        );
+        object.insert("confidence".to_string(), json!(stability.confidence));
+    }
+    artifact
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn candidate_latency_ms(audio_frames: &[AudioFrame], occurred_at: ExactTimestamp) -> u64 {
+    let Some(first) = audio_frames.first() else {
+        return 0;
+    };
+    let elapsed_ns = occurred_at
+        .unix_nanos
+        .saturating_sub(first.captured_at.unix_nanos);
+    (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]

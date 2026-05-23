@@ -658,6 +658,8 @@ fn emit_live_asr_candidate_trace_event(
     turn: u64,
     event: &listenbury::speech::transcript::TranscriptCandidateEvent,
     stability: Option<&TranscriptStabilityState>,
+    backend: listenbury::speech::recognizer::StreamingRecognizerBackend,
+    latency_ms: u64,
     occurred_at: ExactTimestamp,
 ) -> Result<()> {
     let mut candidate_event = trace.event(turn, "transcript_candidate", occurred_at);
@@ -687,14 +689,34 @@ fn emit_live_asr_candidate_trace_event(
             format!("candidate_cancelled id={}", id.0)
         }
     });
-    if let Some(stability) = stability {
-        candidate_event.artifact = Some(json!({
-            "candidate_id": stability.candidate_id.0,
-            "stable_text": stability.stable_text,
-            "unstable_text": stability.unstable_text,
-            "confidence": stability.confidence,
-        }));
+    let mut artifact = json!({
+        "backend": backend.source,
+        "source": backend.source,
+        "partial_kind": backend.partial_kind.as_str(),
+        "latency_ms": latency_ms,
+    });
+    if let Some(stability) = stability
+        && let Some(object) = artifact.as_object_mut()
+    {
+        object.insert("candidate_id".to_string(), json!(stability.candidate_id.0));
+        object.insert("text".to_string(), json!(stability.text));
+        object.insert(
+            "stable_prefix_len".to_string(),
+            json!(stability.stable_prefix_len),
+        );
+        object.insert("stable_text".to_string(), json!(stability.stable_text));
+        object.insert("unstable_text".to_string(), json!(stability.unstable_text));
+        object.insert(
+            "stable_word_prefix".to_string(),
+            json!(stability.stable_word_prefix),
+        );
+        object.insert(
+            "stable_word_count".to_string(),
+            json!(stability.stable_word_count),
+        );
+        object.insert("confidence".to_string(), json!(stability.confidence));
     }
+    candidate_event.artifact = Some(artifact);
     trace.emit(candidate_event)
 }
 
@@ -2546,6 +2568,8 @@ fn append_pending_live_events(
             ContinueEarEvent::TranscriptCandidate {
                 event,
                 stability,
+                backend,
+                latency_ms,
                 occurred_at,
             } => {
                 eprintln!("[ear] {}", ear_event.to_message());
@@ -2554,6 +2578,8 @@ fn append_pending_live_events(
                     live_trace_turn.saturating_add(1),
                     event,
                     stability.as_ref(),
+                    *backend,
+                    *latency_ms,
                     *occurred_at,
                 )?;
             }
@@ -3695,12 +3721,26 @@ impl ContinueEar {
                         ) {
                             Ok(output) => {
                                 let observed_at = ExactTimestamp::now();
-                                for event in output.candidate_events {
+                                let latency_ms = work
+                                    .frames
+                                    .first()
+                                    .map(|frame| {
+                                        let elapsed_ns = observed_at
+                                            .unix_nanos
+                                            .saturating_sub(frame.captured_at.unix_nanos);
+                                        (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
+                                    })
+                                    .unwrap_or_default();
+                                let backend = output.backend;
+                                let candidate_events = output.candidate_events.clone();
+                                for event in candidate_events {
                                     let stability = speculative_planner.observe(&event);
                                     if event_tx_for_asr
                                         .send(ContinueEarEvent::TranscriptCandidate {
                                             event,
                                             stability,
+                                            backend,
+                                            latency_ms,
                                             occurred_at: observed_at,
                                         })
                                         .is_err()
@@ -5993,6 +6033,11 @@ mod tests {
                 },
             },
             stability: None,
+            backend: listenbury::speech::recognizer::StreamingRecognizerBackend {
+                source: "whisper_rolling_window",
+                partial_kind: listenbury::speech::recognizer::StreamingPartialKind::Approximate,
+            },
+            latency_ms: 120,
             occurred_at: ExactTimestamp { unix_nanos: 42 },
         };
 

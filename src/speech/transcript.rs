@@ -41,6 +41,18 @@ pub enum TranscriptCandidateEvent {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscriptStabilityState {
+    pub candidate_id: TranscriptCandidateId,
+    pub text: String,
+    pub stable_prefix_len: usize,
+    pub stable_text: String,
+    pub unstable_text: String,
+    pub stable_word_prefix: Option<String>,
+    pub stable_word_count: usize,
+    pub confidence: Option<f32>,
+}
+
 #[derive(Debug, Default)]
 pub struct TranscriptCandidateTracker {
     next_id: u64,
@@ -75,7 +87,11 @@ impl TranscriptCandidateTracker {
     ) -> Vec<TranscriptCandidateEvent> {
         let text = text.into();
         if text.is_empty() {
-            return Vec::new();
+            return if is_final {
+                self.cancel_active()
+            } else {
+                Vec::new()
+            };
         }
 
         let mut events = Vec::new();
@@ -182,6 +198,13 @@ impl TranscriptCandidateTracker {
         events
     }
 
+    pub fn cancel_active(&mut self) -> Vec<TranscriptCandidateEvent> {
+        let Some(active) = self.active.take() else {
+            return Vec::new();
+        };
+        vec![TranscriptCandidateEvent::CandidateCancelled { id: active.id }]
+    }
+
     fn next_id(&mut self) -> TranscriptCandidateId {
         // IDs intentionally start at 1.
         self.next_id = self
@@ -189,6 +212,52 @@ impl TranscriptCandidateTracker {
             .checked_add(1)
             .expect("transcript candidate id space exhausted");
         TranscriptCandidateId(self.next_id)
+    }
+}
+
+impl TranscriptStabilityState {
+    pub fn from_parts(
+        candidate_id: TranscriptCandidateId,
+        text: &str,
+        stable_prefix_len: usize,
+        confidence: Option<f32>,
+    ) -> Self {
+        let split = stable_prefix_len.min(text.len());
+        let split = if text.is_char_boundary(split) {
+            split
+        } else {
+            text.char_indices()
+                .map(|(idx, _)| idx)
+                .take_while(|idx| *idx < split)
+                .last()
+                .unwrap_or_default()
+        };
+        let (stable_text, unstable_text) = text.split_at(split);
+        let stable_word_split = if stable_text
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+        {
+            stable_text.trim_end().len()
+        } else {
+            stable_text
+                .char_indices()
+                .rev()
+                .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx + ch.len_utf8()))
+                .unwrap_or_default()
+        };
+        let stable_word_prefix = stable_text[..stable_word_split].trim_end();
+        Self {
+            candidate_id,
+            text: text.to_string(),
+            stable_prefix_len: split,
+            stable_text: stable_text.to_string(),
+            unstable_text: unstable_text.to_string(),
+            stable_word_prefix: (!stable_word_prefix.is_empty())
+                .then(|| stable_word_prefix.to_string()),
+            stable_word_count: stable_word_prefix.split_whitespace().count(),
+            confidence,
+        }
     }
 }
 
@@ -325,5 +394,52 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn final_empty_update_cancels_active_candidate() {
+        let mut tracker = TranscriptCandidateTracker::new();
+        let _ = tracker.ingest_candidate("can you tell", Some(0.4), false);
+
+        let events = tracker.ingest_candidate("", None, true);
+        assert_eq!(
+            events,
+            vec![TranscriptCandidateEvent::CandidateCancelled {
+                id: TranscriptCandidateId(1),
+            }]
+        );
+        assert!(tracker.cancel_active().is_empty());
+    }
+
+    #[test]
+    fn partial_candidate_can_finalize_without_replacement() {
+        let mut tracker = TranscriptCandidateTracker::new();
+        let _ = tracker.ingest_candidate("can you tell", Some(0.4), false);
+
+        let events = tracker.ingest_candidate("can you tell", Some(0.9), true);
+        assert_eq!(
+            events,
+            vec![TranscriptCandidateEvent::CandidateFinalized {
+                id: TranscriptCandidateId(1),
+                text: "can you tell".to_string(),
+                confidence: Some(0.9),
+            }]
+        );
+    }
+
+    #[test]
+    fn stability_state_tracks_whole_word_prefix_separately_from_character_prefix() {
+        let state = TranscriptStabilityState::from_parts(
+            TranscriptCandidateId(7),
+            "hello wor",
+            "hello wor".len(),
+            Some(0.6),
+        );
+
+        assert_eq!(state.stable_text, "hello wor");
+        assert_eq!(state.stable_word_prefix.as_deref(), Some("hello"));
+        assert_eq!(state.stable_word_count, 1);
+        assert_eq!(state.unstable_text, "");
+        assert_eq!(state.confidence, Some(0.6));
     }
 }

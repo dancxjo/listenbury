@@ -103,6 +103,10 @@ pub use speech::prosody_timing::{
     ProsodyTimingPlan, forced_alignment_from_json, plan_prosody_timing, praat_analysis_from_json,
     prosody_plan_to_piper_timing, prosody_plan_to_ssml, run_external_alignment, run_praat_analysis,
 };
+pub use speech::recognizer::{
+    SpeechRecognizer, StreamingPartialKind, StreamingRecognition, StreamingRecognizerBackend,
+    StreamingSpeechRecognizer,
+};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
