@@ -22,6 +22,10 @@ pub mod voice_count;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::{span::SpanId, time::ExactTimestamp};
+
+const PETE_KNOWN_VOICE_LABEL: &str = "PETE";
+
 pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
 };
@@ -85,6 +89,21 @@ impl Default for VoiceId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VoiceEnrollmentSampleId(pub Uuid);
+
+impl VoiceEnrollmentSampleId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for VoiceEnrollmentSampleId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Soundscape {
     pub id: SoundscapeId,
@@ -97,6 +116,84 @@ pub struct Voice {
     pub label: VoiceLabel,
     pub kind: VoiceKind,
     pub signatures: Vec<VoiceSignatureId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownVoice {
+    pub id: VoiceId,
+    pub label: String,
+    pub kind: VoiceKind,
+    pub enrollment_samples: Vec<VoiceEnrollmentSampleId>,
+    pub created_at: ExactTimestamp,
+    pub notes: Option<String>,
+}
+
+impl KnownVoice {
+    pub fn pete(created_at: ExactTimestamp) -> Self {
+        Self {
+            id: VoiceId::new(),
+            label: PETE_KNOWN_VOICE_LABEL.to_string(),
+            kind: VoiceKind::Pete,
+            enrollment_samples: Vec::new(),
+            created_at,
+            notes: Some("Known self-voice identity".to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnrollmentSource {
+    ManualLabel,
+    GeneratedTts,
+    ExplicitEnrollmentCommand,
+    ImportedFixture,
+    ClusteringPromotion,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnrollmentQuality {
+    Low,
+    Medium,
+    High,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddingRef {
+    pub backend: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceEnrollmentSample {
+    pub id: VoiceEnrollmentSampleId,
+    pub voice_id: VoiceId,
+    pub audio_span_id: SpanId,
+    pub source: EnrollmentSource,
+    pub quality: EnrollmentQuality,
+    pub embedding_ref: Option<EmbeddingRef>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownVoiceRegistry {
+    pub voices: Vec<KnownVoice>,
+    pub enrollment_samples: Vec<VoiceEnrollmentSample>,
+}
+
+impl KnownVoiceRegistry {
+    pub fn ensure_pete_voice(&mut self, created_at: ExactTimestamp) -> VoiceId {
+        if let Some(existing) = self
+            .voices
+            .iter()
+            .find(|voice| voice.kind == VoiceKind::Pete)
+        {
+            return existing.id;
+        }
+        let pete = KnownVoice::pete(created_at);
+        let id = pete.id;
+        self.voices.push(pete);
+        id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,8 +232,75 @@ pub enum VoiceKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VoiceAttribution {
     pub voice_id: VoiceId,
+    #[serde(default)]
+    pub span_id: Option<SpanId>,
     pub confidence: f32,
-    pub role: VoiceRoleInSpan,
+    #[serde(default)]
+    pub source: VoiceAttributionSource,
+    #[serde(default)]
+    pub alternatives: Vec<VoiceAttributionAlternative>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceAttributionAlternative {
+    pub voice_id: VoiceId,
+    pub confidence: f32,
+    pub source: VoiceAttributionSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VoiceAttributionSource {
+    Unknown,
+    ManualLabel,
+    EnrollmentMatch,
+    GeneratedTts,
+    Clustering,
+    Heuristic,
+    MockMatcher,
+}
+
+impl Default for VoiceAttributionSource {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+pub trait VoiceMatcher {
+    fn attribute(
+        &self,
+        span_id: SpanId,
+        signature_ids: &[VoiceSignatureId],
+        registry: &KnownVoiceRegistry,
+    ) -> Vec<VoiceAttribution>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MockVoiceMatcher;
+
+impl VoiceMatcher for MockVoiceMatcher {
+    fn attribute(
+        &self,
+        span_id: SpanId,
+        _signature_ids: &[VoiceSignatureId],
+        registry: &KnownVoiceRegistry,
+    ) -> Vec<VoiceAttribution> {
+        // Intentional seam: this mock ignores `signature_ids` and emits one
+        // deterministic attribution so callers can exercise
+        // registry/attribution plumbing before a real matcher is wired. A real
+        // matcher should validate signature compatibility before attribution.
+        registry
+            .voices
+            .first()
+            .map(|voice| VoiceAttribution {
+                voice_id: voice.id,
+                span_id: Some(span_id),
+                confidence: 0.5,
+                source: VoiceAttributionSource::MockMatcher,
+                alternatives: Vec::new(),
+            })
+            .into_iter()
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +316,12 @@ pub enum VoiceRoleInSpan {
 
 #[cfg(test)]
 mod tests {
-    use super::VoiceLabel;
+    use super::{
+        EnrollmentQuality, EnrollmentSource, KnownVoice, KnownVoiceRegistry, VoiceAttribution,
+        VoiceAttributionAlternative, VoiceAttributionSource, VoiceEnrollmentSample,
+        VoiceEnrollmentSampleId, VoiceId, VoiceKind, VoiceLabel,
+    };
+    use crate::{span::SpanId, time::ExactTimestamp};
 
     #[test]
     fn voice_labels_render_screenplay_friendly_cues() {
@@ -163,5 +332,104 @@ mod tests {
         );
         assert_eq!(VoiceLabel::Named("Travis".into()).display_label(), "TRAVIS");
         assert_eq!(VoiceLabel::Background.display_label(), "BACKGROUND VOICE");
+    }
+
+    #[test]
+    fn registry_serializes_with_enrollment_provenance() {
+        let created_at = ExactTimestamp::from_unix_nanos(1_750_000_000_000_000_000);
+        let voice_id = VoiceId::new();
+        let sample_id = VoiceEnrollmentSampleId::new();
+        let span_id = SpanId(1);
+        let registry = KnownVoiceRegistry {
+            voices: vec![KnownVoice {
+                id: voice_id,
+                label: "TRAVIS".to_string(),
+                kind: VoiceKind::Human,
+                enrollment_samples: vec![sample_id],
+                created_at,
+                notes: Some("Manual enrollment from WaveDeck".to_string()),
+            }],
+            enrollment_samples: vec![VoiceEnrollmentSample {
+                id: sample_id,
+                voice_id,
+                audio_span_id: span_id,
+                source: EnrollmentSource::ManualLabel,
+                quality: EnrollmentQuality::High,
+                embedding_ref: None,
+            }],
+        };
+
+        let json = serde_json::to_string(&registry).expect("registry should serialize");
+        let decoded: KnownVoiceRegistry =
+            serde_json::from_str(&json).expect("registry should deserialize");
+        assert_eq!(decoded, registry);
+    }
+
+    #[test]
+    fn supports_zero_or_many_attributions_per_span() {
+        let span_id = SpanId(42);
+        let attributions = vec![
+            VoiceAttribution {
+                voice_id: VoiceId::new(),
+                span_id: Some(span_id),
+                confidence: 0.72,
+                source: VoiceAttributionSource::EnrollmentMatch,
+                alternatives: vec![VoiceAttributionAlternative {
+                    voice_id: VoiceId::new(),
+                    confidence: 0.61,
+                    source: VoiceAttributionSource::Heuristic,
+                }],
+            },
+            VoiceAttribution {
+                voice_id: VoiceId::new(),
+                span_id: Some(span_id),
+                confidence: 0.55,
+                source: VoiceAttributionSource::Clustering,
+                alternatives: vec![],
+            },
+        ];
+
+        let empty: Vec<VoiceAttribution> = Vec::new();
+        assert!(empty.is_empty());
+        assert_eq!(
+            attributions
+                .iter()
+                .filter(|item| item.span_id == Some(span_id))
+                .count(),
+            2
+        );
+        assert_eq!(attributions[0].alternatives.len(), 1);
+    }
+
+    #[test]
+    fn attribution_defaults_keep_legacy_payloads_optional() {
+        let voice_id = VoiceId::new();
+        let payload = serde_json::json!({
+            "voice_id": voice_id,
+            "confidence": 0.64
+        });
+
+        let attribution: VoiceAttribution =
+            serde_json::from_value(payload).expect("legacy payload should deserialize");
+        assert_eq!(attribution.voice_id, voice_id);
+        assert_eq!(attribution.span_id, None);
+        assert_eq!(attribution.source, VoiceAttributionSource::Unknown);
+        assert!(attribution.alternatives.is_empty());
+    }
+
+    #[test]
+    fn pete_is_distinct_known_voice_identity() {
+        let pete = KnownVoice::pete(ExactTimestamp::from_unix_nanos(1_000));
+        let travis = KnownVoice {
+            id: VoiceId::new(),
+            label: "TRAVIS".to_string(),
+            kind: VoiceKind::Human,
+            enrollment_samples: Vec::new(),
+            created_at: ExactTimestamp::from_unix_nanos(2_000),
+            notes: None,
+        };
+
+        assert_eq!(pete.kind, VoiceKind::Pete);
+        assert_ne!(pete.id, travis.id);
     }
 }

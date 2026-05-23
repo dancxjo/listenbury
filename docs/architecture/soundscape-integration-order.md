@@ -27,3 +27,9 @@ These convert into:
 7. `#299` transcript/timeline output
 8. `#300` debug view
 9. `#301` source-separation adapters
+
+## Known-voice registry privacy boundary
+
+Known voice identities, enrollment samples, and embedding references are local-only
+soundscape metadata. The first registry slice is intentionally explicit and does
+not upload voice audio, embeddings, or identity labels to remote services.
