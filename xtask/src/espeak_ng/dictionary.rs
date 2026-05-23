@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use super::provenance::{CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata};
 
+const SUPPORTED_DICTIONARY_FLAGS: &[char] = &['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictionaryEntry {
     pub token: String,
@@ -126,7 +128,11 @@ fn parse_dictionary_file(
         let kind = classify_entry(&token, &pronunciation);
 
         for flag in &flags {
-            if !matches!(flag.as_str(), "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H") {
+            let is_supported = flag
+                .chars()
+                .next()
+                .is_some_and(|value| SUPPORTED_DICTIONARY_FLAGS.contains(&value));
+            if !is_supported {
                 unsupported_flags.push(UnsupportedFlag {
                     token: token.clone(),
                     flag: flag.clone(),

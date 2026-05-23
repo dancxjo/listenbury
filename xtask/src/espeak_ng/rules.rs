@@ -184,10 +184,19 @@ pub fn parse_rules_content(
         .collect();
 
     let replace_rules = if matches!(mode, RulesMode::NativeSubset) {
-        replace_rules
-            .into_iter()
-            .filter(|rule| rule.from.chars().all(|ch| ch.is_ascii_alphabetic()))
-            .collect()
+        let mut filtered = Vec::new();
+        for rule in replace_rules {
+            if rule.from.chars().all(|ch| ch.is_ascii_alphabetic()) {
+                filtered.push(rule);
+            } else {
+                unsupported.push(UnsupportedConstruct {
+                    directive: ".replace".to_string(),
+                    source_line: rule.source_line,
+                    content: format!("filtered-out-native-subset: {} -> {}", rule.from, rule.to),
+                });
+            }
+        }
+        filtered
     } else {
         replace_rules
     };

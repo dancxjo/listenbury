@@ -10,10 +10,8 @@ use sha2::{Digest, Sha256};
 
 use super::{
     RulesMode,
-    dictionary::convert_list,
-    profile::convert_profiles,
     provenance::{current_revision, ensure_cache_exists, load_metadata},
-    rules::{convert_rules, parse_rules_content},
+    rules::parse_rules_content,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,11 +182,4 @@ pub fn inventory(lang: &str, json_out: Option<&Path>) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _compile_use_for_converter_signatures(lang: &str, path: &Path) {
-    let _ = convert_profiles(lang, path);
-    let _ = convert_list(lang, path);
-    let _ = convert_rules(lang, path, RulesMode::Inventory);
 }

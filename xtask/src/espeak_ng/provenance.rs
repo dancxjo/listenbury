@@ -68,10 +68,19 @@ pub fn current_revision(cache: &Path) -> Result<String> {
 pub fn read_source_license(cache: &Path) -> String {
     for candidate in ["COPYING", "LICENSE", "README.md"] {
         let path = cache.join(candidate);
-        if let Ok(content) = fs::read_to_string(path)
-            && let Some(first) = content.lines().find(|line| !line.trim().is_empty())
-        {
-            return first.trim().to_string();
+        if let Ok(content) = fs::read_to_string(path) {
+            let normalized = content.to_ascii_lowercase();
+            if normalized.contains("gnu general public license")
+                && (normalized.contains("either version 3") || normalized.contains("version 3"))
+            {
+                return "GPL-3.0-or-later".to_string();
+            }
+            if normalized.contains("gnu general public license") {
+                return "GPL".to_string();
+            }
+            if let Some(first) = content.lines().find(|line| !line.trim().is_empty()) {
+                return first.trim().to_string();
+            }
         }
     }
     "GPL-3.0-or-later".to_string()
