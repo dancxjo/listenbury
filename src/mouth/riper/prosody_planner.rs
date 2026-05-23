@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+use crate::mouth::riper::evidence::{AnalysisClaim, AnalysisTarget, ClaimKind};
 use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId};
 use crate::mouth::riper::prosody_audit::{
     PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind,
     ProsodyRealizationStatus, Stress,
 };
-use crate::mouth::riper::sentence_analysis::OrthographicEmphasisKind;
+use crate::mouth::riper::sentence_analysis::{
+    OrthographicEmphasisKind, PROSODY_EVIDENCE_CONFIDENCE_MIN, ProsodicRole,
+    ProsodyEnvironmentFacts, SyntacticLinkKind,
+};
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
 use crate::text_stability::stable_prefix_len;
 
@@ -37,6 +41,8 @@ const FOCUS_CONTRAST_MARKERS: &[&str] = &["but", "not", "instead", "rather"];
 const FOCUS_CORRECTIVE_PARTICLES: &[&str] = &["actually", "even", "only", "just"];
 const FUNCTION_WORD_GIVEN_STRENGTH: u8 = 24;
 const FUNCTION_WORD_DEEMPHASIS_STRENGTH: u8 = 42;
+const FOCUS_PITCH_STRENGTH_REDUCTION: u8 = 4;
+const FOCUS_PITCH_STRENGTH_FLOOR: u8 = 68;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
@@ -311,6 +317,7 @@ pub struct FocusAccentDiagnostic {
     pub word_index: usize,
     pub reason: FocusAccentReason,
     pub strength: u8,
+    pub evidence: Vec<String>,
     pub candidate_id: SpeechCandidateId,
     pub status: FocusAccentStatus,
 }
@@ -399,6 +406,16 @@ impl ProsodyList {
             realized_ops.len(),
             advisory_ops.len()
         ));
+        diagnostics.extend(self.focus_diagnostics.iter().filter_map(|focus| {
+            (!focus.evidence.is_empty()).then(|| {
+                format!(
+                    "prominence word={} reason={:?} evidence={}",
+                    focus.word,
+                    focus.reason,
+                    focus.evidence.join(", ")
+                )
+            })
+        }));
 
         RiperProsodyRealization {
             candidate_id: candidate.id,
@@ -999,6 +1016,7 @@ fn default_emphasis_ops(
     let mut ops = Vec::new();
     let mut diagnostics = Vec::new();
     let mut focus_by_word = std::collections::HashMap::<usize, FocusSelection>::new();
+    let syntax_claims = candidate.sentence_analysis.claims();
     let env_facts_by_word = candidate
         .sentence_analysis
         .prosody_environment_facts()
@@ -1013,26 +1031,29 @@ fn default_emphasis_ops(
     for target in &candidate.word_targets {
         let word = target.normalized_text.as_str();
         if let Some(facts) = env_facts_by_word.get(&target.word_index)
-            && !facts.conservative
+            && syntax_confident(Some(facts))
         {
             match facts.prosodic_role {
-                crate::mouth::riper::ProsodicRole::Contrastive => promote_focus(
+                ProsodicRole::Contrastive => promote_focus(
                     &mut focus_by_word,
                     target.word_index,
                     FocusAccentReason::SyntacticContrastive,
                     88,
+                    "syntactic_contrastive",
                 ),
-                crate::mouth::riper::ProsodicRole::Focus => promote_focus(
+                ProsodicRole::Focus => promote_focus(
                     &mut focus_by_word,
                     target.word_index,
                     FocusAccentReason::SyntacticFocus,
                     84,
+                    "syntactic_focus",
                 ),
-                crate::mouth::riper::ProsodicRole::DirectAddress => promote_focus(
+                ProsodicRole::DirectAddress => promote_focus(
                     &mut focus_by_word,
                     target.word_index,
                     FocusAccentReason::SyntacticDirectAddress,
                     70,
+                    "syntactic_direct_address",
                 ),
                 _ => {}
             }
@@ -1043,6 +1064,7 @@ fn default_emphasis_ops(
                 target.word_index,
                 FocusAccentReason::QuotedWord,
                 82,
+                "quoted_word",
             );
         }
         if FOCUS_INTENSIFIERS.contains(&word) {
@@ -1051,6 +1073,7 @@ fn default_emphasis_ops(
                 target.word_index,
                 FocusAccentReason::Intensifier,
                 80,
+                "lexical_marker:intensifier",
             );
         }
         if FOCUS_PRECISION_ADVERBS.contains(&word) {
@@ -1059,6 +1082,7 @@ fn default_emphasis_ops(
                 target.word_index,
                 FocusAccentReason::PrecisionAdverb,
                 78,
+                "lexical_marker:precision_adverb",
             );
         }
         if FOCUS_CONTRAST_MARKERS.contains(&word) {
@@ -1067,6 +1091,7 @@ fn default_emphasis_ops(
                 target.word_index,
                 FocusAccentReason::ContrastMarker,
                 76,
+                "lexical_marker:contrast_marker",
             );
         }
         if FOCUS_CORRECTIVE_PARTICLES.contains(&word) {
@@ -1075,6 +1100,7 @@ fn default_emphasis_ops(
                 target.word_index,
                 FocusAccentReason::CorrectiveParticle,
                 74,
+                "lexical_marker:corrective_particle",
             );
         }
     }
@@ -1091,11 +1117,15 @@ fn default_emphasis_ops(
             final_content.word_index,
             FocusAccentReason::FinalContentWord,
             60,
+            "final_content_word",
         );
     }
 
     for target in &candidate.word_targets {
         let focus = focus_by_word.get(&target.word_index).copied();
+        let syntax_facts = env_facts_by_word.get(&target.word_index);
+        let is_appositive_word = syntax_confident(syntax_facts)
+            && word_has_apposition_claim(&syntax_claims, target.word_index);
         if let Some(focus) = focus {
             ops.push(ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex {
@@ -1103,6 +1133,29 @@ fn default_emphasis_ops(
                 },
                 kind: focus_reason_accent_kind(focus.reason),
                 strength: focus.strength,
+            });
+            ops.push(ProsodyOp::SetPitchShape {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                shape: if matches!(
+                    focus.reason,
+                    FocusAccentReason::ContrastMarker | FocusAccentReason::SyntacticContrastive
+                ) {
+                    ProsodyPitchShape::RiseFall
+                } else {
+                    ProsodyPitchShape::Rise
+                },
+                strength: focus
+                    .strength
+                    .saturating_sub(FOCUS_PITCH_STRENGTH_REDUCTION)
+                    .max(FOCUS_PITCH_STRENGTH_FLOOR),
+            });
+            ops.push(ProsodyOp::AdjustEnergy {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                energy: ProsodyEnergyClass::Higher,
             });
             ops.push(ProsodyOp::ApplyRhetoric {
                 target: ProsodyTarget::WordIndex {
@@ -1116,6 +1169,12 @@ fn default_emphasis_ops(
                 word_index: target.word_index,
                 reason: focus.reason,
                 strength: focus.strength,
+                evidence: focus_diagnostic_evidence(
+                    &syntax_claims,
+                    syntax_facts,
+                    target.word_index,
+                    focus.evidence,
+                ),
                 candidate_id: candidate.id,
                 status: focus_status_from_commitment(candidate.commitment),
             });
@@ -1140,6 +1199,13 @@ fn default_emphasis_ops(
                 op: ProsodyOperation::Deemphasize,
                 strength: FUNCTION_WORD_DEEMPHASIS_STRENGTH,
             });
+        } else if is_appositive_word {
+            ops.push(ProsodyOp::AdjustEnergy {
+                target: ProsodyTarget::WordIndex {
+                    index: target.word_index,
+                },
+                energy: ProsodyEnergyClass::Lower,
+            });
         }
 
         let should_accelerate_function_word_rate = !focus_by_word.contains_key(&target.word_index)
@@ -1148,7 +1214,10 @@ fn default_emphasis_ops(
             target: ProsodyTarget::WordIndex {
                 index: target.word_index,
             },
-            rate: if should_accelerate_function_word_rate
+            rate: if focus.is_some() {
+                ProsodyRateClass::Slower
+            } else if should_accelerate_function_word_rate
+                || is_appositive_word
                 || is_parenthetical(candidate, target.text_range.start, target.text_range.end)
             {
                 ProsodyRateClass::Faster
@@ -1236,6 +1305,7 @@ struct FocusAccentPlan {
 struct FocusSelection {
     reason: FocusAccentReason,
     strength: u8,
+    evidence: &'static str,
 }
 
 fn promote_focus(
@@ -1243,12 +1313,19 @@ fn promote_focus(
     word_index: usize,
     reason: FocusAccentReason,
     strength: u8,
+    evidence: &'static str,
 ) {
-    let entry = focus_by_word
-        .entry(word_index)
-        .or_insert(FocusSelection { reason, strength });
+    let entry = focus_by_word.entry(word_index).or_insert(FocusSelection {
+        reason,
+        strength,
+        evidence,
+    });
     if strength > entry.strength {
-        *entry = FocusSelection { reason, strength };
+        *entry = FocusSelection {
+            reason,
+            strength,
+            evidence,
+        };
     }
 }
 
@@ -1270,6 +1347,90 @@ fn focus_reason_accent_kind(reason: FocusAccentReason) -> ProsodyAccentKind {
         ProsodyAccentKind::Contrastive
     } else {
         ProsodyAccentKind::Focus
+    }
+}
+
+fn claim_targets_word(claim: &AnalysisClaim, word_index: usize) -> bool {
+    match &claim.target {
+        AnalysisTarget::WordIndex(index) => *index == word_index,
+        AnalysisTarget::WordRange(range) => range.contains(&word_index),
+        AnalysisTarget::Boundary {
+            left_word,
+            right_word,
+        } => {
+            left_word.is_some_and(|left| left == word_index)
+                || right_word.is_some_and(|right| right == word_index)
+        }
+        _ => false,
+    }
+}
+
+fn syntax_confident(facts: Option<&ProsodyEnvironmentFacts>) -> bool {
+    facts.is_some_and(|facts| {
+        !facts.conservative && facts.confidence >= PROSODY_EVIDENCE_CONFIDENCE_MIN
+    })
+}
+
+fn focus_diagnostic_evidence(
+    claims: &[AnalysisClaim],
+    facts: Option<&ProsodyEnvironmentFacts>,
+    word_index: usize,
+    label: &str,
+) -> Vec<String> {
+    let mut evidence = vec![label.to_string()];
+    if let Some(facts) = facts {
+        evidence.push(format!("prosodic_role:{:?}", facts.prosodic_role));
+        evidence.push(format!("syntax_confidence:{:.2}", facts.confidence));
+        evidence.extend(
+            facts
+                .syntactic_links
+                .iter()
+                .map(|kind| format!("syntactic_link:{}", syntactic_link_label(*kind))),
+        );
+    }
+    evidence.extend(
+        claims
+            .iter()
+            .filter(|claim| claim_targets_word(claim, word_index))
+            .filter(|claim| {
+                matches!(
+                    claim.kind,
+                    ClaimKind::ProsodicRole
+                        | ClaimKind::ContrastPair
+                        | ClaimKind::VocativeBoundary
+                        | ClaimKind::AppositionBoundary
+                        | ClaimKind::ParentheticalBoundary
+                )
+            })
+            .map(|claim| format!("claim:{:?}:{}", claim.kind, claim.rationale)),
+    );
+    evidence.sort();
+    evidence.dedup();
+    evidence
+}
+
+fn word_has_apposition_claim(claims: &[AnalysisClaim], word_index: usize) -> bool {
+    claims.iter().any(|claim| {
+        claim.kind == ClaimKind::AppositionBoundary && claim_targets_word(claim, word_index)
+    })
+}
+
+fn syntactic_link_label(kind: SyntacticLinkKind) -> &'static str {
+    match kind {
+        SyntacticLinkKind::Subject => "subject",
+        SyntacticLinkKind::Object => "object",
+        SyntacticLinkKind::Complement => "complement",
+        SyntacticLinkKind::InfinitivalMarker => "infinitival_marker",
+        SyntacticLinkKind::Modifier => "modifier",
+        SyntacticLinkKind::Determiner => "determiner",
+        SyntacticLinkKind::Auxiliary => "auxiliary",
+        SyntacticLinkKind::Preposition => "preposition",
+        SyntacticLinkKind::Coordination => "coordination",
+        SyntacticLinkKind::ContrastPair => "contrast_pair",
+        SyntacticLinkKind::NounCompound => "noun_compound",
+        SyntacticLinkKind::Vocative => "vocative",
+        SyntacticLinkKind::Apposition => "apposition",
+        SyntacticLinkKind::Parenthetical => "parenthetical",
     }
 }
 
@@ -1630,6 +1791,37 @@ mod tests {
             }
             _ => None,
         });
+        let machine_rate = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::AdjustRate {
+                target: ProsodyTarget::WordIndex { index },
+                rate,
+            } if *index == 3 => Some(*rate),
+            _ => None,
+        });
+        let the_rate = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::AdjustRate {
+                target: ProsodyTarget::WordIndex { index },
+                rate,
+            } if *index == 2 => Some(*rate),
+            _ => None,
+        });
+        let machine_energy = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::AdjustEnergy {
+                target: ProsodyTarget::WordIndex { index },
+                energy,
+            } if *index == 3 => Some(*energy),
+            _ => None,
+        });
+        let machine_pitch = planned.ops.iter().find_map(|op| match op {
+            ProsodyOp::SetPitchShape {
+                target: ProsodyTarget::WordIndex { index },
+                shape,
+                ..
+            } if *index == 3 => Some(*shape),
+            _ => None,
+        });
+        let machine_diag =
+            focus_diag(&planned.focus_diagnostics, "machine").expect("machine focus");
 
         assert!(
             machine_strength.is_some(),
@@ -1637,6 +1829,72 @@ mod tests {
         );
         assert!(the_strength.is_some(), "determiner should stay weak");
         assert!(machine_strength > the_strength);
+        assert_eq!(machine_rate, Some(ProsodyRateClass::Slower));
+        assert_eq!(the_rate, Some(ProsodyRateClass::Faster));
+        assert_eq!(machine_energy, Some(ProsodyEnergyClass::Higher));
+        assert_eq!(machine_pitch, Some(ProsodyPitchShape::Rise));
+        assert!(
+            machine_diag
+                .evidence
+                .iter()
+                .any(|entry| entry == "syntactic_link:object"),
+            "diagnostics should expose the object link that caused the prominence boost"
+        );
+    }
+
+    #[test]
+    fn low_confidence_attachment_does_not_force_syntactic_focus() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker
+            .ingest_text("I saw the man with the telescope.")
+            .expect("candidate");
+        let latest = latest_candidate(&candidate);
+        let telescope_index = latest
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "telescope")
+            .map(|target| target.word_index)
+            .expect("telescope target");
+        let planned = planner.plan_candidate(latest);
+
+        assert!(
+            focus_diag(&planned.focus_diagnostics, "telescope").is_none(),
+            "ambiguous attachment should stay structural-only until syntax is less conservative"
+        );
+        assert!(!planned.ops.iter().any(|op| matches!(
+            op,
+            ProsodyOp::AdjustRate {
+                target: ProsodyTarget::WordIndex { index },
+                rate: ProsodyRateClass::Slower,
+            } if *index == telescope_index
+        )));
+    }
+
+    #[test]
+    fn contrast_pair_target_uses_syntactic_contrast_evidence() {
+        let mut tracker = PhonemeProsodyCandidateTracker::new(SimpleEnglishG2p::default());
+        let mut planner = BreathGroupProsodyPlanner::new();
+        let candidate = tracker
+            .ingest_text("I said red, not blue.")
+            .expect("candidate");
+        let planned = planner.plan_candidate(latest_candidate(&candidate));
+
+        let red = focus_diag(&planned.focus_diagnostics, "red").expect("red focus");
+        let blue = focus_diag(&planned.focus_diagnostics, "blue").expect("blue focus");
+
+        assert_eq!(red.reason, FocusAccentReason::SyntacticContrastive);
+        assert_eq!(blue.reason, FocusAccentReason::SyntacticContrastive);
+        assert!(
+            red.evidence
+                .iter()
+                .any(|entry| entry == "syntactic_link:contrast_pair")
+        );
+        assert!(
+            blue.evidence
+                .iter()
+                .any(|entry| entry == "syntactic_link:contrast_pair")
+        );
     }
 
     #[test]

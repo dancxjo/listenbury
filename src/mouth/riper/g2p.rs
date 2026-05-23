@@ -19,6 +19,7 @@ use crate::mouth::riper::prosody_audit::{
 use crate::mouth::riper::sentence_analysis::{
     HeuristicSentenceAnalyzer, OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
     ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
+    PROSODY_EVIDENCE_CONFIDENCE_MIN,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -181,6 +182,12 @@ impl PhonemeProsodyCandidate {
     }
 
     pub fn word_prosody_info(&self) -> Vec<WordProsodyInfo> {
+        let env_facts_by_word = self
+            .sentence_analysis
+            .prosody_environment_facts()
+            .into_iter()
+            .map(|facts| (facts.word_index, facts))
+            .collect::<std::collections::HashMap<_, _>>();
         self.word_targets
             .iter()
             .map(|target| {
@@ -205,10 +212,26 @@ impl PhonemeProsodyCandidate {
                         .find(|analysis| analysis.word_index == Some(target.word_index))
                         .map(|analysis| analysis.orthographic_emphasis)
                         .unwrap_or(OrthographicEmphasisKind::None),
-                    prominence_class: if is_default_function_word(&target.normalized_text) {
-                        ProminenceClass::Weak
-                    } else {
-                        ProminenceClass::Content
+                    prominence_class: match env_facts_by_word.get(&target.word_index) {
+                        Some(facts)
+                            if !facts.conservative
+                                && facts.confidence >= PROSODY_EVIDENCE_CONFIDENCE_MIN =>
+                        {
+                            match facts.prosodic_role {
+                                ProsodicRole::Contrastive
+                                | ProsodicRole::Focus
+                                | ProsodicRole::DirectAddress => ProminenceClass::Focused,
+                                ProsodicRole::FunctionWeak => ProminenceClass::Weak,
+                                _ if is_default_function_word(&target.normalized_text) => {
+                                    ProminenceClass::Weak
+                                }
+                                _ => ProminenceClass::Content,
+                            }
+                        }
+                        _ if is_default_function_word(&target.normalized_text) => {
+                            ProminenceClass::Weak
+                        }
+                        _ => ProminenceClass::Content,
                     },
                 }
             })
@@ -2391,7 +2414,18 @@ mod tests {
             .iter()
             .find(|info| info.word_index == 5)
             .expect("because info");
+        let small = infos
+            .iter()
+            .find(|info| {
+                candidate
+                    .word_targets
+                    .iter()
+                    .find(|target| target.word_index == info.word_index)
+                    .is_some_and(|target| target.normalized_text == "small")
+            })
+            .expect("small info");
         assert_eq!(because.prominence_class, ProminenceClass::Weak);
+        assert_eq!(small.prominence_class, ProminenceClass::Focused);
         assert!(
             infos
                 .iter()
