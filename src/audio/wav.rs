@@ -9,16 +9,27 @@ use crate::audio::normalize::{
 };
 use crate::time::ExactTimestamp;
 
+const WAV_EXPORT_REASON: &str = "wav_export";
+
+/// Encoding used when writing WAV payload samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WavSampleEncoding {
+    /// 16-bit signed integer PCM samples.
     PcmI16,
+    /// 32-bit IEEE float samples.
     FloatF32,
 }
 
+/// Export-time WAV conversion options.
+///
+/// `None` in `sample_rate_hz` / `channels` preserves the source format from input frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WavExportOptions {
+    /// Target output sample rate in Hz.
     pub sample_rate_hz: Option<u32>,
+    /// Target output channel count.
     pub channels: Option<u16>,
+    /// Output sample encoding used in the written WAV payload.
     pub sample_encoding: WavSampleEncoding,
 }
 
@@ -246,7 +257,7 @@ pub fn write_wav_bytes_with_report(
         raw_samples.extend_from_slice(&frame.samples);
     }
 
-    let normalized = normalize_interleaved_f32(&raw_samples, source, target, "wav_export")?;
+    let normalized = normalize_interleaved_f32(&raw_samples, source, target, WAV_EXPORT_REASON)?;
     let mut pcm = Vec::<u8>::new();
     let (audio_format_code, bits_per_sample, bytes_per_sample) = match options.sample_encoding {
         WavSampleEncoding::PcmI16 => {
@@ -303,15 +314,6 @@ pub fn write_wav_with_report(
     std::fs::write(path, bytes)
         .with_context(|| format!("failed to create WAV at {}", path.display()))?;
     Ok(report)
-}
-
-pub fn write_wav_with_options(
-    path: &Path,
-    frames: &[AudioFrame],
-    options: WavExportOptions,
-) -> Result<()> {
-    let _ = write_wav_with_report(path, frames, options)?;
-    Ok(())
 }
 
 #[cfg(test)]
