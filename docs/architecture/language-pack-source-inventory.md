@@ -6,6 +6,19 @@ It is deliberately **not** a plan to copy eSpeak-ng's rule model or build an eSp
 
 Current first-pass schema/loader implementation: `src/linguistic/language_pack.rs`.
 
+## eSpeak-ng conversion workflow (`cargo xtask`)
+
+The `xtask` helper provides a repeatable source-analysis and conversion flow:
+
+```text
+cargo xtask espeak-ng fetch
+cargo xtask espeak-ng inventory --lang en
+cargo xtask espeak-ng convert --lang en --out data/language-varieties/en/generated/espeak-ng
+cargo xtask espeak-ng diff --lang en
+```
+
+This workflow is for build/dev conversion only. eSpeak-ng remains source material and provenance input, not Listenbury's runtime ontology.
+
 ## Core principle
 
 ```text

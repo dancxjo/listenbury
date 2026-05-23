@@ -33,3 +33,5 @@ voices
 
 # Neural diphone cache – generated locally, do not commit
 diphone-cache/
+
+.target/
