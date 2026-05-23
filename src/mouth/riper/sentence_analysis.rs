@@ -2633,7 +2633,7 @@ mod tests {
     }
 
     #[test]
-    fn link_grammar_parity_fixture_suite_matches_core_islands() {
+    fn test_core_grammar_islands_parity() {
         for fixture in parity_fixtures() {
             assert!(
                 !fixture.reference.is_empty() && !fixture.license_note.is_empty(),
