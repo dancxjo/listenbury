@@ -446,6 +446,7 @@ pub fn fingerprint_path(path: &Path) -> String {
 }
 
 /// Fingerprint the voice config via its phoneme map size and sample rate.
+#[cfg(feature = "tts-riper")]
 pub fn fingerprint_config(config: &crate::mouth::riper::config::PiperVoiceConfig) -> String {
     let mut hasher = Sha256::new();
     hasher.update(config.sample_rate_hz.to_le_bytes());

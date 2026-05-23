@@ -2,7 +2,9 @@ use crate::cli::ModelsCommand;
 #[cfg(feature = "model-download")]
 use crate::cli::download_progress::DownloadProgress;
 #[cfg(feature = "model-download")]
-use crate::cli::{ModelsFetchCommand, ModelsStatusCommand, ModelsUseCommand, ModelsUseKind};
+use crate::cli::{
+    ModelsFetchCommand, ModelsStatusCommand, ModelsUseCommand, ModelsUseKind, ModelsVerifyCommand,
+};
 use anyhow::Result;
 
 #[cfg(feature = "model-download")]
@@ -11,13 +13,14 @@ use anyhow::Context;
 use inquire::Select;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchOutcome, bundle_present, default_asset_paths, default_assets_status_with_verification,
-    download::AssetIntegrityState,
+    FetchOutcome, bundle_assets, bundle_present, default_asset_paths,
+    default_assets_status_with_verification,
+    download::{AssetIntegrityState, verify_existing_asset},
     fetch_all_assets_with_progress_and_jobs_and_verify,
     fetch_bundle_with_progress_and_jobs_and_verify,
     fetch_selected_assets_with_progress_and_jobs_and_verify, find_bundle,
-    manifest::{MODEL_BUNDLES, ModelBundle, ModelKind},
-    paths::resolve_listenbury_home,
+    manifest::{DEFAULT_MODELS, MODEL_BUNDLES, ModelBundle, ModelKind},
+    paths::{asset_path, resolve_listenbury_home},
     read_model_selection, selected_bundle, write_model_selection,
 };
 #[cfg(feature = "model-download")]
@@ -46,6 +49,7 @@ pub(crate) fn run_models(command: Option<ModelsCommand>) -> Result<()> {
         }
         Some(ModelsCommand::List) => print_models_list(),
         Some(ModelsCommand::Status(command)) => print_status(command),
+        Some(ModelsCommand::Verify(command)) => verify_models(command),
         Some(ModelsCommand::Repair(command)) => repair_models(command),
         Some(ModelsCommand::Use(command)) => use_model(command),
         Some(ModelsCommand::Fetch(command)) => fetch_models(command),
@@ -304,6 +308,49 @@ fn repair_models(command: ModelsFetchCommand) -> Result<()> {
         verify: true,
         ..command
     })
+}
+
+#[cfg(feature = "model-download")]
+fn verify_models(command: ModelsVerifyCommand) -> Result<()> {
+    let home = resolve_listenbury_home()?;
+    let assets: Vec<_> = if let Some(model) = &command.model {
+        let bundle = find_bundle(ModelKind::Llm, model)
+            .or_else(|| find_bundle(ModelKind::Voice, model))
+            .or_else(|| find_bundle(ModelKind::Whisper, model))
+            .with_context(|| format!("unknown model `{model}`; run `listenbury models list`"))?;
+        bundle_assets(bundle)?
+    } else {
+        DEFAULT_MODELS.iter().collect()
+    };
+
+    let mut any_invalid = false;
+    for asset in assets {
+        let path = asset_path(&home, asset);
+        let integrity = verify_existing_asset(&path, asset, true)?;
+        let state = integrity_label(integrity);
+        let checksum_note = match asset.sha256 {
+            Some(_) => String::new(),
+            None => " (no checksum in manifest)".dimmed().to_string(),
+        };
+        println!(
+            "{} {}{}",
+            asset.id.bold(),
+            state,
+            checksum_note
+        );
+        match integrity {
+            AssetIntegrityState::PresentInvalidSize
+            | AssetIntegrityState::PresentInvalidChecksum
+            | AssetIntegrityState::Missing => {
+                any_invalid = true;
+            }
+            _ => {}
+        }
+    }
+    if any_invalid {
+        anyhow::bail!("one or more model assets failed verification");
+    }
+    Ok(())
 }
 
 #[cfg(feature = "model-download")]

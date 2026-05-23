@@ -3,9 +3,21 @@ pub struct ModelAsset {
     pub filename: &'static str,
     pub relative_path: &'static str,
     pub url: &'static str,
+    /// Expected file size in bytes. When set, the fetcher will fail if the
+    /// downloaded file does not match. Leave `None` if the authoritative size
+    /// is not known at compile time.
     pub expected_size_bytes: Option<u64>,
+    /// Hex-encoded SHA-256 checksum of the file as distributed by the upstream
+    /// source. When set, every download is verified against this digest before
+    /// the file is promoted to its final path. Leave `None` only when the
+    /// checksum is genuinely unknown; the integrity status will then be reported
+    /// as `unknown-checksum` rather than silently passing.
     pub sha256: Option<&'static str>,
+    /// SPDX license identifier or short description (e.g. `"MIT"`, `"Apache-2.0"`,
+    /// `"CC-BY-4.0"`, `"proprietary"`).
     pub license: Option<&'static str>,
+    /// Human-readable upstream source description (e.g. a repository URL or
+    /// project name).
     pub source: Option<&'static str>,
 }
 
@@ -33,8 +45,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-tiny",
@@ -43,8 +55,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-base-en",
@@ -53,8 +65,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-base",
@@ -63,8 +75,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-small-en",
@@ -73,8 +85,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-small",
@@ -83,8 +95,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-medium-en",
@@ -93,8 +105,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-medium",
@@ -103,8 +115,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-large-v1",
@@ -113,8 +125,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-large-v2",
@@ -123,8 +135,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-large-v3",
@@ -133,8 +145,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "whisper-large-v3-turbo",
@@ -143,8 +155,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggerganov/whisper.cpp"),
     },
     ModelAsset {
         id: "llama-3-2-3b-instruct-q4-k-m",
@@ -153,8 +165,10 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF/resolve/main/llama-3.2-3b-instruct-q4_k_m.gguf",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("LicenseRef-Llama-3.2"),
+        source: Some(
+            "https://huggingface.co/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF",
+        ),
     },
     ModelAsset {
         id: "gpt-oss-20b-mxfp4",
@@ -163,8 +177,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/ggml-org/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-mxfp4.gguf",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/ggml-org/gpt-oss-20b-GGUF"),
     },
     ModelAsset {
         id: "gemma-3-4b-it-q4-k-m",
@@ -173,8 +187,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("LicenseRef-Gemma"),
+        source: Some("https://huggingface.co/unsloth/gemma-3-4b-it-GGUF"),
     },
     ModelAsset {
         id: "gemma-4-e4b-it-q4-k-m",
@@ -183,8 +197,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("LicenseRef-Gemma"),
+        source: Some("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF"),
     },
     ModelAsset {
         id: "piper-ryan-medium",
@@ -193,8 +207,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-ryan-medium-config",
@@ -203,8 +217,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-amy-medium",
@@ -213,8 +227,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-amy-medium-config",
@@ -223,8 +237,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-hfc-male-medium",
@@ -233,8 +247,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-hfc-male-medium-config",
@@ -243,8 +257,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-hfc-female-medium",
@@ -253,8 +267,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-hfc-female-medium-config",
@@ -263,8 +277,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-john-medium",
@@ -273,8 +287,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-john-medium-config",
@@ -283,8 +297,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/john/medium/en_US-john-medium.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-ljspeech-high",
@@ -293,8 +307,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC0-1.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-ljspeech-high-config",
@@ -303,8 +317,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ljspeech/high/en_US-ljspeech-high.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC0-1.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-libritts-high",
@@ -313,8 +327,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
     ModelAsset {
         id: "piper-libritts-high-config",
@@ -323,8 +337,8 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/libritts/high/en_US-libritts-high.onnx.json",
         expected_size_bytes: None,
         sha256: None,
-        license: None,
-        source: None,
+        license: Some("CC-BY-4.0"),
+        source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
 ];
 
