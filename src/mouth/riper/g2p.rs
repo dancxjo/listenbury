@@ -33,7 +33,9 @@ const PHRASE_BREAK_SYMBOL: &str = "|";
 const BREATH_BREAK_WORD_INTERVAL: usize = 9;
 const BREATH_BREAK_MIN_WORDS_AFTER: usize = 4;
 const BREATH_BREAK_SEARCH_RADIUS: usize = 3;
+/// Minimum boundary-claim confidence required to override vocative/appositive span suppression.
 const BREATH_BOUNDARY_CONFIDENCE_MIN: f32 = 0.75;
+/// Minimum boundary-claim confidence required to outrank distance-only boundary selection.
 const BREATH_BOUNDARY_PRIORITY_MIN: f32 = 0.82;
 
 pub trait GraphemeToPhoneme {
@@ -973,12 +975,16 @@ fn best_syntax_guided_breath_boundary(
                 .as_ref()
                 .is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_PRIORITY_MIN),
         );
-        let key = (
+        let key = BoundarySortKey {
+            // 0 = strong, high-confidence boundary evidence; 1 = regular heuristic.
             priority,
+            // Prefer candidates nearest the periodic target.
             distance,
-            breath_boundary_penalty(boundary, sentence_analysis, boundary_claim.as_ref()),
-            usize::from(boundary < target),
-        );
+            // Lower penalty means friendlier syntax/function-word context.
+            penalty: breath_boundary_penalty(boundary, sentence_analysis, boundary_claim.as_ref()),
+            // Prefer target-aligned or forward movement over drifting backward.
+            backward_bias: usize::from(boundary < target),
+        };
 
         match &best {
             Some((_, best_key, _)) if key >= *best_key => {}
@@ -1007,7 +1013,13 @@ fn best_syntax_guided_breath_boundary(
     }
 }
 
-type BoundarySortKey = (usize, usize, usize, usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BoundarySortKey {
+    priority: usize,
+    distance: usize,
+    penalty: usize,
+    backward_bias: usize,
+}
 
 #[derive(Debug, Clone)]
 struct BoundaryClaim {
@@ -1701,6 +1713,12 @@ mod tests {
             }),
             "diagnostics should capture tight-link suppression evidence"
         );
+        if choice.boundary.is_some() {
+            assert!(
+                !choice.evidence.is_empty(),
+                "placed boundaries should carry explanatory evidence"
+            );
+        }
     }
 
     #[test]
