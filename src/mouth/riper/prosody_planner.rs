@@ -7,7 +7,8 @@ use crate::mouth::riper::prosody_audit::{
     ProsodyRealizationStatus, Stress,
 };
 use crate::mouth::riper::sentence_analysis::{
-    OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
+    OrthographicEmphasisKind, PROSODY_EVIDENCE_CONFIDENCE_MIN, ProsodicRole,
+    ProsodyEnvironmentFacts,
 };
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
 use crate::text_stability::stable_prefix_len;
@@ -40,6 +41,8 @@ const FOCUS_CONTRAST_MARKERS: &[&str] = &["but", "not", "instead", "rather"];
 const FOCUS_CORRECTIVE_PARTICLES: &[&str] = &["actually", "even", "only", "just"];
 const FUNCTION_WORD_GIVEN_STRENGTH: u8 = 24;
 const FUNCTION_WORD_DEEMPHASIS_STRENGTH: u8 = 42;
+const FOCUS_PITCH_STRENGTH_REDUCTION: u8 = 4;
+const FOCUS_PITCH_STRENGTH_FLOOR: u8 = 68;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BreathGroupId(pub u64);
@@ -1143,7 +1146,10 @@ fn default_emphasis_ops(
                 } else {
                     ProsodyPitchShape::Rise
                 },
-                strength: focus.strength.saturating_sub(4).max(68),
+                strength: focus
+                    .strength
+                    .saturating_sub(FOCUS_PITCH_STRENGTH_REDUCTION)
+                    .max(FOCUS_PITCH_STRENGTH_FLOOR),
             });
             ops.push(ProsodyOp::AdjustEnergy {
                 target: ProsodyTarget::WordIndex {
@@ -1360,7 +1366,9 @@ fn claim_targets_word(claim: &AnalysisClaim, word_index: usize) -> bool {
 }
 
 fn syntax_confident(facts: Option<&ProsodyEnvironmentFacts>) -> bool {
-    facts.is_some_and(|facts| !facts.conservative && facts.confidence >= 0.75)
+    facts.is_some_and(|facts| {
+        !facts.conservative && facts.confidence >= PROSODY_EVIDENCE_CONFIDENCE_MIN
+    })
 }
 
 fn focus_diagnostic_evidence(

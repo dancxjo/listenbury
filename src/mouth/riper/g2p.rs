@@ -18,8 +18,9 @@ use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
-    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
+    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, PROSODY_EVIDENCE_CONFIDENCE_MIN,
+    ProsodicRole, ProsodyEnvironmentFacts, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+    SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -212,7 +213,10 @@ impl PhonemeProsodyCandidate {
                         .map(|analysis| analysis.orthographic_emphasis)
                         .unwrap_or(OrthographicEmphasisKind::None),
                     prominence_class: match env_facts_by_word.get(&target.word_index) {
-                        Some(facts) if !facts.conservative && facts.confidence >= 0.75 => {
+                        Some(facts)
+                            if !facts.conservative
+                                && facts.confidence >= PROSODY_EVIDENCE_CONFIDENCE_MIN =>
+                        {
                             match facts.prosodic_role {
                                 ProsodicRole::Contrastive
                                 | ProsodicRole::Focus

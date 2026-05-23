@@ -37,6 +37,7 @@ const AMBIGUOUS_VERB_ATTACHMENT_CONFIDENCE: f32 = 0.44;
 const LOW_CONFIDENCE_PARSE_RANK_DELTA: f32 = 0.1;
 const LOW_CONFIDENCE_PARSE_RANK_MIN: f32 = 0.7;
 const TO_RULE_CONTEXT_CONFIDENCE_MIN: f32 = 0.65;
+pub const PROSODY_EVIDENCE_CONFIDENCE_MIN: f32 = 0.75;
 
 const COMMON_LINK_ADJECTIVES: &[&str] = &[
     "small", "big", "good", "bad", "bright", "dark", "quick", "slow", "new", "old", "young",
