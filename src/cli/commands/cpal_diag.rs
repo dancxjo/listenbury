@@ -266,6 +266,10 @@ impl PreparedAudioPlayback {
         playback_duration(self.sample_count(), self.sample_rate_hz, self.channels)
     }
 
+    pub(crate) fn conversion_report(&self) -> &AudioConversionReport {
+        &self.conversion_report
+    }
+
     pub(crate) fn as_audio_frame(&self, captured_at: ExactTimestamp) -> AudioFrame {
         AudioFrame {
             captured_at,
@@ -583,6 +587,13 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
         playback.channels,
         audio_duration.as_secs_f64(),
     );
+    let report = playback.conversion_report();
+    if !report.operations.is_empty() || !report.warnings.is_empty() {
+        println!(
+            "Playback conversion: {:?} -> {:?}, ops={:?}, warnings={:?}",
+            report.source, report.target, report.operations, report.warnings
+        );
+    }
 
     Ok(())
 }

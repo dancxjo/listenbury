@@ -45,7 +45,7 @@ fn read_wav_as_mono_16khz_frames(
                 source: AudioFormat::asr_whisper_input(),
                 target: AudioFormat::asr_whisper_input(),
                 operations: Vec::new(),
-                warnings: vec!["wav input contained no frames".to_string()],
+                warnings: vec!["WAV input contained no frames".to_string()],
                 reason: "whisper_input".to_string(),
             },
         ));

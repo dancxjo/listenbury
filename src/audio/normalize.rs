@@ -246,6 +246,7 @@ pub fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32
 
 pub fn normalize_signed_sample(sample: i64, bits_per_sample: u16) -> f32 {
     if bits_per_sample == 0 {
+        // A zero-bit PCM declaration is invalid; return silence to keep callers total.
         return 0.0;
     }
     let positive_scale = ((1_i64 << (bits_per_sample - 1)) - 1) as f32;
