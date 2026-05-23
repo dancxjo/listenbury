@@ -7,11 +7,12 @@ use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
-    phoneme_from_arpabet, realize_sequence, PhonemeSchema, RealizationConfig,
-    Stress as PhonologyStress,
+    PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
+    realize_sequence,
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
+use crate::mouth::riper::LexicalProsodyFlag;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
@@ -24,8 +25,7 @@ use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
-use crate::mouth::riper::LexicalProsodyFlag;
-use crate::mouth::riper::{morphophonology, AnalysisSource, PhonologicalStress};
+use crate::mouth::riper::{AnalysisSource, PhonologicalStress, morphophonology};
 use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
@@ -181,6 +181,12 @@ impl PhonemeProsodyCandidate {
     }
 
     pub fn word_prosody_info(&self) -> Vec<WordProsodyInfo> {
+        let env_facts_by_word = self
+            .sentence_analysis
+            .prosody_environment_facts()
+            .into_iter()
+            .map(|facts| (facts.word_index, facts))
+            .collect::<std::collections::HashMap<_, _>>();
         self.word_targets
             .iter()
             .map(|target| {
@@ -205,10 +211,23 @@ impl PhonemeProsodyCandidate {
                         .find(|analysis| analysis.word_index == Some(target.word_index))
                         .map(|analysis| analysis.orthographic_emphasis)
                         .unwrap_or(OrthographicEmphasisKind::None),
-                    prominence_class: if is_default_function_word(&target.normalized_text) {
-                        ProminenceClass::Weak
-                    } else {
-                        ProminenceClass::Content
+                    prominence_class: match env_facts_by_word.get(&target.word_index) {
+                        Some(facts) if !facts.conservative && facts.confidence >= 0.75 => {
+                            match facts.prosodic_role {
+                                ProsodicRole::Contrastive
+                                | ProsodicRole::Focus
+                                | ProsodicRole::DirectAddress => ProminenceClass::Focused,
+                                ProsodicRole::FunctionWeak => ProminenceClass::Weak,
+                                _ if is_default_function_word(&target.normalized_text) => {
+                                    ProminenceClass::Weak
+                                }
+                                _ => ProminenceClass::Content,
+                            }
+                        }
+                        _ if is_default_function_word(&target.normalized_text) => {
+                            ProminenceClass::Weak
+                        }
+                        _ => ProminenceClass::Content,
                     },
                 }
             })
@@ -1790,7 +1809,9 @@ mod tests {
         );
         assert_eq!(
             symbols_for_word(&unit, "unpunctuated"),
-            vec!["AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"],
+            vec![
+                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"
+            ],
             "expected unpunctuated to flap /t/ before the unstressed -ed vowel"
         );
         assert_eq!(
@@ -2391,7 +2412,18 @@ mod tests {
             .iter()
             .find(|info| info.word_index == 5)
             .expect("because info");
+        let small = infos
+            .iter()
+            .find(|info| {
+                candidate
+                    .word_targets
+                    .iter()
+                    .find(|target| target.word_index == info.word_index)
+                    .is_some_and(|target| target.normalized_text == "small")
+            })
+            .expect("small info");
         assert_eq!(because.prominence_class, ProminenceClass::Weak);
+        assert_eq!(small.prominence_class, ProminenceClass::Focused);
         assert!(
             infos
                 .iter()
