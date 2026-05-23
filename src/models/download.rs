@@ -770,6 +770,42 @@ mod tests {
         server.join().expect("server");
     }
 
+    #[test]
+    fn verify_reports_missing_when_file_absent() {
+        let home = temp_dir("models-verify-missing");
+        let asset_path = home.join("models/test/model.bin");
+        // Deliberately do NOT create the file.
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            10,
+            Some("ccdbfb9993be88c536b0b7cd2abe60eda83c7ce1ad530c6a2ada81510ff1548c"),
+        );
+        let integrity = verify_existing_asset(&asset_path, &asset, true).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::Missing);
+    }
+
+    #[test]
+    fn verify_reports_present_unverified_without_verify_flag() {
+        let home = temp_dir("models-verify-unverified");
+        let asset_path = home.join("models/test/model.bin");
+        let body = b"tiny-model";
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        fs::write(&asset_path, body).expect("write model");
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            body.len() as u64,
+            Some("ccdbfb9993be88c536b0b7cd2abe60eda83c7ce1ad530c6a2ada81510ff1548c"),
+        );
+        // verify=false → should report PresentUnverified even if checksum would match.
+        let integrity =
+            verify_existing_asset(&asset_path, &asset, false).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::PresentUnverified);
+    }
+
     fn test_asset(
         filename: &'static str,
         relative_path: &'static str,

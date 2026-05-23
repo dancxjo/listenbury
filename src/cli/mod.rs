@@ -615,6 +615,7 @@ pub(crate) enum ModelsCommand {
     List,
     Use(ModelsUseCommand),
     Status(ModelsStatusCommand),
+    Verify(ModelsVerifyCommand),
     Repair(ModelsFetchCommand),
     Path,
 }
@@ -639,6 +640,13 @@ pub(crate) struct ModelsStatusCommand {
     /// Verify existing model files against manifest checksums/sizes.
     #[arg(long)]
     pub(crate) verify: bool,
+}
+
+/// Arguments for `listenbury models verify`.
+#[derive(Debug, Args, Default)]
+pub(crate) struct ModelsVerifyCommand {
+    /// Verify one model bundle by name instead of all registered assets.
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -2440,5 +2448,33 @@ mod tests {
         else {
             panic!("expected models menu command");
         };
+    }
+
+    #[test]
+    fn models_verify_parses() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "verify"])
+            .expect("models verify should parse");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Verify(command)),
+        }) = cli.command
+        else {
+            panic!("expected models verify command");
+        };
+        assert!(command.model.is_none());
+    }
+
+    #[test]
+    fn models_verify_parses_model_name() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "verify", "whisper-tiny"])
+            .expect("models verify with model name should parse");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Verify(command)),
+        }) = cli.command
+        else {
+            panic!("expected models verify command");
+        };
+        assert_eq!(command.model.as_deref(), Some("whisper-tiny"));
     }
 }
