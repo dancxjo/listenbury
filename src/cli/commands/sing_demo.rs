@@ -8,50 +8,49 @@ use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 #[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
-use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
-
-#[cfg(feature = "tts-piper")]
-use listenbury::PiperTextToSpeech;
+use crate::cli::piper::resolve_piper_bin;
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
-use listenbury::mouth::tts::TextToSpeech;
 use listenbury::prosody::note_target::{
     MidiNote, NoteArticulation, NoteDuration, NoteTarget, PitchTarget, TimePoint, Velocity,
 };
 use listenbury::prosody::singing::SungPhrase;
 use listenbury::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
 use listenbury::prosody::vibrato::Vibrato;
-use listenbury::time::ExactTimestamp;
-use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
-use listenbury::voice::articulator::{
-    RenderPlan, SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
+use listenbury::vocoder::{
+    SingDemoBackendSelector, VocoderConfig, VocoderInput, backend_for_option,
 };
-use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
+use listenbury::voice::articulator::{
+    articulate, backend_detail_expectation, render_plan_for_backend,
+};
 use listenbury::voice::tract::targets::default_english_phone_targets;
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
     let plan = articulate(&phrase);
     let backend = command.selected_backend();
-    let backend_kind = render_kind_for_backend(backend);
-    let detail = backend_detail_expectation(backend_kind);
+    let selector = selector_for_backend(backend);
+    let config = vocoder_config_for_command(backend, &command)?;
+    let mut renderer = backend_for_option(selector, config)?;
+    let descriptor = renderer.descriptor();
+    let backend_kind = descriptor.backend_kind.ok_or_else(|| {
+        anyhow::anyhow!(
+            "backend `{}` has no sing-demo render contract",
+            descriptor.id
+        )
+    })?;
+    let detail = descriptor
+        .detail
+        .unwrap_or_else(|| backend_detail_expectation(backend_kind));
     let target_table = default_english_phone_targets();
     let render_plan = render_plan_for_backend(backend_kind, &plan, 0.7, &target_table);
-    println!("sing-demo backend: {backend:?} ({detail:?})");
+    println!("sing-demo backend: {} ({detail:?})", descriptor.id);
 
-    for note in backend_degradation_notes(backend) {
+    for note in descriptor.notes {
         println!("sing-demo note: {note}");
     }
 
-    let frames = match backend {
-        SingDemoBackendOption::Klatt => synthesize_klatt_from_plan(render_plan)?,
-        SingDemoBackendOption::Riper => {
-            synthesize_riper_klatt_fallback_from_plan(render_plan, &command)?
-        }
-        SingDemoBackendOption::Mbrola => synthesize_mbrola_from_plan(render_plan, &command)?,
-        SingDemoBackendOption::Piper => synthesize_piper_from_plan(render_plan, &command)?,
-    };
+    let frames = renderer.render(VocoderInput::RenderPlan(&render_plan))?;
 
     let output_path = command
         .output_wav
@@ -64,184 +63,34 @@ fn default_output_wav_path(backend: SingDemoBackendOption) -> PathBuf {
     PathBuf::from(format!("out/hello-ragtime-{}.wav", backend.as_str()))
 }
 
-fn synthesize_klatt_from_plan(plan: RenderPlan) -> Result<Vec<AudioFrame>> {
-    let config = KlattRenderConfig::default();
-    let target_table = default_english_phone_targets();
-    let RenderPlan::PhoneTimed(neutral_targets) = plan else {
-        anyhow::bail!("Klatt backend requires a phone-timed render plan");
-    };
-    anyhow::ensure!(
-        !neutral_targets.is_empty(),
-        "listenbury dev sing-demo --backend klatt produced an empty phone target plan"
-    );
-    let missing_phones: Vec<String> = neutral_targets
-        .iter()
-        .map(|target| target.phone.ipa.as_str())
-        .filter(|ipa| !target_table.contains_key(*ipa))
-        .map(str::to_string)
-        .collect();
-    anyhow::ensure!(
-        missing_phones.is_empty(),
-        "listenbury dev sing-demo --backend klatt cannot render phone(s): {}",
-        missing_phones.join(", ")
-    );
-
-    let klatt_targets = klatt_render_targets_from_phone_timed(&neutral_targets, &target_table);
-    let pcm = render_phone_string(&klatt_targets, &config);
-    anyhow::ensure!(
-        !pcm.is_empty(),
-        "listenbury dev sing-demo --backend klatt produced no audio"
-    );
-
-    Ok(vec![AudioFrame {
-        captured_at: ExactTimestamp::now(),
-        sample_rate_hz: config.sample_rate,
-        channels: 1,
-        samples: pcm,
-        voice_signatures: Vec::new(),
-    }])
-}
-
-fn synthesize_riper_klatt_fallback_from_plan(
-    plan: RenderPlan,
-    _command: &SingDemoCommand,
-) -> Result<Vec<AudioFrame>> {
-    synthesize_klatt_from_plan(plan)
-        .context("Riper Klatt fallback sing-demo path failed to render the shared phone-timed plan")
-}
-
-fn synthesize_mbrola_from_plan(
-    plan: RenderPlan,
-    command: &SingDemoCommand,
-) -> Result<Vec<AudioFrame>> {
-    let voice_path = resolve_sing_mbrola_voice(command.mbrola_voice.clone())?;
-    let renderer = listenbury::MbrolaRenderer::from_voice_path(None, &voice_path)
-        .with_context(|| format!("failed to load MBROLA voice {}", voice_path.display()))?;
-    let RenderPlan::PhoneTimed(targets) = plan else {
-        anyhow::bail!("MBROLA sing-demo requires a phone-timed render plan");
-    };
-    let mut phones = Vec::with_capacity(targets.len());
-    for target in &targets {
-        let symbol = renderer
-            .voice()
-            .symbol_map
-            .map_phone(&target.phone.ipa)
-            .with_context(|| {
-                format!(
-                    "failed to map sung phone `{}` to MBROLA voice `{}`",
-                    target.phone.ipa,
-                    renderer.voice().name
-                )
-            })?;
-        let duration_ms = target.duration_ms.clamp(1, u64::from(u32::MAX)) as u32;
-        let pitch_targets = target
-            .f0_hz
-            .map(|hz| {
-                vec![
-                    listenbury::MbrolaPitchTarget { percent: 0, hz },
-                    listenbury::MbrolaPitchTarget {
-                        percent: 50,
-                        hz: hz * 1.02,
-                    },
-                    listenbury::MbrolaPitchTarget {
-                        percent: 100,
-                        hz: hz * 0.99,
-                    },
-                ]
-            })
-            .unwrap_or_default();
-        phones.push(listenbury::MbrolaPhone {
-            symbol,
-            duration_ms,
-            pitch_targets,
-        });
-    }
-    let phone_plan = listenbury::PhoneTimedPlan::new(phones);
-    renderer.render_phone_plan_to_frames(&phone_plan).context(
-        "native MBROLA diphone renderer failed while using the shared Riper phone-timed plan",
-    )
-}
-
-fn synthesize_piper_from_plan(
-    plan: RenderPlan,
-    command: &SingDemoCommand,
-) -> Result<Vec<AudioFrame>> {
-    #[cfg(not(feature = "tts-piper"))]
-    {
-        let _ = (plan, command);
-        anyhow::bail!("listenbury dev sing-demo --backend piper requires the `tts-piper` feature");
-    }
-
-    #[cfg(feature = "tts-piper")]
-    {
-        #[cfg(feature = "tts-riper")]
-        {
-            synthesize_piper_text_from_plan(plan, command)
-        }
-        #[cfg(not(feature = "tts-riper"))]
-        {
-            synthesize_piper_text_from_plan(plan, command)
-        }
-    }
-}
-
-#[cfg(all(feature = "tts-piper", feature = "tts-riper"))]
-fn synthesize_piper_text_from_plan(
-    plan: RenderPlan,
-    command: &SingDemoCommand,
-) -> Result<Vec<AudioFrame>> {
-    let text = text_from_text_render_plan(plan)?;
-    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
-    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
-    let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
-
-    let mut tts = PiperTextToSpeech::new(piper_config);
-    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
-    collect_tts_audio(&mut tts, Duration::from_secs(30))
-}
-
-#[cfg(all(feature = "tts-piper", not(feature = "tts-riper")))]
-fn synthesize_piper_text_from_plan(
-    plan: RenderPlan,
-    command: &SingDemoCommand,
-) -> Result<Vec<AudioFrame>> {
-    let text = text_from_text_render_plan(plan)?;
-    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
-    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
-    let piper_config = piper_config_for_voice(piper_bin, piper_voice)?;
-    let mut tts = PiperTextToSpeech::new(piper_config);
-    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
-    collect_tts_audio(&mut tts, Duration::from_secs(30))
-}
-
-fn text_from_text_render_plan(plan: RenderPlan) -> Result<String> {
-    match plan {
-        RenderPlan::PartialProsody { text, .. } | RenderPlan::CoarseText { text, .. } => Ok(text),
-        RenderPlan::PhoneTimed(_) => {
-            anyhow::bail!("text backend requires a degraded text render plan")
-        }
-    }
-}
-
-fn backend_degradation_notes(backend: SingDemoBackendOption) -> &'static [&'static str] {
+fn selector_for_backend(backend: SingDemoBackendOption) -> SingDemoBackendSelector {
     match backend {
-        SingDemoBackendOption::Klatt => &[
-            "Klatt consumes the shared phone-timed plan and nucleus-driven pitch sampling.",
-            "Per-syllable vibrato now modulates sustained nucleus F0 in the trajectory layer.",
-        ],
-        SingDemoBackendOption::Riper => &[
-            "Riper sing-demo currently routes through an explicit RiperKlattFallback sung path.",
-            "Riper's current sung vocoder path is Klatt source/filter until the ONNX path grows direct F0 and duration controls.",
-        ],
-        SingDemoBackendOption::Mbrola => &[
-            "MBROLA loads a real voice database and validates the shared phone-timed plan against its symbol map.",
-            "Native MBROLA TD-PSOLA now matches shared phone durations and pitch targets while stitching real database waveforms without calling Klatt or the mbrola binary.",
-        ],
-        SingDemoBackendOption::Piper => &[
-            "Piper currently consumes only coarse shared-plan text hints.",
-            "Piper currently ignores shared phones, note timing detail, and vibrato.",
-        ],
+        SingDemoBackendOption::Klatt => SingDemoBackendSelector::Klatt,
+        SingDemoBackendOption::Riper => SingDemoBackendSelector::Riper,
+        SingDemoBackendOption::Mbrola => SingDemoBackendSelector::Mbrola,
+        SingDemoBackendOption::Piper => SingDemoBackendSelector::Piper,
     }
+}
+
+fn vocoder_config_for_command(
+    backend: SingDemoBackendOption,
+    command: &SingDemoCommand,
+) -> Result<VocoderConfig> {
+    let mut config = VocoderConfig::default();
+    if backend == SingDemoBackendOption::Mbrola {
+        config.mbrola_voice = Some(resolve_sing_mbrola_voice(command.mbrola_voice.clone())?);
+    }
+
+    if backend == SingDemoBackendOption::Piper {
+        #[cfg(feature = "tts-piper")]
+        {
+            config.piper_voice = Some(resolve_piper_voice(command.piper_voice.clone())?);
+            config.piper_bin = Some(resolve_piper_bin(command.piper_bin.clone())?);
+            config.piper_timeout = Some(Duration::from_secs(30));
+        }
+    }
+
+    Ok(config)
 }
 
 fn write_demo_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
@@ -501,15 +350,6 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
     Ok(phrase)
 }
 
-fn render_kind_for_backend(backend: SingDemoBackendOption) -> SungBackendKind {
-    match backend {
-        SingDemoBackendOption::Klatt => SungBackendKind::Klatt,
-        SingDemoBackendOption::Mbrola => SungBackendKind::Mbrola,
-        SingDemoBackendOption::Riper => SungBackendKind::RiperKlattFallback,
-        SingDemoBackendOption::Piper => SungBackendKind::Piper,
-    }
-}
-
 impl SingDemoBackendOption {
     fn as_str(self) -> &'static str {
         match self {
@@ -537,6 +377,8 @@ fn resolve_sing_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use listenbury::vocoder::list_backends;
+    use listenbury::voice::articulator::SungBackendKind;
 
     #[test]
     fn ragtime_phrase_keeps_final_gal_nucleus_long() {
@@ -603,13 +445,24 @@ mod tests {
 
     #[test]
     fn backend_degradation_notes_are_explicit() {
-        let klatt = backend_degradation_notes(SingDemoBackendOption::Klatt).join(" ");
+        let backends = list_backends();
+        let klatt = backends
+            .iter()
+            .find(|descriptor| descriptor.id == "klatt")
+            .expect("klatt descriptor")
+            .notes
+            .join(" ");
         assert!(
             klatt.contains("vibrato now modulates sustained nucleus F0"),
             "klatt note should call out trajectory vibrato support"
         );
 
-        let riper = backend_degradation_notes(SingDemoBackendOption::Riper).join(" ");
+        let riper = backends
+            .iter()
+            .find(|descriptor| descriptor.id == "riper-klatt-fallback")
+            .expect("riper fallback descriptor")
+            .notes
+            .join(" ");
         assert!(
             riper.contains("RiperKlattFallback"),
             "riper should advertise that it currently routes through the explicit fallback path"
@@ -619,7 +472,12 @@ mod tests {
             "riper should advertise that its sung path is currently Klatt-backed"
         );
 
-        let piper = backend_degradation_notes(SingDemoBackendOption::Piper).join(" ");
+        let piper = backends
+            .iter()
+            .find(|descriptor| descriptor.id == "piper")
+            .expect("piper descriptor")
+            .notes
+            .join(" ");
         assert!(
             piper.contains("ignores shared phones"),
             "piper degradation should be explicit"
@@ -633,8 +491,12 @@ mod tests {
         let target_table = default_english_phone_targets();
         let render_plan =
             render_plan_for_backend(SungBackendKind::Klatt, &plan, 0.7, &target_table);
-        let frames =
-            synthesize_klatt_from_plan(render_plan).expect("klatt sing-demo should synthesize");
+        let mut backend =
+            backend_for_option(SingDemoBackendSelector::Klatt, VocoderConfig::default())
+                .expect("klatt backend");
+        let frames = backend
+            .render(VocoderInput::RenderPlan(&render_plan))
+            .expect("klatt sing-demo should synthesize");
         let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
         assert!(!frames.is_empty(), "klatt sing-demo should emit frames");
         assert!(
@@ -649,33 +511,27 @@ mod tests {
         let plan = articulate(&phrase);
         let target_table = default_english_phone_targets();
         assert_eq!(
-            render_kind_for_backend(SingDemoBackendOption::Riper),
-            SungBackendKind::RiperKlattFallback
+            selector_for_backend(SingDemoBackendOption::Riper),
+            SingDemoBackendSelector::Riper
         );
         assert_eq!(
             backend_detail_expectation(SungBackendKind::RiperKlattFallback),
             listenbury::voice::articulator::SungBackendDetail::PhoneTimedViaKlattFallback
         );
         let render_plan = render_plan_for_backend(
-            render_kind_for_backend(SingDemoBackendOption::Riper),
+            SungBackendKind::RiperKlattFallback,
             &plan,
             0.7,
             &target_table,
         );
-        let frames = synthesize_riper_klatt_fallback_from_plan(
-            render_plan,
-            &SingDemoCommand {
-                backend: None,
-                riper: true,
-                klatt: false,
-                mbrola: false,
-                mbrola_voice: None,
-                output_wav: None,
-                piper_bin: None,
-                piper_voice: None,
-            },
-        )
-        .expect("riper sing-demo should synthesize through the Klatt-backed phone-timed fallback");
+        let mut backend =
+            backend_for_option(SingDemoBackendSelector::Riper, VocoderConfig::default())
+                .expect("riper backend");
+        let frames = backend
+            .render(VocoderInput::RenderPlan(&render_plan))
+            .expect(
+                "riper sing-demo should synthesize through the Klatt-backed phone-timed fallback",
+            );
         let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
         assert!(!frames.is_empty(), "riper sing-demo should emit frames");
         assert!(
@@ -686,31 +542,32 @@ mod tests {
 
     #[test]
     fn mbrola_backend_kind_is_distinct_and_phone_timed() {
-        assert_eq!(
-            render_kind_for_backend(SingDemoBackendOption::Mbrola),
-            SungBackendKind::Mbrola
-        );
+        let backends = list_backends();
+        let mbrola = backends
+            .iter()
+            .find(|descriptor| descriptor.id == "mbrola")
+            .expect("mbrola descriptor");
+        let klatt = backends
+            .iter()
+            .find(|descriptor| descriptor.id == "klatt")
+            .expect("klatt descriptor");
+        assert_eq!(mbrola.backend_kind, Some(SungBackendKind::Mbrola));
         assert_ne!(
-            render_kind_for_backend(SingDemoBackendOption::Mbrola),
-            render_kind_for_backend(SingDemoBackendOption::Klatt),
+            mbrola.backend_kind, klatt.backend_kind,
             "MBROLA should no longer be identified as Klatt"
         );
+    }
 
-        let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
-        let plan = articulate(&phrase);
-        let target_table = default_english_phone_targets();
-        let render_plan = render_plan_for_backend(
-            render_kind_for_backend(SingDemoBackendOption::Mbrola),
-            &plan,
-            0.7,
-            &target_table,
-        );
-        let RenderPlan::PhoneTimed(targets) = render_plan else {
-            panic!("MBROLA should receive a phone-timed render plan");
-        };
+    #[test]
+    fn sing_demo_contains_no_direct_synth_backend_impls() {
+        let source = include_str!("sing_demo.rs");
         assert!(
-            !targets.is_empty(),
-            "MBROLA render plan should preserve shared phone timing targets"
+            !source.contains("fn synthesize_klatt_from_plan"),
+            "sing_demo should orchestrate through the vocoder layer"
+        );
+        assert!(
+            !source.contains("fn synthesize_mbrola_from_plan"),
+            "sing_demo should orchestrate through the vocoder layer"
         );
     }
 }

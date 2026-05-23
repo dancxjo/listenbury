@@ -24,6 +24,7 @@ pub mod text_stability;
 pub mod time;
 pub mod trace;
 pub mod vision;
+pub mod vocoder;
 pub mod voice;
 pub mod web;
 pub mod word;
