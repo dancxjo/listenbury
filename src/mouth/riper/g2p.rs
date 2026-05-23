@@ -33,6 +33,8 @@ const PHRASE_BREAK_SYMBOL: &str = "|";
 const BREATH_BREAK_WORD_INTERVAL: usize = 9;
 const BREATH_BREAK_MIN_WORDS_AFTER: usize = 4;
 const BREATH_BREAK_SEARCH_RADIUS: usize = 3;
+const BREATH_BOUNDARY_CONFIDENCE_MIN: f32 = 0.75;
+const BREATH_BOUNDARY_PRIORITY_MIN: f32 = 0.82;
 
 pub trait GraphemeToPhoneme {
     fn phonemize(&self, text: &str) -> Result<PiperPhonemeSequence>;
@@ -45,6 +47,7 @@ pub struct PhonemizedUnit {
     pub word_targets: Vec<WordProsodyTarget>,
     pub phoneme_to_word: Vec<Option<usize>>,
     pub lexical_stress: Vec<LexicalStressTarget>,
+    pub breath_break_diagnostics: Vec<BreathBreakDiagnostic>,
     pub sentence_analysis: SentenceAnalysis,
     pub boundary: ProsodyBoundaryHint,
     pub boundary_kind: PhraseBoundaryKind,
@@ -115,6 +118,19 @@ pub struct WordProsodyTarget {
     pub text_range: std::ops::Range<usize>,
     pub phoneme_range: std::ops::Range<usize>,
     pub normalized_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BreathBreakDiagnostic {
+    pub after_word: usize,
+    pub decision: BreathBreakDecision,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreathBreakDecision {
+    Placed,
+    Suppressed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,7 +252,8 @@ impl SimpleEnglishG2p {
     pub fn phonemize_unit(&self, text: &str) -> std::result::Result<PhonemizedUnit, G2pError> {
         let normalized = self.normalizer.normalize(text)?;
         let sentence_analysis = HeuristicSentenceAnalyzer.analyze(text, &normalized);
-        let breath_break_after_words = syntax_guided_breath_breaks(&normalized, &sentence_analysis);
+        let (breath_break_after_words, breath_break_diagnostics) =
+            syntax_guided_breath_breaks(&normalized, &sentence_analysis);
         let mut symbols = Vec::new();
         let mut word_targets = Vec::new();
         let mut phoneme_to_word = Vec::new();
@@ -368,6 +385,7 @@ impl SimpleEnglishG2p {
             word_targets,
             phoneme_to_word,
             lexical_stress,
+            breath_break_diagnostics,
             sentence_analysis,
             boundary: normalized.boundary,
             boundary_kind: normalized.boundary_kind,
@@ -780,7 +798,10 @@ fn should_insert_breath_break(
 fn syntax_guided_breath_breaks(
     normalized: &crate::mouth::riper::text::NormalizedText,
     sentence_analysis: &SentenceAnalysis,
-) -> std::collections::BTreeSet<usize> {
+) -> (
+    std::collections::BTreeSet<usize>,
+    Vec<BreathBreakDiagnostic>,
+) {
     let word_count = sentence_analysis
         .tokens
         .iter()
@@ -789,6 +810,7 @@ fn syntax_guided_breath_breaks(
         .map_or(0, |index| index + 1);
     let explicit_phrase_breaks = explicit_phrase_break_after_words(normalized);
     let mut breaks = std::collections::BTreeSet::new();
+    let mut diagnostics = Vec::new();
     let mut segment_start = 0usize;
 
     for phrase_break_after in explicit_phrase_breaks.iter().copied() {
@@ -800,6 +822,7 @@ fn syntax_guided_breath_breaks(
                 sentence_analysis,
                 &explicit_phrase_breaks,
                 &mut breaks,
+                &mut diagnostics,
             );
         }
         segment_start = phrase_break_after.saturating_add(1);
@@ -813,10 +836,11 @@ fn syntax_guided_breath_breaks(
             sentence_analysis,
             &explicit_phrase_breaks,
             &mut breaks,
+            &mut diagnostics,
         );
     }
 
-    breaks
+    (breaks, diagnostics)
 }
 
 fn explicit_phrase_break_after_words(
@@ -856,6 +880,7 @@ fn collect_segment_breath_breaks(
     sentence_analysis: &SentenceAnalysis,
     explicit_phrase_breaks: &std::collections::BTreeSet<usize>,
     breaks: &mut std::collections::BTreeSet<usize>,
+    diagnostics: &mut Vec<BreathBreakDiagnostic>,
 ) {
     if segment_end <= segment_start {
         return;
@@ -870,13 +895,20 @@ fn collect_segment_breath_breaks(
         if ended_by_phrase_break && words_after <= BREATH_BREAK_MIN_WORDS_AFTER {
             break;
         }
-        if let Some(boundary) = best_syntax_guided_breath_boundary(
+        let boundary_choice = best_syntax_guided_breath_boundary(
             target,
             segment_start,
             segment_end,
             sentence_analysis,
             explicit_phrase_breaks,
-        ) {
+        );
+        diagnostics.extend(boundary_choice.suppressed);
+        if let Some(boundary) = boundary_choice.boundary {
+            diagnostics.push(BreathBreakDiagnostic {
+                after_word: boundary,
+                decision: BreathBreakDecision::Placed,
+                evidence: boundary_choice.evidence,
+            });
             breaks.insert(boundary);
             target = boundary + BREATH_BREAK_WORD_INTERVAL;
         } else {
@@ -891,33 +923,117 @@ fn best_syntax_guided_breath_boundary(
     segment_end: usize,
     sentence_analysis: &SentenceAnalysis,
     explicit_phrase_breaks: &std::collections::BTreeSet<usize>,
-) -> Option<usize> {
+) -> BoundaryChoice {
     let min_boundary = target
         .saturating_sub(BREATH_BREAK_SEARCH_RADIUS)
         .max(segment_start);
     let max_boundary = (target + BREATH_BREAK_SEARCH_RADIUS).min(segment_end - 1);
-    (min_boundary..=max_boundary)
-        .filter(|boundary| !explicit_phrase_breaks.contains(boundary))
-        .filter(|boundary| !crosses_tight_syntactic_link(*boundary, sentence_analysis))
-        .min_by_key(|boundary| {
-            let distance = boundary.abs_diff(target);
-            (
-                distance,
-                breath_boundary_penalty(*boundary, sentence_analysis),
-                usize::from(*boundary < target),
-            )
-        })
+    let mut suppressed = Vec::new();
+    let mut best: Option<(usize, BoundarySortKey, Vec<String>)> = None;
+
+    for boundary in min_boundary..=max_boundary {
+        if explicit_phrase_breaks.contains(&boundary) {
+            continue;
+        }
+        if let Some(tight_link) = tight_link_crossing(boundary, sentence_analysis) {
+            suppressed.push(BreathBreakDiagnostic {
+                after_word: boundary,
+                decision: BreathBreakDecision::Suppressed,
+                evidence: vec![format!("suppressed_by_tight_link:{tight_link:?}")],
+            });
+            continue;
+        }
+
+        let boundary_claim = best_boundary_claim(boundary, sentence_analysis);
+        if let Some(span_link) = protected_span_crossing(boundary, sentence_analysis) {
+            let support = boundary_claim
+                .as_ref()
+                .is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_CONFIDENCE_MIN);
+            if !support {
+                suppressed.push(BreathBreakDiagnostic {
+                    after_word: boundary,
+                    decision: BreathBreakDecision::Suppressed,
+                    evidence: vec![format!("suppressed_by_span:{span_link:?}")],
+                });
+                continue;
+            }
+        }
+
+        let mut evidence = Vec::new();
+        if let Some(claim) = &boundary_claim {
+            evidence.push(format!(
+                "boundary_claim:{}:{:.2}",
+                claim.kind, claim.confidence
+            ));
+        }
+
+        let distance = boundary.abs_diff(target);
+        let priority = usize::from(
+            !boundary_claim
+                .as_ref()
+                .is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_PRIORITY_MIN),
+        );
+        let key = (
+            priority,
+            distance,
+            breath_boundary_penalty(boundary, sentence_analysis, boundary_claim.as_ref()),
+            usize::from(boundary < target),
+        );
+
+        match &best {
+            Some((_, best_key, _)) if key >= *best_key => {}
+            _ => {
+                best = Some((boundary, key, evidence));
+            }
+        }
+    }
+
+    if let Some((boundary, _, evidence)) = best {
+        BoundaryChoice {
+            boundary: Some(boundary),
+            evidence: if evidence.is_empty() {
+                vec!["heuristic_spacing".to_string()]
+            } else {
+                evidence
+            },
+            suppressed,
+        }
+    } else {
+        BoundaryChoice {
+            boundary: None,
+            evidence: Vec::new(),
+            suppressed,
+        }
+    }
 }
 
-fn crosses_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
-    sentence_analysis.link_parses.iter().any(|parse| {
-        parse.links.iter().any(|link| {
+type BoundarySortKey = (usize, usize, usize, usize);
+
+#[derive(Debug, Clone)]
+struct BoundaryClaim {
+    kind: String,
+    confidence: f32,
+}
+
+#[derive(Debug, Default)]
+struct BoundaryChoice {
+    boundary: Option<usize>,
+    evidence: Vec<String>,
+    suppressed: Vec<BreathBreakDiagnostic>,
+}
+
+fn tight_link_crossing(
+    boundary: usize,
+    sentence_analysis: &SentenceAnalysis,
+) -> Option<SyntacticLinkKind> {
+    sentence_analysis.link_parses.iter().find_map(|parse| {
+        parse.links.iter().find_map(|link| {
             let (left, right) = if link.left <= link.right {
                 (link.left, link.right)
             } else {
                 (link.right, link.left)
             };
-            left == boundary
+            (left == boundary
                 && right == boundary + 1
                 && matches!(
                     link.kind,
@@ -927,12 +1043,80 @@ fn crosses_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAna
                         | SyntacticLinkKind::Preposition
                         | SyntacticLinkKind::Modifier
                         | SyntacticLinkKind::NounCompound
-                )
+                ))
+            .then_some(link.kind)
         })
     })
 }
 
-fn breath_boundary_penalty(boundary: usize, sentence_analysis: &SentenceAnalysis) -> usize {
+fn protected_span_crossing(
+    boundary: usize,
+    sentence_analysis: &SentenceAnalysis,
+) -> Option<SyntacticLinkKind> {
+    sentence_analysis.link_parses.iter().find_map(|parse| {
+        parse.links.iter().find_map(|link| {
+            let (left, right) = if link.left <= link.right {
+                (link.left, link.right)
+            } else {
+                (link.right, link.left)
+            };
+            (left <= boundary
+                && right > boundary
+                && matches!(
+                    link.kind,
+                    SyntacticLinkKind::Vocative | SyntacticLinkKind::Apposition
+                ))
+            .then_some(link.kind)
+        })
+    })
+}
+
+fn best_boundary_claim(
+    boundary: usize,
+    sentence_analysis: &SentenceAnalysis,
+) -> Option<BoundaryClaim> {
+    sentence_analysis.link_parses.first().and_then(|parse| {
+        parse
+            .claims
+            .iter()
+            .filter_map(|claim| match (&claim.target, &claim.value) {
+                (
+                    crate::mouth::riper::AnalysisTarget::Boundary {
+                        left_word: Some(left_word),
+                        ..
+                    },
+                    crate::mouth::riper::ClaimValue::BoundaryKind(boundary_kind),
+                ) if *left_word == boundary
+                    && matches!(
+                        boundary_kind.as_str(),
+                        "Coordination"
+                            | "PrepositionalPhrase"
+                            | "MajorPhrasePause"
+                            | "MinorPhrasePause"
+                            | "AppositivePhrase"
+                            | "VocativeCommaPauseSuppressed"
+                    ) =>
+                {
+                    Some(BoundaryClaim {
+                        kind: boundary_kind.clone(),
+                        confidence: claim.confidence,
+                    })
+                }
+                _ => None,
+            })
+            .max_by(|left, right| {
+                left.confidence
+                    .partial_cmp(&right.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    })
+}
+
+fn breath_boundary_penalty(
+    boundary: usize,
+    sentence_analysis: &SentenceAnalysis,
+    boundary_claim: Option<&BoundaryClaim>,
+) -> usize {
     let current = word_text(sentence_analysis, boundary);
     let next = word_text(sentence_analysis, boundary + 1);
     let mut penalty = 10usize;
@@ -946,7 +1130,7 @@ fn breath_boundary_penalty(boundary: usize, sentence_analysis: &SentenceAnalysis
     if ends_tight_syntactic_link(boundary, sentence_analysis) {
         penalty = penalty.saturating_sub(8);
     }
-    if has_link_boundary_claim(boundary, sentence_analysis) {
+    if boundary_claim.is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_CONFIDENCE_MIN) {
         penalty = penalty.saturating_sub(6);
     }
 
@@ -962,27 +1146,6 @@ fn ends_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalys
                     SyntacticLinkKind::Determiner
                         | SyntacticLinkKind::Modifier
                         | SyntacticLinkKind::NounCompound
-                )
-        })
-    })
-}
-
-fn has_link_boundary_claim(boundary: usize, sentence_analysis: &SentenceAnalysis) -> bool {
-    sentence_analysis.link_parses.first().is_some_and(|parse| {
-        parse.claims.iter().any(|claim| {
-            claim.confidence >= 0.7
-                && matches!(
-                    (&claim.target, &claim.value),
-                    (
-                        crate::mouth::riper::AnalysisTarget::Boundary {
-                            left_word: Some(left_word),
-                            ..
-                        },
-                        crate::mouth::riper::ClaimValue::BoundaryKind(
-                            boundary_kind
-                        )
-                    ) if *left_word == boundary
-                        && matches!(boundary_kind.as_str(), "Coordination" | "PrepositionalPhrase")
                 )
         })
     })
@@ -1304,6 +1467,14 @@ fn initial_to_phones(initial: char) -> Option<&'static [&'static str]> {
 mod tests {
     use super::*;
     use crate::linguistic::phonology::RealizationMethod;
+    use crate::mouth::riper::evidence::{
+        AnalysisClaim, AnalysisSourceKind, AnalysisTarget, ClaimKind, ClaimValue,
+    };
+    use crate::mouth::riper::prosody_audit::PhraseBoundaryKind as AuditedBoundaryKind;
+    use crate::mouth::riper::sentence_analysis::{
+        OrthographicEmphasisKind, PartOfSpeech, ProsodicRole, ReductionClass, SyntacticLink,
+        SyntacticLinkParse, SyntacticLinkSource, TokenAnalysis,
+    };
 
     fn symbols(sequence: &PiperPhonemeSequence) -> Vec<String> {
         sequence.phonemes.iter().map(|p| p.0.clone()).collect()
@@ -1319,6 +1490,36 @@ mod tests {
             .iter()
             .map(|p| p.0.clone())
             .collect()
+    }
+
+    fn synthetic_analysis(
+        words: &[&str],
+        links: Vec<SyntacticLink>,
+        claims: Vec<AnalysisClaim>,
+    ) -> SentenceAnalysis {
+        SentenceAnalysis {
+            tokens: words
+                .iter()
+                .enumerate()
+                .map(|(word_index, text)| TokenAnalysis {
+                    token_index: word_index,
+                    word_index: Some(word_index),
+                    text: (*text).to_string(),
+                    pos: PartOfSpeech::Unknown,
+                    syntactic_role: None,
+                    prosodic_role: ProsodicRole::Content,
+                    orthographic_emphasis: OrthographicEmphasisKind::None,
+                    reduction: ReductionClass::None,
+                    reduction_diagnostic: None,
+                })
+                .collect(),
+            link_parses: vec![SyntacticLinkParse {
+                links,
+                claims,
+                rank: 1.0,
+            }],
+            terminal_boundary_kind: AuditedBoundaryKind::None,
+        }
     }
 
     fn to_token_analyses(unit: &PhonemizedUnit) -> Vec<&crate::mouth::riper::TokenAnalysis> {
@@ -1437,6 +1638,110 @@ mod tests {
                 .count()
                 >= 2,
             "breath break should coexist with the final sentence break"
+        );
+    }
+
+    #[test]
+    fn low_confidence_boundary_claims_do_not_force_breath_breaks() {
+        let analysis = synthetic_analysis(
+            &[
+                "we",
+                "moved",
+                "the",
+                "machine",
+                "because",
+                "the",
+                "manager",
+                "insisted",
+                "through",
+                "another",
+                "inspection",
+                "today",
+            ],
+            vec![SyntacticLink {
+                left: 8,
+                right: 9,
+                kind: SyntacticLinkKind::Preposition,
+                confidence: 0.8,
+                source: SyntacticLinkSource::HeuristicGrammarIsland,
+            }],
+            vec![AnalysisClaim::new(
+                AnalysisTarget::Boundary {
+                    left_word: Some(8),
+                    right_word: Some(9),
+                },
+                ClaimKind::BoundaryKind,
+                ClaimValue::BoundaryKind("PrepositionalPhrase".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                0.55,
+                "low-confidence boundary hypothesis",
+            )],
+        );
+        let choice = best_syntax_guided_breath_boundary(
+            8,
+            0,
+            11,
+            &analysis,
+            &std::collections::BTreeSet::new(),
+        );
+
+        assert_ne!(
+            choice.boundary,
+            Some(8),
+            "low-confidence claims should not force a break across preposition-object links"
+        );
+        assert!(
+            choice.suppressed.iter().any(|diagnostic| {
+                diagnostic.after_word == 8
+                    && diagnostic.decision == BreathBreakDecision::Suppressed
+                    && diagnostic
+                        .evidence
+                        .iter()
+                        .any(|item| item.contains("suppressed_by_tight_link:Preposition"))
+            }),
+            "diagnostics should capture tight-link suppression evidence"
+        );
+    }
+
+    #[test]
+    fn high_confidence_boundary_claims_prioritize_phrase_break_candidates() {
+        let analysis = synthetic_analysis(
+            &[
+                "we", "tuned", "the", "engine", "for", "a", "while", "before", "we", "paused",
+                "and", "then",
+            ],
+            vec![],
+            vec![AnalysisClaim::new(
+                AnalysisTarget::Boundary {
+                    left_word: Some(10),
+                    right_word: Some(11),
+                },
+                ClaimKind::BoundaryKind,
+                ClaimValue::BoundaryKind("Coordination".to_string()),
+                AnalysisSourceKind::SyntaxRule,
+                0.9,
+                "coordination boundary",
+            )],
+        );
+        let choice = best_syntax_guided_breath_boundary(
+            8,
+            0,
+            11,
+            &analysis,
+            &std::collections::BTreeSet::new(),
+        );
+
+        assert_eq!(
+            choice.boundary,
+            Some(10),
+            "high-confidence boundary claims should outrank pure spacing distance"
+        );
+        assert!(
+            choice
+                .evidence
+                .iter()
+                .any(|item| item.contains("boundary_claim:Coordination")),
+            "diagnostics should include the boundary evidence that allowed the break"
         );
     }
 
