@@ -1219,7 +1219,8 @@ pub struct BoundaryProsodyEffect {
 /// without parsing strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoundaryProsodyRule {
-    /// Unique identifier, copied from the originating catalog rule's `rule_id`.
+    /// Unique identifier, copied from the originating
+    /// [`BoundaryProsodyRuleSeed`] entry's `rule_id`.
     pub id: String,
     /// What position or punctuation character triggers this rule.
     pub boundary_pattern: BoundaryPattern,
@@ -1335,7 +1336,8 @@ fn suppressible_by_for_punctuation(match_pattern: &str) -> Vec<SuppressibleBy> {
 /// [`BoundaryPattern::AnyMajorBoundary`].
 pub fn convert_to_boundary_prosody_rule(rule: &BoundaryProsodyRuleSeed) -> BoundaryProsodyRule {
     let confidence = confidence_from_catalog_entry(rule.confidence);
-    // match_pattern is always a single punctuation character in the catalog data.
+    // `match_pattern` is always a single punctuation character in
+    // `BoundaryProsodyRuleSeed` entries.
     // chars().next() safely handles the empty-string edge case without panicking.
     let boundary_pattern = match rule.match_pattern.chars().next() {
         Some(ch) => BoundaryPattern::Punctuation(ch),
