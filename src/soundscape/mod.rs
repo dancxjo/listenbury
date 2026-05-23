@@ -24,6 +24,8 @@ use uuid::Uuid;
 
 use crate::{span::SpanId, time::ExactTimestamp};
 
+const PETE_KNOWN_VOICE_LABEL: &str = "PETE";
+
 pub use attribution::{
     AttributionEvidence, ClusterId, SoundscapeContext, SourceAttributor, SourceHypothesis,
 };
@@ -130,7 +132,7 @@ impl KnownVoice {
     pub fn pete(created_at: ExactTimestamp) -> Self {
         Self {
             id: VoiceId::new(),
-            label: "PETE".to_string(),
+            label: PETE_KNOWN_VOICE_LABEL.to_string(),
             kind: VoiceKind::Pete,
             enrollment_samples: Vec::new(),
             created_at,
@@ -230,8 +232,8 @@ pub enum VoiceKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VoiceAttribution {
     pub voice_id: VoiceId,
-    #[serde(default = "default_span_id")]
-    pub span_id: SpanId,
+    #[serde(default)]
+    pub span_id: Option<SpanId>,
     pub confidence: f32,
     #[serde(default)]
     pub source: VoiceAttributionSource,
@@ -263,10 +265,6 @@ impl Default for VoiceAttributionSource {
     }
 }
 
-fn default_span_id() -> SpanId {
-    SpanId(0)
-}
-
 pub trait VoiceMatcher {
     fn attribute(
         &self,
@@ -286,12 +284,16 @@ impl VoiceMatcher for MockVoiceMatcher {
         _signature_ids: &[VoiceSignatureId],
         registry: &KnownVoiceRegistry,
     ) -> Vec<VoiceAttribution> {
+        // Intentional seam: this mock ignores `signature_ids` and emits one
+        // deterministic attribution so callers can exercise
+        // registry/attribution plumbing before a real matcher is wired. A real
+        // matcher should validate signature compatibility before attribution.
         registry
             .voices
             .first()
             .map(|voice| VoiceAttribution {
                 voice_id: voice.id,
-                span_id,
+                span_id: Some(span_id),
                 confidence: 0.5,
                 source: VoiceAttributionSource::MockMatcher,
                 alternatives: Vec::new(),
@@ -369,7 +371,7 @@ mod tests {
         let attributions = vec![
             VoiceAttribution {
                 voice_id: VoiceId::new(),
-                span_id,
+                span_id: Some(span_id),
                 confidence: 0.72,
                 source: VoiceAttributionSource::EnrollmentMatch,
                 alternatives: vec![VoiceAttributionAlternative {
@@ -380,7 +382,7 @@ mod tests {
             },
             VoiceAttribution {
                 voice_id: VoiceId::new(),
-                span_id,
+                span_id: Some(span_id),
                 confidence: 0.55,
                 source: VoiceAttributionSource::Clustering,
                 alternatives: vec![],
@@ -392,7 +394,7 @@ mod tests {
         assert_eq!(
             attributions
                 .iter()
-                .filter(|item| item.span_id == span_id)
+                .filter(|item| item.span_id == Some(span_id))
                 .count(),
             2
         );
@@ -410,7 +412,7 @@ mod tests {
         let attribution: VoiceAttribution =
             serde_json::from_value(payload).expect("legacy payload should deserialize");
         assert_eq!(attribution.voice_id, voice_id);
-        assert_eq!(attribution.span_id, SpanId(0));
+        assert_eq!(attribution.span_id, None);
         assert_eq!(attribution.source, VoiceAttributionSource::Unknown);
         assert!(attribution.alternatives.is_empty());
     }
