@@ -1,13 +1,16 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::provenance::{CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata};
+use super::{
+    discovery::{discover_profile_files, discover_voice_files},
+    provenance::{CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanguageTag {
@@ -29,6 +32,14 @@ pub struct UnsupportedRecord {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectiveRecord {
+    pub line: usize,
+    pub directive: String,
+    pub args: Vec<String>,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StressProfile {
     pub length: Vec<i32>,
@@ -38,6 +49,7 @@ pub struct StressProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConvertedProfile {
     pub id: String,
+    pub kind: String,
     pub source: String,
     pub source_file: String,
     pub source_revision: String,
@@ -49,6 +61,7 @@ pub struct ConvertedProfile {
     pub dictrules: Vec<i32>,
     pub stress: StressProfile,
     pub replacements: Vec<Replacement>,
+    pub directives: Vec<DirectiveRecord>,
     pub unsupported: Vec<UnsupportedRecord>,
 }
 
@@ -65,6 +78,7 @@ fn parse_i32_values(values: &[&str]) -> Vec<i32> {
 
 pub fn parse_profile_content(
     id: &str,
+    kind: &str,
     source_file: &str,
     content: &str,
     source_revision: &str,
@@ -76,6 +90,7 @@ pub fn parse_profile_content(
     let mut dictrules = Vec::new();
     let mut stress = StressProfile::default();
     let mut replacements = Vec::new();
+    let mut directives = Vec::new();
     let mut unsupported = Vec::new();
 
     for (index, raw) in content.lines().enumerate() {
@@ -89,6 +104,12 @@ pub fn parse_profile_content(
             continue;
         };
         let rest: Vec<&str> = parts.collect();
+        directives.push(DirectiveRecord {
+            line: line_no,
+            directive: directive.to_string(),
+            args: rest.iter().map(|part| (*part).to_string()).collect(),
+            content: line.to_string(),
+        });
         match directive {
             "name" => {
                 if !rest.is_empty() {
@@ -139,6 +160,7 @@ pub fn parse_profile_content(
 
     ConvertedProfile {
         id: id.to_string(),
+        kind: kind.to_string(),
         source: "espeak-ng".to_string(),
         source_file: source_file.to_string(),
         source_revision: source_revision.to_string(),
@@ -150,34 +172,16 @@ pub fn parse_profile_content(
         dictrules,
         stress,
         replacements,
+        directives,
         unsupported,
     }
 }
 
-fn discover_profile_files(cache: &Path, lang: &str) -> Result<Vec<PathBuf>> {
-    let base = cache.join("espeak-ng-data/lang/gmw");
-    let mut files = Vec::new();
-    if !base.exists() {
-        return Ok(files);
-    }
-
-    for entry in
-        fs::read_dir(&base).with_context(|| format!("failed to read {}", base.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if file_name == lang || file_name.starts_with(&format!("{lang}-")) {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
+fn profile_target_name(source_file: &str) -> String {
+    source_file
+        .strip_prefix("espeak-ng-data/")
+        .unwrap_or(source_file)
+        .replace('/', "__")
 }
 
 pub fn convert_profiles(lang: &str, out: &Path) -> Result<()> {
@@ -190,6 +194,11 @@ pub fn convert_profiles(lang: &str, out: &Path) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("failed to create {}", out.display()))?;
     let mut seen_ids = BTreeSet::new();
     for profile_path in discover_profile_files(&cache, lang)? {
+        let source_file = profile_path
+            .strip_prefix(&cache)
+            .unwrap_or(&profile_path)
+            .to_string_lossy()
+            .to_string();
         let id = profile_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -198,15 +207,11 @@ pub fn convert_profiles(lang: &str, out: &Path) -> Result<()> {
         if !seen_ids.insert(id.clone()) {
             continue;
         }
-        let source_file = profile_path
-            .strip_prefix(&cache)
-            .unwrap_or(&profile_path)
-            .to_string_lossy()
-            .to_string();
         let content = fs::read_to_string(&profile_path)
             .with_context(|| format!("failed to read {}", profile_path.display()))?;
         let converted = parse_profile_content(
             &id,
+            "language-profile",
             &source_file,
             &content,
             &source_revision,
@@ -221,6 +226,47 @@ pub fn convert_profiles(lang: &str, out: &Path) -> Result<()> {
     }
 
     println!("Wrote profile conversions to {}", out.display());
+    Ok(())
+}
+
+pub fn convert_voice_profiles(lang: &str, out: &Path) -> Result<()> {
+    let cache = ensure_cache_exists()?;
+    let source_revision = current_revision(&cache)?;
+    let source_license = load_metadata()?
+        .map(|metadata| metadata.source_license)
+        .unwrap_or_else(|| "GPL-3.0-or-later".to_string());
+
+    fs::create_dir_all(out).with_context(|| format!("failed to create {}", out.display()))?;
+    let mut seen_ids = BTreeSet::new();
+    for voice_path in discover_voice_files(&cache, lang)? {
+        let source_file = voice_path
+            .strip_prefix(&cache)
+            .unwrap_or(&voice_path)
+            .to_string_lossy()
+            .to_string();
+        let id = profile_target_name(&source_file);
+        if !seen_ids.insert(id.clone()) {
+            continue;
+        }
+        let content = fs::read_to_string(&voice_path)
+            .with_context(|| format!("failed to read {}", voice_path.display()))?;
+        let converted = parse_profile_content(
+            &id,
+            "voice-profile",
+            &source_file,
+            &content,
+            &source_revision,
+            &source_license,
+        );
+        let target = out.join(format!("{id}.toml"));
+        fs::write(
+            &target,
+            toml::to_string_pretty(&converted).context("failed to encode voice TOML")?,
+        )
+        .with_context(|| format!("failed to write {}", target.display()))?;
+    }
+
+    println!("Wrote voice conversions to {}", out.display());
     Ok(())
 }
 
@@ -243,6 +289,7 @@ formant 120
 "#;
         let profile = parse_profile_content(
             "en-US",
+            "language-profile",
             "espeak-ng-data/lang/gmw/en-US",
             content,
             "abc",

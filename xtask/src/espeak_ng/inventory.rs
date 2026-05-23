@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     RulesMode,
+    discovery::{discover_dictionary_files, discover_profile_files, discover_voice_files},
     provenance::{current_revision, ensure_cache_exists, load_metadata},
     rules::parse_rules_content,
 };
@@ -53,30 +54,6 @@ fn push_file(cache: &Path, path: PathBuf, files: &mut Vec<InventoryFile>) -> Res
     Ok(())
 }
 
-fn list_prefixed_files(cache: &Path, base: &str, prefix: &str) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let dir = cache.join(base);
-    if !dir.exists() {
-        return Ok(files);
-    }
-    for entry in fs::read_dir(&dir).with_context(|| format!("failed to read {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(prefix))
-        {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 pub fn inventory(lang: &str, json_out: Option<&Path>) -> Result<()> {
     let cache = ensure_cache_exists()?;
     let revision = current_revision(&cache)?;
@@ -85,22 +62,15 @@ pub fn inventory(lang: &str, json_out: Option<&Path>) -> Result<()> {
         .unwrap_or_else(|| "GPL-3.0-or-later".to_string());
 
     let mut files = Vec::new();
-    for direct in [
-        format!("dictsource/{lang}_rules"),
-        format!("dictsource/{lang}_list"),
-        format!("dictsource/{lang}_extra"),
-        "phsource/phonemes".to_string(),
-    ] {
-        push_file(&cache, cache.join(direct), &mut files)?;
+    for dictionary_file in discover_dictionary_files(&cache, lang) {
+        push_file(&cache, dictionary_file, &mut files)?;
     }
+    push_file(&cache, cache.join("phsource/phonemes"), &mut files)?;
 
-    for profile in list_prefixed_files(&cache, "espeak-ng-data/lang/gmw", lang)? {
+    for profile in discover_profile_files(&cache, lang)? {
         push_file(&cache, profile, &mut files)?;
     }
-    for voice in list_prefixed_files(&cache, "espeak-ng-data/voices/mb", "mb-en")? {
-        push_file(&cache, voice, &mut files)?;
-    }
-    for voice in list_prefixed_files(&cache, "espeak-ng-data/voices/mb", "mb-us")? {
+    for voice in discover_voice_files(&cache, lang)? {
         push_file(&cache, voice, &mut files)?;
     }
 
@@ -114,14 +84,14 @@ pub fn inventory(lang: &str, json_out: Option<&Path>) -> Result<()> {
         if file.path.contains("_list") || file.path.contains("_extra") {
             relevant_sections.insert("dictionary".to_string());
         }
-        if file.path.contains("lang/gmw") {
+        if file.path.contains("espeak-ng-data/lang/") {
             relevant_sections.insert("profiles".to_string());
         }
         if file.path.contains("phsource/phonemes") {
             relevant_sections.insert("phoneme-table".to_string());
         }
-        if file.path.contains("voices/mb") {
-            relevant_sections.insert("mbrola-voices".to_string());
+        if file.path.contains("voices/") {
+            relevant_sections.insert("voices".to_string());
         }
     }
 

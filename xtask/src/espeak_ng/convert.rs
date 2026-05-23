@@ -11,8 +11,9 @@ use tempfile::tempdir;
 
 use super::{
     RulesMode,
+    discovery::discover_languages,
     dictionary::convert_list,
-    profile::convert_profiles,
+    profile::{convert_profiles, convert_voice_profiles},
     provenance::{
         CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata, repo_root,
     },
@@ -62,10 +63,12 @@ pub fn convert_all(lang: &str, out: &Path) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("failed to create {}", out.display()))?;
 
     let profiles_dir = out.join("profiles");
+    let voices_dir = out.join("voices");
     let dictionary_dir = out.join("dictionary");
     let rules_dir = out.join("rules-inventory");
 
     convert_profiles(lang, &profiles_dir)?;
+    convert_voice_profiles(lang, &voices_dir)?;
     convert_list(lang, &dictionary_dir)?;
     convert_rules(lang, &rules_dir, RulesMode::Inventory)?;
     convert_rules(lang, &rules_dir, RulesMode::NativeSubset)?;
@@ -113,6 +116,54 @@ fn default_regen_out(lang: &str) -> Result<PathBuf> {
 pub fn regen(lang: &str) -> Result<()> {
     let out = default_regen_out(lang)?;
     convert_all(lang, &out)
+}
+
+pub fn regen_all(limit: Option<usize>) -> Result<()> {
+    let cache = ensure_cache_exists()?;
+    let mut languages = discover_languages(&cache)?;
+    if let Some(limit) = limit {
+        languages.truncate(limit);
+    }
+
+    for language in &languages {
+        let out = default_regen_out(&language.lang)?;
+        println!("Regenerating lang={} into {}", language.lang, out.display());
+        convert_all(&language.lang, &out)?;
+    }
+
+    println!("Regenerated {} eSpeak-ng language outputs", languages.len());
+    Ok(())
+}
+
+pub fn languages(json_out: Option<&Path>) -> Result<()> {
+    let cache = ensure_cache_exists()?;
+    let languages = discover_languages(&cache)?;
+
+    println!("Discovered {} eSpeak-ng languages", languages.len());
+    for language in &languages {
+        println!(
+            "  {}: profiles={} dictionary_files={} voice_files={}",
+            language.lang,
+            language.profile_files.len(),
+            language.dictionary_files.len(),
+            language.voice_files.len()
+        );
+    }
+
+    if let Some(path) = json_out {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        fs::write(
+            path,
+            serde_json::to_string_pretty(&languages).context("failed to encode languages json")?,
+        )
+        .with_context(|| format!("failed to write {}", path.display()))?;
+        println!("Wrote languages JSON to {}", path.display());
+    }
+
+    Ok(())
 }
 
 pub fn diff(lang: &str, out: Option<&Path>) -> Result<()> {

@@ -1,4 +1,5 @@
 mod convert;
+mod discovery;
 mod dictionary;
 mod fetch;
 mod inventory;
@@ -26,6 +27,11 @@ enum EspeakNgSubcommand {
     },
     /// Show local eSpeak-ng source cache status.
     Status,
+    /// List languages discovered from eSpeak-ng language and dictionary sources.
+    Languages {
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
     /// Inventory eSpeak-ng source files for a language.
     Inventory {
         #[arg(long, default_value = "en")]
@@ -68,6 +74,12 @@ enum EspeakNgSubcommand {
         #[arg(long, default_value = "en")]
         lang: String,
     },
+    /// Regenerate deterministic eSpeak-derived output for every discovered language.
+    RegenAll {
+        /// Optional cap for smoke-testing the all-language pipeline.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Diff regenerated output against existing generated files.
     Diff {
         #[arg(long, default_value = "en")]
@@ -87,6 +99,7 @@ pub fn run(cmd: EspeakNgCommand) -> Result<()> {
     match cmd.command {
         EspeakNgSubcommand::Fetch { rev } => fetch::fetch(rev.as_deref()),
         EspeakNgSubcommand::Status => fetch::status(),
+        EspeakNgSubcommand::Languages { json } => convert::languages(json.as_deref()),
         EspeakNgSubcommand::Inventory { lang, json } => {
             inventory::inventory(&lang, json.as_deref())
         }
@@ -97,6 +110,7 @@ pub fn run(cmd: EspeakNgCommand) -> Result<()> {
         }
         EspeakNgSubcommand::Convert { lang, out } => convert::convert_all(&lang, &out),
         EspeakNgSubcommand::Regen { lang } => convert::regen(&lang),
+        EspeakNgSubcommand::RegenAll { limit } => convert::regen_all(limit),
         EspeakNgSubcommand::Diff { lang, out } => convert::diff(&lang, out.as_deref()),
     }
 }
