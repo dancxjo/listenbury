@@ -12,6 +12,13 @@ use std::path::{Path, PathBuf};
 const CALIBRATION_FRAME_SAMPLES: usize = 160;
 const DEFAULT_HANGOVER_MS: u64 = 180;
 const DEFAULT_MIN_SPEECH_MS: u64 = 120;
+// Heuristic mapping from energy-over-noise to a bounded pseudo-probability.
+const SPEECH_PROB_ENERGY_OVER_NOISE_NORMALIZER: f32 = 3.0;
+// Threshold picks are intentionally conservative: require being above both
+// high-percentile RMS and a multiple of measured noise-floor percentile.
+const RECOMMENDED_RMS_THRESHOLD_QUANTILE: f32 = 0.95;
+const RECOMMENDED_NOISE_FLOOR_QUANTILE: f32 = 0.9;
+const RECOMMENDED_NOISE_GATE_MULTIPLIER: f32 = 2.0;
 
 pub(crate) fn run_vad(command: VadCommand) -> Result<()> {
     match command {
@@ -172,7 +179,9 @@ fn compute_room_baseline(frames: &[listenbury::AudioFrame]) -> Result<RoomBaseli
         rms.push(frame.rms_energy);
         peak.push(frame.peak_amplitude);
         zcr.push(frame.zero_crossing_rate);
-        speech_prob.push((frame.energy_over_noise / 3.0).clamp(0.0, 1.0));
+        speech_prob.push(
+            (frame.energy_over_noise / SPEECH_PROB_ENERGY_OVER_NOISE_NORMALIZER).clamp(0.0, 1.0),
+        );
         noise_floor.push(frame.noise_floor_rms);
         band_low.push(frame.band_energy_db[0]);
         band_low_mid.push(frame.band_energy_db[1]);
@@ -192,11 +201,16 @@ fn compute_room_baseline(frames: &[listenbury::AudioFrame]) -> Result<RoomBaseli
             mid_high: Distribution::from_values(&band_mid_high),
             high: Distribution::from_values(&band_high),
         },
-        recommended_initial_thresholds: RecommendedThresholds {
-            rms_threshold: (quantile(&rms, 0.95)).max(quantile(&noise_floor, 0.9) * 2.0),
-            noise_floor: quantile(&noise_floor, 0.5),
-            hangover_ms: DEFAULT_HANGOVER_MS,
-            min_speech_ms: DEFAULT_MIN_SPEECH_MS,
+        recommended_initial_thresholds: {
+            let noise_gate_threshold = quantile(&noise_floor, RECOMMENDED_NOISE_FLOOR_QUANTILE)
+                * RECOMMENDED_NOISE_GATE_MULTIPLIER;
+            RecommendedThresholds {
+                rms_threshold: quantile(&rms, RECOMMENDED_RMS_THRESHOLD_QUANTILE)
+                    .max(noise_gate_threshold),
+                noise_floor: quantile(&noise_floor, 0.5),
+                hangover_ms: DEFAULT_HANGOVER_MS,
+                min_speech_ms: DEFAULT_MIN_SPEECH_MS,
+            }
         },
     })
 }
@@ -245,7 +259,7 @@ fn compute_labeled_metrics(frame_stats: &[FrameStat], labels: &[LabelInterval]) 
     let truth = frame_stats
         .iter()
         .map(|frame| {
-            let midpoint = frame.start_ms + (frame.end_ms.saturating_sub(frame.start_ms) / 2);
+            let midpoint = frame.start_ms.saturating_add(frame.end_ms) / 2;
             match label_at(labels, midpoint) {
                 Some(LabelKind::Speech) => {
                     if frame.speech {
@@ -410,10 +424,14 @@ fn write_text(path: &Path, content: &str) -> Result<()> {
 }
 
 fn quantile(values: &[f32], q: f32) -> f32 {
-    if values.is_empty() {
+    let mut sorted = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if sorted.is_empty() {
         return 0.0;
     }
-    let mut sorted = values.to_vec();
     sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
     let clamped_q = q.clamp(0.0, 1.0);
     let idx = ((sorted.len() - 1) as f32 * clamped_q).round() as usize;
@@ -565,6 +583,7 @@ struct FrameStat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const EXPECTED_NOISE_TRIGGER_RATE_HZ_MIN: f32 = 39.0;
 
     #[test]
     fn distribution_computes_expected_summary() {
@@ -633,7 +652,7 @@ mod tests {
         assert_eq!(metrics.false_negatives, 1);
         assert_eq!(metrics.false_positives, 1);
         assert_eq!(metrics.true_negatives, 1);
-        assert!(metrics.noise_trigger_rate_hz > 39.0);
+        assert!(metrics.noise_trigger_rate_hz > EXPECTED_NOISE_TRIGGER_RATE_HZ_MIN);
         let onset = metrics.onset_latency_ms.expect("expected onset latency");
         assert_eq!(onset.mean_ms, 0.0);
     }
