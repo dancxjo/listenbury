@@ -17,6 +17,7 @@ mod soundscape_debug;
 mod speech_cache;
 mod trace_viewer_export;
 mod transcribe;
+mod vad_calibration;
 mod vad_trace;
 mod web;
 
@@ -42,6 +43,7 @@ pub(crate) use soundscape_debug::run_soundscape_debug;
 pub(crate) use speech_cache::run_speech_cache;
 pub(crate) use trace_viewer_export::run_trace_viewer_export;
 pub(crate) use transcribe::run_transcribe;
+pub(crate) use vad_calibration::run_vad;
 pub(crate) use vad_trace::run_vad_trace;
 pub(crate) use web::run_web;
 
