@@ -36,7 +36,7 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn collect_files(dir: &Path, acc: &mut BTreeMap<String, String>) -> Result<()> {
+fn collect_files(root: &Path, dir: &Path, acc: &mut BTreeMap<String, String>) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -44,11 +44,11 @@ fn collect_files(dir: &Path, acc: &mut BTreeMap<String, String>) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, acc)?;
+            collect_files(root, &path, acc)?;
             continue;
         }
         let rel = path
-            .strip_prefix(dir)
+            .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .to_string();
@@ -134,8 +134,8 @@ pub fn diff(lang: &str, out: Option<&Path>) -> Result<()> {
 
     let mut current = BTreeMap::new();
     let mut expected = BTreeMap::new();
-    collect_files(&target_out, &mut current)?;
-    collect_files(tmp.path(), &mut expected)?;
+    collect_files(&target_out, &target_out, &mut current)?;
+    collect_files(tmp.path(), tmp.path(), &mut expected)?;
 
     let mut drift = Vec::new();
     for (path, hash) in &expected {
@@ -161,4 +161,29 @@ pub fn diff(lang: &str, out: Option<&Path>) -> Result<()> {
         println!("  - {item}");
     }
     bail!("generated output differs from regenerated eSpeak-ng conversion")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_files;
+    use anyhow::Result;
+    use std::{collections::BTreeMap, fs};
+    use tempfile::tempdir;
+
+    #[test]
+    fn collect_files_keeps_paths_relative_to_root() -> Result<()> {
+        let tmp = tempdir()?;
+        let root = tmp.path();
+        fs::create_dir_all(root.join("profiles"))?;
+        fs::create_dir_all(root.join("dictionary"))?;
+        fs::write(root.join("profiles/en-US.toml"), "profile")?;
+        fs::write(root.join("dictionary/dictionary.toml"), "dictionary")?;
+
+        let mut files = BTreeMap::new();
+        collect_files(root, root, &mut files)?;
+
+        assert!(files.contains_key("profiles/en-US.toml"));
+        assert!(files.contains_key("dictionary/dictionary.toml"));
+        Ok(())
+    }
 }
