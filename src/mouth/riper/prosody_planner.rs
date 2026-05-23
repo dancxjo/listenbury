@@ -8,7 +8,7 @@ use crate::mouth::riper::prosody_audit::{
 };
 use crate::mouth::riper::sentence_analysis::{
     OrthographicEmphasisKind, PROSODY_EVIDENCE_CONFIDENCE_MIN, ProsodicRole,
-    ProsodyEnvironmentFacts,
+    ProsodyEnvironmentFacts, SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{ProsodyBoundaryHint, ProsodyCommitment, detect_vocative_spans};
 use crate::text_stability::stable_prefix_len;
@@ -1124,8 +1124,8 @@ fn default_emphasis_ops(
     for target in &candidate.word_targets {
         let focus = focus_by_word.get(&target.word_index).copied();
         let syntax_facts = env_facts_by_word.get(&target.word_index);
-        let appositive_word =
-            syntax_confident(syntax_facts) && is_appositive_word(&syntax_claims, target.word_index);
+        let is_appositive_word = syntax_confident(syntax_facts)
+            && word_has_apposition_claim(&syntax_claims, target.word_index);
         if let Some(focus) = focus {
             ops.push(ProsodyOp::SetAccent {
                 target: ProsodyTarget::WordIndex {
@@ -1199,7 +1199,7 @@ fn default_emphasis_ops(
                 op: ProsodyOperation::Deemphasize,
                 strength: FUNCTION_WORD_DEEMPHASIS_STRENGTH,
             });
-        } else if appositive_word {
+        } else if is_appositive_word {
             ops.push(ProsodyOp::AdjustEnergy {
                 target: ProsodyTarget::WordIndex {
                     index: target.word_index,
@@ -1217,7 +1217,7 @@ fn default_emphasis_ops(
             rate: if focus.is_some() {
                 ProsodyRateClass::Slower
             } else if should_accelerate_function_word_rate
-                || appositive_word
+                || is_appositive_word
                 || is_parenthetical(candidate, target.text_range.start, target.text_range.end)
             {
                 ProsodyRateClass::Faster
@@ -1385,7 +1385,7 @@ fn focus_diagnostic_evidence(
             facts
                 .syntactic_links
                 .iter()
-                .map(|kind| format!("syntactic_link:{kind:?}")),
+                .map(|kind| format!("syntactic_link:{}", syntactic_link_label(*kind))),
         );
     }
     evidence.extend(
@@ -1409,10 +1409,29 @@ fn focus_diagnostic_evidence(
     evidence
 }
 
-fn is_appositive_word(claims: &[AnalysisClaim], word_index: usize) -> bool {
+fn word_has_apposition_claim(claims: &[AnalysisClaim], word_index: usize) -> bool {
     claims.iter().any(|claim| {
         claim.kind == ClaimKind::AppositionBoundary && claim_targets_word(claim, word_index)
     })
+}
+
+fn syntactic_link_label(kind: SyntacticLinkKind) -> &'static str {
+    match kind {
+        SyntacticLinkKind::Subject => "subject",
+        SyntacticLinkKind::Object => "object",
+        SyntacticLinkKind::Complement => "complement",
+        SyntacticLinkKind::InfinitivalMarker => "infinitival_marker",
+        SyntacticLinkKind::Modifier => "modifier",
+        SyntacticLinkKind::Determiner => "determiner",
+        SyntacticLinkKind::Auxiliary => "auxiliary",
+        SyntacticLinkKind::Preposition => "preposition",
+        SyntacticLinkKind::Coordination => "coordination",
+        SyntacticLinkKind::ContrastPair => "contrast_pair",
+        SyntacticLinkKind::NounCompound => "noun_compound",
+        SyntacticLinkKind::Vocative => "vocative",
+        SyntacticLinkKind::Apposition => "apposition",
+        SyntacticLinkKind::Parenthetical => "parenthetical",
+    }
 }
 
 fn has_quote_emphasis(candidate: &PhonemeProsodyCandidate, start: usize, end: usize) -> bool {
@@ -1818,7 +1837,7 @@ mod tests {
             machine_diag
                 .evidence
                 .iter()
-                .any(|entry| entry == "syntactic_link:Object"),
+                .any(|entry| entry == "syntactic_link:object"),
             "diagnostics should expose the object link that caused the prominence boost"
         );
     }
@@ -1869,12 +1888,12 @@ mod tests {
         assert!(
             red.evidence
                 .iter()
-                .any(|entry| entry == "syntactic_link:ContrastPair")
+                .any(|entry| entry == "syntactic_link:contrast_pair")
         );
         assert!(
             blue.evidence
                 .iter()
-                .any(|entry| entry == "syntactic_link:ContrastPair")
+                .any(|entry| entry == "syntactic_link:contrast_pair")
         );
     }
 
