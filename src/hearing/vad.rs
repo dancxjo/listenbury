@@ -1,7 +1,10 @@
 use crate::audio::frame::AudioFrame;
+use crate::config::VadProfile;
 #[cfg(feature = "vad-webrtc")]
 use anyhow::Context;
+use serde::{Deserialize, Serialize};
 
+const ENERGY_DEFAULT_THRESHOLD_RMS: f32 = 0.02;
 #[cfg(feature = "vad-webrtc")]
 const WEBRTC_ENERGY_FALLBACK_THRESHOLD_RMS: f32 = 0.08;
 #[cfg(feature = "vad-webrtc")]
@@ -15,11 +18,14 @@ const WEBRTC_NOISE_GATE_MARGIN_RMS: f32 = 0.006;
 #[cfg(feature = "vad-webrtc")]
 const WEBRTC_NOISE_FLOOR_ALPHA: f32 = 0.05;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum VadBackendKind {
+    #[serde(rename = "energy")]
     #[default]
     Energy,
+    #[serde(rename = "webrtc")]
     WebRtc,
+    #[serde(rename = "silero")]
     Silero,
 }
 
@@ -50,12 +56,27 @@ pub trait VoiceActivityDetector {
 }
 
 pub fn create_vad_backend(kind: VadBackendKind) -> anyhow::Result<Box<dyn VoiceActivityDetector>> {
+    create_vad_backend_with_profile(kind, None)
+}
+
+pub fn create_vad_backend_with_profile(
+    kind: VadBackendKind,
+    profile: Option<&VadProfile>,
+) -> anyhow::Result<Box<dyn VoiceActivityDetector>> {
+    let kind = profile.map(|profile| profile.backend).unwrap_or(kind);
     match kind {
-        VadBackendKind::Energy => Ok(Box::new(EnergyVad::default())),
+        VadBackendKind::Energy => Ok(Box::new(EnergyVad::new(
+            profile
+                .map(|profile| profile.rms_threshold)
+                .unwrap_or(ENERGY_DEFAULT_THRESHOLD_RMS),
+        ))),
         VadBackendKind::WebRtc => {
             #[cfg(feature = "vad-webrtc")]
             {
-                Ok(Box::new(WebRtcVad::default()))
+                Ok(Box::new(match profile {
+                    Some(profile) => WebRtcVad::new(profile.rms_threshold, profile.noise_floor),
+                    None => WebRtcVad::default(),
+                }))
             }
             #[cfg(not(feature = "vad-webrtc"))]
             {
@@ -105,7 +126,7 @@ impl EnergyVad {
 
 impl Default for EnergyVad {
     fn default() -> Self {
-        Self::new(0.02)
+        Self::new(ENERGY_DEFAULT_THRESHOLD_RMS)
     }
 }
 
@@ -142,6 +163,14 @@ impl Default for WebRtcVad {
 
 #[cfg(feature = "vad-webrtc")]
 impl WebRtcVad {
+    fn new(energy_fallback_threshold_rms: f32, noise_floor_rms: f32) -> Self {
+        Self {
+            energy_fallback: EnergyVad::new(energy_fallback_threshold_rms),
+            noise_floor_rms,
+            ..Self::default()
+        }
+    }
+
     fn speech_gate_rms(&self) -> f32 {
         WEBRTC_MIN_SPEECH_RMS.max(
             self.noise_floor_rms

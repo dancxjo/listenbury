@@ -34,6 +34,7 @@ pub use audio::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
     analyze_audio_frames, analyze_mono_samples, build_speech_likelihood_stream,
 };
+pub use config::{ListenburyConfig, VadProfile};
 pub use diagnostics::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
 pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,

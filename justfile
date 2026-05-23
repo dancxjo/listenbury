@@ -8,6 +8,8 @@ cmudict-path := "data/cmudict.dict"
 mbrola-voices-url := "https://raw.githubusercontent.com/numediart/MBROLA-voices/master/data"
 diphone-model := env_var_or_default("LISTENBURY_DIPHONE_MODEL", "models/voice.onnx")
 diphone-config := env_var_or_default("LISTENBURY_DIPHONE_CONFIG", "models/voice.json")
+vad-profile := env_var_or_default("LISTENBURY_VAD_PROFILE", "out/vad-profile.toml")
+vad-report := env_var_or_default("LISTENBURY_VAD_REPORT", "out/vad-room-energy.json")
 
 default:
     @just --list
@@ -50,7 +52,20 @@ diphone-audit plan:
 
 # Start the live PETE listening loop.
 listen *args:
-    cargo run -- listen "$@"
+    @if [ -f "{{vad-profile}}" ]; then cargo run -- listen --vad-profile "{{vad-profile}}" "$@"; else cargo run -- listen "$@"; fi
+
+# Capture room tone and save the active VAD calibration profile.
+vad-calibrate-room seconds="20" backend="energy":
+    @mkdir -p "$(dirname "{{vad-profile}}")" "$(dirname "{{vad-report}}")"
+    cargo run -- vad calibrate-room --vad "{{backend}}" --seconds "{{seconds}}" --json "{{vad-report}}" --toml "{{vad-profile}}"
+
+# Start the live loop with the saved VAD calibration profile.
+listen-calibrated *args:
+    cargo run -- listen --vad-profile "{{vad-profile}}" "$@"
+
+# Trace a WAV through the saved VAD calibration profile.
+vad-trace-calibrated input_wav *args:
+    cargo run -- dev vad-trace "{{input_wav}}" --vad-profile "{{vad-profile}}" "$@"
 
 # Download the full CMU Pronouncing Dictionary into data/cmudict.dict.
 fetch:

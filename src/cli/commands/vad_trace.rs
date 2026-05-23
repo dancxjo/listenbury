@@ -1,10 +1,10 @@
-use crate::cli::VadTraceCommand;
+use crate::cli::{VadTraceCommand, resolve_vad_config};
 use anyhow::{Context, Result};
 use listenbury::AudioFrame;
 use listenbury::audio::read_wav_as_audio_frames;
 use listenbury::event::HearingEvent;
 use listenbury::hearing::breath::BreathGroupSegmenter;
-use listenbury::hearing::vad::{VadBackendKind, create_vad_backend};
+use listenbury::hearing::vad::{VadBackendKind, create_vad_backend_with_profile};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::Write;
@@ -34,8 +34,8 @@ enum VadTraceEvent {
 pub(crate) fn run_vad_trace(command: VadTraceCommand) -> Result<()> {
     let frames = read_wav_as_audio_frames(&command.input_wav, VAD_TRACE_FRAME_SAMPLES)
         .with_context(|| format!("failed to read WAV {}", command.input_wav.display()))?;
-    let backend = command.vad.as_backend_kind();
-    let events = collect_vad_trace_events(&frames, backend)?;
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let events = collect_vad_trace_events(&frames, vad_config.backend, vad_config.profile)?;
 
     for event in &events {
         match event {
@@ -74,9 +74,12 @@ pub(crate) fn run_vad_trace(command: VadTraceCommand) -> Result<()> {
 fn collect_vad_trace_events(
     frames: &[AudioFrame],
     backend: VadBackendKind,
+    profile: Option<listenbury::VadProfile>,
 ) -> Result<Vec<VadTraceEvent>> {
-    let mut vad = create_vad_backend(backend)?;
-    let mut segmenter = BreathGroupSegmenter::default();
+    let mut vad = create_vad_backend_with_profile(backend, profile.as_ref())?;
+    let mut segmenter = profile
+        .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+        .unwrap_or_default();
     let mut events = Vec::new();
     let mut t_ms: u64 = 0;
     let mut group_start_ms = HashMap::new();
@@ -235,7 +238,7 @@ mod tests {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let frames =
             read_wav_as_audio_frames(&repo_root.join("samples/silence-16k-mono.wav"), 160).unwrap();
-        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy, None).unwrap();
 
         assert!(
             !events
@@ -249,7 +252,7 @@ mod tests {
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let frames =
             read_wav_as_audio_frames(&repo_root.join("samples/hello-16k-mono.wav"), 160).unwrap();
-        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy, None).unwrap();
 
         assert!(
             events
@@ -372,7 +375,7 @@ mod tests {
                 voice_signatures: Vec::new(),
             },
         ];
-        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy).unwrap();
+        let events = collect_vad_trace_events(&frames, VadBackendKind::Energy, None).unwrap();
         let frame_events = events
             .iter()
             .filter_map(|event| match event {

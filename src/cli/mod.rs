@@ -13,9 +13,9 @@ mod piper;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use listenbury::VadBackendKind;
+use listenbury::{VadBackendKind, VadProfile};
 use live_session::{LiveSession, LiveSessionConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(name = "listenbury", version, about = "Low-latency PETE runtime")]
@@ -144,6 +144,9 @@ pub(crate) struct VadTraceCommand {
     pub(crate) jsonl: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -180,6 +183,9 @@ pub(crate) struct MicTranscribeCommand {
     pub(crate) refine_interval_ms: u64,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
     /// Start the screenplay and WaveDeck browser viewers; microphone capture runs until Ctrl-C.
     #[arg(long)]
     pub(crate) web: bool,
@@ -223,6 +229,9 @@ pub(crate) struct ContinueCommand {
     pub(crate) whisper_model: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
     /// Prompt framing to apply to the initial prompt only. Stdin appends are inserted raw.
     #[arg(long, value_enum, default_value_t = PromptMode::Raw)]
     pub(crate) mode: PromptMode,
@@ -350,6 +359,9 @@ pub(crate) struct TranscribeCommand {
     pub(crate) until_ctrl_c: bool,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
     /// Start the screenplay and WaveDeck browser viewers; microphone capture runs until Ctrl-C.
     #[arg(long)]
     pub(crate) web: bool,
@@ -534,6 +546,9 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
     /// Start the WaveDeck browser viewer alongside the listen loop (live events streamed via SSE).
     #[arg(long)]
     pub(crate) web: bool,
@@ -571,6 +586,26 @@ impl VadBackendOption {
             Self::Silero => VadBackendKind::Silero,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolvedVadConfig {
+    pub(crate) backend: VadBackendKind,
+    pub(crate) profile: Option<VadProfile>,
+}
+
+pub(crate) fn resolve_vad_config(
+    selected: VadBackendOption,
+    profile_path: Option<&Path>,
+) -> Result<ResolvedVadConfig> {
+    let profile = profile_path.map(VadProfile::read_toml).transpose()?;
+    Ok(ResolvedVadConfig {
+        backend: profile
+            .as_ref()
+            .map(|profile| profile.backend)
+            .unwrap_or_else(|| selected.as_backend_kind()),
+        profile,
+    })
 }
 
 #[derive(Debug, Subcommand)]
@@ -1729,6 +1764,72 @@ mod tests {
             panic!("expected listen command");
         };
         assert_eq!(live_command.vad, VadBackendOption::Energy);
+    }
+
+    #[test]
+    fn vad_profile_parses_for_live_mic_trace_and_continue() {
+        let profile = PathBuf::from("out/vad-profile.toml");
+
+        let live = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--vad-profile",
+            "out/vad-profile.toml",
+        ])
+        .expect("listen should parse --vad-profile");
+        let Some(Command::Listen(live_command)) = live.command else {
+            panic!("expected listen command");
+        };
+        assert_eq!(live_command.vad_profile, Some(profile.clone()));
+
+        let mic = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "mic-transcribe",
+            "--vad-profile",
+            "out/vad-profile.toml",
+        ])
+        .expect("mic-transcribe should parse --vad-profile");
+        let Some(Command::Dev {
+            command: DevCommand::MicTranscribe(mic_command),
+        }) = mic.command
+        else {
+            panic!("expected mic-transcribe command");
+        };
+        assert_eq!(mic_command.vad_profile, Some(profile.clone()));
+
+        let trace = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "vad-trace",
+            "samples/hello-16k-mono.wav",
+            "--vad-profile",
+            "out/vad-profile.toml",
+        ])
+        .expect("vad-trace should parse --vad-profile");
+        let Some(Command::Dev {
+            command: DevCommand::VadTrace(trace_command),
+        }) = trace.command
+        else {
+            panic!("expected vad-trace command");
+        };
+        assert_eq!(trace_command.vad_profile, Some(profile.clone()));
+
+        let continue_command = Cli::try_parse_from([
+            "listenbury",
+            "dev",
+            "continue",
+            "--vad-profile",
+            "out/vad-profile.toml",
+        ])
+        .expect("dev continue should parse --vad-profile");
+        let Some(Command::Dev {
+            command: DevCommand::Continue(continue_command),
+        }) = continue_command.command
+        else {
+            panic!("expected continue command");
+        };
+        assert_eq!(continue_command.vad_profile, Some(profile));
     }
 
     #[test]

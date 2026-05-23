@@ -3,6 +3,7 @@ use crate::cli::{
 };
 use anyhow::{Context, Result};
 use listenbury::audio::read_wav_as_audio_frames;
+use listenbury::config::VadProfile;
 use listenbury::hearing::vad::{VadBackendKind, create_vad_backend};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -217,7 +218,7 @@ fn compute_room_baseline(frames: &[listenbury::AudioFrame]) -> Result<RoomBaseli
 
 fn recommend_profile(backend: VadBackendKind, baseline: &RoomBaseline) -> VadProfile {
     VadProfile {
-        backend: backend.as_str().to_string(),
+        backend,
         rms_threshold: baseline.recommended_initial_thresholds.rms_threshold,
         hangover_ms: baseline.recommended_initial_thresholds.hangover_ms,
         min_speech_ms: baseline.recommended_initial_thresholds.min_speech_ms,
@@ -534,28 +535,6 @@ struct LabeledMetrics {
 struct LatencySummary {
     mean_ms: f32,
     p95_ms: f32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct VadProfile {
-    backend: String,
-    rms_threshold: f32,
-    hangover_ms: u64,
-    min_speech_ms: u64,
-    noise_floor: f32,
-}
-
-impl VadProfile {
-    fn to_toml(&self) -> String {
-        format!(
-            "[vad]\nbackend = \"{}\"\nrms_threshold = {:.6}\nhangover_ms = {}\nmin_speech_ms = {}\nnoise_floor = {:.6}\n",
-            self.backend,
-            self.rms_threshold,
-            self.hangover_ms,
-            self.min_speech_ms,
-            self.noise_floor
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

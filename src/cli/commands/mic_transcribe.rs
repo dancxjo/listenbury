@@ -1,6 +1,8 @@
 use crate::cli::MicTranscribeCommand;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use crate::cli::model_paths::{resolve_refine_whisper_model, resolve_whisper_model};
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+use crate::cli::resolve_vad_config;
 use anyhow::Result;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -24,7 +26,7 @@ use listenbury::hearing::breath::{
     BreathGroupConfig, BreathGroupId, BreathGroupSegmenter, DEFAULT_VAD_FRAME_MS,
 };
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::live_trace::{LiveTraceRecorder, SseBroadcaster};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -377,12 +379,16 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
-    let vad_backend = command.vad.as_backend_kind();
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let vad_backend = vad_config.backend;
     let (frame_sample_rate_hz, frame_channels) =
         vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let mut state = MicTranscribeState {
-        vad: create_vad_backend(vad_backend)?,
-        segmenter: BreathGroupSegmenter::default(),
+        vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
+        segmenter: vad_config
+            .profile
+            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+            .unwrap_or_default(),
         active_groups: HashMap::new(),
         frame_time_ms: 0,
         last_vad_state: None,
@@ -663,7 +669,8 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         .play()
         .with_context(|| format!("failed to start capture from {device_name}"))?;
 
-    let vad_backend = command.vad.as_backend_kind();
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let vad_backend = vad_config.backend;
     println!(
         "transcribe --web listening on {device_name}: {} Hz, {} channel(s), vad={}, sample_queue={}. Press Ctrl-C to stop.",
         input_sample_rate_hz,
@@ -686,8 +693,11 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     let (frame_sample_rate_hz, frame_channels) =
         vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let mut state = WebTranscribeState {
-        vad: create_vad_backend(vad_backend)?,
-        segmenter: BreathGroupSegmenter::new(web_transcribe_breath_group_config()),
+        vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
+        segmenter: vad_config
+            .profile
+            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+            .unwrap_or_else(|| BreathGroupSegmenter::new(web_transcribe_breath_group_config())),
         active_groups: HashMap::new(),
         frame_time_ms: 0,
         last_vad_state: None,

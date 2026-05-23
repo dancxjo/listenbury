@@ -31,15 +31,17 @@ pub(crate) struct LiveSessionConfig {
     runtime: Option<LiveRuntimeCompatibilityShim>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LiveInputConfig {
     pub(crate) seconds: Option<u64>,
     pub(crate) vad: VadBackendOption,
+    pub(crate) vad_profile: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HearingConfig {
     pub(crate) vad: VadBackendOption,
+    pub(crate) vad_profile: Option<PathBuf>,
     pub(crate) tts_vad_pause_ms: u64,
     pub(crate) tts_vad_listen_ms: u64,
 }
@@ -100,9 +102,11 @@ impl LiveSessionConfig {
             input: LiveInputConfig {
                 seconds: command.seconds,
                 vad: command.vad,
+                vad_profile: command.vad_profile.clone(),
             },
             hearing: HearingConfig {
                 vad: command.vad,
+                vad_profile: command.vad_profile.clone(),
                 tts_vad_pause_ms: DEFAULT_TTS_VAD_PAUSE_MS,
                 tts_vad_listen_ms: DEFAULT_TTS_VAD_LISTEN_MS,
             },
@@ -143,9 +147,11 @@ impl LiveSessionConfig {
             input: LiveInputConfig {
                 seconds: None,
                 vad: command.vad,
+                vad_profile: command.vad_profile.clone(),
             },
             hearing: HearingConfig {
                 vad: command.vad,
+                vad_profile: command.vad_profile.clone(),
                 tts_vad_pause_ms: command.tts_vad_pause_ms,
                 tts_vad_listen_ms: command.tts_vad_listen_ms,
             },
@@ -224,6 +230,7 @@ pub(crate) fn continue_command_from_listen_command(
         piper_voice: command.piper_voice,
         whisper_model: command.whisper_model,
         vad: command.vad,
+        vad_profile: command.vad_profile,
         mode: PromptMode::Raw,
         max_tokens: None,
         context_size: DEFAULT_CONTEXT_SIZE,

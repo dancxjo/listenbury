@@ -22,6 +22,7 @@ pub(crate) fn run_transcribe(command: TranscribeCommand) -> Result<()> {
             refine_window_seconds: command.refine_window_seconds,
             refine_interval_ms: command.refine_interval_ms,
             vad: command.vad,
+            vad_profile: command.vad_profile,
             web: command.web,
             web_host: command.web_host,
             web_port: command.web_port,

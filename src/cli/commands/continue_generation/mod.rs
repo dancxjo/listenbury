@@ -1,4 +1,11 @@
 use crate::cli::ContinueCommand;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use crate::cli::resolve_vad_config;
 use anyhow::Result;
 
 #[cfg(any(
@@ -152,7 +159,7 @@ use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObs
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{VadResult, VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::vad::{VadResult, VoiceActivityDetector, create_vad_backend_with_profile};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -815,7 +822,8 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
     let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
     let whisper_model = resolve_whisper_model(command.whisper_model.clone())?;
-    let vad_backend = command.vad.as_backend_kind();
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let vad_backend = vad_config.backend;
     let capture_enabled = Arc::new(AtomicBool::new(true));
     let speaker_reference = Arc::new(Mutex::new(SpeakerReferenceMask::default()));
     let trace_started_at = ExactTimestamp::now();
@@ -886,6 +894,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let (_ear, ear_rx) = ContinueEar::start(ContinueEarConfig {
         whisper_model,
         vad_backend,
+        vad_profile: vad_config.profile,
         capture_enabled: Arc::clone(&capture_enabled),
         speaker_reference,
         live_audio,
@@ -3507,6 +3516,7 @@ fn drain_mouth_events_without_llm(
 struct ContinueEarConfig {
     whisper_model: PathBuf,
     vad_backend: VadBackendKind,
+    vad_profile: Option<listenbury::VadProfile>,
     capture_enabled: Arc<AtomicBool>,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
@@ -3750,6 +3760,7 @@ impl ContinueEar {
                     event_tx.clone(),
                     stop_for_processor,
                     config.vad_backend,
+                    config.vad_profile,
                     input_sample_rate_hz,
                     input_channels,
                     Arc::clone(&config.speaker_reference),
@@ -3934,6 +3945,7 @@ fn run_continue_ear_processor(
     event_tx: crossbeam_channel::Sender<ContinueEarEvent>,
     stop: Arc<AtomicBool>,
     vad_backend: VadBackendKind,
+    vad_profile: Option<listenbury::VadProfile>,
     input_sample_rate_hz: u32,
     input_channels: u16,
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
@@ -3948,8 +3960,10 @@ fn run_continue_ear_processor(
         vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let mut pending = VecDeque::<f32>::new();
     let mut state = ContinueEarState {
-        vad: create_vad_backend(vad_backend)?,
-        segmenter: BreathGroupSegmenter::default(),
+        vad: create_vad_backend_with_profile(vad_backend, vad_profile.as_ref())?,
+        segmenter: vad_profile
+            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+            .unwrap_or_default(),
         active_groups: HashMap::new(),
         environment: EnvironmentalSoundObserver::default(),
         auditory_scene: AuditorySceneAnalyzer::new(speaker_reference),

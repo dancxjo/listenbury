@@ -1,4 +1,11 @@
 use crate::cli::LiveHalfDuplexCommand;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use crate::cli::resolve_vad_config;
 use anyhow::Result;
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
 
@@ -112,7 +119,7 @@ use listenbury::hearing::vad::VadBackendKind;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend};
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -761,19 +768,20 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         TeeSink(trace_writer, broadcaster),
     );
     trace.emit_now(0, "capture_started", session_clock.now())?;
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let vad_backend = vad_config.backend;
 
     println!(
         "live-half-duplex listening on {input_name}: {} Hz, {} channel(s), vad={}.",
         input_sample_rate_hz,
         input_channels,
-        command.vad.as_backend_kind().as_str()
+        vad_backend.as_str()
     );
     println!("half-duplex mode: no barge-in, no interruption during Pete's speech.");
 
     let stop_deadline = command
         .seconds
         .map(|seconds| Instant::now() + Duration::from_secs(seconds));
-    let vad_backend = command.vad.as_backend_kind();
     let (frame_sample_rate_hz, frame_channels) =
         vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
     let input_frame_samples =
@@ -782,8 +790,11 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let mut pending = VecDeque::<f32>::new();
     let mut state = LiveHalfDuplexState {
         session_clock: session_clock.clone(),
-        vad: create_vad_backend(vad_backend)?,
-        segmenter: BreathGroupSegmenter::default(),
+        vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
+        segmenter: vad_config
+            .profile
+            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+            .unwrap_or_default(),
         active_groups: HashMap::new(),
         self_hearing: SelfHearingState::default(),
         controller: ConversationController::default(),
