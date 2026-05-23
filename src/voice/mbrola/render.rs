@@ -224,6 +224,21 @@ fn render_native_diphone_frames(
     Ok(rendered.frames)
 }
 
+pub fn render_phone_plan_with_diphone_provider_to_frames(
+    plan: &PhoneTimedPlan,
+    provider: &mut impl DiphoneProvider,
+    sample_rate_hz: u32,
+    source_period_samples: usize,
+) -> Result<Vec<AudioFrame>> {
+    let rendered = render_native_diphone_frames_with_provider(
+        plan,
+        provider,
+        sample_rate_hz,
+        source_period_samples,
+    )?;
+    Ok(rendered.frames)
+}
+
 #[derive(Debug, Default)]
 struct NativeRenderResult {
     frames: Vec<AudioFrame>,

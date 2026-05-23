@@ -5,12 +5,13 @@ use anyhow::{Context, Result};
 
 use crate::cli::{
     DiphoneAuditPlanCommand, DiphoneCacheBuildCommand, DiphoneCacheCommand,
-    DiphoneCacheForgeCommand, DiphoneCacheListCommand, DiphoneCommand,
+    DiphoneCacheForgeCommand, DiphoneCacheListCommand, DiphoneCommand, DiphoneWizardCommand,
 };
 
 pub(crate) fn run_diphone(command: DiphoneCommand) -> Result<()> {
     match command {
         DiphoneCommand::Forge(cmd) => run_forge(cmd),
+        DiphoneCommand::Wizard(cmd) => run_wizard(cmd),
         DiphoneCommand::CacheBuild(cmd) => run_build(cmd),
         DiphoneCommand::CacheList(cmd) => run_list(cmd),
         DiphoneCommand::AuditPlan(cmd) => run_audit_plan(cmd),
@@ -24,6 +25,55 @@ pub(crate) fn run_diphone_cache(command: DiphoneCacheCommand) -> Result<()> {
         DiphoneCacheCommand::List(cmd) => run_diphone(DiphoneCommand::CacheList(cmd)),
         DiphoneCacheCommand::AuditPlan(cmd) => run_diphone(DiphoneCommand::AuditPlan(cmd)),
     }
+}
+
+#[cfg(feature = "tts-riper")]
+fn run_wizard(cmd: DiphoneWizardCommand) -> Result<()> {
+    use listenbury::voice::diphone::{DIPHONE_VOICE_MANIFEST_FILE, DiphoneVoiceManifest};
+
+    let config = match cmd.config {
+        Some(config) => config,
+        None => infer_piper_config_path(&cmd.model)?,
+    };
+    let voice_dir = cmd.voice;
+    let cache_dir = voice_dir.join("diphone-cache");
+
+    run_build(DiphoneCacheBuildCommand {
+        model: cmd.model.clone(),
+        config: config.clone(),
+        inventory: cmd.inventory.clone(),
+        force: cmd.force,
+        cache_dir: cache_dir.clone(),
+    })?;
+
+    let parsed_config = load_config(&config)?;
+    let manifest = DiphoneVoiceManifest::new(
+        voice_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("diphone-voice"),
+        absolute_or_original(&cmd.model),
+        absolute_or_original(&config),
+        absolute_or_original(&cache_dir),
+        cmd.inventory,
+        parsed_config.sample_rate_hz,
+    );
+    manifest.write_pretty(&voice_dir)?;
+
+    println!(
+        "Diphone voice ready: {}",
+        voice_dir.join(DIPHONE_VOICE_MANIFEST_FILE).display()
+    );
+    println!(
+        "Try: MBROLA_VOICE={} listenbury say --mbrola \"Hello, my baby.\"",
+        voice_dir.display()
+    );
+    Ok(())
+}
+
+#[cfg(not(feature = "tts-riper"))]
+fn run_wizard(_cmd: DiphoneWizardCommand) -> Result<()> {
+    anyhow::bail!("listenbury diphone wizard requires the `tts-riper` feature")
 }
 
 #[cfg(feature = "tts-riper")]
@@ -700,6 +750,45 @@ fn builtin_inventory(name: &str) -> Option<&'static [&'static str]> {
 
 fn builtin_inventory_names() -> Vec<&'static str> {
     vec!["en-us-basic"]
+}
+
+#[cfg(feature = "tts-riper")]
+fn infer_piper_config_path(model: &Path) -> Result<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(file_name) = model.file_name().and_then(|name| name.to_str()) {
+        candidates.push(model.with_file_name(format!("{file_name}.json")));
+    }
+    candidates.push(model.with_extension("json"));
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    let file_name = model
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("<model>");
+    anyhow::bail!(
+        "failed to infer Piper config for {}; tried {}. Pass --config explicitly.",
+        model.display(),
+        [
+            format!("{file_name}.json"),
+            model
+                .with_extension("json")
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("<model>.json")
+                .to_string()
+        ]
+        .join(", ")
+    )
+}
+
+#[cfg(feature = "tts-riper")]
+fn absolute_or_original(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(feature = "tts-riper")]

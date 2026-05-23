@@ -385,7 +385,7 @@ pub(crate) struct SayCommand {
     pub(crate) riper: bool,
     #[arg(long, requires = "riper")]
     pub(crate) klatt: bool,
-    #[arg(long, requires = "riper", conflicts_with = "klatt")]
+    #[arg(long, conflicts_with = "klatt")]
     pub(crate) mbrola: bool,
     #[arg(long, requires = "mbrola")]
     pub(crate) mbrola_voice: Option<PathBuf>,
@@ -709,6 +709,8 @@ pub(crate) enum DiphoneCacheCommand {
 pub(crate) enum DiphoneCommand {
     /// Forge a single diphone and store it in the cache.
     Forge(DiphoneCacheForgeCommand),
+    /// Create a cache-backed diphone voice from a Piper/Riper ONNX model.
+    Wizard(DiphoneWizardCommand),
     /// Build a full diphone inventory cache.
     #[command(alias = "build")]
     CacheBuild(DiphoneCacheBuildCommand),
@@ -827,6 +829,23 @@ pub(crate) struct DiphoneCacheBuildCommand {
     /// Directory for the diphone cache (defaults to `./diphone-cache`).
     #[arg(long, default_value = "diphone-cache")]
     pub(crate) cache_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneWizardCommand {
+    /// Path to the Piper ONNX model file.
+    pub(crate) model: PathBuf,
+    /// Local voice directory/name to create (e.g. `ryan`).
+    pub(crate) voice: PathBuf,
+    /// Path to the Piper voice config JSON. Defaults to `<model>.json`, then `<stem>.json`.
+    #[arg(long)]
+    pub(crate) config: Option<PathBuf>,
+    /// Inventory name or phone-list file to prewarm.
+    #[arg(long, default_value = "en-us-basic")]
+    pub(crate) inventory: String,
+    /// Re-forge and overwrite units even when the cache entry already exists.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1009,6 +1028,23 @@ mod tests {
         };
         assert_eq!(command.inventory, "en-us-basic");
         assert!(command.force);
+    }
+
+    #[test]
+    fn diphone_wizard_parses_model_voice_and_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "diphone", "wizard", "ryan.onnx", "ryan"])
+            .expect("diphone wizard should parse model and voice name");
+
+        let Some(Command::Diphone { command }) = cli.command else {
+            panic!("expected top-level diphone command");
+        };
+        let DiphoneCommand::Wizard(command) = command else {
+            panic!("expected wizard subcommand");
+        };
+        assert_eq!(command.model, PathBuf::from("ryan.onnx"));
+        assert_eq!(command.voice, PathBuf::from("ryan"));
+        assert!(command.config.is_none());
+        assert_eq!(command.inventory, "en-us-basic");
     }
 
     #[test]
@@ -1266,6 +1302,19 @@ mod tests {
         assert!(!command.klatt);
         assert!(command.mbrola);
         assert!(command.mbrola_voice.is_none());
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_mbrola_without_explicit_riper() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--mbrola", "hello"])
+            .expect("say should parse MBROLA shorthand");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(!command.riper);
+        assert!(command.mbrola);
         assert_eq!(command.words, ["hello"]);
     }
 

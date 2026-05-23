@@ -35,6 +35,10 @@ use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "tts-riper")]
+use listenbury::voice::diphone::{DiphoneCache, DiphoneVoiceManifest, NeuralDiphoneProvider};
+#[cfg(feature = "tts-riper")]
+use listenbury::voice::mbrola::render_phone_plan_with_diphone_provider_to_frames;
+#[cfg(feature = "tts-riper")]
 use listenbury::voice::mbrola::{MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, PhoneTimedPlan};
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::{
@@ -252,18 +256,64 @@ fn say_riper_tts_for_voice(_piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
 }
 
 #[cfg(feature = "tts-riper")]
-#[derive(Debug)]
-struct MbrolaTextBackend {
-    renderer: MbrolaRenderer,
-    phonemizer: SimpleEnglishG2p,
+enum MbrolaTextBackend {
+    Native {
+        renderer: MbrolaRenderer,
+        phonemizer: SimpleEnglishG2p,
+    },
+    DiphoneCache {
+        provider: NeuralDiphoneProvider,
+        phonemizer: SimpleEnglishG2p,
+        voice_name: String,
+        sample_rate_hz: u32,
+        source_period_samples: usize,
+    },
 }
 
 #[cfg(feature = "tts-riper")]
 impl MbrolaTextBackend {
     fn load(voice_path: PathBuf) -> Result<Self> {
-        Ok(Self {
+        if let Some(manifest) = DiphoneVoiceManifest::load_if_present(&voice_path)? {
+            return Self::load_diphone_cache(manifest);
+        }
+        Ok(Self::Native {
             renderer: MbrolaRenderer::from_voice_path(None, voice_path)?,
             phonemizer: SimpleEnglishG2p::default(),
+        })
+    }
+
+    fn load_diphone_cache(manifest: DiphoneVoiceManifest) -> Result<Self> {
+        let config_json = std::fs::read_to_string(&manifest.config).with_context(|| {
+            format!(
+                "failed to read Piper voice config {}",
+                manifest.config.display()
+            )
+        })?;
+        let config = PiperVoiceConfig::from_json_str(&config_json).with_context(|| {
+            format!(
+                "failed to parse Piper voice config {}",
+                manifest.config.display()
+            )
+        })?;
+        let sample_rate_hz = config.sample_rate_hz;
+        let backend = RiperBackend::load(&manifest.model, config).with_context(|| {
+            format!(
+                "failed to load cache-backed diphone voice model {}",
+                manifest.model.display()
+            )
+        })?;
+        let cache = DiphoneCache::open(&manifest.cache_dir).with_context(|| {
+            format!(
+                "failed to open diphone cache {}",
+                manifest.cache_dir.display()
+            )
+        })?;
+        Ok(Self::DiphoneCache {
+            provider: NeuralDiphoneProvider::new(backend, cache),
+            phonemizer: SimpleEnglishG2p::default(),
+            voice_name: manifest.name,
+            sample_rate_hz,
+            source_period_samples: neutral_source_period_samples(sample_rate_hz),
         })
     }
 }
@@ -271,21 +321,53 @@ impl MbrolaTextBackend {
 #[cfg(feature = "tts-riper")]
 impl TtsBackend for MbrolaTextBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
-        let phonemes = self
-            .phonemizer
-            .phonemize_unit(text)
-            .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
-            .phonemes;
-        let plan = mbrola_plan_from_riper_phonemes(&phonemes, text, self.renderer.voice())?;
-        let frames = self
-            .renderer
-            .render_phone_plan_to_frames(&plan)
-            .with_context(|| format!("native MBROLA diphone render failed for `{text}`"))?;
-        anyhow::ensure!(
-            !frames.is_empty(),
-            "MBROLA produced no audio frames for `{text}`"
-        );
-        Ok(frames)
+        match self {
+            Self::Native {
+                renderer,
+                phonemizer,
+            } => {
+                let phonemes = phonemizer
+                    .phonemize_unit(text)
+                    .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
+                    .phonemes;
+                let plan = mbrola_plan_from_riper_phonemes(&phonemes, text, renderer.voice())?;
+                let frames = renderer
+                    .render_phone_plan_to_frames(&plan)
+                    .with_context(|| format!("native MBROLA diphone render failed for `{text}`"))?;
+                anyhow::ensure!(
+                    !frames.is_empty(),
+                    "MBROLA produced no audio frames for `{text}`"
+                );
+                Ok(frames)
+            }
+            Self::DiphoneCache {
+                provider,
+                phonemizer,
+                voice_name,
+                sample_rate_hz,
+                source_period_samples,
+            } => {
+                let phonemes = phonemizer
+                    .phonemize_unit(text)
+                    .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
+                    .phonemes;
+                let plan = diphone_cache_plan_from_riper_phonemes(&phonemes, text, voice_name)?;
+                let frames = render_phone_plan_with_diphone_provider_to_frames(
+                    &plan,
+                    provider,
+                    *sample_rate_hz,
+                    *source_period_samples,
+                )
+                .with_context(|| {
+                    format!("cache-backed MBROLA-compatible render failed for `{text}`")
+                })?;
+                anyhow::ensure!(
+                    !frames.is_empty(),
+                    "cache-backed diphone voice produced no audio frames for `{text}`"
+                );
+                Ok(frames)
+            }
+        }
     }
 }
 
@@ -343,6 +425,53 @@ fn mbrola_plan_from_riper_phonemes(
 }
 
 #[cfg(feature = "tts-riper")]
+fn diphone_cache_plan_from_riper_phonemes(
+    phonemes: &PiperPhonemeSequence,
+    text: &str,
+    voice_name: &str,
+) -> Result<PhoneTimedPlan> {
+    let mut phones = Vec::new();
+    for phoneme in &phonemes.phonemes {
+        let symbol = phoneme.0.as_str();
+        if symbol.trim().is_empty()
+            || matches!(symbol, "_" | "^" | "$" | "|" | "‖" | "." | "," | "!" | "?")
+        {
+            continue;
+        }
+        let duration_ms = mbrola_default_phone_duration_ms(symbol);
+        let pitch_targets = if mbrola_symbol_is_pitch_bearing(symbol) {
+            vec![
+                MbrolaPitchTarget {
+                    percent: 0,
+                    hz: 125.0,
+                },
+                MbrolaPitchTarget {
+                    percent: 60,
+                    hz: 135.0,
+                },
+                MbrolaPitchTarget {
+                    percent: 100,
+                    hz: 128.0,
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        phones.push(MbrolaPhone {
+            symbol: symbol.to_string(),
+            duration_ms,
+            pitch_targets,
+        });
+    }
+    phones.push(MbrolaPhone::new("_", 120));
+    anyhow::ensure!(
+        phones.iter().any(|phone| phone.symbol != "_"),
+        "Riper produced no cache-renderable phones for `{text}` with diphone voice `{voice_name}`"
+    );
+    Ok(PhoneTimedPlan::new(phones))
+}
+
+#[cfg(feature = "tts-riper")]
 fn mbrola_default_phone_duration_ms(symbol: &str) -> u32 {
     if mbrola_symbol_is_pitch_bearing(symbol) {
         145
@@ -383,6 +512,11 @@ fn mbrola_symbol_is_pitch_bearing(symbol: &str) -> bool {
             | "ʊ"
             | "u"
     )
+}
+
+#[cfg(feature = "tts-riper")]
+fn neutral_source_period_samples(sample_rate_hz: u32) -> usize {
+    (sample_rate_hz / 125).max(1) as usize
 }
 
 #[cfg(feature = "tts-riper")]
@@ -1117,6 +1251,9 @@ impl SayArgs {
         }
 
         let mbrola = command.mbrola || command.mbrola_voice.is_some();
+        if mbrola {
+            riper = true;
+        }
         if words.is_empty() && mbrola {
             words.push("Hello, my baby.".to_string());
         }
@@ -1124,10 +1261,6 @@ impl SayArgs {
         anyhow::ensure!(
             !klatt || riper,
             "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
-        );
-        anyhow::ensure!(
-            !mbrola || riper,
-            "listenbury say: --mbrola is only supported as a Riper backend alternative; pass --riper --mbrola"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
@@ -1779,6 +1912,23 @@ mod tests {
         assert!(!args.klatt);
         assert!(should_use_mbrola_backend(&args));
         assert_eq!(args.mbrola_voice, Some(PathBuf::from("voices/us1")));
+    }
+
+    #[test]
+    fn say_args_auto_selects_riper_for_mbrola() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            klatt: false,
+            mbrola: true,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("mbrola should imply the Riper planning path");
+        assert!(args.riper);
+        assert!(args.mbrola);
     }
 
     #[test]

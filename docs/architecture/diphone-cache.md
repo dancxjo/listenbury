@@ -19,9 +19,18 @@ Use `listenbury diphone` to forge, prewarm, inspect, and audit:
 
 ```bash
 listenbury diphone forge --model path/to/model.onnx --config path/to/model.json --left h --right @
+listenbury diphone wizard path/to/model.onnx ryan
 listenbury diphone cache-build --model path/to/model.onnx --config path/to/model.json --inventory en-us-basic
 listenbury diphone cache-list --model path/to/model.onnx --config path/to/model.json
 listenbury diphone audit-plan --model path/to/model.onnx --config path/to/model.json --plan out/example.pho
+```
+
+`diphone wizard` infers `path/to/model.onnx.json` (falling back to `path/to/model.json`),
+prewarms `ryan/diphone-cache/`, and writes `ryan/listenbury-diphone-voice.json`.
+The resulting directory can be used as an MBROLA-compatible local voice:
+
+```bash
+MBROLA_VOICE=ryan listenbury say --mbrola "Ooooh! Let's get married in Urartu, love."
 ```
 
 Single-unit forge optionally writes debug artifacts with `--debug-dir`:

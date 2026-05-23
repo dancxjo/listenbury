@@ -26,6 +26,7 @@
 
 pub mod cache;
 pub mod forge;
+pub mod manifest;
 pub mod normalize;
 pub mod provider;
 
@@ -35,6 +36,7 @@ pub use forge::{
     NORMALIZATION_VERSION, PhoneClass, SegmentationReport, build_carrier_sequence,
     forge_from_samples,
 };
+pub use manifest::{DIPHONE_VOICE_MANIFEST_FILE, DiphoneVoiceManifest};
 pub use normalize::NormalizationReport;
 pub use provider::FallbackDiphoneProvider;
 

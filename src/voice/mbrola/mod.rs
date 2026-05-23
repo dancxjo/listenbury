@@ -31,7 +31,10 @@ pub use pho::{
     MbrolaPhoParseError, MbrolaPhone, MbrolaPitchTarget, PhoneTimedPlan, phone_timed_plan_to_pho,
     prosody_timing_plan_to_phone_timed_plan, read_pho_file, write_pho_file,
 };
-pub use render::{MbrolaRenderer, MbrolaRendererConfig, PhoneTimedRenderer, RenderReport};
+pub use render::{
+    MbrolaRenderer, MbrolaRendererConfig, PhoneTimedRenderer, RenderReport,
+    render_phone_plan_with_diphone_provider_to_frames,
+};
 pub use symbols::{MbrolaSymbolMap, UnmappedPhone};
 pub use units::{
     JoinPoint, UnitAssemblyReport, assemble_unit, left_half_samples, right_half_samples,
