@@ -472,17 +472,13 @@ fn run_echo_impl(command: EchoCommand) -> Result<()> {
         frame_start_ms = frame_start_ms.saturating_add(frame_duration_ms(frame));
     }
 
-    let Some((transcript, _events)) = recognizer.poll_timed_transcript_with_finality(true)? else {
+    let transcript = recognizer.poll_timed_transcript_with_finality(true)?;
+    if transcript.text.trim().is_empty() {
         anyhow::bail!(
             "Whisper produced no transcript for echo input {}",
             command.input_wav.display()
         );
-    };
-    anyhow::ensure!(
-        !transcript.text.trim().is_empty(),
-        "Whisper produced an empty transcript for echo input {}",
-        command.input_wav.display()
-    );
+    }
 
     let observation = EchoProsodyObservation::from_streaming_updates(
         transcript.text.clone(),

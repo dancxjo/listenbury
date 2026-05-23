@@ -17,63 +17,20 @@ use super::*;
         feature = "tts-piper"
     )
 ))]
+use listenbury::speech::recognizer::StreamingRecognizerBackend;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 use listenbury::speech::transcript::{
     TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
+    TranscriptStabilityState,
 };
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct TranscriptStabilityState {
-    pub(super) candidate_id: TranscriptCandidateId,
-    pub(super) stable_text: String,
-    pub(super) unstable_text: String,
-    pub(super) confidence: Option<f32>,
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-impl TranscriptStabilityState {
-    pub(super) fn from_parts(
-        candidate_id: TranscriptCandidateId,
-        text: &str,
-        stable_prefix_len: usize,
-        confidence: Option<f32>,
-    ) -> Self {
-        let split = stable_prefix_len.min(text.len());
-        let split = if text.is_char_boundary(split) {
-            split
-        } else {
-            text.char_indices()
-                .find_map(|(idx, ch)| {
-                    let end = idx + ch.len_utf8();
-                    (end >= split).then_some(end)
-                })
-                .unwrap_or(text.len())
-        };
-        let (stable_text, unstable_text) = text.split_at(split);
-        Self {
-            candidate_id,
-            stable_text: stable_text.to_string(),
-            unstable_text: unstable_text.to_string(),
-            confidence,
-        }
-    }
-}
 
 #[cfg(any(
     test,
@@ -193,6 +150,8 @@ pub(super) enum ContinueEarEvent {
     TranscriptCandidate {
         event: TranscriptCandidateEvent,
         stability: Option<TranscriptStabilityState>,
+        backend: StreamingRecognizerBackend,
+        latency_ms: u64,
         occurred_at: ExactTimestamp,
     },
     Error {
@@ -243,6 +202,8 @@ impl ContinueEarEvent {
             Self::TranscriptCandidate {
                 event,
                 stability,
+                backend: _,
+                latency_ms: _,
                 occurred_at: _,
             } => match event {
                 TranscriptCandidateEvent::CandidateStarted { id } => {
@@ -252,8 +213,13 @@ impl ContinueEarEvent {
                 | TranscriptCandidateEvent::CandidateFinalized { id, .. } => {
                     if let Some(state) = stability {
                         format!(
-                            "transcript_candidate_state: id={} stable={:?} unstable={:?} confidence={:?}",
-                            id.0, state.stable_text, state.unstable_text, state.confidence
+                            "transcript_candidate_state: id={} stable={:?} unstable={:?} stable_word_prefix={:?} stable_word_count={} confidence={:?}",
+                            id.0,
+                            state.stable_text,
+                            state.unstable_text,
+                            state.stable_word_prefix,
+                            state.stable_word_count,
+                            state.confidence
                         )
                     } else {
                         format!("transcript_candidate_state: id={}", id.0)
