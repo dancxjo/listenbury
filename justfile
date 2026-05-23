@@ -18,6 +18,10 @@ default:
 run *args:
     cargo run -- "$@"
 
+# Speak through the default CLI backend.
+say *args:
+    @just run say "$@"
+
 # Speak through the Riper MBROLA backend. Run `just fetch` first for the default us3/en1 voices.
 say-mbrola text:
     cargo run -- say --riper --mbrola "{{text}}"
