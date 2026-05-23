@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 use crate::vocoder::bigvgan::BigVganBackend;
 use crate::vocoder::diffwave::DiffwaveBackend;
@@ -106,8 +106,7 @@ mod tests {
     };
     use crate::vocoder::VocoderInput;
     use crate::voice::articulator::{
-        RenderPlan, SungBackendKind, articulate, backend_detail_expectation,
-        render_plan_for_backend,
+        articulate, backend_detail_expectation, render_plan_for_backend, SungBackendKind,
     };
     use crate::voice::tract::targets::default_english_phone_targets;
     use std::time::Duration;
@@ -253,25 +252,15 @@ mod tests {
 
     #[test]
     fn piper_backend_rejects_phone_timed_input() {
-        let phrase = ragtime_phrase();
-        let plan = articulate(&phrase);
-        let target_table = default_english_phone_targets();
-        let render_plan =
-            render_plan_for_backend(SungBackendKind::Piper, &plan, 0.7, &target_table);
-
         let mut backend =
             backend_for_option(SingDemoBackendSelector::Piper, VocoderConfig::default())
                 .expect("piper backend");
         let err = backend
-            .render(VocoderInput::PhoneTimed(match &render_plan {
-                RenderPlan::CoarseText { .. } | RenderPlan::PartialProsody { .. } => &[],
-                RenderPlan::PhoneTimed(targets) => targets,
-            }))
+            .render(VocoderInput::PhoneTimed(&[]))
             .expect_err("piper should reject phone-timed input");
-        assert!(
-            err.to_string()
-                .contains("accepts only degraded coarse text input")
-        );
+        assert!(err
+            .to_string()
+            .contains("accepts only degraded coarse text input"));
     }
 
     #[test]
@@ -299,10 +288,9 @@ mod tests {
                     ssml_hint: None,
                 })
                 .expect_err("stub should return unimplemented error");
-            assert!(
-                err.to_string()
-                    .contains("registered but not implemented yet")
-            );
+            assert!(err
+                .to_string()
+                .contains("registered but not implemented yet"));
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
@@ -8,6 +8,11 @@ use crate::vocoder::{
 };
 use crate::voice::articulator::{RenderPlan, SungBackendDetail, SungBackendKind};
 use crate::{MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, PhoneTimedPlan};
+
+const PITCH_TARGET_MID_PERCENT: u8 = 50;
+const PITCH_TARGET_END_PERCENT: u8 = 100;
+const PITCH_TARGET_MID_RATIO: f32 = 1.02;
+const PITCH_TARGET_END_RATIO: f32 = 0.99;
 
 pub struct MbrolaBackend {
     voice_path: PathBuf,
@@ -71,12 +76,12 @@ impl MbrolaBackend {
                     vec![
                         MbrolaPitchTarget { percent: 0, hz },
                         MbrolaPitchTarget {
-                            percent: 50,
-                            hz: hz * 1.02,
+                            percent: PITCH_TARGET_MID_PERCENT,
+                            hz: hz * PITCH_TARGET_MID_RATIO,
                         },
                         MbrolaPitchTarget {
-                            percent: 100,
-                            hz: hz * 0.99,
+                            percent: PITCH_TARGET_END_PERCENT,
+                            hz: hz * PITCH_TARGET_END_RATIO,
                         },
                     ]
                 })
