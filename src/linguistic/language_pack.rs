@@ -172,7 +172,7 @@ pub struct LexiconSection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PronunciationRulesSection {
     pub policy: String,
-    pub seed_rule_table_json: &'static str,
+    pub pronunciation_rule_catalog_json: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -703,8 +703,8 @@ fn load_static_language_pack(
     if pronunciation_rules_json.trim().is_empty() {
         return Err(LanguagePackDataError::InvalidSection {
             path: data.pronunciation_rules_json.1,
-            section: "pronunciation_rules.seed_rule_table_json",
-            reason: "JSON seed table cannot be empty".to_string(),
+            section: "pronunciation_rules.pronunciation_rule_catalog_json",
+            reason: "JSON pronunciation rule catalog cannot be empty".to_string(),
         });
     }
 
@@ -792,7 +792,7 @@ fn load_static_language_pack(
         lexicon,
         pronunciation_rules: PronunciationRulesSection {
             policy: pronunciation_policy.profile,
-            seed_rule_table_json: pronunciation_rules_json,
+            pronunciation_rule_catalog_json: pronunciation_rules_json,
         },
         morphophonology,
         phrase_rules,
@@ -839,7 +839,12 @@ mod tests {
         let pack = english_us_language_pack();
         assert_eq!(pack.manifest.id, "en-US");
         assert!(!pack.phonology.arpabet_vowels.is_empty());
-        assert!(!pack.pronunciation_rules.seed_rule_table_json.is_empty());
+        assert!(
+            !pack
+                .pronunciation_rules
+                .pronunciation_rule_catalog_json
+                .is_empty()
+        );
         assert!(pack.backend_map("riper").is_some());
         assert!(pack.backend_map("klatt").is_some());
         assert!(pack.backend_map("mbrola-us1").is_some());

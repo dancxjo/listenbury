@@ -2183,7 +2183,7 @@ fn classify_to_token(
     )
 }
 
-fn has_imported_lexical_flag(rule_id: &str, flag: LexicalProsodyFlag) -> bool {
+fn has_language_pack_lexical_flag(rule_id: &str, flag: LexicalProsodyFlag) -> bool {
     english_lexical_flag_facts_for_rule(rule_id)
         .iter()
         .any(|fact| fact.flag == flag)
@@ -2217,9 +2217,12 @@ fn rule_matches_word_syntax_context(
         return false;
     }
 
-    let verb_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyVerbContext);
-    let noun_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyNounContext);
-    let past_context = has_imported_lexical_flag(rule_id, LexicalProsodyFlag::LikelyPastContext);
+    let verb_context =
+        has_language_pack_lexical_flag(rule_id, LexicalProsodyFlag::LikelyVerbContext);
+    let noun_context =
+        has_language_pack_lexical_flag(rule_id, LexicalProsodyFlag::LikelyNounContext);
+    let past_context =
+        has_language_pack_lexical_flag(rule_id, LexicalProsodyFlag::LikelyPastContext);
     let next_is_verb = next_syntax.is_some_and(|facts| facts.pos == PartOfSpeech::Verb);
     let linked_infinitive = has_link(current_syntax, SyntacticLinkKind::InfinitivalMarker);
     let linked_aux_chain = has_link(next_syntax, SyntacticLinkKind::Auxiliary);

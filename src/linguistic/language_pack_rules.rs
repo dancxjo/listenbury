@@ -10,7 +10,7 @@ use crate::linguistic::phone::PhoneString;
 use crate::mouth::riper::{NormalizedText, SentenceAnalysis};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RuleProvenance {
+pub struct SourceProvenance {
     pub source: String,
     pub source_file: String,
     pub source_license: String,
@@ -38,7 +38,7 @@ pub struct LexicalProsodyFlagFact {
     pub source_rule_id: String,
     pub flag: LexicalProsodyFlag,
     pub confidence: f32,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +61,7 @@ pub struct WeakFormRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ pub struct StressRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,11 +88,11 @@ pub struct PronunciationOverrideRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PunctuationProsodyRule {
+pub struct BoundaryProsodyRuleSeed {
     pub rule_id: String,
     pub match_pattern: String,
     pub context: RuleContextConstraint,
@@ -101,11 +101,11 @@ pub struct PunctuationProsodyRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MultiWordSeedRule {
+pub struct PhraseRuleEntry {
     pub rule_id: String,
     pub words: Vec<String>,
     pub context: RuleContextConstraint,
@@ -116,7 +116,7 @@ pub struct MultiWordSeedRule {
     pub required_links: Vec<String>,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +129,7 @@ pub struct VoiceVariantRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,7 +142,7 @@ pub struct PhonemeMappingRule {
     pub priority: i32,
     #[serde(default)]
     pub dictionary_flags: Vec<LexicalProsodyFlag>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,15 +158,15 @@ pub struct LinguisticVarietyRuleTable {
     pub weak_form_rules: Vec<WeakFormRule>,
     pub stress_rules: Vec<StressRule>,
     pub pronunciation_override_rules: Vec<PronunciationOverrideRule>,
-    pub punctuation_prosody_rules: Vec<PunctuationProsodyRule>,
+    pub punctuation_prosody_rules: Vec<BoundaryProsodyRuleSeed>,
     #[serde(default)]
-    pub multi_word_rules: Vec<MultiWordSeedRule>,
+    pub multi_word_rules: Vec<PhraseRuleEntry>,
     pub voice_variant_rules: Vec<VoiceVariantRule>,
     pub phoneme_mapping_rules: Vec<PhonemeMappingRule>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EspeakNgSeedRuleTable {
+pub struct PronunciationRuleCatalog {
     pub source: String,
     pub imported_at: String,
     pub source_license: String,
@@ -179,10 +179,10 @@ pub struct ToRuleDescriptor {
     pub citation_form: String,
     pub output_transformation: String,
     pub lexical_flags: Vec<LexicalProsodyFlagFact>,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
-impl EspeakNgSeedRuleTable {
+impl PronunciationRuleCatalog {
     pub fn find_variety(&self, tag: &str) -> Option<&LinguisticVarietyRuleTable> {
         self.linguistic_varieties
             .roots
@@ -202,39 +202,41 @@ impl LinguisticVarietyRuleTable {
     }
 }
 
-pub fn import_rule_table_from_str(input: &str) -> Result<EspeakNgSeedRuleTable, serde_json::Error> {
+pub fn import_rule_catalog_from_str(
+    input: &str,
+) -> Result<PronunciationRuleCatalog, serde_json::Error> {
     serde_json::from_str(input)
 }
 
-pub fn export_rule_table_to_json(
-    table: &EspeakNgSeedRuleTable,
+pub fn export_rule_catalog_to_json(
+    table: &PronunciationRuleCatalog,
 ) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(table)
 }
 
-pub fn load_seed_rule_table() -> &'static EspeakNgSeedRuleTable {
-    static TABLE: OnceLock<EspeakNgSeedRuleTable> = OnceLock::new();
+pub fn load_pronunciation_rule_catalog() -> &'static PronunciationRuleCatalog {
+    static TABLE: OnceLock<PronunciationRuleCatalog> = OnceLock::new();
     TABLE.get_or_init(|| {
-        import_rule_table_from_str(
+        import_rule_catalog_from_str(
             english_us_language_pack()
                 .pronunciation_rules
-                .seed_rule_table_json,
+                .pronunciation_rule_catalog_json,
         )
-        .expect("bundled eSpeak-ng seed rules JSON should parse")
+        .expect("bundled eSpeak-ng-derived rule catalog JSON should parse")
     })
 }
 
-pub fn english_seed_variety() -> &'static LinguisticVarietyRuleTable {
-    let table = load_seed_rule_table();
+pub fn english_rule_catalog_variety() -> &'static LinguisticVarietyRuleTable {
+    let table = load_pronunciation_rule_catalog();
     table
         .find_variety("en-us-general")
         .or_else(|| table.find_variety("en-us"))
         .or_else(|| table.find_variety("en"))
-        .expect("bundled eSpeak-ng seed rules should include an English variety")
+        .expect("bundled eSpeak-ng-derived rule catalog should include an English variety")
 }
 
 pub fn english_to_rule_descriptor(rule_id: &str) -> Option<ToRuleDescriptor> {
-    let variety = english_seed_variety();
+    let variety = english_rule_catalog_variety();
     if let Some(rule) = variety
         .weak_form_rules
         .iter()
@@ -263,7 +265,7 @@ pub fn english_to_rule_descriptor(rule_id: &str) -> Option<ToRuleDescriptor> {
 }
 
 pub fn english_lexical_flag_facts_for_rule(rule_id: &str) -> Vec<LexicalProsodyFlagFact> {
-    let variety = english_seed_variety();
+    let variety = english_rule_catalog_variety();
     if let Some(rule) = variety
         .weak_form_rules
         .iter()
@@ -297,9 +299,9 @@ pub fn english_lexical_flag_facts_for_rule(rule_id: &str) -> Vec<LexicalProsodyF
 
 pub fn english_punctuation_rule(
     terminal_punctuation: char,
-) -> Option<&'static PunctuationProsodyRule> {
+) -> Option<&'static BoundaryProsodyRuleSeed> {
     let pattern = terminal_punctuation.to_string();
-    english_seed_variety()
+    english_rule_catalog_variety()
         .punctuation_prosody_rules
         .iter()
         .find(|rule| rule.match_pattern == pattern)
@@ -361,7 +363,7 @@ pub enum MorphophonologyOutput {
 /// format that any downstream component can inspect without re-parsing
 /// eSpeak's proprietary rule syntax.
 ///
-/// A rule carries full [`RuleProvenance`] so diagnostics can always trace
+/// A rule carries full [`SourceProvenance`] so diagnostics can always trace
 /// where a particular pronunciation decision originated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MorphophonologyRule {
@@ -376,11 +378,11 @@ pub struct MorphophonologyRule {
     /// What the rule produces once the stem is resolved.
     pub output_policy: MorphophonologyOutput,
     /// Where this rule's knowledge was originally encoded.
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
-fn espeak_provenance() -> RuleProvenance {
-    RuleProvenance {
+fn espeak_provenance() -> SourceProvenance {
+    SourceProvenance {
         source: "espeak-ng-derived".to_string(),
         source_file: "dictsource/en_rules".to_string(),
         source_license: "GPL-3.0-or-later".to_string(),
@@ -393,7 +395,7 @@ fn espeak_provenance() -> RuleProvenance {
 ///
 /// These rules cover the most productive English suffixes (`-ed`, `-ing`,
 /// `-s`, `-ly`) and common prefixes (`un-`, `re-`, `di-`).  Every rule
-/// carries [`RuleProvenance`] so callers can surface attribution in
+/// carries [`SourceProvenance`] so callers can surface attribution in
 /// diagnostics.
 pub fn english_native_morphophonology_rules() -> Vec<MorphophonologyRule> {
     let prov = espeak_provenance();
@@ -548,18 +550,18 @@ pub struct RuleConditionDiagnostics {
     pub reasons: Vec<String>,
 }
 
-/// An eSpeak-ng seed rule translated into a Listenbury-native rule descriptor.
+/// An eSpeak-ng catalog rule translated into a Listenbury-native rule descriptor.
 ///
 /// The [`ling_env::EnvironmentPattern`] encodes the linguistic conditions under
 /// which this rule applies (POS, prosodic role, phrase boundary, confidence,
 /// language/variety).  Provenance fields are preserved verbatim so diagnostics
 /// can trace every rule back to its eSpeak-ng origin.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ImportedEnvironmentRule {
-    /// Unique rule identifier, copied from the seed rule's `rule_id`.
+pub struct LanguagePackEnvironmentRule {
+    /// Unique rule identifier, copied from the catalog rule's `rule_id`.
     pub id: String,
     /// Trace back to the originating eSpeak-ng source file and license.
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
     /// Higher values take precedence when multiple rules match.
     pub priority: i32,
     /// Normalised confidence in `[0, 1]`.
@@ -574,7 +576,7 @@ pub struct ImportedEnvironmentRule {
     pub output: RuleOutput,
 }
 
-/// Phrase-level pronunciation/prosody rule imported from an eSpeak multi-word seed entry.
+/// Phrase-level pronunciation/prosody rule imported from an eSpeak multi-word catalog entry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiWordPronunciationRule {
     pub id: String,
@@ -582,7 +584,7 @@ pub struct MultiWordPronunciationRule {
     pub conditions: Vec<VarietyRuleCondition>,
     pub pattern: ling_env::EnvironmentPattern,
     pub output: MultiWordRuleOutput,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
     pub priority: i32,
     pub confidence: f32,
     pub required_links: Vec<String>,
@@ -601,7 +603,7 @@ pub struct MatchedWordSpan {
 pub struct MultiWordRuleMatch {
     pub rule_id: String,
     pub matched_word_span: MatchedWordSpan,
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +630,7 @@ fn arpabet_to_phone_string(arpabet_str: &str) -> PhoneString {
     PhoneString { phones }
 }
 
-/// Parse the `output_transformation` field of a [`PunctuationProsodyRule`] into a
+/// Parse the `output_transformation` field of a [`BoundaryProsodyRuleSeed`] into a
 /// `(PhraseBoundaryKind, contour_label)` pair.
 ///
 /// Expected format: `"boundary:<label>"` where `<label>` is a lower-case contour
@@ -649,10 +651,10 @@ fn parse_boundary_output(output: &str) -> (ling_env::PhraseBoundaryKind, Option<
 
 /// Seed rule `confidence` values are stored as integers in the range 0–100.
 /// Divide by this factor to normalise them to the [0.0, 1.0] range expected by
-/// [`ImportedEnvironmentRule::confidence`].
+/// [`LanguagePackEnvironmentRule::confidence`].
 const CONFIDENCE_SCALE_FACTOR: f32 = 100.0;
 
-fn confidence_from_seed(raw: u8) -> f32 {
+fn confidence_from_catalog_entry(raw: u8) -> f32 {
     raw as f32 / CONFIDENCE_SCALE_FACTOR
 }
 
@@ -689,7 +691,7 @@ fn contextual_flags(context: &RuleContextConstraint) -> Vec<LexicalProsodyFlag> 
 fn lexical_flag_facts(
     rule_id: &str,
     confidence: f32,
-    provenance: &RuleProvenance,
+    provenance: &SourceProvenance,
     mut flags: Vec<LexicalProsodyFlag>,
 ) -> Vec<LexicalProsodyFlagFact> {
     flags.sort_unstable_by_key(|flag| *flag as u8);
@@ -711,7 +713,7 @@ fn lexical_flag_facts_for_weak_form_rule(rule: &WeakFormRule) -> Vec<LexicalPros
     flags.extend(contextual_flags(&rule.context));
     lexical_flag_facts(
         &rule.rule_id,
-        confidence_from_seed(rule.confidence),
+        confidence_from_catalog_entry(rule.confidence),
         &rule.provenance,
         flags,
     )
@@ -728,7 +730,7 @@ fn lexical_flag_facts_for_stress_rule(rule: &StressRule) -> Vec<LexicalProsodyFl
     flags.extend(contextual_flags(&rule.context));
     lexical_flag_facts(
         &rule.rule_id,
-        confidence_from_seed(rule.confidence),
+        confidence_from_catalog_entry(rule.confidence),
         &rule.provenance,
         flags,
     )
@@ -752,14 +754,14 @@ fn lexical_flag_facts_for_pronunciation_override_rule(
     }
     lexical_flag_facts(
         &rule.rule_id,
-        confidence_from_seed(rule.confidence),
+        confidence_from_catalog_entry(rule.confidence),
         &rule.provenance,
         flags,
     )
 }
 
 fn lexical_flag_facts_for_punctuation_rule(
-    rule: &PunctuationProsodyRule,
+    rule: &BoundaryProsodyRuleSeed,
 ) -> Vec<LexicalProsodyFlagFact> {
     let mut flags = rule.dictionary_flags.clone();
     push_flag_once(&mut flags, LexicalProsodyFlag::PauseAfter);
@@ -767,13 +769,13 @@ fn lexical_flag_facts_for_punctuation_rule(
     flags.extend(contextual_flags(&rule.context));
     lexical_flag_facts(
         &rule.rule_id,
-        confidence_from_seed(rule.confidence),
+        confidence_from_catalog_entry(rule.confidence),
         &rule.provenance,
         flags,
     )
 }
 
-fn lexical_flag_facts_for_multi_word_rule(rule: &MultiWordSeedRule) -> Vec<LexicalProsodyFlagFact> {
+fn lexical_flag_facts_for_multi_word_rule(rule: &PhraseRuleEntry) -> Vec<LexicalProsodyFlagFact> {
     let mut flags = rule.dictionary_flags.clone();
     if rule.output_transformation == "no_break" {
         push_flag_once(&mut flags, LexicalProsodyFlag::PauseAfter);
@@ -781,7 +783,7 @@ fn lexical_flag_facts_for_multi_word_rule(rule: &MultiWordSeedRule) -> Vec<Lexic
     flags.extend(contextual_flags(&rule.context));
     lexical_flag_facts(
         &rule.rule_id,
-        confidence_from_seed(rule.confidence),
+        confidence_from_catalog_entry(rule.confidence),
         &rule.provenance,
         flags,
     )
@@ -901,7 +903,7 @@ fn condition_matches_active_profile(
 }
 
 pub fn evaluate_rule_conditions(
-    rule: &ImportedEnvironmentRule,
+    rule: &LanguagePackEnvironmentRule,
     active: &ActiveVarietyProfile,
 ) -> RuleConditionDiagnostics {
     if rule.conditions.is_empty() {
@@ -925,7 +927,7 @@ pub fn evaluate_rule_conditions(
 }
 
 pub fn english_voice_render_conditions() -> Vec<VarietyRuleCondition> {
-    english_seed_variety()
+    english_rule_catalog_variety()
         .voice_variant_rules
         .iter()
         .map(|rule| VarietyRuleCondition {
@@ -944,12 +946,12 @@ pub fn english_voice_render_conditions() -> Vec<VarietyRuleCondition> {
 // Public conversion functions
 // ---------------------------------------------------------------------------
 
-/// Convert a [`WeakFormRule`] into a native [`ImportedEnvironmentRule`].
+/// Convert a [`WeakFormRule`] into a native [`LanguagePackEnvironmentRule`] entry.
 ///
 /// The resulting rule fires when the phonological context indicates a function
 /// word in a weak prosodic position ([`ling_env::ProsodicRole::FunctionWeak`]).
 ///
-/// The seed rule's `next_pos` constraint (e.g. "fire before a verb") is *not*
+/// The catalog rule's `next_pos` constraint (e.g. "fire before a verb") is *not*
 /// mapped to a [`ling_env::ContextPredicate::Pos`] predicate because it refers to
 /// the *next* word's POS, which the current `EnvironmentPattern` engine does not
 /// model directly.  The `ProsodicRole::FunctionWeak` predicate captures the same
@@ -958,12 +960,12 @@ pub fn convert_weak_form_rule(
     rule: &WeakFormRule,
     language: &str,
     variety: &str,
-) -> ImportedEnvironmentRule {
+) -> LanguagePackEnvironmentRule {
     let output_phones = arpabet_to_phone_string(&rule.output_transformation);
-    let confidence = confidence_from_seed(rule.confidence);
+    let confidence = confidence_from_catalog_entry(rule.confidence);
 
     // Prosodic role: weak form words are always function words in weak position.
-    // Note: the seed rule's `next_pos` constraint ("fire when the next word is a
+    // Note: the catalog rule's `next_pos` constraint ("fire when the next word is a
     // verb/noun/…") cannot be expressed as a `ContextPredicate::Pos` on the
     // *current* word — the native engine does not yet model "next-word POS"
     // directly.  The `ProsodicRole::FunctionWeak` predicate captures the same
@@ -984,7 +986,7 @@ pub fn convert_weak_form_rule(
         ling_env::TargetPattern::Symbols(citation_symbols)
     };
 
-    ImportedEnvironmentRule {
+    LanguagePackEnvironmentRule {
         id: rule.rule_id.clone(),
         provenance: rule.provenance.clone(),
         priority: rule.priority,
@@ -1009,21 +1011,21 @@ pub fn convert_weak_form_rule(
     }
 }
 
-/// Convert a [`PunctuationProsodyRule`] into a native [`ImportedEnvironmentRule`].
+/// Convert a [`BoundaryProsodyRuleSeed`] into a native [`LanguagePackEnvironmentRule`] entry.
 ///
 /// The output is a [`RuleOutput::ProsodyBoundary`] whose `contour` label is
-/// derived from the seed rule's `output_transformation` string
+/// derived from the catalog rule's `output_transformation` string
 /// (`"boundary:<label>"`).  The target pattern carries the literal punctuation
 /// character so callers can identify which surface form triggers this rule.
 pub fn convert_punctuation_prosody_rule(
-    rule: &PunctuationProsodyRule,
+    rule: &BoundaryProsodyRuleSeed,
     language: &str,
     variety: &str,
-) -> ImportedEnvironmentRule {
-    let confidence = confidence_from_seed(rule.confidence);
+) -> LanguagePackEnvironmentRule {
+    let confidence = confidence_from_catalog_entry(rule.confidence);
     let (boundary, contour) = parse_boundary_output(&rule.output_transformation);
 
-    ImportedEnvironmentRule {
+    LanguagePackEnvironmentRule {
         id: rule.rule_id.clone(),
         provenance: rule.provenance.clone(),
         priority: rule.priority,
@@ -1068,10 +1070,10 @@ fn parse_multi_word_output(output: &str) -> MultiWordRuleOutput {
     MultiWordRuleOutput::PhoneString(arpabet_to_phone_string(output))
 }
 
-/// Convert a [`MultiWordSeedRule`] into a native phrase-level
+/// Convert a [`PhraseRuleEntry`] into a native phrase-level
 /// [`MultiWordPronunciationRule`].
 pub fn convert_multi_word_rule(
-    rule: &MultiWordSeedRule,
+    rule: &PhraseRuleEntry,
     language: &str,
     variety: &str,
 ) -> MultiWordPronunciationRule {
@@ -1096,7 +1098,7 @@ pub fn convert_multi_word_rule(
         output: parse_multi_word_output(&rule.output_transformation),
         provenance: rule.provenance.clone(),
         priority: rule.priority,
-        confidence: confidence_from_seed(rule.confidence),
+        confidence: confidence_from_catalog_entry(rule.confidence),
         required_links: rule.required_links.clone(),
         lexical_flags: lexical_flag_facts_for_multi_word_rule(rule),
     }
@@ -1211,13 +1213,14 @@ pub struct BoundaryProsodyEffect {
 /// A structured boundary/prosody rule derived from eSpeak-ng clause-position
 /// and punctuation prosody rules.
 ///
-/// Unlike [`ImportedEnvironmentRule`], which stores the output as an opaque
+/// Unlike [`LanguagePackEnvironmentRule`], which stores the output as an opaque
 /// `contour: Option<String>`, `BoundaryProsodyRule` encodes every prosodic
 /// dimension as a typed field so that downstream renderers can act on them
 /// without parsing strings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoundaryProsodyRule {
-    /// Unique identifier, copied from the originating seed rule's `rule_id`.
+    /// Unique identifier, copied from the originating
+    /// [`BoundaryProsodyRuleSeed`] entry's `rule_id`.
     pub id: String,
     /// What position or punctuation character triggers this rule.
     pub boundary_pattern: BoundaryPattern,
@@ -1228,11 +1231,11 @@ pub struct BoundaryProsodyRule {
     /// Normalised confidence in `[0, 1]`.
     pub confidence: f32,
     /// Trace back to the originating eSpeak-ng source file and license.
-    pub provenance: RuleProvenance,
+    pub provenance: SourceProvenance,
 }
 
 // ---------------------------------------------------------------------------
-// Conversion: PunctuationProsodyRule → BoundaryProsodyRule
+// Conversion: BoundaryProsodyRuleSeed → BoundaryProsodyRule
 // ---------------------------------------------------------------------------
 
 /// Intermediate result of parsing an `output_transformation` string into
@@ -1322,18 +1325,19 @@ fn suppressible_by_for_punctuation(match_pattern: &str) -> Vec<SuppressibleBy> {
     }
 }
 
-/// Convert a [`PunctuationProsodyRule`] into a structured [`BoundaryProsodyRule`].
+/// Convert a [`BoundaryProsodyRuleSeed`] into a structured [`BoundaryProsodyRule`].
 ///
 /// Unlike [`convert_punctuation_prosody_rule`] which produces an
-/// [`ImportedEnvironmentRule`] with a string `contour` field, this function
+/// [`LanguagePackEnvironmentRule`] with a string `contour` field, this function
 /// produces fully typed output that does not depend on string parsing downstream.
 ///
 /// `match_pattern` is expected to be a single Unicode scalar value (punctuation
 /// character).  If it is empty the pattern falls back to
 /// [`BoundaryPattern::AnyMajorBoundary`].
-pub fn convert_to_boundary_prosody_rule(rule: &PunctuationProsodyRule) -> BoundaryProsodyRule {
-    let confidence = confidence_from_seed(rule.confidence);
-    // match_pattern is always a single punctuation character in the seed data.
+pub fn convert_to_boundary_prosody_rule(rule: &BoundaryProsodyRuleSeed) -> BoundaryProsodyRule {
+    let confidence = confidence_from_catalog_entry(rule.confidence);
+    // `match_pattern` is always a single punctuation character in
+    // `BoundaryProsodyRuleSeed` entries.
     // chars().next() safely handles the empty-string edge case without panicking.
     let boundary_pattern = match rule.match_pattern.chars().next() {
         Some(ch) => BoundaryPattern::Punctuation(ch),
@@ -1386,7 +1390,7 @@ pub fn is_comma_pause_suppressed(
 /// These supplement the punctuation-derived rules with position-based prosodic
 /// effects such as utterance-final falling cadence and clause-start freshness.
 pub fn clause_position_boundary_rules() -> Vec<BoundaryProsodyRule> {
-    let provenance = RuleProvenance {
+    let provenance = SourceProvenance {
         source: "espeak-ng-derived".to_string(),
         source_file: "dictsource/en_rules, phsource/prosody".to_string(),
         source_license: "GPL-3.0-or-later".to_string(),
@@ -1445,20 +1449,20 @@ pub fn clause_position_boundary_rules() -> Vec<BoundaryProsodyRule> {
 // Bulk converters for the bundled English variety
 // ---------------------------------------------------------------------------
 
-/// Return native [`ImportedEnvironmentRule`] descriptors for all weak-form rules
-/// in the bundled English (US, General American) seed variety.
-pub fn english_imported_weak_form_rules() -> Vec<ImportedEnvironmentRule> {
-    english_seed_variety()
+/// Return native [`LanguagePackEnvironmentRule`] descriptors for all weak-form rules
+/// in the bundled English (US, General American) rule-catalog variety.
+pub fn english_pack_weak_form_rules() -> Vec<LanguagePackEnvironmentRule> {
+    english_rule_catalog_variety()
         .weak_form_rules
         .iter()
         .map(|r| convert_weak_form_rule(r, "en", "american_english"))
         .collect()
 }
 
-/// Return native [`ImportedEnvironmentRule`] descriptors for all punctuation
-/// prosody rules in the bundled English (US, General American) seed variety.
-pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
-    english_seed_variety()
+/// Return native [`LanguagePackEnvironmentRule`] descriptors for all punctuation
+/// prosody rules in the bundled English (US, General American) rule-catalog variety.
+pub fn english_pack_punctuation_rules() -> Vec<LanguagePackEnvironmentRule> {
+    english_rule_catalog_variety()
         .punctuation_prosody_rules
         .iter()
         .map(|r| convert_punctuation_prosody_rule(r, "en", "american_english"))
@@ -1469,14 +1473,14 @@ pub fn english_imported_punctuation_rules() -> Vec<ImportedEnvironmentRule> {
 /// (US, General American) variety.
 ///
 /// The result combines:
-/// 1. Punctuation-derived rules converted from the seed JSON via
+/// 1. Punctuation-derived rules converted from the rule catalog JSON via
 ///    [`convert_to_boundary_prosody_rule`].
 /// 2. Clause-position rules from [`clause_position_boundary_rules`].
 ///
 /// Rules are returned sorted by descending priority so callers may apply them
 /// in order, stopping at the first match.
 pub fn english_boundary_prosody_rules() -> Vec<BoundaryProsodyRule> {
-    let mut rules: Vec<BoundaryProsodyRule> = english_seed_variety()
+    let mut rules: Vec<BoundaryProsodyRule> = english_rule_catalog_variety()
         .punctuation_prosody_rules
         .iter()
         .map(convert_to_boundary_prosody_rule)
@@ -1487,9 +1491,9 @@ pub fn english_boundary_prosody_rules() -> Vec<BoundaryProsodyRule> {
 }
 
 /// Return native phrase-level descriptors for all imported multi-word rules in
-/// the bundled English (US, General American) seed variety.
-pub fn english_imported_multi_word_rules() -> Vec<MultiWordPronunciationRule> {
-    english_seed_variety()
+/// the bundled English (US, General American) rule-catalog variety.
+pub fn english_pack_phrase_rules() -> Vec<MultiWordPronunciationRule> {
+    english_rule_catalog_variety()
         .multi_word_rules
         .iter()
         .map(|r| convert_multi_word_rule(r, "en", "american_english"))
@@ -1512,7 +1516,7 @@ pub fn english_imported_multi_word_rules() -> Vec<MultiWordPronunciationRule> {
 /// Phoneme-level predicates (`Symbol`, `PhoneIpa`, `PhonemeClass`, `Stress`) are
 /// out of scope for word-level imported rules and are treated as always-satisfied.
 pub fn rule_matches_context(
-    rule: &ImportedEnvironmentRule,
+    rule: &LanguagePackEnvironmentRule,
     context: &ling_env::RuleMatchContext<'_>,
 ) -> bool {
     let active_profile = ActiveVarietyProfile {
@@ -1677,8 +1681,8 @@ mod tests {
     use crate::mouth::riper::{HeuristicSentenceAnalyzer, SentenceAnalyzer, TextNormalizer};
 
     #[test]
-    fn parses_bundled_seed_rule_table_and_supports_nested_varieties() {
-        let table = load_seed_rule_table();
+    fn parses_bundled_rule_catalog_and_supports_nested_varieties() {
+        let table = load_pronunciation_rule_catalog();
         assert_eq!(table.source, "espeak-ng-derived");
         assert!(table.find_variety("en-us-general").is_some());
         assert!(table.find_variety("fr-fr").is_some());
@@ -1687,14 +1691,14 @@ mod tests {
 
     #[test]
     fn converter_round_trip_is_deterministic() {
-        let parsed = import_rule_table_from_str(
+        let parsed = import_rule_catalog_from_str(
             english_us_language_pack()
                 .pronunciation_rules
-                .seed_rule_table_json,
+                .pronunciation_rule_catalog_json,
         )
         .expect("parse");
-        let emitted = export_rule_table_to_json(&parsed).expect("export");
-        let reparsed = import_rule_table_from_str(&emitted).expect("reparse");
+        let emitted = export_rule_catalog_to_json(&parsed).expect("export");
+        let reparsed = import_rule_catalog_from_str(&emitted).expect("reparse");
         assert_eq!(parsed, reparsed);
     }
 
@@ -1724,13 +1728,13 @@ mod tests {
 
     #[test]
     fn converted_weak_form_rule_preserves_provenance() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
+            .expect("catalog rule must exist");
 
-        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let native = convert_weak_form_rule(catalog_rule, "en", "american_english");
 
         assert_eq!(native.id, "weak_form_to_before_verb");
         assert_eq!(native.provenance.source, "espeak-ng-derived");
@@ -1749,13 +1753,13 @@ mod tests {
 
     #[test]
     fn converted_weak_form_rule_matches_function_weak_prosodic_role() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
+            .expect("catalog rule must exist");
 
-        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let native = convert_weak_form_rule(catalog_rule, "en", "american_english");
 
         let sequence = vec![
             phoneme_from_arpabet("T", "cmudict"),
@@ -1777,13 +1781,13 @@ mod tests {
 
     #[test]
     fn converted_weak_form_rule_rejects_content_word_prosodic_role() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
+            .expect("catalog rule must exist");
 
-        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let native = convert_weak_form_rule(catalog_rule, "en", "american_english");
 
         let sequence = vec![phoneme_from_arpabet("T", "cmudict")];
         let config = RealizationConfig {
@@ -1802,13 +1806,13 @@ mod tests {
 
     #[test]
     fn converted_weak_form_rule_rejects_wrong_language() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
+            .expect("catalog rule must exist");
 
-        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let native = convert_weak_form_rule(catalog_rule, "en", "american_english");
 
         let sequence = vec![phoneme_from_arpabet("T", "cmudict")];
         let config = RealizationConfig {
@@ -1826,13 +1830,13 @@ mod tests {
     }
 
     #[test]
-    fn imported_rule_conditions_support_profile_flag_enable_disable() {
-        let seed_rule = english_seed_variety()
+    fn pack_rule_conditions_support_profile_flag_enable_disable() {
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
+            .expect("catalog rule must exist");
+        let mut native = convert_weak_form_rule(catalog_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         native.conditions = vec![VarietyRuleCondition {
             language: "en".to_string(),
             variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
@@ -1871,12 +1875,12 @@ mod tests {
 
     #[test]
     fn ga_stub_inheritance_requires_explicit_condition_metadata() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
+            .expect("catalog rule must exist");
+        let mut native = convert_weak_form_rule(catalog_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         let active_stub_profile = ActiveVarietyProfile {
             language: "en".to_string(),
             variety: "received_pronunciation".to_string(),
@@ -1908,12 +1912,12 @@ mod tests {
 
     #[test]
     fn voice_render_conditions_do_not_apply_to_phonological_selection() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
-        let mut native = convert_weak_form_rule(seed_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
+            .expect("catalog rule must exist");
+        let mut native = convert_weak_form_rule(catalog_rule, "en", VARIETY_ID_AMERICAN_ENGLISH);
         native.conditions = vec![VarietyRuleCondition {
             language: "en".to_string(),
             variety: VARIETY_ID_AMERICAN_ENGLISH.to_string(),
@@ -1954,11 +1958,11 @@ mod tests {
     }
 
     #[test]
-    fn voice_render_conditions_are_imported_from_espeak_voice_variants() {
+    fn voice_render_conditions_are_derived_from_espeak_voice_variants() {
         let conditions = english_voice_render_conditions();
         assert!(
             !conditions.is_empty(),
-            "expected at least one imported voice/render condition"
+            "expected at least one derived voice/render condition"
         );
         assert!(conditions.iter().any(|condition| {
             condition.voice_profile.as_deref() == Some("default")
@@ -1971,13 +1975,13 @@ mod tests {
 
     #[test]
     fn converted_weak_form_rule_output_is_phone_string_not_backend_specific() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .weak_form_rules
             .iter()
             .find(|r| r.rule_id == "weak_form_to_before_verb")
-            .expect("seed rule must exist");
+            .expect("catalog rule must exist");
 
-        let native = convert_weak_form_rule(seed_rule, "en", "american_english");
+        let native = convert_weak_form_rule(catalog_rule, "en", "american_english");
 
         assert!(
             matches!(&native.output, RuleOutput::PhoneString(_)),
@@ -2001,13 +2005,13 @@ mod tests {
 
     #[test]
     fn converted_punctuation_prosody_rule_has_major_boundary_output() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "!")
             .expect("exclamation rule must exist");
 
-        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+        let native = convert_punctuation_prosody_rule(catalog_rule, "en", "american_english");
 
         assert_eq!(native.id, "punctuation_exclamation_boundary");
         assert!(
@@ -2053,13 +2057,13 @@ mod tests {
 
     #[test]
     fn converted_punctuation_prosody_rule_preserves_provenance() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "!")
             .expect("exclamation rule must exist");
 
-        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+        let native = convert_punctuation_prosody_rule(catalog_rule, "en", "american_english");
 
         assert_eq!(native.provenance.source, "espeak-ng-derived");
         assert_eq!(native.provenance.source_license, "GPL-3.0-or-later");
@@ -2067,13 +2071,13 @@ mod tests {
 
     #[test]
     fn question_mark_rule_has_final_rising_contour() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "?")
             .expect("question mark rule must exist");
 
-        let native = convert_punctuation_prosody_rule(seed_rule, "en", "american_english");
+        let native = convert_punctuation_prosody_rule(catalog_rule, "en", "american_english");
 
         if let RuleOutput::ProsodyBoundary { boundary, contour } = &native.output {
             assert_eq!(*boundary, ling_env::PhraseBoundaryKind::Major);
@@ -2085,7 +2089,7 @@ mod tests {
 
     #[test]
     fn bulk_english_weak_form_rules_are_non_empty_and_all_have_provenance() {
-        let rules = english_imported_weak_form_rules();
+        let rules = english_pack_weak_form_rules();
         assert!(
             !rules.is_empty(),
             "should have at least one English weak form rule"
@@ -2106,7 +2110,7 @@ mod tests {
 
     #[test]
     fn bulk_english_punctuation_rules_are_non_empty_and_all_have_boundary_output() {
-        let rules = english_imported_punctuation_rules();
+        let rules = english_pack_punctuation_rules();
         assert!(
             !rules.is_empty(),
             "should have at least one English punctuation rule"
@@ -2131,13 +2135,13 @@ mod tests {
 
     #[test]
     fn boundary_prosody_rule_exclamation_has_structured_effect() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "!")
             .expect("exclamation rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         assert_eq!(rule.id, "punctuation_exclamation_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('!'));
@@ -2160,13 +2164,13 @@ mod tests {
 
     #[test]
     fn boundary_prosody_rule_question_has_final_rising_direction() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "?")
             .expect("question mark rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         assert_eq!(rule.id, "punctuation_question_rising_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('?'));
@@ -2193,32 +2197,32 @@ mod tests {
     }
 
     #[test]
-    fn bulk_english_multi_word_rules_are_imported_as_phrase_level_rules() {
-        let rules = english_imported_multi_word_rules();
+    fn bulk_english_phrase_rules_are_projected_as_phrase_level_rules() {
+        let rules = english_pack_phrase_rules();
         assert!(
             !rules.is_empty(),
-            "expected at least one imported multi-word phrase rule"
+            "expected at least one language-pack phrase rule"
         );
         assert!(
             rules.iter().any(|rule| rule.words == vec!["kind", "of"]),
-            "expected function-word phrase seed entry"
+            "expected function-word phrase catalog entry"
         );
         assert!(
             rules.iter().any(|rule| rule.words == vec!["to", "go"]
                 && matches!(rule.output, MultiWordRuleOutput::NoBreak)),
-            "expected no-break phrase seed entry"
+            "expected no-break phrase catalog entry"
         );
     }
 
     #[test]
     fn boundary_prosody_rule_period_has_final_falling_direction() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == ".")
             .expect("period rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         assert_eq!(rule.id, "punctuation_period_final_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation('.'));
@@ -2236,13 +2240,13 @@ mod tests {
 
     #[test]
     fn boundary_prosody_rule_comma_is_minor_and_suppressible() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == ",")
             .expect("comma rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         assert_eq!(rule.id, "punctuation_comma_minor_boundary");
         assert_eq!(rule.boundary_pattern, BoundaryPattern::Punctuation(','));
@@ -2275,13 +2279,13 @@ mod tests {
 
     #[test]
     fn comma_pause_suppression_by_vocative_evidence() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == ",")
             .expect("comma rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         // Vocative context suppresses the pause.
         assert!(
@@ -2302,13 +2306,13 @@ mod tests {
 
     #[test]
     fn exclamation_pause_is_never_suppressed() {
-        let seed_rule = english_seed_variety()
+        let catalog_rule = english_rule_catalog_variety()
             .punctuation_prosody_rules
             .iter()
             .find(|r| r.match_pattern == "!")
             .expect("exclamation rule must exist");
 
-        let rule = convert_to_boundary_prosody_rule(seed_rule);
+        let rule = convert_to_boundary_prosody_rule(catalog_rule);
 
         // Even with every possible suppressor, exclamation is never suppressed.
         assert!(
@@ -2362,12 +2366,12 @@ mod tests {
     }
 
     #[test]
-    fn english_boundary_prosody_rules_covers_all_seed_punctuation_and_clause_positions() {
+    fn english_boundary_prosody_rules_covers_all_catalog_punctuation_and_clause_positions() {
         let rules = english_boundary_prosody_rules();
 
         assert!(!rules.is_empty(), "bulk rules must not be empty");
 
-        // All seed punctuation rules appear.
+        // All catalog punctuation rules appear.
         for ch in ['!', '?', '.', ',', ';', ':'] {
             assert!(
                 rules
@@ -2541,7 +2545,7 @@ mod tests {
         let source = "kind of odd";
         let normalized = normalizer.normalize(source).expect("normalize");
         let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
-        let rule = english_imported_multi_word_rules()
+        let rule = english_pack_phrase_rules()
             .into_iter()
             .find(|rule| rule.id == "phrase_kind_of_reduction")
             .expect("kind-of rule should exist");
@@ -2561,7 +2565,7 @@ mod tests {
         let source = "to go now";
         let normalized = normalizer.normalize(source).expect("normalize");
         let analysis = HeuristicSentenceAnalyzer.analyze(source, &normalized);
-        let rule = english_imported_multi_word_rules()
+        let rule = english_pack_phrase_rules()
             .into_iter()
             .find(|rule| rule.id == "phrase_to_go_no_break")
             .expect("to-go no-break rule should exist");
