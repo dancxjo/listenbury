@@ -363,6 +363,8 @@ fn browser_transcript_player_assets_include_timeline_zoom_controls() {
     assert!(js.contains("function startTimeRangeSelection"));
     assert!(js.contains("function updateTimeRangeSelectionOverlays"));
     assert!(js.contains("function zoomToTimeSelection"));
+    assert!(js.contains("from \"/assets/wavedeck-editor-model.mjs\""));
+    assert!(js.contains("function applyEditorStateAction(action)"));
     assert!(js.contains("RANGE_SELECTION_DRAG_THRESHOLD_PX"));
     assert!(js.contains("WHEEL_ZOOM_SENSITIVITY"));
     assert!(js.contains("function autoplayWordClip"));

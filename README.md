@@ -333,6 +333,12 @@ and `listenbury listen --web`:
 web/browser-transcript-player/
 ```
 
+WaveDeck’s editor-grade DAW roadmap and operation-model plan is tracked in:
+
+```text
+docs/architecture/wavedeck-editor-architecture.md
+```
+
 Host it directly from Listenbury:
 
 ```bash
