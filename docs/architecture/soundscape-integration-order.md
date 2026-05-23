@@ -31,5 +31,14 @@ These convert into:
 ## Known-voice registry privacy boundary
 
 Known voice identities, enrollment samples, and embedding references are local-only
-soundscape metadata. The first registry slice is intentionally explicit and does
-not upload voice audio, embeddings, or identity labels to remote services.
+soundscape metadata. The registry persists to local memory state
+(`listenbury_data/memory/known_voices.json`) and enrollment vectors are stored in
+the local Qdrant collection `listenbury_known_voice_enrollments` with payload
+metadata for provenance (`voice_id`, `voice_label`, `voice_kind`,
+`enrollment_sample_id`, `audio_span_id`, `source`, `quality`, timestamps, and
+`memory_scope=local_only`).
+
+This voice-identity memory is intentionally separate from transcript/text memory:
+transcript traces are conversational content for recall/summarization, while
+voice identity memory is probabilistic speaker evidence used for enrollment,
+matching, and attribution.
