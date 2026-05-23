@@ -48,7 +48,16 @@ impl DiphoneVoiceManifest {
     }
 
     pub fn load_if_present(path: impl AsRef<Path>) -> Result<Option<Self>> {
-        let manifest_path = Self::manifest_path(path);
+        let path = path.as_ref();
+        let manifest_path = if path.is_dir() {
+            path.join(DIPHONE_VOICE_MANIFEST_FILE)
+        } else if path.file_name().and_then(|name| name.to_str())
+            == Some(DIPHONE_VOICE_MANIFEST_FILE)
+        {
+            path.to_path_buf()
+        } else {
+            return Ok(None);
+        };
         if !manifest_path.is_file() {
             return Ok(None);
         }
@@ -88,5 +97,46 @@ impl DiphoneVoiceManifest {
                 manifest_path.display()
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_if_present_ignores_non_manifest_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let voice_database = dir.path().join("us3");
+        std::fs::write(&voice_database, [0xff, 0xfe, 0xfd]).unwrap();
+
+        let manifest = DiphoneVoiceManifest::load_if_present(&voice_database)
+            .expect("non-manifest files should not be parsed");
+
+        assert_eq!(manifest, None);
+    }
+
+    #[test]
+    fn load_if_present_reads_manifest_file_and_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = DiphoneVoiceManifest::new(
+            "ryan",
+            "/tmp/ryan.onnx",
+            "/tmp/ryan.onnx.json",
+            "/tmp/diphone-cache",
+            "en-us-basic",
+            22_050,
+        );
+        manifest.write_pretty(dir.path()).unwrap();
+
+        assert_eq!(
+            DiphoneVoiceManifest::load_if_present(dir.path()).unwrap(),
+            Some(manifest.clone())
+        );
+        assert_eq!(
+            DiphoneVoiceManifest::load_if_present(dir.path().join(DIPHONE_VOICE_MANIFEST_FILE))
+                .unwrap(),
+            Some(manifest)
+        );
     }
 }
