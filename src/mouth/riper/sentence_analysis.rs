@@ -2520,6 +2520,157 @@ mod tests {
             .any(|link| link.left == left && link.right == right && link.kind == kind)
     }
 
+    struct LinkGrammarParityFixture {
+        sentence: &'static str,
+        left: &'static str,
+        right: &'static str,
+        kind: SyntacticLinkKind,
+        required_claim: ClaimKind,
+        required_predicate: ContextPredicate,
+        reference: &'static str,
+        license_note: &'static str,
+    }
+
+    fn parity_fixtures() -> Vec<LinkGrammarParityFixture> {
+        vec![
+            LinkGrammarParityFixture {
+                sentence: "I want to go.",
+                left: "to",
+                right: "go",
+                kind: SyntacticLinkKind::InfinitivalMarker,
+                required_claim: ClaimKind::InfinitivalMarker,
+                required_predicate: ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::InfinitivalMarker,
+                ),
+                reference: "Link Grammar infinitival-marker behavior (`I`/`TO` style).",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "I said TO, not FROM.",
+                left: "to",
+                right: "from",
+                kind: SyntacticLinkKind::ContrastPair,
+                required_claim: ClaimKind::ContrastPair,
+                required_predicate: ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::ContrastPair,
+                ),
+                reference: "Link Grammar contrastive conjunction behavior (`not ... but ...` family).",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "Thank you, Dave.",
+                left: "you",
+                right: "dave",
+                kind: SyntacticLinkKind::Vocative,
+                required_claim: ClaimKind::VocativeBoundary,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Vocative),
+                reference: "Link Grammar comma/direct-address punctuation behavior.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "The machine, unfortunately, exploded.",
+                left: "machine",
+                right: "exploded",
+                kind: SyntacticLinkKind::Parenthetical,
+                required_claim: ClaimKind::ParentheticalBoundary,
+                required_predicate: ContextPredicate::SyntacticLink(
+                    SyntacticLinkKind::Parenthetical,
+                ),
+                reference: "Link Grammar comma-island parenthetical behavior.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "My brother, who lives in Tacoma, arrived.",
+                left: "brother",
+                right: "who",
+                kind: SyntacticLinkKind::Apposition,
+                required_claim: ClaimKind::AppositionBoundary,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Apposition),
+                reference: "Link Grammar non-restrictive/appositive comma behavior.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "a dog",
+                left: "a",
+                right: "dog",
+                kind: SyntacticLinkKind::Determiner,
+                required_claim: ClaimKind::MorphologicalForm,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Determiner),
+                reference: "Link Grammar determiner↔noun and article phonetic-agreement behavior.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "an owl",
+                left: "an",
+                right: "owl",
+                kind: SyntacticLinkKind::Determiner,
+                required_claim: ClaimKind::MorphologicalForm,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Determiner),
+                reference: "Link Grammar determiner↔noun and article phonetic-agreement behavior.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "the owl",
+                left: "the",
+                right: "owl",
+                kind: SyntacticLinkKind::Determiner,
+                required_claim: ClaimKind::WeakFunctionCandidate,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Determiner),
+                reference: "Link Grammar determiner↔noun behavior for weak article realization.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+            LinkGrammarParityFixture {
+                sentence: "the door",
+                left: "the",
+                right: "door",
+                kind: SyntacticLinkKind::Determiner,
+                required_claim: ClaimKind::WeakFunctionCandidate,
+                required_predicate: ContextPredicate::SyntacticLink(SyntacticLinkKind::Determiner),
+                reference: "Link Grammar determiner↔noun behavior for article allomorphy hooks.",
+                license_note: "Conceptual parity only; no upstream dictionary data copied.",
+            },
+        ]
+    }
+
+    #[test]
+    fn test_core_grammar_islands_parity() {
+        for fixture in parity_fixtures() {
+            assert!(
+                !fixture.reference.is_empty() && !fixture.license_note.is_empty(),
+                "fixture metadata should preserve provenance/licensing context for {}",
+                fixture.sentence
+            );
+            let analysis = analyze(fixture.sentence);
+            let parse = analysis.link_parses.first().expect("link parse");
+            let left = word_index(&analysis, fixture.left);
+            let right = word_index(&analysis, fixture.right);
+            assert!(
+                has_link(parse, left, right, fixture.kind),
+                "missing {:?} link for fixture {:?}",
+                fixture.kind,
+                fixture.sentence
+            );
+            assert!(
+                parse
+                    .claims
+                    .iter()
+                    .any(|claim| claim.kind == fixture.required_claim),
+                "missing {:?} claim for fixture {:?}",
+                fixture.required_claim,
+                fixture.sentence
+            );
+            assert!(
+                analysis
+                    .environment_patterns()
+                    .iter()
+                    .any(|pattern| { pattern.predicates.contains(&fixture.required_predicate) }),
+                "missing {:?} predicate for fixture {:?}",
+                fixture.required_predicate,
+                fixture.sentence
+            );
+        }
+    }
+
     #[test]
     fn fixture_links_infinitival_to_and_claims() {
         let analysis = analyze("I want to go.");
