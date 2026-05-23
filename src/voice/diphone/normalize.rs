@@ -174,7 +174,10 @@ mod tests {
         let mut samples: Vec<f32> = (0..128).map(|i| (i as f32 * 0.05).sin()).collect();
         let report = normalize_diphone(&mut samples);
         if let Some(rms_after) = report.rms_after {
-            assert!((rms_after - 0.1).abs() < 1e-4, "rms_after should be ~0.1, got {rms_after}");
+            assert!(
+                (rms_after - 0.1).abs() < 1e-4,
+                "rms_after should be ~0.1, got {rms_after}"
+            );
         }
     }
 }

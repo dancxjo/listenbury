@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
-use crate::linguistic::english_us_language_pack;
+use crate::linguistic::{english_rp_language_pack, english_us_language_pack};
 
 /// Voice-specific mapping from Listenbury phone symbols to MBROLA symbols.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +40,14 @@ impl MbrolaSymbolMap {
         let map = english_us_language_pack()
             .backend_map("mbrola-us3")
             .expect("en-US language pack should define mbrola-us3 backend map");
+        Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
+    }
+
+    /// Starter map for the RP `en1` voice inventory.
+    pub fn en1_starter() -> Self {
+        let map = english_rp_language_pack()
+            .backend_map("mbrola-en1")
+            .expect("en-GB-RP language pack should define mbrola-en1 backend map");
         Self::new(map.iter().map(|(from, to)| (from.clone(), to.clone())))
     }
 
@@ -89,6 +97,14 @@ mod tests {
     fn us1_maps_representative_phones_from_datapack() {
         let map = MbrolaSymbolMap::us1_starter();
         assert_eq!(map.map_phone("OW1").unwrap(), "oU");
+        assert_eq!(map.map_phone("tʃ").unwrap(), "tS");
+    }
+
+    #[test]
+    fn en1_maps_representative_rp_phones_from_datapack() {
+        let map = MbrolaSymbolMap::en1_starter();
+        assert_eq!(map.map_phone("OW1").unwrap(), "@U");
+        assert_eq!(map.map_phone("ER1").unwrap(), "3:");
         assert_eq!(map.map_phone("tʃ").unwrap(), "tS");
     }
 }

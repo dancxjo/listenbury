@@ -7,11 +7,12 @@ use crate::linguistic::orthography::OrthographicWord;
 use crate::linguistic::phone::PhoneString;
 use crate::linguistic::phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 use crate::linguistic::phonology::{
-    phoneme_from_arpabet, realize_sequence, PhonemeSchema, RealizationConfig,
-    Stress as PhonologyStress,
+    PhonemeSchema, RealizationConfig, Stress as PhonologyStress, phoneme_from_arpabet,
+    realize_sequence,
 };
 use crate::linguistic::pronounce::{OrthographyToPhonemes, PhonologyError};
 use crate::linguistic::variety::LinguisticVariety;
+use crate::mouth::riper::LexicalProsodyFlag;
 use crate::mouth::riper::phoneme::{PiperPhoneme, PiperPhonemeSequence};
 use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
@@ -25,8 +26,7 @@ use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
     TextNormalizationError, TextNormalizer,
 };
-use crate::mouth::riper::LexicalProsodyFlag;
-use crate::mouth::riper::{morphophonology, AnalysisSource, PhonologicalStress};
+use crate::mouth::riper::{AnalysisSource, PhonologicalStress, morphophonology};
 use crate::text_stability::stable_prefix_len;
 
 const WORD_SEPARATOR_SYMBOL: &str = " ";
@@ -1813,7 +1813,9 @@ mod tests {
         );
         assert_eq!(
             symbols_for_word(&unit, "unpunctuated"),
-            vec!["AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"],
+            vec![
+                "AH1", "N", "P", "AH1", "NG", "K", "CH", "UW", "EY2", "DX", "IH0", "D"
+            ],
             "expected unpunctuated to flap /t/ before the unstressed -ed vowel"
         );
         assert_eq!(

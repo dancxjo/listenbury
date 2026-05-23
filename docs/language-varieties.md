@@ -1,6 +1,7 @@
 # Language-variety datapacks
 
-Listenbury now carries an explicit `en-US` language-variety datapack at:
+Listenbury now carries explicit language-variety datapacks. The baseline `en-US`
+pack lives at:
 
 - `data/language-varieties/en-US/manifest.toml`
 - `data/language-varieties/en-US/phonology.toml`
@@ -16,6 +17,12 @@ Listenbury now carries an explicit `en-US` language-variety datapack at:
 - `data/language-varieties/en-US/backend-maps/riper.toml`
 - `data/language-varieties/en-US/backend-maps/mbrola-us1.toml`
 - `data/language-varieties/en-US/backend-maps/mbrola-us3.toml`
+
+The RP pack lives at `data/language-varieties/en-GB-RP/` and includes a
+voice-specific MBROLA map for `en1`:
+
+- `data/language-varieties/en-GB-RP/manifest.toml`
+- `data/language-varieties/en-GB-RP/backend-maps/mbrola-en1.toml`
 
 The runtime loader is in:
 

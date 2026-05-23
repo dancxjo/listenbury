@@ -300,14 +300,20 @@ fn known_coda_clusters_are_legal() {
 fn single_ch_affricate_is_legal_coda() {
     // "each" /iːtʃ/ — single /tʃ/ coda
     let tsh = phones(&["tʃ"]);
-    assert!(ga().is_legal_coda(&refs(&tsh)), "/tʃ/ alone should be a legal coda");
+    assert!(
+        ga().is_legal_coda(&refs(&tsh)),
+        "/tʃ/ alone should be a legal coda"
+    );
 }
 
 #[test]
 fn single_jh_affricate_is_legal_coda() {
     // "age" /eɪdʒ/ — single /dʒ/ coda
     let dzh = phones(&["dʒ"]);
-    assert!(ga().is_legal_coda(&refs(&dzh)), "/dʒ/ alone should be a legal coda");
+    assert!(
+        ga().is_legal_coda(&refs(&dzh)),
+        "/dʒ/ alone should be a legal coda"
+    );
 }
 
 #[test]
@@ -316,8 +322,14 @@ fn affricate_coda_clusters_with_nasals_are_legal() {
     let p = ga();
     let ntsh = phones(&["n", "tʃ"]);
     let ndzh = phones(&["n", "dʒ"]);
-    assert!(p.is_legal_coda(&refs(&ntsh)), "/ntʃ/ should be a legal coda");
-    assert!(p.is_legal_coda(&refs(&ndzh)), "/ndʒ/ should be a legal coda");
+    assert!(
+        p.is_legal_coda(&refs(&ntsh)),
+        "/ntʃ/ should be a legal coda"
+    );
+    assert!(
+        p.is_legal_coda(&refs(&ndzh)),
+        "/ndʒ/ should be a legal coda"
+    );
 }
 
 #[test]
@@ -326,8 +338,14 @@ fn affricate_coda_clusters_with_liquids_are_legal() {
     let p = ga();
     let ltsh = phones(&["l", "tʃ"]);
     let rtsh = phones(&["ɹ", "tʃ"]);
-    assert!(p.is_legal_coda(&refs(&ltsh)), "/ltʃ/ should be a legal coda");
-    assert!(p.is_legal_coda(&refs(&rtsh)), "/ɹtʃ/ should be a legal coda");
+    assert!(
+        p.is_legal_coda(&refs(&ltsh)),
+        "/ltʃ/ should be a legal coda"
+    );
+    assert!(
+        p.is_legal_coda(&refs(&rtsh)),
+        "/ɹtʃ/ should be a legal coda"
+    );
 }
 
 #[test]

@@ -29,12 +29,17 @@ impl MbrolaVoice {
             bail!("MBROLA voice path is not a file: {}", path.display());
         }
         let name = voice_name(&path);
-        let symbol_map =
-            if symbol_map == MbrolaSymbolMap::default() && name.eq_ignore_ascii_case("us3") {
+        let symbol_map = if symbol_map == MbrolaSymbolMap::default() {
+            if name.eq_ignore_ascii_case("en1") {
+                MbrolaSymbolMap::en1_starter()
+            } else if name.eq_ignore_ascii_case("us3") {
                 MbrolaSymbolMap::us3_starter()
             } else {
                 symbol_map
-            };
+            }
+        } else {
+            symbol_map
+        };
         Ok(Self {
             path,
             name,
@@ -50,4 +55,22 @@ fn voice_name(path: &Path) -> String {
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("mbrola")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn en1_voice_uses_rp_datapack_symbol_map() {
+        let path = PathBuf::from("data/mbrola/en1/en1");
+        if !path.is_file() {
+            eprintln!("skipping en1 voice map test; run `just fetch`");
+            return;
+        }
+
+        let voice = MbrolaVoice::load(path).expect("load en1 voice");
+        assert_eq!(voice.symbol_map.map_phone("OW1").unwrap(), "@U");
+        assert_eq!(voice.symbol_map.map_phone("IY1").unwrap(), "i:");
+    }
 }

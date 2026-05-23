@@ -10,6 +10,8 @@ use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
 
+#[cfg(feature = "tts-piper")]
+use listenbury::PiperTextToSpeech;
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
@@ -23,12 +25,10 @@ use listenbury::prosody::vibrato::Vibrato;
 use listenbury::time::ExactTimestamp;
 use listenbury::voice::articulator::klatt_render_targets_from_phone_timed;
 use listenbury::voice::articulator::{
-    articulate, backend_detail_expectation, render_plan_for_backend, RenderPlan, SungBackendKind,
+    RenderPlan, SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
 };
-use listenbury::voice::tract::klatt::{render_phone_string, KlattRenderConfig};
+use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::default_english_phone_targets;
-#[cfg(feature = "tts-piper")]
-use listenbury::PiperTextToSpeech;
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;

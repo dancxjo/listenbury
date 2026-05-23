@@ -206,8 +206,8 @@ fn synthetic_silence_unit(
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
     use anyhow::Result;
+    use anyhow::anyhow;
     use std::collections::BTreeMap;
 
     use super::*;

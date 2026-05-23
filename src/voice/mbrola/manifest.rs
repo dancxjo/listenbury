@@ -88,10 +88,7 @@ impl VoiceManifest {
     /// directory.  Returns `Ok(None)` when no manifest file exists, rather than
     /// an error.
     pub fn find_for_voice(voice_path: impl AsRef<Path>) -> Result<Option<Self>, ManifestError> {
-        let dir = voice_path
-            .as_ref()
-            .parent()
-            .unwrap_or(Path::new("."));
+        let dir = voice_path.as_ref().parent().unwrap_or(Path::new("."));
 
         let toml_path = dir.join("manifest.toml");
         if toml_path.is_file() {

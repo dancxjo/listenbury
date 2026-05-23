@@ -45,7 +45,10 @@ pub(crate) fn run_mbrola_inventory(cmd: MbrolaInventoryCommand) -> Result<()> {
             );
             println!(
                 "License      : {}",
-                manifest.license_name.as_deref().unwrap_or("(not specified)")
+                manifest
+                    .license_name
+                    .as_deref()
+                    .unwrap_or("(not specified)")
             );
             println!(
                 "License URL  : {}",
@@ -53,7 +56,10 @@ pub(crate) fn run_mbrola_inventory(cmd: MbrolaInventoryCommand) -> Result<()> {
             );
             println!(
                 "Upstream URL : {}",
-                manifest.upstream_url.as_deref().unwrap_or("(not specified)")
+                manifest
+                    .upstream_url
+                    .as_deref()
+                    .unwrap_or("(not specified)")
             );
             println!(
                 "Redistrib.   : {}",
@@ -178,13 +184,33 @@ pub(crate) fn run_mbrola_audit(cmd: MbrolaAuditCommand) -> Result<()> {
         if phone.symbol == "_" {
             continue;
         }
-        let prev = if i > 0 { phones[i - 1].symbol.as_str() } else { "_" };
+        let prev = if i > 0 {
+            phones[i - 1].symbol.as_str()
+        } else {
+            "_"
+        };
         let next = phones.get(i + 1).map(|p| p.symbol.as_str()).unwrap_or("_");
 
         // Check right context: (prev, phone)
-        audit_diphone_pair(&db, prev, &phone.symbol, &mut exact_count, &mut fallback_count, &mut silence_count, &mut missing_diphones);
+        audit_diphone_pair(
+            &db,
+            prev,
+            &phone.symbol,
+            &mut exact_count,
+            &mut fallback_count,
+            &mut silence_count,
+            &mut missing_diphones,
+        );
         // Check left context: (phone, next)
-        audit_diphone_pair(&db, &phone.symbol, next, &mut exact_count, &mut fallback_count, &mut silence_count, &mut missing_diphones);
+        audit_diphone_pair(
+            &db,
+            &phone.symbol,
+            next,
+            &mut exact_count,
+            &mut fallback_count,
+            &mut silence_count,
+            &mut missing_diphones,
+        );
     }
 
     println!();
@@ -226,17 +252,13 @@ fn audit_diphone_pair(
     if left != "_" && right != "_" {
         if db.diphone("_", right).is_some() {
             *fallback_count += 1;
-            missing_diphones.push(format!(
-                "{left}-{right}: boundary fallback (_-{right})"
-            ));
+            missing_diphones.push(format!("{left}-{right}: boundary fallback (_-{right})"));
             return;
         }
         // Try (left, _) for left-half context
         if db.diphone(left, "_").is_some() {
             *fallback_count += 1;
-            missing_diphones.push(format!(
-                "{left}-{right}: boundary fallback ({left}-_)"
-            ));
+            missing_diphones.push(format!("{left}-{right}: boundary fallback ({left}-_)"));
             return;
         }
     }

@@ -4,7 +4,7 @@ use crate::voice::tract::targets::{
     GlottalSourceTarget, PhoneRenderTarget, VocalTractFilterTarget,
 };
 
-use super::params::{interpolate, KlattFrameParams};
+use super::params::{KlattFrameParams, interpolate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PhoneClass {

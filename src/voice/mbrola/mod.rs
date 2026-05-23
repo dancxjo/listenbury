@@ -23,7 +23,9 @@ pub use diphone_provider::{
     DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
     DiphoneUnitSource, ForgeProvenance, MbrolaDiphoneProvider,
 };
-pub use fallback::{FallbackReason, FallbackResult, fallback_warning, resolve_left_half, resolve_right_half};
+pub use fallback::{
+    FallbackReason, FallbackResult, fallback_warning, resolve_left_half, resolve_right_half,
+};
 pub use manifest::{ManifestError, VoiceManifest};
 pub use pho::{
     MbrolaPhoParseError, MbrolaPhone, MbrolaPitchTarget, PhoneTimedPlan, phone_timed_plan_to_pho,
@@ -31,5 +33,7 @@ pub use pho::{
 };
 pub use render::{MbrolaRenderer, MbrolaRendererConfig, PhoneTimedRenderer, RenderReport};
 pub use symbols::{MbrolaSymbolMap, UnmappedPhone};
-pub use units::{JoinPoint, UnitAssemblyReport, assemble_unit, left_half_samples, right_half_samples};
+pub use units::{
+    JoinPoint, UnitAssemblyReport, assemble_unit, left_half_samples, right_half_samples,
+};
 pub use voice::MbrolaVoice;

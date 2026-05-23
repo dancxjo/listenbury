@@ -660,9 +660,11 @@ mod tests {
         // DC offset should have been reported
         assert!(forged.normalization.dc_offset_removed.abs() > 0.5);
         // Final mean should be near zero
-        let mean: f32 =
-            forged.unit.samples.iter().sum::<f32>() / forged.unit.samples.len() as f32;
-        assert!(mean.abs() < 0.05, "mean should be near zero after DC removal, got {mean}");
+        let mean: f32 = forged.unit.samples.iter().sum::<f32>() / forged.unit.samples.len() as f32;
+        assert!(
+            mean.abs() < 0.05,
+            "mean should be near zero after DC removal, got {mean}"
+        );
     }
 
     #[test]

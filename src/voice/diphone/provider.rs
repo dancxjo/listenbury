@@ -274,8 +274,8 @@ mod tests {
     fn cache_backed_forge_roundtrip_without_onnx() {
         use crate::voice::diphone::cache::{CacheEntryMetadata, CacheKey, DiphoneCache};
         use crate::voice::diphone::forge::{
-            CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, NORMALIZATION_VERSION,
-            ForgeSettings, build_carrier_sequence, forge_from_samples,
+            CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, ForgeSettings, NORMALIZATION_VERSION,
+            build_carrier_sequence, forge_from_samples,
         };
 
         let dir = std::env::temp_dir().join(format!(
@@ -305,8 +305,7 @@ mod tests {
         };
 
         // Forge without ONNX
-        let synthetic_pcm: Vec<f32> =
-            (0..512).map(|i| (i as f32 * 0.05_f32).sin()).collect();
+        let synthetic_pcm: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05_f32).sin()).collect();
         let carrier = build_carrier_sequence("p", "ae");
         let forged = forge_from_samples(
             "p",
@@ -340,7 +339,9 @@ mod tests {
             .expect("cache store should succeed");
 
         // Should be a cache hit after storing
-        let retrieved = cache.get(&key).expect("should be a cache hit after storing");
+        let retrieved = cache
+            .get(&key)
+            .expect("should be a cache hit after storing");
         assert_eq!(retrieved.samples, forged.unit.samples);
         assert_eq!(retrieved.halfseg_samples, forged.unit.halfseg_samples);
         assert_eq!(retrieved.source, DiphoneUnitSource::CacheHit);

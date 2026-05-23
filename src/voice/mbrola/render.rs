@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::audio::{frame::AudioFrame, write_wav};
 use crate::time::ExactTimestamp;
@@ -9,7 +9,7 @@ use crate::time::ExactTimestamp;
 use super::database::MbrolaDatabase;
 use super::diphone_provider::{DiphoneProvider, DiphoneUnitSource, MbrolaDiphoneProvider};
 use super::fallback::{fallback_warning, resolve_left_half, resolve_right_half};
-use super::pho::{write_pho_file, MbrolaPitchTarget, PhoneTimedPlan};
+use super::pho::{MbrolaPitchTarget, PhoneTimedPlan, write_pho_file};
 use super::units::{assemble_unit, left_half_samples, right_half_samples, smooth_join_in_place};
 use super::voice::MbrolaVoice;
 
@@ -632,7 +632,7 @@ mod tests {
         DiphoneKey, DiphoneLookup, DiphoneUnit, DiphoneUnitMetadata, DiphoneUnitSource,
     };
     use super::super::pho::MbrolaPhone;
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -760,13 +760,17 @@ mod tests {
 
         assert_eq!(rendered.frames.len(), 1);
         assert_eq!(rendered.frames[0].sample_rate_hz, 16_000);
-        assert!(rendered.frames[0]
-            .samples
-            .iter()
-            .any(|sample| sample.abs() > 0.001));
-        assert!(rendered
-            .source_counts
-            .contains_key(&DiphoneUnitSource::MbrolaBoundaryFallback));
+        assert!(
+            rendered.frames[0]
+                .samples
+                .iter()
+                .any(|sample| sample.abs() > 0.001)
+        );
+        assert!(
+            rendered
+                .source_counts
+                .contains_key(&DiphoneUnitSource::MbrolaBoundaryFallback)
+        );
         assert!(!rendered.warnings.is_empty());
     }
 
@@ -793,10 +797,12 @@ mod tests {
             Some(&2)
         );
         assert_eq!(rendered.warnings.len(), 2);
-        assert!(rendered
-            .warnings
-            .iter()
-            .all(|warning| warning.contains("boundary fallback diphone")));
+        assert!(
+            rendered
+                .warnings
+                .iter()
+                .all(|warning| warning.contains("boundary fallback diphone"))
+        );
     }
 
     fn sine(hz: f32, len: usize, sample_rate_hz: u32) -> Vec<f32> {

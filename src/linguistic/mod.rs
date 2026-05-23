@@ -19,8 +19,10 @@ pub mod variety;
 
 pub use cmudict::{CmuPhoneme, CmudictPronouncer, PronunciationEntry, PronunciationStatus, Stress};
 pub use inventory::general_american_english;
-pub use language_pack::{LanguagePack, english_us_language_pack};
-pub use language_variety::{LanguageVariety, LanguageVarietyLookupError, english_us_variety};
+pub use language_pack::{LanguagePack, english_rp_language_pack, english_us_language_pack};
+pub use language_variety::{
+    LanguageVariety, LanguageVarietyLookupError, english_rp_variety, english_us_variety,
+};
 pub use orthography::OrthographicWord;
 pub use phoneme::{Phoneme, PhonemeSeq, PhonemeText, PhonemeTextUnit};
 pub use phonology::{

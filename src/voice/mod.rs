@@ -27,8 +27,8 @@ pub use articulator::{
     SyllableRenderSpan, articulate, articulate_with_decomposition_policy,
     articulate_with_inventory, articulate_with_inventory_and_decomposition_policy,
     backend_detail_expectation, coarse_text_render_plan, is_phone_voiced,
-    klatt_render_targets_from_phone_timed, partial_prosody_render_plan, render_plan_for_backend,
-    phone_timed_targets_from_articulator_plan,
+    klatt_render_targets_from_phone_timed, partial_prosody_render_plan,
+    phone_timed_targets_from_articulator_plan, render_plan_for_backend,
     try_articulate_with_inventory_and_decomposition_policy,
 };
 pub use coarticulation::{

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 static EN_US_VARIETY: OnceLock<LanguageVariety> = OnceLock::new();
+static EN_GB_RP_VARIETY: OnceLock<LanguageVariety> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LanguageVariety {
@@ -129,6 +130,12 @@ pub fn english_us_variety() -> &'static LanguageVariety {
     })
 }
 
+pub fn english_rp_variety() -> &'static LanguageVariety {
+    EN_GB_RP_VARIETY.get_or_init(|| {
+        load_english_rp_variety().expect("en-GB-RP language-variety datapack should be valid")
+    })
+}
+
 fn load_english_us_variety() -> Result<LanguageVariety, LanguageVarietyDataError> {
     let manifest: ManifestPack = toml::from_str(include_str!(
         "../../data/language-varieties/en-US/manifest.toml"
@@ -162,6 +169,53 @@ fn load_english_us_variety() -> Result<LanguageVariety, LanguageVarietyDataError
     let mut backend_maps = HashMap::new();
     backend_maps.insert("mbrola-us1".to_string(), mbrola_us1.map);
     backend_maps.insert("mbrola-us3".to_string(), mbrola_us3.map);
+
+    Ok(LanguageVariety {
+        id: manifest.id,
+        label: manifest.label,
+        language: manifest.language,
+        inventory_id: manifest.inventory_id,
+        arpabet_vowels: phonology
+            .arpabet_vowels
+            .into_iter()
+            .map(|value| value.to_ascii_uppercase())
+            .collect(),
+        nucleus_symbols: phonology.nucleus_symbols.into_iter().collect(),
+        vowel_phone_chars: phonology
+            .vowel_phone_chars
+            .into_iter()
+            .flat_map(|symbol| symbol.chars().collect::<Vec<_>>())
+            .flat_map(|ch| ch.to_lowercase().collect::<Vec<_>>())
+            .collect(),
+        backend_maps,
+    })
+}
+
+fn load_english_rp_variety() -> Result<LanguageVariety, LanguageVarietyDataError> {
+    let manifest: ManifestPack = toml::from_str(include_str!(
+        "../../data/language-varieties/en-GB-RP/manifest.toml"
+    ))
+    .map_err(|source| LanguageVarietyDataError::Parse {
+        path: "../../data/language-varieties/en-GB-RP/manifest.toml",
+        source,
+    })?;
+    let phonology: PhonologyPack = toml::from_str(include_str!(
+        "../../data/language-varieties/en-GB-RP/phonology.toml"
+    ))
+    .map_err(|source| LanguageVarietyDataError::Parse {
+        path: "../../data/language-varieties/en-GB-RP/phonology.toml",
+        source,
+    })?;
+    let mbrola_en1: BackendMapPack = toml::from_str(include_str!(
+        "../../data/language-varieties/en-GB-RP/backend-maps/mbrola-en1.toml"
+    ))
+    .map_err(|source| LanguageVarietyDataError::Parse {
+        path: "../../data/language-varieties/en-GB-RP/backend-maps/mbrola-en1.toml",
+        source,
+    })?;
+
+    let mut backend_maps = HashMap::new();
+    backend_maps.insert("mbrola-en1".to_string(), mbrola_en1.map);
 
     Ok(LanguageVariety {
         id: manifest.id,
@@ -218,6 +272,19 @@ mod tests {
                 .map_backend_symbol("mbrola-us3", "ER1")
                 .expect("ER1 should map"),
             "r="
+        );
+    }
+
+    #[test]
+    fn rp_datapack_maps_mbrola_en1_symbols() {
+        let variety = english_rp_variety();
+        assert_eq!(variety.id, "en-GB-RP");
+        assert_eq!(variety.inventory_id, "en-GB-RP");
+        assert_eq!(
+            variety
+                .map_backend_symbol("mbrola-en1", "OW1")
+                .expect("OW1 should map"),
+            "@U"
         );
     }
 
