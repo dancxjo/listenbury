@@ -67,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         command: DiphoneCommand,
     },
+    #[command(about = "Calibrate and compare VAD backends on captured or fixture audio")]
+    Vad {
+        #[command(subcommand)]
+        command: VadCommand,
+    },
     #[command(hide = true)]
     Dev {
         #[command(subcommand)]
@@ -667,6 +672,76 @@ pub(crate) enum DiphoneCommand {
     AuditPlan(DiphoneAuditPlanCommand),
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum VadCommand {
+    /// Capture/read room tone and emit baseline stats + an initial VAD profile.
+    CalibrateRoom(VadCalibrateRoomCommand),
+    /// Calibrate one backend against optional labeled intervals.
+    Calibrate(VadCalibrateCommand),
+    /// Compare multiple backends against optional labeled intervals.
+    Compare(VadCompareCommand),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct VadCalibrateRoomCommand {
+    /// Optional WAV path. If omitted, capture from the default input device.
+    #[arg(long)]
+    pub(crate) audio: Option<PathBuf>,
+    /// Capture duration used when --audio is omitted.
+    #[arg(long, default_value_t = 20)]
+    pub(crate) seconds: u64,
+    /// Optional JSON report output path.
+    #[arg(long)]
+    pub(crate) json: Option<PathBuf>,
+    /// Optional TOML profile output path.
+    #[arg(long)]
+    pub(crate) toml: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct VadCalibrateCommand {
+    /// Fixture WAV used for calibration.
+    #[arg(long)]
+    pub(crate) audio: PathBuf,
+    /// Optional labeled intervals JSON.
+    #[arg(long)]
+    pub(crate) labels: Option<PathBuf>,
+    /// Optional JSON report output path.
+    #[arg(long)]
+    pub(crate) json: Option<PathBuf>,
+    /// Optional TOML profile output path.
+    #[arg(long)]
+    pub(crate) toml: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::Energy)]
+    pub(crate) vad: VadBackendOption,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct VadCompareCommand {
+    /// Fixture WAV used for backend comparison.
+    #[arg(long)]
+    pub(crate) audio: PathBuf,
+    /// Optional labeled intervals JSON.
+    #[arg(long)]
+    pub(crate) labels: Option<PathBuf>,
+    /// Optional JSON report output path.
+    #[arg(long)]
+    pub(crate) json: Option<PathBuf>,
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        default_values_t = [
+            VadBackendOption::Energy,
+            VadBackendOption::WebRtc,
+            VadBackendOption::Silero
+        ]
+    )]
+    pub(crate) backends: Vec<VadBackendOption>,
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct DiphoneCacheForgeCommand {
     /// Path to the Piper ONNX model file.
@@ -774,6 +849,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
         Command::Diphone { command } => commands::run_diphone(command),
+        Command::Vad { command } => commands::run_vad(command),
         Command::Dev { command } => run_dev(command),
     }
 }
@@ -917,6 +993,54 @@ mod tests {
             Some(PathBuf::from("data/mbrola/us3/us3"))
         );
         assert_eq!(command.plan, PathBuf::from("out/example.pho"));
+    }
+
+    #[test]
+    fn vad_calibrate_room_parses_with_defaults() {
+        let cli = Cli::try_parse_from(["listenbury", "vad", "calibrate-room"])
+            .expect("vad calibrate-room should parse");
+
+        let Some(Command::Vad {
+            command: VadCommand::CalibrateRoom(command),
+        }) = cli.command
+        else {
+            panic!("expected vad calibrate-room command");
+        };
+        assert!(command.audio.is_none());
+        assert_eq!(command.seconds, 20);
+        assert_eq!(command.vad, VadBackendOption::Energy);
+    }
+
+    #[test]
+    fn vad_compare_parses_backend_list_and_labels() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "vad",
+            "compare",
+            "--audio",
+            "samples/hello-16k-mono.wav",
+            "--labels",
+            "samples/room-labels.json",
+            "--backends",
+            "energy,webrtc",
+        ])
+        .expect("vad compare should parse backend list");
+
+        let Some(Command::Vad {
+            command: VadCommand::Compare(command),
+        }) = cli.command
+        else {
+            panic!("expected vad compare command");
+        };
+        assert_eq!(command.audio, PathBuf::from("samples/hello-16k-mono.wav"));
+        assert_eq!(
+            command.labels,
+            Some(PathBuf::from("samples/room-labels.json"))
+        );
+        assert_eq!(
+            command.backends,
+            vec![VadBackendOption::Energy, VadBackendOption::WebRtc]
+        );
     }
 
     #[test]
