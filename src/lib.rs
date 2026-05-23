@@ -69,16 +69,18 @@ pub use segmentation::{
 };
 pub use soundscape::{
     AcousticContribution, AcousticMixture, AcousticMixtureId, AttributionEvidence, AudioSpan,
-    ClusterId, DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent, EventId,
-    IsolationEvaluation, IsolationPolicy, MixtureComponent, MixtureId, NoopSourceSeparator,
-    OverlapMixture, PlaybackCancellationSeparator, SeparationMethod, SeparationRequest,
-    SeparationResult, SoundEvent, SoundEventKind, SoundSource, Soundscape, SoundscapeContext,
-    SoundscapeDebugView, SoundscapeFrame, SoundscapeId, SoundscapePipelineAdapter,
-    SourceAttributedTranscript, SourceAttributor, SourceCriterion, SourceHypothesis, SourceId,
-    SourceKind, SourceLabel, SourceOperation, SourceSeparator, SuppressionTarget, TimePoint,
-    TimeRange, TrackingTarget, Voice, VoiceAttribution, VoiceId, VoiceKind, VoiceLabel,
-    VoiceRoleInSpan, apply_separation_requests, detect_overlaps, evaluate_policies,
-    self_hearing_suppression_policy,
+    ClusterId, DebugHypothesis, DebugOverlapMixture, DebugSource, DebugTranscriptEvent,
+    EmbeddingRef, EnrollmentQuality, EnrollmentSource, EventId, IsolationEvaluation,
+    IsolationPolicy, KnownVoice, KnownVoiceRegistry, MixtureComponent, MixtureId, MockVoiceMatcher,
+    NoopSourceSeparator, OverlapMixture, PlaybackCancellationSeparator, SeparationMethod,
+    SeparationRequest, SeparationResult, SoundEvent, SoundEventKind, SoundSource, Soundscape,
+    SoundscapeContext, SoundscapeDebugView, SoundscapeFrame, SoundscapeId,
+    SoundscapePipelineAdapter, SourceAttributedTranscript, SourceAttributor, SourceCriterion,
+    SourceHypothesis, SourceId, SourceKind, SourceLabel, SourceOperation, SourceSeparator,
+    SuppressionTarget, TimePoint, TimeRange, TrackingTarget, Voice, VoiceAttribution,
+    VoiceAttributionAlternative, VoiceAttributionSource, VoiceEnrollmentSample,
+    VoiceEnrollmentSampleId, VoiceId, VoiceKind, VoiceLabel, VoiceMatcher, VoiceRoleInSpan,
+    apply_separation_requests, detect_overlaps, evaluate_policies, self_hearing_suppression_policy,
 };
 pub use span::{
     Alignment, AlignmentGraph, AlignmentKind, AlignmentOffset, Cursor, Modality, Span, SpanId,
