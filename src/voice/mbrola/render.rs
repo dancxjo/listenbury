@@ -10,13 +10,13 @@ use super::database::MbrolaDatabase;
 use super::diphone_provider::{DiphoneProvider, DiphoneUnitSource, MbrolaDiphoneProvider};
 use super::fallback::{fallback_warning, resolve_left_half, resolve_right_half};
 use super::pho::{write_pho_file, MbrolaPitchTarget, PhoneTimedPlan};
-use super::units::{assemble_unit, left_half_samples, right_half_samples};
+use super::units::{assemble_unit, left_half_samples, right_half_samples, smooth_join_in_place};
 use super::voice::MbrolaVoice;
 
 const MIN_PSOLA_GRAINS: usize = 2;
-/// Number of samples on each side of the diphone join to use for the
-/// equal-power crossfade.  Set to 0 to disable crossfade.
-const CROSSFADE_SAMPLES: usize = 8;
+/// Number of samples on each side of a synthetic join to use for splice
+/// smoothing.  Set to 0 to disable smoothing.
+const CROSSFADE_SAMPLES: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MbrolaRendererConfig {
@@ -297,14 +297,15 @@ fn render_native_diphone_frames_with_provider(
                 phone.symbol
             ));
         }
-        samples.extend(psola_synthesize(
+        let phone_samples = psola_synthesize(
             &unit,
             &frame_centers,
             phone.duration_ms,
             &phone.pitch_targets,
             sample_rate_hz,
             source_period_samples,
-        ));
+        );
+        append_smoothed(&mut samples, phone_samples, CROSSFADE_SAMPLES);
     }
     Ok(NativeRenderResult {
         frames: vec![AudioFrame {
@@ -317,6 +318,17 @@ fn render_native_diphone_frames_with_provider(
         source_counts,
         warnings,
     })
+}
+
+fn append_smoothed(samples: &mut Vec<f32>, mut next: Vec<f32>, radius: usize) {
+    if samples.is_empty() || next.is_empty() || radius == 0 {
+        samples.append(&mut next);
+        return;
+    }
+
+    let join_idx = samples.len();
+    samples.append(&mut next);
+    smooth_join_in_place(samples, join_idx, radius);
 }
 
 fn previous_symbol(plan: &PhoneTimedPlan, index: usize) -> Option<&str> {
@@ -691,6 +703,17 @@ mod tests {
             vec![80, 160, 240]
         );
         assert_eq!(usable_frame_centers(320, &[10], 80), vec![80, 160, 240]);
+    }
+
+    #[test]
+    fn append_smoothed_reduces_phone_boundary_step_without_changing_length() {
+        let mut samples = vec![0.2_f32; 16];
+        append_smoothed(&mut samples, vec![0.8_f32; 16], 8);
+
+        assert_eq!(samples.len(), 32);
+        assert!((samples[16] - samples[15]).abs() < 0.6);
+        assert!(samples[15] > 0.2);
+        assert!(samples[16] < 0.8);
     }
 
     #[test]

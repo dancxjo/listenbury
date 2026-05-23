@@ -12,8 +12,8 @@
 //! Before handing the concatenated samples to PSOLA, we apply:
 //!
 //! 1. Per-half DC removal (bias removal around each half independently).
-//! 2. Equal-power crossfade across a short window at the join point to reduce
-//!    click-through artefacts.
+//! 2. Short splice smoothing around the join point to reduce click-through
+//!    artefacts without inserting a silence notch.
 //! 3. Optional RMS normalisation near the join to reduce sudden loudness jumps.
 //!
 //! The module is designed to be independently testable without a live MBROLA
@@ -35,9 +35,9 @@ pub struct UnitAssemblyReport {
     pub right_half_len: usize,
     /// Length of the left-half contribution (samples).
     pub left_half_len: usize,
-    /// Position of the crossfade centre in the assembled unit.
+    /// Position of the smoothed splice in the assembled unit.
     pub join_point: Option<JoinPoint>,
-    /// Width of the crossfade window used (samples on each side of the join).
+    /// Width of the join smoothing window used (samples on each side of the join).
     pub crossfade_radius: usize,
     /// True when RMS normalisation was applied near the join.
     pub rms_normalised: bool,
@@ -51,8 +51,8 @@ pub struct UnitAssemblyReport {
 /// # Arguments
 /// * `right_half` – samples from the right (second) half of `(prev, phone)`
 /// * `left_half`  – samples from the left (first) half of `(phone, next)`
-/// * `crossfade_samples` – half-width of the equal-power crossfade in samples.
-///   Pass `0` to disable crossfade.
+/// * `crossfade_samples` – half-width of the join smoothing window in samples.
+///   Pass `0` to disable smoothing.
 /// * `normalise_join` – whether to apply RMS normalisation on a window near
 ///   the join point to reduce loudness jumps.
 pub fn assemble_unit(
@@ -87,10 +87,10 @@ pub fn assemble_unit(
 
     let join_idx = right_len;
 
-    // 3. Equal-power crossfade across the join
+    // 3. Smooth the splice around the join.
     let radius = crossfade_radius(crossfade_samples, right_len, left_len);
     if radius > 0 {
-        apply_crossfade(&mut combined, join_idx, radius);
+        smooth_join_in_place(&mut combined, join_idx, radius);
     }
 
     // 4. Optional RMS normalisation near the join
@@ -157,55 +157,43 @@ fn crossfade_radius(requested: usize, right_len: usize, left_len: usize) -> usiz
     requested.min(max)
 }
 
-/// Apply an equal-power crossfade of `radius` samples on each side of `join_idx`.
+/// Smooth a hard splice in place while preserving sample count.
 ///
-/// Samples in `[join_idx - radius, join_idx)` fade out the right half while
-/// the equivalent tail from the left half fades in, blended using a quarter-
-/// cosine envelope so that power is preserved.
-fn apply_crossfade(buf: &mut [f32], join_idx: usize, radius: usize) {
-    if radius == 0 || buf.len() < 2 {
+/// A true overlap crossfade would shorten the assembled phone unit unless the
+/// timing model also moved pitch marks.  This de-click ramp instead splits the
+/// instantaneous step at the splice across both sides of the boundary, reducing
+/// the single-sample jump without creating a brief zero-amplitude gap.
+pub(crate) fn smooth_join_in_place(buf: &mut [f32], join_idx: usize, radius: usize) {
+    if radius == 0 || join_idx == 0 || join_idx >= buf.len() {
         return;
     }
 
-    // The crossfade window straddles `join_idx`:
-    //   right side: buf[join_idx - radius .. join_idx]   (fades out)
-    //   left  side: buf[join_idx .. join_idx + radius]   (fades in)
-    //
-    // We blend the two using equal-power (cos/sin) so that
-    //   right_gain^2 + left_gain^2 == 1.
-    //
-    // To avoid reading past the buffer ends we clamp the indices.
-    let fade_start = join_idx.saturating_sub(radius);
-    let fade_end = (join_idx + radius).min(buf.len());
-    let fade_len = fade_end - fade_start;
-    if fade_len < 2 {
+    let radius = radius.min(join_idx).min(buf.len() - join_idx);
+    if radius == 0 {
         return;
     }
 
-    // right section: indices [fade_start, join_idx)
-    // left  section: indices [join_idx,   fade_end )
-    let buf_len = buf.len();
-    let right_range = join_idx.min(buf_len) - fade_start;
-    let left_range = fade_end - join_idx.min(buf_len);
-
-    // Apply fade-out on right side: last `right_range` samples before join
-    for (i, sample) in buf[fade_start..fade_start + right_range]
-        .iter_mut()
-        .enumerate()
-    {
-        let t = (i + 1) as f32 / (right_range + 1) as f32;
-        // gain goes from 1 → 0 as i increases (approaching join)
-        let gain = (std::f32::consts::FRAC_PI_2 * (1.0 - t)).cos();
-        *sample *= gain;
+    let jump = buf[join_idx] - buf[join_idx - 1];
+    if !jump.is_finite() || jump.abs() < f32::EPSILON {
+        return;
     }
 
-    // Apply fade-in on left side: first `left_range` samples after join
-    for (i, sample) in buf[join_idx.min(buf_len)..fade_end].iter_mut().enumerate() {
-        let t = (i + 1) as f32 / (left_range + 1) as f32;
-        // gain goes from 0 → 1 as i increases (moving away from join)
-        let gain = (std::f32::consts::FRAC_PI_2 * t).sin();
-        *sample *= gain;
+    let half_jump = jump * 0.5;
+    let left_start = join_idx - radius;
+    for i in 0..radius {
+        let t = smoothstep((i + 1) as f32 / (radius + 1) as f32);
+        buf[left_start + i] += half_jump * t;
     }
+
+    for i in 0..radius {
+        let t = smoothstep((i + 1) as f32 / (radius + 1) as f32);
+        buf[join_idx + i] -= half_jump * (1.0 - t);
+    }
+}
+
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Apply RMS normalisation within `window` samples on each side of the join.
@@ -306,24 +294,40 @@ mod tests {
 
     #[test]
     fn assemble_unit_crossfade_reduces_discontinuity() {
-        // Create a signal that has a large DC jump at the join without crossfade.
-        let right: Vec<f32> = (0..16).map(|_| 0.8_f32).collect();
-        let left: Vec<f32> = (0..16).map(|_| -0.8_f32).collect();
+        // Create a signal that still has a large join jump after per-half DC removal.
+        let right: Vec<f32> = (0..16).map(|i| i as f32 / 16.0).collect();
+        let left: Vec<f32> = (0..16).map(|i| -1.0 + i as f32 / 16.0).collect();
 
         let (no_fade, _) = assemble_unit(&right, &left, 0, false);
         let (with_fade, report) = assemble_unit(&right, &left, 4, false);
 
-        // Crossfade should have been applied
+        // Join smoothing should have been applied.
         assert!(report.crossfade_radius > 0);
 
-        // The jump at the join should be smaller with crossfade
+        // The jump at the join should be smaller with smoothing.
         let join = 16;
         let jump_no_fade = (no_fade[join] - no_fade[join - 1]).abs();
         let jump_fade = (with_fade[join] - with_fade[join - 1]).abs();
         assert!(
-            jump_fade <= jump_no_fade + 0.01,
-            "crossfade should reduce or maintain discontinuity: no_fade={jump_no_fade:.3}, fade={jump_fade:.3}"
+            jump_fade < jump_no_fade * 0.5,
+            "join smoothing should reduce discontinuity: no_fade={jump_no_fade:.3}, fade={jump_fade:.3}"
         );
+    }
+
+    #[test]
+    fn smooth_join_in_place_preserves_length_without_notching_to_zero() {
+        let mut samples = vec![0.4_f32; 8];
+        samples.extend(vec![0.8_f32; 8]);
+        let len = samples.len();
+
+        smooth_join_in_place(&mut samples, 8, 4);
+
+        assert_eq!(samples.len(), len);
+        assert!(samples[7] > 0.4);
+        assert!(samples[8] < 0.8);
+        assert!(samples[7] > 0.3);
+        assert!(samples[8] > 0.3);
+        assert!((samples[8] - samples[7]).abs() < 0.4);
     }
 
     #[test]
