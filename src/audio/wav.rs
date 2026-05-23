@@ -9,6 +9,40 @@ use crate::audio::normalize::{
 };
 use crate::time::ExactTimestamp;
 
+const WAV_EXPORT_REASON: &str = "wav_export";
+
+/// Encoding used when writing WAV payload samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WavSampleEncoding {
+    /// 16-bit signed integer PCM samples.
+    PcmI16,
+    /// 32-bit IEEE float samples.
+    FloatF32,
+}
+
+/// Export-time WAV conversion options.
+///
+/// `None` in `sample_rate_hz` / `channels` preserves the source format from input frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavExportOptions {
+    /// Target output sample rate in Hz.
+    pub sample_rate_hz: Option<u32>,
+    /// Target output channel count.
+    pub channels: Option<u16>,
+    /// Output sample encoding used in the written WAV payload.
+    pub sample_encoding: WavSampleEncoding,
+}
+
+impl Default for WavExportOptions {
+    fn default() -> Self {
+        Self {
+            sample_rate_hz: None,
+            channels: None,
+            sample_encoding: WavSampleEncoding::PcmI16,
+        }
+    }
+}
+
 pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
     Ok(read_wav_as_audio_frames_with_report(path, frame_samples)?.0)
 }
@@ -175,6 +209,13 @@ pub fn write_wav(path: &Path, frames: &[AudioFrame]) -> Result<()> {
 }
 
 pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
+    Ok(write_wav_bytes_with_report(frames, WavExportOptions::default())?.0)
+}
+
+pub fn write_wav_bytes_with_report(
+    frames: &[AudioFrame],
+    options: WavExportOptions,
+) -> Result<(Vec<u8>, AudioConversionReport)> {
     let Some(first_frame) = frames.first() else {
         anyhow::bail!("cannot write WAV without audio frames");
     };
@@ -183,7 +224,23 @@ pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
         "cannot write WAV with zero channels"
     );
 
-    let mut pcm = Vec::<u8>::new();
+    let source = AudioFormat::new(
+        first_frame.sample_rate_hz,
+        first_frame.channels,
+        SampleKind::F32,
+    );
+    let target = AudioFormat::new(
+        options.sample_rate_hz.unwrap_or(first_frame.sample_rate_hz),
+        options.channels.unwrap_or(first_frame.channels),
+        SampleKind::F32,
+    );
+    anyhow::ensure!(
+        target.sample_rate_hz > 0,
+        "cannot write WAV with zero sample rate"
+    );
+    anyhow::ensure!(target.channels > 0, "cannot write WAV with zero channels");
+
+    let mut raw_samples = Vec::<f32>::new();
     for frame in frames {
         anyhow::ensure!(
             frame.channels == first_frame.channels,
@@ -197,25 +254,38 @@ pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
             first_frame.sample_rate_hz,
             frame.sample_rate_hz
         );
-
-        for sample in &frame.samples {
-            pcm.extend_from_slice(&f32_to_i16(*sample).to_le_bytes());
-        }
+        raw_samples.extend_from_slice(&frame.samples);
     }
 
+    let normalized = normalize_interleaved_f32(&raw_samples, source, target, WAV_EXPORT_REASON)?;
+    let mut pcm = Vec::<u8>::new();
+    let (audio_format_code, bits_per_sample, bytes_per_sample) = match options.sample_encoding {
+        WavSampleEncoding::PcmI16 => {
+            for sample in &normalized.samples {
+                pcm.extend_from_slice(&f32_to_i16(*sample).to_le_bytes());
+            }
+            (1u16, 16u16, 2u16)
+        }
+        WavSampleEncoding::FloatF32 => {
+            for sample in &normalized.samples {
+                pcm.extend_from_slice(&sample.to_le_bytes());
+            }
+            (3u16, 32u16, 4u16)
+        }
+    };
+
+    let sample_rate_hz = normalized.report.target.sample_rate_hz;
+    let channels = normalized.report.target.channels;
+    let block_align = channels
+        .checked_mul(bytes_per_sample)
+        .context("WAV block alignment overflows u16")?;
+    let byte_rate = sample_rate_hz
+        .checked_mul(u32::from(block_align))
+        .context("WAV byte rate overflows u32")?;
     let data_len = u32::try_from(pcm.len()).context("WAV PCM payload exceeds u32 size")?;
     let riff_len = 36u32
         .checked_add(data_len)
         .context("WAV RIFF payload exceeds u32 size")?;
-    let byte_rate = first_frame
-        .sample_rate_hz
-        .checked_mul(u32::from(first_frame.channels))
-        .and_then(|value| value.checked_mul(2))
-        .context("WAV byte rate overflows u32")?;
-    let block_align = first_frame
-        .channels
-        .checked_mul(2)
-        .context("WAV block alignment overflows u16")?;
 
     let mut out = Vec::with_capacity(44usize.saturating_add(pcm.len()));
     out.extend_from_slice(b"RIFF");
@@ -223,16 +293,27 @@ pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
     out.extend_from_slice(b"WAVE");
     out.extend_from_slice(b"fmt ");
     out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&first_frame.channels.to_le_bytes());
-    out.extend_from_slice(&first_frame.sample_rate_hz.to_le_bytes());
+    out.extend_from_slice(&audio_format_code.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&sample_rate_hz.to_le_bytes());
     out.extend_from_slice(&byte_rate.to_le_bytes());
     out.extend_from_slice(&block_align.to_le_bytes());
-    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(&bits_per_sample.to_le_bytes());
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_len.to_le_bytes());
     out.extend_from_slice(&pcm);
-    Ok(out)
+    Ok((out, normalized.report))
+}
+
+pub fn write_wav_with_report(
+    path: &Path,
+    frames: &[AudioFrame],
+    options: WavExportOptions,
+) -> Result<AudioConversionReport> {
+    let (bytes, report) = write_wav_bytes_with_report(frames, options)?;
+    std::fs::write(path, bytes)
+        .with_context(|| format!("failed to create WAV at {}", path.display()))?;
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -426,5 +507,84 @@ mod tests {
         assert_eq!(f32_to_i16(0.5), 16_384);
         assert_eq!(f32_to_i16(1.0), i16::MAX);
         assert_eq!(f32_to_i16(1.5), i16::MAX);
+    }
+
+    #[test]
+    fn write_wav_with_report_can_resample_and_downmix() {
+        let path = unique_test_path("export-normalize");
+        let mut stereo = Vec::with_capacity(48_000 * 2);
+        for _ in 0..48_000 {
+            stereo.push(1.0);
+            stereo.push(0.0);
+        }
+        let frames = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            samples: stereo,
+            voice_signatures: Vec::new(),
+        }];
+
+        let report = write_wav_with_report(
+            &path,
+            &frames,
+            WavExportOptions {
+                sample_rate_hz: Some(16_000),
+                channels: Some(1),
+                sample_encoding: WavSampleEncoding::PcmI16,
+            },
+        )
+        .expect("WAV export should succeed");
+        assert!(
+            report
+                .operations
+                .contains(&crate::audio::AudioConversionOp::DownmixToMono)
+        );
+        assert!(
+            report
+                .operations
+                .contains(&crate::audio::AudioConversionOp::Resample)
+        );
+
+        let read_back = read_wav_frames(&path, 1_600).expect("exported WAV should read");
+        assert_eq!(read_back[0].sample_rate_hz, 16_000);
+        assert_eq!(read_back[0].channels, 1);
+
+        fs::remove_file(path).expect("temporary WAV should be removed");
+    }
+
+    #[test]
+    fn write_wav_bytes_with_report_supports_float32_encoding() {
+        let frames = vec![AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: 22_050,
+            channels: 1,
+            samples: vec![0.25, -0.5],
+            voice_signatures: Vec::new(),
+        }];
+
+        let (bytes, report) = write_wav_bytes_with_report(
+            &frames,
+            WavExportOptions {
+                sample_rate_hz: None,
+                channels: None,
+                sample_encoding: WavSampleEncoding::FloatF32,
+            },
+        )
+        .expect("float WAV export should succeed");
+        assert!(report.operations.is_empty());
+
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(bytes))
+            .expect("float WAV bytes should parse");
+        let spec = reader.spec();
+        assert_eq!(spec.sample_format, hound::SampleFormat::Float);
+        assert_eq!(spec.bits_per_sample, 32);
+        let samples = reader
+            .samples::<f32>()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("float samples should decode");
+        assert_eq!(samples.len(), 2);
+        assert!((samples[0] - 0.25).abs() <= FLOAT_TOLERANCE);
+        assert!((samples[1] + 0.5).abs() <= FLOAT_TOLERANCE);
     }
 }

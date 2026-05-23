@@ -52,8 +52,10 @@ pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };
 pub use wav::{
-    read_wav_as_audio_frames, read_wav_as_audio_frames_with_report, read_wav_as_whisper_frames,
+    WavExportOptions, WavSampleEncoding, read_wav_as_audio_frames,
+    read_wav_as_audio_frames_with_report, read_wav_as_whisper_frames,
     read_wav_as_whisper_frames_with_report, read_wav_frames, write_wav, write_wav_bytes,
+    write_wav_bytes_with_report, write_wav_with_report,
 };
 
 pub trait AudioInput {
