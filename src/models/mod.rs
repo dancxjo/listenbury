@@ -7,7 +7,9 @@ use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 
-use crate::models::download::fetch_asset_with_progress;
+use crate::models::download::{
+    AssetIntegrityState, fetch_asset_with_progress_and_verify, verify_existing_asset,
+};
 use crate::models::manifest::{DEFAULT_MODELS, MODEL_BUNDLES, ModelAsset, ModelBundle, ModelKind};
 use crate::models::paths::{asset_path, resolve_listenbury_home};
 
@@ -15,7 +17,12 @@ use crate::models::paths::{asset_path, resolve_listenbury_home};
 pub struct ModelStatus {
     pub asset_id: &'static str,
     pub path: PathBuf,
-    pub present: bool,
+    pub integrity: AssetIntegrityState,
+    pub url: &'static str,
+    pub expected_size_bytes: Option<u64>,
+    pub sha256: Option<&'static str>,
+    pub license: Option<&'static str>,
+    pub source: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,9 +212,18 @@ pub fn fetch_bundle_with_progress_and_jobs(
     jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
+    fetch_bundle_with_progress_and_jobs_and_verify(bundle, jobs, false, &mut progress)
+}
+
+pub fn fetch_bundle_with_progress_and_jobs_and_verify(
+    bundle: &ModelBundle,
+    jobs: usize,
+    verify_existing: bool,
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
     let assets = bundle_assets(bundle)?;
-    fetch_asset_refs_at_home(&home, &assets, jobs, &mut progress)
+    fetch_asset_refs_at_home(&home, &assets, jobs, verify_existing, &mut progress)
 }
 
 pub fn fetch_selected_assets_with_progress(
@@ -220,22 +236,31 @@ pub fn fetch_selected_assets_with_progress_and_jobs(
     jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
+    fetch_selected_assets_with_progress_and_jobs_and_verify(jobs, false, &mut progress)
+}
+
+pub fn fetch_selected_assets_with_progress_and_jobs_and_verify(
+    jobs: usize,
+    verify_existing: bool,
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
     let bundles = [
         selected_bundle(ModelKind::Whisper)?,
         selected_bundle(ModelKind::Llm)?,
         selected_bundle(ModelKind::Voice)?,
     ];
-    fetch_bundles_with_progress(&bundles, jobs, &mut progress)
+    fetch_bundles_with_progress(&bundles, jobs, verify_existing, &mut progress)
 }
 
 pub fn fetch_bundles_with_progress(
     bundles: &[&ModelBundle],
     jobs: usize,
+    verify_existing: bool,
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
     let assets = assets_for_bundles(bundles)?;
-    fetch_asset_refs_at_home(&home, &assets, jobs, progress)
+    fetch_asset_refs_at_home(&home, &assets, jobs, verify_existing, progress)
 }
 
 pub fn fetch_all_assets_with_progress(
@@ -248,9 +273,17 @@ pub fn fetch_all_assets_with_progress_and_jobs(
     jobs: usize,
     mut progress: impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
+    fetch_all_assets_with_progress_and_jobs_and_verify(jobs, false, &mut progress)
+}
+
+pub fn fetch_all_assets_with_progress_and_jobs_and_verify(
+    jobs: usize,
+    verify_existing: bool,
+    mut progress: impl FnMut(FetchProgress),
+) -> Result<Vec<FetchResult>> {
     let home = resolve_listenbury_home()?;
     let assets = DEFAULT_MODELS.iter().collect::<Vec<_>>();
-    fetch_asset_refs_at_home(&home, &assets, jobs, &mut progress)
+    fetch_asset_refs_at_home(&home, &assets, jobs, verify_existing, &mut progress)
 }
 
 fn assets_for_bundles(bundles: &[&ModelBundle]) -> Result<Vec<&'static ModelAsset>> {
@@ -284,19 +317,28 @@ pub fn default_asset_paths() -> Result<Vec<(&'static ModelAsset, PathBuf)>> {
 }
 
 pub fn default_assets_status() -> Result<Vec<ModelStatus>> {
+    default_assets_status_with_verification(false)
+}
+
+pub fn default_assets_status_with_verification(verify: bool) -> Result<Vec<ModelStatus>> {
     let home = resolve_listenbury_home()?;
     Ok(DEFAULT_MODELS
         .iter()
         .map(|asset| {
             let path = asset_path(&home, asset);
-            let present = path.metadata().map(|meta| meta.len() > 0).unwrap_or(false);
-            ModelStatus {
+            let integrity = verify_existing_asset(&path, asset, verify)?;
+            Ok(ModelStatus {
                 asset_id: asset.id,
                 path,
-                present,
-            }
+                integrity,
+                url: asset.url,
+                expected_size_bytes: asset.expected_size_bytes,
+                sha256: asset.sha256,
+                license: asset.license,
+                source: asset.source,
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>>>()?)
 }
 
 pub fn fetch_default_assets() -> Result<Vec<FetchResult>> {
@@ -316,13 +358,14 @@ fn fetch_assets_at_home(
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let assets = assets.iter().collect::<Vec<_>>();
-    fetch_asset_refs_at_home(home, &assets, 1, progress)
+    fetch_asset_refs_at_home(home, &assets, 1, false, progress)
 }
 
 fn fetch_asset_refs_at_home(
     home: &Path,
     assets: &[&ModelAsset],
     jobs: usize,
+    verify_existing: bool,
     progress: &mut impl FnMut(FetchProgress),
 ) -> Result<Vec<FetchResult>> {
     let jobs = jobs.max(1);
@@ -338,8 +381,11 @@ fn fetch_asset_refs_at_home(
                 let asset_index = chunk_start + offset;
                 let path = asset_path(home, asset);
                 scope.spawn(move || {
-                    let result =
-                        fetch_asset_with_progress(home, asset, |downloaded_bytes, total_bytes| {
+                    let result = fetch_asset_with_progress_and_verify(
+                        home,
+                        asset,
+                        verify_existing,
+                        |downloaded_bytes, total_bytes| {
                             let _ = sender.send(FetchEvent::Progress(FetchProgress {
                                 asset_id: asset.id,
                                 asset_index,
@@ -348,7 +394,8 @@ fn fetch_asset_refs_at_home(
                                 downloaded_bytes,
                                 total_bytes,
                             }));
-                        });
+                        },
+                    );
                     let outcome = match result {
                         Ok(downloaded) => FetchResult {
                             asset_id: asset.id,
@@ -421,7 +468,10 @@ mod tests {
             filename: "small.bin",
             relative_path: "models/test/small.bin",
             url: "http://127.0.0.1:9/unreachable",
-            expected_size_hint: None,
+            expected_size_bytes: None,
+            sha256: None,
+            license: None,
+            source: None,
         }];
 
         let results = fetch_assets_at_home(&home, &assets, &mut |_| {})

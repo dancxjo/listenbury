@@ -574,7 +574,8 @@ pub(crate) enum ModelsCommand {
     Fetch(ModelsFetchCommand),
     List,
     Use(ModelsUseCommand),
-    Status,
+    Status(ModelsStatusCommand),
+    Repair(ModelsFetchCommand),
     Path,
 }
 
@@ -585,9 +586,19 @@ pub(crate) struct ModelsFetchCommand {
     /// Fetch every registered asset.
     #[arg(long)]
     pub(crate) all: bool,
+    /// Verify existing files against manifest checksums/sizes and repair invalid assets.
+    #[arg(long)]
+    pub(crate) verify: bool,
     /// Maximum number of model assets to download at once.
     #[arg(long, default_value_t = 2)]
     pub(crate) jobs: usize,
+}
+
+#[derive(Debug, Args, Default)]
+pub(crate) struct ModelsStatusCommand {
+    /// Verify existing model files against manifest checksums/sizes.
+    #[arg(long)]
+    pub(crate) verify: bool,
 }
 
 #[derive(Debug, Args)]
@@ -2088,6 +2099,50 @@ mod tests {
             panic!("expected models fetch command");
         };
         assert_eq!(command.jobs, 4);
+        assert!(!command.verify);
+    }
+
+    #[test]
+    fn models_fetch_parses_verify_flag() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "fetch", "--verify"])
+            .expect("models fetch should parse verify");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Fetch(command)),
+        }) = cli.command
+        else {
+            panic!("expected models fetch command");
+        };
+        assert!(command.verify);
+    }
+
+    #[test]
+    fn models_status_parses_verify_flag() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "status", "--verify"])
+            .expect("models status should parse verify");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Status(command)),
+        }) = cli.command
+        else {
+            panic!("expected models status command");
+        };
+        assert!(command.verify);
+    }
+
+    #[test]
+    fn models_repair_parses_jobs() {
+        let cli = Cli::try_parse_from(["listenbury", "models", "repair", "--jobs", "3"])
+            .expect("models repair should parse jobs");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Repair(command)),
+        }) = cli.command
+        else {
+            panic!("expected models repair command");
+        };
+        assert_eq!(command.jobs, 3);
+        assert!(!command.verify);
     }
 
     #[test]
