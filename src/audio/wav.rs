@@ -3,25 +3,52 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::audio::frame::AudioFrame;
+use crate::audio::normalize::{
+    AudioConversionReport, AudioFormat, MONO_CHANNELS, SampleKind, WHISPER_SAMPLE_RATE_HZ,
+    f32_to_i16, normalize_interleaved_f32, normalize_signed_sample,
+};
 use crate::time::ExactTimestamp;
 
-const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
-const MONO_CHANNELS: u16 = 1;
-
 pub fn read_wav_as_audio_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    Ok(read_wav_as_audio_frames_with_report(path, frame_samples)?.0)
+}
+
+pub fn read_wav_as_audio_frames_with_report(
+    path: &Path,
+    frame_samples: usize,
+) -> Result<(Vec<AudioFrame>, AudioConversionReport)> {
     read_wav_as_mono_16khz_frames(path, frame_samples)
 }
 
 pub fn read_wav_as_whisper_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+    Ok(read_wav_as_whisper_frames_with_report(path, frame_samples)?.0)
+}
+
+pub fn read_wav_as_whisper_frames_with_report(
+    path: &Path,
+    frame_samples: usize,
+) -> Result<(Vec<AudioFrame>, AudioConversionReport)> {
     read_wav_as_mono_16khz_frames(path, frame_samples)
 }
 
-fn read_wav_as_mono_16khz_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
+fn read_wav_as_mono_16khz_frames(
+    path: &Path,
+    frame_samples: usize,
+) -> Result<(Vec<AudioFrame>, AudioConversionReport)> {
     anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
 
     let frames = read_wav_frames(path, frame_samples)?;
     let Some(first) = frames.first() else {
-        return Ok(frames);
+        return Ok((
+            frames,
+            AudioConversionReport {
+                source: AudioFormat::asr_whisper_input(),
+                target: AudioFormat::asr_whisper_input(),
+                operations: Vec::new(),
+                warnings: vec!["WAV input contained no frames".to_string()],
+                reason: "whisper_input".to_string(),
+            },
+        ));
     };
 
     let sample_rate_hz = first.sample_rate_hz;
@@ -51,10 +78,15 @@ fn read_wav_as_mono_16khz_frames(path: &Path, frame_samples: usize) -> Result<Ve
         samples.extend_from_slice(&frame.samples);
     }
 
-    let mono_samples = mix_to_mono(&samples, channels);
-    let resampled_samples = resample_linear(&mono_samples, sample_rate_hz, WHISPER_SAMPLE_RATE_HZ);
+    let normalized = normalize_interleaved_f32(
+        &samples,
+        AudioFormat::new(sample_rate_hz, channels, SampleKind::F32),
+        AudioFormat::asr_whisper_input(),
+        "whisper_input",
+    )?;
+    let resampled_samples = normalized.samples;
 
-    Ok(resampled_samples
+    let frames = resampled_samples
         .chunks(frame_samples)
         .map(|chunk| AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -63,7 +95,8 @@ fn read_wav_as_mono_16khz_frames(path: &Path, frame_samples: usize) -> Result<Ve
             samples: chunk.to_vec(),
             voice_signatures: Vec::new(),
         })
-        .collect())
+        .collect();
+    Ok((frames, normalized.report))
 }
 
 pub fn read_wav_frames(path: &Path, frame_samples: usize) -> Result<Vec<AudioFrame>> {
@@ -202,53 +235,6 @@ pub fn write_wav_bytes(frames: &[AudioFrame]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn normalize_signed_sample(sample: i64, bits_per_sample: u16) -> f32 {
-    let positive_scale = ((1_i64 << (bits_per_sample - 1)) - 1) as f32;
-    let negative_scale = (1_i64 << (bits_per_sample - 1)) as f32;
-    if sample < 0 {
-        sample as f32 / negative_scale
-    } else {
-        sample as f32 / positive_scale
-    }
-}
-
-fn f32_to_i16(sample: f32) -> i16 {
-    let scaled = (sample.clamp(-1.0, 1.0) * (i16::MAX as f32 + 1.0)).round();
-    scaled.clamp(i16::MIN as f32, i16::MAX as f32) as i16
-}
-
-fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    let channel_count = usize::from(channels);
-    samples
-        .chunks_exact(channel_count)
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
-        .collect()
-}
-
-fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
-    if samples.is_empty() || source_rate_hz == target_rate_hz {
-        return samples.to_vec();
-    }
-
-    let output_len = ((samples.len() as f64 * f64::from(target_rate_hz))
-        / f64::from(source_rate_hz))
-    .round() as usize;
-    let mut output = Vec::with_capacity(output_len);
-    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
-
-    for output_idx in 0..output_len {
-        let source_pos = output_idx as f64 * source_step;
-        let left_idx = source_pos.floor() as usize;
-        let right_idx = (left_idx + 1).min(samples.len() - 1);
-        let fraction = (source_pos - left_idx as f64) as f32;
-        let left = samples[left_idx];
-        let right = samples[right_idx];
-        output.push(left + (right - left) * fraction);
-    }
-
-    output
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -312,7 +298,8 @@ mod tests {
         }
         writer.finalize().expect("WAV should finalize");
 
-        let got = read_wav_as_audio_frames(&path, 1_600).expect("WAV should convert");
+        let (got, report) =
+            read_wav_as_audio_frames_with_report(&path, 1_600).expect("WAV should convert");
 
         assert_eq!(got.len(), 10);
         assert!(
@@ -321,6 +308,7 @@ mod tests {
         );
         assert!(got.iter().all(|frame| frame.channels == MONO_CHANNELS));
         assert!(got.iter().all(|frame| frame.samples.len() == 1_600));
+        assert_eq!(report.reason, "whisper_input");
 
         fs::remove_file(path).expect("temporary WAV should be removed");
     }
@@ -438,17 +426,5 @@ mod tests {
         assert_eq!(f32_to_i16(0.5), 16_384);
         assert_eq!(f32_to_i16(1.0), i16::MAX);
         assert_eq!(f32_to_i16(1.5), i16::MAX);
-    }
-
-    #[test]
-    fn mix_to_mono_averages_interleaved_channels() {
-        assert_eq!(mix_to_mono(&[1.0, 0.0, -0.5, 0.5], 2), vec![0.5, 0.0]);
-    }
-
-    #[test]
-    fn resample_linear_downsamples_by_duration() {
-        let got = resample_linear(&[0.0, 1.0, 0.0, -1.0], 4, 2);
-
-        assert_eq!(got, vec![0.0, 0.0]);
     }
 }

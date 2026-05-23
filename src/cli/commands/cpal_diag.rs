@@ -10,6 +10,10 @@ use cpal::{FromSample, Sample, SizedSample};
 #[cfg(feature = "audio-cpal")]
 use listenbury::audio::frame::AudioFrame;
 #[cfg(feature = "audio-cpal")]
+use listenbury::audio::normalize::{
+    AudioConversionReport, AudioFormat, NormalizedAudio, SampleKind, normalize_interleaved_f32,
+};
+#[cfg(feature = "audio-cpal")]
 use listenbury::audio::{read_wav_frames, write_wav};
 #[cfg(feature = "audio-cpal")]
 use listenbury::time::ExactTimestamp;
@@ -249,6 +253,7 @@ pub(crate) struct PreparedAudioPlayback {
     pub(crate) sample_rate_hz: u32,
     pub(crate) channels: u16,
     pub(crate) samples: Arc<Vec<f32>>,
+    pub(crate) conversion_report: AudioConversionReport,
 }
 
 #[cfg(feature = "audio-cpal")]
@@ -259,6 +264,10 @@ impl PreparedAudioPlayback {
 
     pub(crate) fn duration(&self) -> Duration {
         playback_duration(self.sample_count(), self.sample_rate_hz, self.channels)
+    }
+
+    pub(crate) fn conversion_report(&self) -> &AudioConversionReport {
+        &self.conversion_report
     }
 
     pub(crate) fn as_audio_frame(&self, captured_at: ExactTimestamp) -> AudioFrame {
@@ -477,13 +486,15 @@ pub(crate) fn prepare_audio_playback(
     let output_config = select_output_config(&device, sample_rate, channels)?;
     let output_sample_rate = output_config.sample_rate_hz;
     let output_channels = output_config.channels;
-    let audio_samples = convert_audio_samples(
+    let normalized_audio = convert_audio_samples(
         &audio_samples,
         sample_rate,
         channels,
         output_sample_rate,
         output_channels,
+        &format!("playback:{source}"),
     );
+    let audio_samples = normalized_audio.samples;
     anyhow::ensure!(
         !audio_samples.is_empty(),
         "audio from {source} had no samples after output conversion"
@@ -497,6 +508,7 @@ pub(crate) fn prepare_audio_playback(
         sample_rate_hz: output_sample_rate,
         channels: output_channels,
         samples: Arc::new(audio_samples),
+        conversion_report: normalized_audio.report,
     })
 }
 
@@ -545,7 +557,9 @@ fn convert_frames_for_output(
         channels,
         target_sample_rate_hz,
         target_channels,
-    ))
+        &format!("stream-playback:{source}"),
+    )
+    .samples)
 }
 
 #[cfg(feature = "audio-cpal")]
@@ -573,6 +587,13 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
         playback.channels,
         audio_duration.as_secs_f64(),
     );
+    let report = playback.conversion_report();
+    if !report.operations.is_empty() || !report.warnings.is_empty() {
+        println!(
+            "Playback conversion: {:?} -> {:?}, ops={:?}, warnings={:?}",
+            report.source, report.target, report.operations, report.warnings
+        );
+    }
 
     Ok(())
 }
@@ -696,99 +717,15 @@ fn convert_audio_samples(
     source_channels: u16,
     target_sample_rate_hz: u32,
     target_channels: u16,
-) -> Vec<f32> {
-    let mut converted = convert_channels(samples, source_channels, target_channels);
-    if source_sample_rate_hz != target_sample_rate_hz {
-        converted = resample_interleaved(
-            &converted,
-            source_sample_rate_hz,
-            target_sample_rate_hz,
-            target_channels,
-        );
-    }
-    converted
-}
-
-#[cfg(feature = "audio-cpal")]
-fn convert_channels(samples: &[f32], source_channels: u16, target_channels: u16) -> Vec<f32> {
-    if source_channels == target_channels {
-        return samples.to_vec();
-    }
-
-    if target_channels == 1 {
-        return mix_to_mono(samples, source_channels);
-    }
-
-    let source_channel_count = usize::from(source_channels).max(1);
-    let target_channel_count = usize::from(target_channels).max(1);
-    if source_channel_count == 1 {
-        let mut converted = Vec::with_capacity(samples.len().saturating_mul(target_channel_count));
-        for sample in samples {
-            for _ in 0..target_channel_count {
-                converted.push(*sample);
-            }
-        }
-        return converted;
-    }
-
-    let mut converted = Vec::with_capacity(
-        samples
-            .len()
-            .saturating_div(source_channel_count)
-            .saturating_mul(target_channel_count),
-    );
-    for frame in samples.chunks_exact(source_channel_count) {
-        for channel_idx in 0..target_channel_count {
-            converted.push(frame[channel_idx.min(source_channel_count - 1)]);
-        }
-    }
-    converted
-}
-
-#[cfg(feature = "audio-cpal")]
-fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    let channel_count = usize::from(channels).max(1);
-    if channel_count == 1 {
-        return samples.to_vec();
-    }
-    samples
-        .chunks_exact(channel_count)
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
-        .collect()
-}
-
-#[cfg(feature = "audio-cpal")]
-fn resample_interleaved(
-    samples: &[f32],
-    source_rate_hz: u32,
-    target_rate_hz: u32,
-    channels: u16,
-) -> Vec<f32> {
-    let channel_count = usize::from(channels).max(1);
-    let frame_count = samples.len() / channel_count;
-    if samples.is_empty() || frame_count == 0 || source_rate_hz == target_rate_hz {
-        return samples.to_vec();
-    }
-
-    let output_frame_count = ((frame_count as f64 * f64::from(target_rate_hz))
-        / f64::from(source_rate_hz))
-    .round() as usize;
-    let mut output = Vec::with_capacity(output_frame_count.saturating_mul(channel_count));
-    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
-
-    for output_frame_idx in 0..output_frame_count {
-        let source_pos = output_frame_idx as f64 * source_step;
-        let left_frame_idx = source_pos.floor() as usize;
-        let right_frame_idx = (left_frame_idx + 1).min(frame_count - 1);
-        let fraction = (source_pos - left_frame_idx as f64) as f32;
-        for channel_idx in 0..channel_count {
-            let left = samples[left_frame_idx * channel_count + channel_idx];
-            let right = samples[right_frame_idx * channel_count + channel_idx];
-            output.push(left + (right - left) * fraction);
-        }
-    }
-
-    output
+    reason: &str,
+) -> NormalizedAudio {
+    normalize_interleaved_f32(
+        samples,
+        AudioFormat::new(source_sample_rate_hz, source_channels, SampleKind::F32),
+        AudioFormat::new(target_sample_rate_hz, target_channels, SampleKind::F32),
+        reason,
+    )
+    .expect("validated CPAL audio formats should always normalize")
 }
 
 #[cfg(feature = "audio-cpal")]

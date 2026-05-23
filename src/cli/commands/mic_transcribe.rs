@@ -16,6 +16,8 @@ use listenbury::audio::capture::{
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::audio::ring::make_audio_ring;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::event::HearingEvent;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::hearing::breath::{
@@ -1466,8 +1468,13 @@ fn prepare_whisper_frames(frames: &[AudioFrame], frame_samples: usize) -> Result
         interleaved.extend_from_slice(&frame.samples);
     }
 
-    let mono = mix_to_mono(&interleaved, source_channels);
-    let resampled = resample_linear(&mono, source_rate_hz, WHISPER_SAMPLE_RATE_HZ);
+    let resampled = normalize_interleaved_f32(
+        &interleaved,
+        AudioFormat::new(source_rate_hz, source_channels, SampleKind::F32),
+        AudioFormat::new(WHISPER_SAMPLE_RATE_HZ, MONO_CHANNELS, SampleKind::F32),
+        "mic_whisper_input",
+    )?
+    .samples;
     Ok(resampled
         .chunks(frame_samples)
         .map(|chunk| AudioFrame {
@@ -1509,17 +1516,14 @@ fn convert_frame_samples(
         return samples.to_vec();
     }
 
-    let mut converted = if input_channels != frame_channels && frame_channels == MONO_CHANNELS {
-        mix_to_mono(samples, input_channels)
-    } else {
-        samples.to_vec()
-    };
-
-    if input_sample_rate_hz != frame_sample_rate_hz {
-        converted = resample_linear(&converted, input_sample_rate_hz, frame_sample_rate_hz);
-    }
-
-    converted
+    normalize_interleaved_f32(
+        samples,
+        AudioFormat::new(input_sample_rate_hz, input_channels, SampleKind::F32),
+        AudioFormat::new(frame_sample_rate_hz, frame_channels, SampleKind::F32),
+        "mic_vad_frame",
+    )
+    .expect("validated mic frame formats should always normalize")
+    .samples
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -1535,43 +1539,6 @@ fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     }
     let samples_per_channel = frame.samples.len() as f64 / f64::from(frame.channels);
     ((samples_per_channel / f64::from(frame.sample_rate_hz)) * 1000.0).round() as u64
-}
-
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    let channel_count = usize::from(channels);
-    if channel_count == 1 {
-        return samples.to_vec();
-    }
-    samples
-        .chunks_exact(channel_count)
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
-        .collect()
-}
-
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
-    if samples.is_empty() || source_rate_hz == target_rate_hz {
-        return samples.to_vec();
-    }
-
-    let output_len = ((samples.len() as f64 * f64::from(target_rate_hz))
-        / f64::from(source_rate_hz))
-    .round() as usize;
-    let mut output = Vec::with_capacity(output_len);
-    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
-
-    for output_idx in 0..output_len {
-        let source_pos = output_idx as f64 * source_step;
-        let left_idx = source_pos.floor() as usize;
-        let right_idx = (left_idx + 1).min(samples.len() - 1);
-        let fraction = (source_pos - left_idx as f64) as f32;
-        let left = samples[left_idx];
-        let right = samples[right_idx];
-        output.push(left + (right - left) * fraction);
-    }
-
-    output
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
