@@ -424,8 +424,8 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
         emit_live_candidate_updates(
             &mut state.candidate_planner,
             &output,
-            group.opened_at_ms,
-            state.frame_time_ms,
+            &group.frames,
+            ExactTimestamp::now(),
         );
         let text = output.text;
         if text.is_empty() {
@@ -791,19 +791,19 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
     for group in state.active_groups.values_mut() {
         group.frames.push(frame.clone());
         if frame_end_ms >= group.next_prospective_at_ms {
-            prospective_groups.push((group.frames.clone(), group.opened_at_ms));
+            prospective_groups.push(group.frames.clone());
             group.next_prospective_at_ms =
                 frame_end_ms.saturating_add(WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS);
         }
     }
 
-    for (frames, opened_at_ms) in prospective_groups {
+    for frames in prospective_groups {
         let output = transcribe_group_with_finality(&frames, &mut state.recognizer, false)?;
         emit_live_candidate_updates(
             &mut state.candidate_planner,
             &output,
-            opened_at_ms,
-            frame_end_ms,
+            &frames,
+            ExactTimestamp::now(),
         );
     }
 
@@ -819,8 +819,8 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
                 emit_live_candidate_updates(
                     &mut state.candidate_planner,
                     &output,
-                    group.opened_at_ms,
-                    frame_end_ms,
+                    &group.frames,
+                    ExactTimestamp::now(),
                 );
                 let text = output.text;
                 if text.is_empty() {
@@ -846,15 +846,15 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
 fn emit_live_candidate_updates(
     planner: &mut WebTranscriptSpeculativePlanner,
     output: &TranscribeGroupOutput,
-    opened_at_ms: u64,
-    observed_at_ms: u64,
+    audio_frames: &[AudioFrame],
+    occurred_at: ExactTimestamp,
 ) {
-    let latency_ms = observed_at_ms.saturating_sub(opened_at_ms);
+    let latency_ms = candidate_latency_ms(audio_frames, occurred_at);
     for event in &output.candidate_events {
         let stability = planner.observe(event);
         println!(
             "{}",
-            candidate_console_message(event, stability.as_ref(), output.backend, latency_ms,)
+            candidate_console_message(event, stability.as_ref(), output.backend, latency_ms)
         );
     }
 }
@@ -1160,7 +1160,7 @@ fn emit_web_transcribe_output(
     occurred_at: ExactTimestamp,
 ) -> Result<()> {
     let turn = state.live_trace_turn.saturating_add(1);
-    let latency_ms = state.frame_time_ms.saturating_sub(word_timing_offset_ms);
+    let latency_ms = candidate_latency_ms(audio_frames, occurred_at);
     for event in &output.candidate_events {
         let stability = state.candidate_planner.observe(event);
         emit_web_candidate_trace_event(
@@ -1329,6 +1329,17 @@ fn candidate_trace_artifact(
         object.insert("confidence".to_string(), json!(stability.confidence));
     }
     artifact
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn candidate_latency_ms(audio_frames: &[AudioFrame], occurred_at: ExactTimestamp) -> u64 {
+    let Some(first) = audio_frames.first() else {
+        return 0;
+    };
+    let elapsed_ns = occurred_at
+        .unix_nanos
+        .saturating_sub(first.captured_at.unix_nanos);
+    (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]

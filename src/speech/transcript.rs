@@ -227,11 +227,10 @@ impl TranscriptStabilityState {
             split
         } else {
             text.char_indices()
-                .find_map(|(idx, ch)| {
-                    let end = idx + ch.len_utf8();
-                    (end >= split).then_some(end)
-                })
-                .unwrap_or(text.len())
+                .map(|(idx, _)| idx)
+                .take_while(|idx| *idx < split)
+                .last()
+                .unwrap_or_default()
         };
         let (stable_text, unstable_text) = text.split_at(split);
         let stable_word_split = if stable_text

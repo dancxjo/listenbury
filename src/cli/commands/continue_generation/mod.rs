@@ -3704,9 +3704,16 @@ impl ContinueEar {
                         ) {
                             Ok(output) => {
                                 let observed_at = ExactTimestamp::now();
-                                let latency_ms = work.frames.iter().fold(0u64, |acc, frame| {
-                                    acc.saturating_add(frame_duration_ms(frame))
-                                });
+                                let latency_ms = work
+                                    .frames
+                                    .first()
+                                    .map(|frame| {
+                                        let elapsed_ns = observed_at
+                                            .unix_nanos
+                                            .saturating_sub(frame.captured_at.unix_nanos);
+                                        (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
+                                    })
+                                    .unwrap_or_default();
                                 let backend = output.backend;
                                 let candidate_events = output.candidate_events.clone();
                                 for event in candidate_events {
