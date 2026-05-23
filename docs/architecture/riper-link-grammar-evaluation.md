@@ -3,6 +3,9 @@
 Follow-up mapping table and implementation priorities:
 [`riper-link-grammar-mapping.md`](./riper-link-grammar-mapping.md).
 
+Native implementation inventory and parity-gap audit:
+[`riper-link-grammar-native-audit.md`](./riper-link-grammar-native-audit.md).
+
 ## Why evaluate a link model
 
 Riper prosody decisions often depend on local typed relationships (`to` + infinitive, vocative boundaries, contrast pairs, comma-island behavior) rather than a single global constituency tree.  
