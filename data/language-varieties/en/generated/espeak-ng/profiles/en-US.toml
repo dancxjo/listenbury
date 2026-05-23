@@ -1,0 +1,62 @@
+id = "en-US"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-US"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (America)"
+phonemes = "en-us"
+dictrules = [
+    3,
+    6,
+]
+
+[[language_tags]]
+tag = "en-us"
+priority = 2
+
+[[language_tags]]
+tag = "en"
+priority = 3
+
+[stress]
+length = [
+    140,
+    120,
+    190,
+    170,
+    0,
+    0,
+    255,
+    300,
+]
+amplitude = [
+    17,
+    16,
+    19,
+    19,
+    19,
+    19,
+    21,
+    19,
+]
+
+[[replacements]]
+flags = 3
+from = "I"
+to = "i"
+
+[[replacements]]
+flags = 3
+from = "I2"
+to = "i"
+
+[[unsupported]]
+line = 5
+directive = "maintainer"
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[unsupported]]
+line = 6
+directive = "status"
+content = "status mature"

@@ -1,0 +1,44 @@
+id = "en-GB-x-gbcwmd"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-GB-x-gbcwmd"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (West Midlands)"
+phonemes = "en-wm"
+dictrules = [6]
+
+[[language_tags]]
+tag = "en-gb-x-gbcwmd"
+
+[[language_tags]]
+tag = "en-gb"
+priority = 9
+
+[[language_tags]]
+tag = "en"
+priority = 9
+
+[stress]
+length = []
+amplitude = []
+
+[[replacements]]
+flags = 0
+from = "h"
+to = "NULL"
+
+[[replacements]]
+flags = 0
+from = "o@"
+to = "O@"
+
+[[unsupported]]
+line = 11
+directive = "intonation"
+content = "intonation 4"
+
+[[unsupported]]
+line = 12
+directive = "stressAdd"
+content = "stressAdd 0 0 0 0 0 0 0 20"

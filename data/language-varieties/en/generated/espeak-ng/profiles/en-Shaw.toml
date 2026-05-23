@@ -1,0 +1,27 @@
+id = "en-Shaw"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-Shaw"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (Shavian alphabet)"
+phonemes = "en"
+dictrules = []
+replacements = []
+
+[[language_tags]]
+tag = "en-shaw"
+
+[stress]
+length = []
+amplitude = []
+
+[[unsupported]]
+line = 3
+directive = "maintainer"
+content = "maintainer Luna Rose <luna@anarchy.center>"
+
+[[unsupported]]
+line = 4
+directive = "status"
+content = "status testing"

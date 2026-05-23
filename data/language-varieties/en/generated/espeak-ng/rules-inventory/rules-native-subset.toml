@@ -1,0 +1,514 @@
+lang = "en"
+mode = "native-subset"
+source = "espeak-ng"
+source_file = "dictsource/en_rules"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+replace_rules = []
+condition_flags_seen = [
+    "?!3",
+    "?2",
+    "?3",
+    "?5",
+    "?7",
+    "?8",
+]
+suffix_prefix_operators_seen = [
+    "$",
+    "+",
+    "-",
+    "<",
+    ">",
+]
+special_symbols_seen = [
+    "#",
+    "%",
+    "&",
+    "(",
+    ")",
+    ":",
+    "@",
+    "_",
+]
+
+[[letter_groups]]
+id = "L01"
+value = "l r"
+source_line = 34
+
+[[letter_groups]]
+id = "L02"
+value = "i y"
+source_line = 35
+
+[[letter_groups]]
+id = "L03"
+value = "a i o u"
+source_line = 36
+
+[[letter_groups]]
+id = "L04"
+value = "e i y"
+source_line = 37
+
+[[letter_groups]]
+id = "L05"
+value = "c g k"
+source_line = 38
+
+[[letter_groups]]
+id = "L06"
+value = "s z"
+source_line = 39
+
+[[letter_groups]]
+id = "L07"
+value = "b d g m n r bE dE lE nE"
+source_line = 40
+
+[[letter_groups]]
+id = "L08"
+value = "t d s z n x"
+source_line = 41
+
+[[letter_groups]]
+id = "L10"
+value = "graph log met scop"
+source_line = 42
+
+[[letter_groups]]
+id = "L11"
+value = "ä ö ü ae ø"
+source_line = 43
+
+[[groups]]
+name = "'"
+count = 1
+
+[[groups]]
+name = "0xF0"
+count = 1
+
+[[groups]]
+name = "0xce"
+count = 1
+
+[[groups]]
+name = "0xcf"
+count = 1
+
+[[groups]]
+name = "E"
+count = 1
+
+[[groups]]
+name = "a"
+count = 1
+
+[[groups]]
+name = "ab"
+count = 1
+
+[[groups]]
+name = "ac"
+count = 1
+
+[[groups]]
+name = "ad"
+count = 1
+
+[[groups]]
+name = "af"
+count = 1
+
+[[groups]]
+name = "ag"
+count = 1
+
+[[groups]]
+name = "ai"
+count = 1
+
+[[groups]]
+name = "al"
+count = 1
+
+[[groups]]
+name = "am"
+count = 1
+
+[[groups]]
+name = "an"
+count = 1
+
+[[groups]]
+name = "ap"
+count = 1
+
+[[groups]]
+name = "ar"
+count = 1
+
+[[groups]]
+name = "as"
+count = 1
+
+[[groups]]
+name = "at"
+count = 1
+
+[[groups]]
+name = "au"
+count = 1
+
+[[groups]]
+name = "av"
+count = 1
+
+[[groups]]
+name = "b"
+count = 1
+
+[[groups]]
+name = "be"
+count = 1
+
+[[groups]]
+name = "bi"
+count = 1
+
+[[groups]]
+name = "c"
+count = 1
+
+[[groups]]
+name = "ch"
+count = 1
+
+[[groups]]
+name = "co"
+count = 1
+
+[[groups]]
+name = "d"
+count = 1
+
+[[groups]]
+name = "de"
+count = 1
+
+[[groups]]
+name = "di"
+count = 1
+
+[[groups]]
+name = "e"
+count = 1
+
+[[groups]]
+name = "ea"
+count = 1
+
+[[groups]]
+name = "ed"
+count = 1
+
+[[groups]]
+name = "ei"
+count = 1
+
+[[groups]]
+name = "el"
+count = 1
+
+[[groups]]
+name = "em"
+count = 1
+
+[[groups]]
+name = "en"
+count = 1
+
+[[groups]]
+name = "eo"
+count = 1
+
+[[groups]]
+name = "er"
+count = 1
+
+[[groups]]
+name = "es"
+count = 1
+
+[[groups]]
+name = "et"
+count = 1
+
+[[groups]]
+name = "eu"
+count = 1
+
+[[groups]]
+name = "ev"
+count = 1
+
+[[groups]]
+name = "ex"
+count = 1
+
+[[groups]]
+name = "ey"
+count = 1
+
+[[groups]]
+name = "f"
+count = 1
+
+[[groups]]
+name = "g"
+count = 1
+
+[[groups]]
+name = "h"
+count = 1
+
+[[groups]]
+name = "i"
+count = 1
+
+[[groups]]
+name = "ia"
+count = 1
+
+[[groups]]
+name = "ie"
+count = 1
+
+[[groups]]
+name = "ig"
+count = 1
+
+[[groups]]
+name = "il"
+count = 1
+
+[[groups]]
+name = "im"
+count = 1
+
+[[groups]]
+name = "in"
+count = 1
+
+[[groups]]
+name = "io"
+count = 1
+
+[[groups]]
+name = "ir"
+count = 1
+
+[[groups]]
+name = "is"
+count = 1
+
+[[groups]]
+name = "it"
+count = 1
+
+[[groups]]
+name = "iv"
+count = 1
+
+[[groups]]
+name = "j"
+count = 1
+
+[[groups]]
+name = "k"
+count = 1
+
+[[groups]]
+name = "l"
+count = 1
+
+[[groups]]
+name = "le"
+count = 1
+
+[[groups]]
+name = "m"
+count = 1
+
+[[groups]]
+name = "mi"
+count = 1
+
+[[groups]]
+name = "n"
+count = 1
+
+[[groups]]
+name = "ng"
+count = 1
+
+[[groups]]
+name = "o"
+count = 1
+
+[[groups]]
+name = "ol"
+count = 1
+
+[[groups]]
+name = "om"
+count = 1
+
+[[groups]]
+name = "on"
+count = 1
+
+[[groups]]
+name = "oo"
+count = 1
+
+[[groups]]
+name = "op"
+count = 1
+
+[[groups]]
+name = "or"
+count = 1
+
+[[groups]]
+name = "os"
+count = 1
+
+[[groups]]
+name = "ot"
+count = 1
+
+[[groups]]
+name = "ou"
+count = 1
+
+[[groups]]
+name = "ov"
+count = 1
+
+[[groups]]
+name = "ow"
+count = 1
+
+[[groups]]
+name = "p"
+count = 1
+
+[[groups]]
+name = "pe"
+count = 1
+
+[[groups]]
+name = "pr"
+count = 1
+
+[[groups]]
+name = "q"
+count = 1
+
+[[groups]]
+name = "r"
+count = 1
+
+[[groups]]
+name = "re"
+count = 1
+
+[[groups]]
+name = "s"
+count = 1
+
+[[groups]]
+name = "su"
+count = 1
+
+[[groups]]
+name = "t"
+count = 1
+
+[[groups]]
+name = "th"
+count = 1
+
+[[groups]]
+name = "ti"
+count = 1
+
+[[groups]]
+name = "tu"
+count = 1
+
+[[groups]]
+name = "u"
+count = 1
+
+[[groups]]
+name = "ue"
+count = 1
+
+[[groups]]
+name = "ui"
+count = 1
+
+[[groups]]
+name = "un"
+count = 1
+
+[[groups]]
+name = "unnamed"
+count = 1
+
+[[groups]]
+name = "up"
+count = 1
+
+[[groups]]
+name = "ur"
+count = 1
+
+[[groups]]
+name = "v"
+count = 1
+
+[[groups]]
+name = "w"
+count = 1
+
+[[groups]]
+name = "x"
+count = 1
+
+[[groups]]
+name = "y"
+count = 1
+
+[[groups]]
+name = "z"
+count = 1
+
+[[unsupported]]
+directive = ".replace"
+source_line = 46
+content = ".replace"
+
+[[unsupported]]
+directive = "."
+source_line = 7129
+content = ".          d0t"
+
+[[unsupported]]
+directive = "."
+source_line = 7130
+content = ". (.       _:"

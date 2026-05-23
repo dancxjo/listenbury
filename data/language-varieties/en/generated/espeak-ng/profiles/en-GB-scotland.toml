@@ -1,0 +1,74 @@
+id = "en-GB-scotland"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-GB-scotland"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (Scotland)"
+phonemes = "en-sc"
+dictrules = [
+    2,
+    5,
+    6,
+    7,
+]
+
+[[language_tags]]
+tag = "en-gb-scotland"
+
+[[language_tags]]
+tag = "en"
+priority = 4
+
+[stress]
+length = [
+    180,
+    130,
+    200,
+    200,
+    0,
+    0,
+    250,
+    270,
+]
+amplitude = []
+
+[[replacements]]
+flags = 3
+from = "@"
+to = "V"
+
+[[replacements]]
+flags = 3
+from = "I"
+to = "i"
+
+[[replacements]]
+flags = 3
+from = "I2"
+to = "i"
+
+[[replacements]]
+flags = 1
+from = "aI"
+to = "aI2"
+
+[[replacements]]
+flags = 2
+from = "a"
+to = "a/"
+
+[[replacements]]
+flags = 2
+from = "u:"
+to = "U"
+
+[[unsupported]]
+line = 5
+directive = "maintainer"
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[unsupported]]
+line = 6
+directive = "status"
+content = "status mature"

@@ -1,0 +1,59 @@
+id = "en-GB-x-rp"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-GB-x-rp"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (Received Pronunciation)"
+phonemes = "en-rp"
+dictrules = []
+
+[[language_tags]]
+tag = "en-gb-x-rp"
+
+[[language_tags]]
+tag = "en-gb"
+priority = 4
+
+[[language_tags]]
+tag = "en"
+priority = 5
+
+[stress]
+length = []
+amplitude = []
+
+[[replacements]]
+flags = 0
+from = "o@"
+to = "O@"
+
+[[replacements]]
+flags = 3
+from = "I"
+to = "i"
+
+[[replacements]]
+flags = 3
+from = "I2"
+to = "i"
+
+[[replacements]]
+flags = 3
+from = "@"
+to = "a#"
+
+[[replacements]]
+flags = 3
+from = "3"
+to = "a#"
+
+[[unsupported]]
+line = 6
+directive = "maintainer"
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[unsupported]]
+line = 7
+directive = "status"
+content = "status mature"

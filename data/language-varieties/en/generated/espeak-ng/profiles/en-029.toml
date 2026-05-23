@@ -1,0 +1,79 @@
+id = "en-029"
+source = "espeak-ng"
+source_file = "espeak-ng-data/lang/gmw/en-029"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GNU GENERAL PUBLIC LICENSE"
+converter_version = "0.1.0"
+name = "English (Caribbean)"
+phonemes = "en-wi"
+dictrules = [8]
+
+[[language_tags]]
+tag = "en-029"
+
+[[language_tags]]
+tag = "en"
+priority = 10
+
+[stress]
+length = [
+    175,
+    175,
+    175,
+    175,
+    220,
+    220,
+    250,
+    290,
+]
+amplitude = []
+
+[[replacements]]
+flags = 0
+from = "D"
+to = "d"
+
+[[replacements]]
+flags = 0
+from = "T"
+to = "t["
+
+[[replacements]]
+flags = 0
+from = "U@"
+to = "o@"
+
+[[replacements]]
+flags = 3
+from = "@"
+to = "a#"
+
+[[replacements]]
+flags = 3
+from = "3"
+to = "a#"
+
+[[replacements]]
+flags = 3
+from = "N"
+to = "n"
+
+[[unsupported]]
+line = 5
+directive = "maintainer"
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[unsupported]]
+line = 6
+directive = "status"
+content = "status mature"
+
+[[unsupported]]
+line = 19
+directive = "formant"
+content = "formant 1  98  100 100"
+
+[[unsupported]]
+line = 20
+directive = "formant"
+content = "formant 2  98  100 100"
