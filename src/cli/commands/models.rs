@@ -2,7 +2,7 @@ use crate::cli::ModelsCommand;
 #[cfg(feature = "model-download")]
 use crate::cli::download_progress::DownloadProgress;
 #[cfg(feature = "model-download")]
-use crate::cli::{ModelsFetchCommand, ModelsUseCommand, ModelsUseKind};
+use crate::cli::{ModelsFetchCommand, ModelsStatusCommand, ModelsUseCommand, ModelsUseKind};
 use anyhow::Result;
 
 #[cfg(feature = "model-download")]
@@ -11,9 +11,11 @@ use anyhow::Context;
 use inquire::Select;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchOutcome, bundle_present, default_asset_paths, default_assets_status,
-    fetch_all_assets_with_progress_and_jobs, fetch_bundle_with_progress_and_jobs,
-    fetch_selected_assets_with_progress_and_jobs, find_bundle,
+    FetchOutcome, bundle_present, default_asset_paths, default_assets_status_with_verification,
+    download::AssetIntegrityState,
+    fetch_all_assets_with_progress_and_jobs_and_verify,
+    fetch_bundle_with_progress_and_jobs_and_verify,
+    fetch_selected_assets_with_progress_and_jobs_and_verify, find_bundle,
     manifest::{MODEL_BUNDLES, ModelBundle, ModelKind},
     paths::resolve_listenbury_home,
     read_model_selection, selected_bundle, write_model_selection,
@@ -43,22 +45,8 @@ pub(crate) fn run_models(command: Option<ModelsCommand>) -> Result<()> {
             Ok(())
         }
         Some(ModelsCommand::List) => print_models_list(),
-        Some(ModelsCommand::Status) => {
-            for status in default_assets_status()? {
-                let state = if status.present {
-                    "present".green().to_string()
-                } else {
-                    "missing".red().to_string()
-                };
-                println!(
-                    "{} {} {}",
-                    status.asset_id.bold(),
-                    state,
-                    status.path.display()
-                );
-            }
-            Ok(())
-        }
+        Some(ModelsCommand::Status(command)) => print_status(command),
+        Some(ModelsCommand::Repair(command)) => repair_models(command),
         Some(ModelsCommand::Use(command)) => use_model(command),
         Some(ModelsCommand::Fetch(command)) => fetch_models(command),
     }
@@ -228,7 +216,12 @@ impl fmt::Display for BundleChoice {
 fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
     let jobs = command.jobs.max(1);
     let result = if command.all {
-        progress_fetch("Fetching every registered model asset...", None, jobs)
+        progress_fetch(
+            "Fetching every registered model asset...",
+            None,
+            jobs,
+            command.verify,
+        )
     } else if let Some(model) = command.model {
         let bundle = find_bundle(ModelKind::Llm, &model)
             .or_else(|| find_bundle(ModelKind::Voice, &model))
@@ -238,9 +231,15 @@ fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
             &format!("Fetching {}...", bundle.display_name),
             Some(bundle),
             jobs,
+            command.verify,
         )
     } else {
-        progress_fetch("Fetching selected model assets...", None, jobs)
+        progress_fetch(
+            "Fetching selected model assets...",
+            None,
+            jobs,
+            command.verify,
+        )
     }?;
     print_fetch_results(result)
 }
@@ -250,22 +249,73 @@ fn progress_fetch(
     message: &str,
     bundle: Option<&ModelBundle>,
     jobs: usize,
+    verify_existing: bool,
 ) -> Result<Vec<listenbury::models::FetchResult>> {
     let mut progress = DownloadProgress::new(message)?;
 
     let results = match (message.contains("every registered"), bundle) {
-        (true, _) => fetch_all_assets_with_progress_and_jobs(jobs, |asset_progress| {
-            progress.update(asset_progress);
-        })?,
-        (_, Some(bundle)) => fetch_bundle_with_progress_and_jobs(bundle, jobs, |asset_progress| {
-            progress.update(asset_progress);
-        })?,
-        _ => fetch_selected_assets_with_progress_and_jobs(jobs, |asset_progress| {
-            progress.update(asset_progress);
-        })?,
+        (true, _) => fetch_all_assets_with_progress_and_jobs_and_verify(
+            jobs,
+            verify_existing,
+            |asset_progress| {
+                progress.update(asset_progress);
+            },
+        )?,
+        (_, Some(bundle)) => fetch_bundle_with_progress_and_jobs_and_verify(
+            bundle,
+            jobs,
+            verify_existing,
+            |asset_progress| {
+                progress.update(asset_progress);
+            },
+        )?,
+        _ => fetch_selected_assets_with_progress_and_jobs_and_verify(
+            jobs,
+            verify_existing,
+            |asset_progress| {
+                progress.update(asset_progress);
+            },
+        )?,
     };
     progress.finish_and_clear();
     Ok(results)
+}
+
+#[cfg(feature = "model-download")]
+fn print_status(command: ModelsStatusCommand) -> Result<()> {
+    for status in default_assets_status_with_verification(command.verify)? {
+        let state = integrity_label(status.integrity);
+        println!(
+            "{} {} {} source={} license={} url={}",
+            status.asset_id.bold(),
+            state,
+            status.path.display(),
+            status.source.unwrap_or("unknown"),
+            status.license.unwrap_or("unknown"),
+            status.url
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "model-download")]
+fn repair_models(command: ModelsFetchCommand) -> Result<()> {
+    fetch_models(ModelsFetchCommand {
+        verify: true,
+        ..command
+    })
+}
+
+#[cfg(feature = "model-download")]
+fn integrity_label(state: AssetIntegrityState) -> String {
+    match state {
+        AssetIntegrityState::Missing => "missing".red().to_string(),
+        AssetIntegrityState::PresentUnverified => "present-unverified".yellow().to_string(),
+        AssetIntegrityState::PresentValid => "present-valid".green().to_string(),
+        AssetIntegrityState::PresentInvalidSize => "present-invalid-size".red().to_string(),
+        AssetIntegrityState::PresentInvalidChecksum => "present-invalid-checksum".red().to_string(),
+        AssetIntegrityState::UnknownChecksum => "unknown-checksum".yellow().to_string(),
+    }
 }
 
 #[cfg(feature = "model-download")]

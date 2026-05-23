@@ -4,9 +4,20 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::models::manifest::ModelAsset;
 use crate::models::paths::asset_path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetIntegrityState {
+    Missing,
+    PresentUnverified,
+    PresentValid,
+    PresentInvalidSize,
+    PresentInvalidChecksum,
+    UnknownChecksum,
+}
 
 pub fn fetch_asset(home: &Path, asset: &ModelAsset) -> Result<bool> {
     fetch_asset_with_progress(home, asset, |_, _| {})
@@ -17,6 +28,15 @@ pub fn fetch_asset_with_progress(
     asset: &ModelAsset,
     mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<bool> {
+    fetch_asset_with_progress_and_verify(home, asset, false, &mut progress)
+}
+
+pub fn fetch_asset_with_progress_and_verify(
+    home: &Path,
+    asset: &ModelAsset,
+    verify_existing: bool,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<bool> {
     let target_path = asset_path(home, asset);
     let parent = target_path
         .parent()
@@ -25,10 +45,25 @@ pub fn fetch_asset_with_progress(
         .with_context(|| format!("failed to create model directory {}", parent.display()))?;
 
     let existing_bytes = file_len(&target_path)?;
-    let remote_bytes = remote_content_length(asset).or(asset.expected_size_hint);
+    let remote_bytes = remote_content_length(asset).or(asset.expected_size_bytes);
     if let Some(existing_bytes) = existing_bytes
         && existing_bytes > 0
     {
+        if verify_existing {
+            match verify_existing_asset(&target_path, asset, true)? {
+                AssetIntegrityState::PresentValid | AssetIntegrityState::UnknownChecksum => {
+                    cleanup_partial_files(parent, asset, None)?;
+                    return Ok(false);
+                }
+                AssetIntegrityState::PresentInvalidSize
+                | AssetIntegrityState::PresentInvalidChecksum => {
+                    remove_file_if_exists(&target_path)?;
+                    cleanup_partial_files(parent, asset, None)?;
+                    return download_fresh(asset, &target_path, remote_bytes, &mut progress);
+                }
+                AssetIntegrityState::Missing | AssetIntegrityState::PresentUnverified => {}
+            }
+        }
         match remote_bytes {
             Some(total_bytes) if existing_bytes == total_bytes => {
                 cleanup_partial_files(parent, asset, None)?;
@@ -64,6 +99,36 @@ pub fn fetch_asset_with_progress(
     download_fresh(asset, &target_path, remote_bytes, &mut progress)
 }
 
+pub fn verify_existing_asset(
+    path: &Path,
+    asset: &ModelAsset,
+    verify: bool,
+) -> Result<AssetIntegrityState> {
+    let Some(actual_bytes) = file_len(path)? else {
+        return Ok(AssetIntegrityState::Missing);
+    };
+    if actual_bytes == 0 {
+        return Ok(AssetIntegrityState::Missing);
+    }
+    if !verify {
+        return Ok(AssetIntegrityState::PresentUnverified);
+    }
+    if let Some(expected_size_bytes) = asset.expected_size_bytes
+        && expected_size_bytes != actual_bytes
+    {
+        return Ok(AssetIntegrityState::PresentInvalidSize);
+    }
+    let Some(expected_sha256) = asset.sha256 else {
+        return Ok(AssetIntegrityState::UnknownChecksum);
+    };
+    let actual_sha256 = file_sha256_hex(path)?;
+    if actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        Ok(AssetIntegrityState::PresentValid)
+    } else {
+        Ok(AssetIntegrityState::PresentInvalidChecksum)
+    }
+}
+
 fn download_fresh(
     asset: &ModelAsset,
     target_path: &Path,
@@ -97,13 +162,7 @@ fn download_fresh(
         .with_context(|| format!("failed to flush {}", temp_path.display()))?;
     drop(file);
 
-    fs::rename(&temp_path, target_path).with_context(|| {
-        format!(
-            "failed to move completed download {} to {}",
-            temp_path.display(),
-            target_path.display()
-        )
-    })?;
+    finalize_download(asset, &temp_path, target_path, total_bytes)?;
     Ok(true)
 }
 
@@ -284,21 +343,41 @@ fn file_len(path: &Path) -> Result<Option<u64>> {
     }
 }
 
+fn file_sha256_hex(path: &Path) -> Result<String> {
+    let mut file =
+        File::open(path).with_context(|| format!("failed to open file {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
 fn finalize_download(
     asset: &ModelAsset,
     download_path: &Path,
     target_path: &Path,
     total_bytes: Option<u64>,
 ) -> Result<()> {
-    let Some(total_bytes) = total_bytes else {
-        return Ok(());
-    };
-    let actual_bytes = file_len(download_path)?.unwrap_or(0);
-    if actual_bytes != total_bytes {
-        bail!(
-            "downloaded file {} is {actual_bytes} bytes, expected {total_bytes} bytes",
-            download_path.display()
-        );
+    let verify_result = verify_downloaded_asset(asset, download_path, total_bytes);
+    if let Err(error) = verify_result {
+        remove_file_if_exists(download_path)?;
+        return Err(error);
     }
     if download_path != target_path {
         fs::rename(download_path, target_path).with_context(|| {
@@ -311,6 +390,40 @@ fn finalize_download(
     }
     if let Some(parent) = target_path.parent() {
         cleanup_partial_files(parent, asset, Some(target_path))?;
+    }
+    Ok(())
+}
+
+fn verify_downloaded_asset(
+    asset: &ModelAsset,
+    path: &Path,
+    total_bytes: Option<u64>,
+) -> Result<()> {
+    let actual_bytes = file_len(path)?.unwrap_or(0);
+    if let Some(total_bytes) = total_bytes
+        && actual_bytes != total_bytes
+    {
+        bail!(
+            "downloaded file {} is {actual_bytes} bytes, expected {total_bytes} bytes",
+            path.display()
+        );
+    }
+    if let Some(expected_size_bytes) = asset.expected_size_bytes
+        && actual_bytes != expected_size_bytes
+    {
+        bail!(
+            "downloaded file {} is {actual_bytes} bytes, expected manifest size {expected_size_bytes} bytes",
+            path.display()
+        );
+    }
+    if let Some(expected_sha256) = asset.sha256 {
+        let actual_sha256 = file_sha256_hex(path)?;
+        if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+            bail!(
+                "downloaded file {} SHA-256 mismatch: expected {expected_sha256}, got {actual_sha256}",
+                path.display()
+            );
+        }
     }
     Ok(())
 }
@@ -356,7 +469,7 @@ mod tests {
     use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::fetch_asset_with_progress;
+    use super::{AssetIntegrityState, fetch_asset_with_progress, verify_existing_asset};
     use crate::models::manifest::ModelAsset;
 
     fn temp_dir(label: &str) -> PathBuf {
@@ -429,7 +542,10 @@ mod tests {
             filename: "model.bin",
             relative_path: "models/test/model.bin",
             url: Box::leak(url.into_boxed_str()),
-            expected_size_hint: None,
+            expected_size_bytes: None,
+            sha256: None,
+            license: None,
+            source: None,
         };
 
         let mut progress_updates = Vec::new();
@@ -503,7 +619,10 @@ mod tests {
             filename: "model.bin",
             relative_path: "models/test/model.bin",
             url: Box::leak(url.into_boxed_str()),
-            expected_size_hint: None,
+            expected_size_bytes: None,
+            sha256: None,
+            license: None,
+            source: None,
         };
 
         let mut progress_updates = Vec::new();
@@ -519,6 +638,154 @@ mod tests {
         assert!(!smaller_partial.exists());
         assert!(progress_updates.contains(&(b"already-".len() as u64, Some(body.len() as u64))));
         server.join().expect("server");
+    }
+
+    #[test]
+    fn verify_reports_valid_checksum() {
+        let home = temp_dir("models-verify-valid");
+        let asset_path = home.join("models/test/model.bin");
+        let body = b"tiny-model";
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        fs::write(&asset_path, body).expect("write model");
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            body.len() as u64,
+            Some("ccdbfb9993be88c536b0b7cd2abe60eda83c7ce1ad530c6a2ada81510ff1548c"),
+        );
+        let integrity = verify_existing_asset(&asset_path, &asset, true).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::PresentValid);
+    }
+
+    #[test]
+    fn verify_reports_invalid_checksum() {
+        let home = temp_dir("models-verify-bad-checksum");
+        let asset_path = home.join("models/test/model.bin");
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        fs::write(&asset_path, b"tiny-model").expect("write model");
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            b"tiny-model".len() as u64,
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        );
+        let integrity = verify_existing_asset(&asset_path, &asset, true).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::PresentInvalidChecksum);
+    }
+
+    #[test]
+    fn verify_reports_invalid_size() {
+        let home = temp_dir("models-verify-bad-size");
+        let asset_path = home.join("models/test/model.bin");
+        let body = b"tiny-model";
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        fs::write(&asset_path, body).expect("write model");
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            body.len() as u64 + 1,
+            None,
+        );
+        let integrity = verify_existing_asset(&asset_path, &asset, true).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::PresentInvalidSize);
+    }
+
+    #[test]
+    fn verify_reports_unknown_checksum_when_missing() {
+        let home = temp_dir("models-verify-unknown-checksum");
+        let asset_path = home.join("models/test/model.bin");
+        let body = b"tiny-model";
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        fs::write(&asset_path, body).expect("write model");
+
+        let asset = test_asset(
+            "model.bin",
+            "models/test/model.bin",
+            body.len() as u64,
+            None,
+        );
+        let integrity = verify_existing_asset(&asset_path, &asset, true).expect("verify existing");
+        assert_eq!(integrity, AssetIntegrityState::UnknownChecksum);
+    }
+
+    #[test]
+    fn fetch_rejects_invalid_checksum_without_promoting_temp_file() {
+        let body = b"tiny-model".to_vec();
+        let server_body = body.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let url = format!("http://{}/model.bin", listener.local_addr().expect("addr"));
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let request = read_request(&mut stream);
+                if request.starts_with("HEAD ") {
+                    write_response(
+                        &mut stream,
+                        "HTTP/1.1 200 OK",
+                        &[("Content-Length", &server_body.len().to_string())],
+                        &[],
+                    );
+                    continue;
+                }
+                assert!(request.starts_with("GET "), "unexpected request: {request}");
+                write_response(
+                    &mut stream,
+                    "HTTP/1.1 200 OK",
+                    &[("Content-Length", &server_body.len().to_string())],
+                    &server_body,
+                );
+            }
+        });
+
+        let home = temp_dir("models-reject-invalid-checksum");
+        let asset_path = home.join("models/test/model.bin");
+        fs::create_dir_all(asset_path.parent().expect("parent")).expect("mkdir");
+        let asset = ModelAsset {
+            id: "test-asset",
+            filename: "model.bin",
+            relative_path: "models/test/model.bin",
+            url: Box::leak(url.into_boxed_str()),
+            expected_size_bytes: Some(body.len() as u64),
+            sha256: Some("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+            license: Some("unknown"),
+            source: Some("fixture-server"),
+        };
+
+        let result = fetch_asset_with_progress(&home, &asset, |_, _| {});
+        assert!(result.is_err(), "checksum mismatch should fail");
+        assert!(
+            !asset_path.exists(),
+            "invalid download should not become final"
+        );
+
+        let model_dir = asset_path.parent().expect("parent");
+        let has_part = fs::read_dir(model_dir)
+            .expect("read model dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".part"));
+        assert!(!has_part, "checksum mismatch should clean partial files");
+        server.join().expect("server");
+    }
+
+    fn test_asset(
+        filename: &'static str,
+        relative_path: &'static str,
+        expected_size_bytes: u64,
+        sha256: Option<&'static str>,
+    ) -> ModelAsset {
+        ModelAsset {
+            id: "test-asset",
+            filename,
+            relative_path,
+            url: "http://127.0.0.1:9/unreachable",
+            expected_size_bytes: Some(expected_size_bytes),
+            sha256,
+            license: Some("test"),
+            source: Some("tests"),
+        }
     }
 
     fn read_request(stream: &mut TcpStream) -> String {
