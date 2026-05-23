@@ -30,6 +30,7 @@
 
 pub mod embed;
 pub mod journal;
+pub mod known_voice;
 pub mod neo4j;
 pub mod qdrant;
 pub mod sink;
@@ -38,6 +39,11 @@ pub mod worker;
 
 pub use embed::EmbeddingProvider;
 pub use journal::{JournalEntry, JournalMemorySink, MemoryJournal};
+pub use known_voice::{
+    DEFAULT_KNOWN_VOICE_REGISTRY_PATH, DeterministicKnownVoiceEmbeddingProvider,
+    KNOWN_VOICE_EMBEDDING_BACKEND, KNOWN_VOICE_LOCALITY, KNOWN_VOICE_QDRANT_COLLECTION,
+    KnownVoiceEmbeddingProvider, KnownVoiceMemoryStore, QdrantKnownVoiceMatcher,
+};
 pub use neo4j::{
     Neo4jNode, Neo4jRelationship, Neo4jStore, Neo4jTraceWrite, Neo4jWriteResult, trace_write_for,
 };

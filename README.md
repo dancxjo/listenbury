@@ -706,6 +706,14 @@ docker compose rm -f qdrant neo4j
 
 Cold memory is intended for asynchronous traces, summaries, recall experiments, and analysis. It should not block live speech.
 
+Known voice identity memory is also local-only. Listenbury stores the
+known-voice registry in `listenbury_data/memory/known_voices.json` and stores
+enrollment vectors in a local Qdrant collection
+(`listenbury_known_voice_enrollments`) for probabilistic speaker attribution.
+This is separate from transcript/text memory: voice memory tracks identity
+evidence and enrollment provenance, while transcript memory tracks spoken
+content.
+
 ## Development Principles
 
 1. **Keep the hot path hot.**  
