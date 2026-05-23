@@ -1,5 +1,6 @@
 use crate::cli::LiveHalfDuplexCommand;
 use anyhow::Result;
+use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -2552,56 +2553,17 @@ fn convert_frame_samples(
         return samples.to_vec();
     }
 
-    let mut converted = if input_channels != frame_channels && frame_channels == MONO_CHANNELS {
-        mix_to_mono(samples, input_channels)
-    } else {
-        samples.to_vec()
-    };
-
-    if input_sample_rate_hz != frame_sample_rate_hz {
-        converted = resample_linear(&converted, input_sample_rate_hz, frame_sample_rate_hz);
-    }
-
-    converted
+    normalize_interleaved_f32(
+        samples,
+        AudioFormat::new(input_sample_rate_hz, input_channels, SampleKind::F32),
+        AudioFormat::new(frame_sample_rate_hz, frame_channels, SampleKind::F32),
+        "live_half_duplex_vad_frame",
+    )
+    .expect("validated live-half-duplex frame formats should always normalize")
+    .samples
 }
 
 #[allow(dead_code)]
-fn mix_to_mono(samples: &[f32], channels: u16) -> Vec<f32> {
-    let channel_count = usize::from(channels).max(1);
-    if channel_count == 1 {
-        return samples.to_vec();
-    }
-    samples
-        .chunks_exact(channel_count)
-        .map(|frame| frame.iter().sum::<f32>() / f32::from(channels))
-        .collect()
-}
-
-#[allow(dead_code)]
-fn resample_linear(samples: &[f32], source_rate_hz: u32, target_rate_hz: u32) -> Vec<f32> {
-    if samples.is_empty() || source_rate_hz == target_rate_hz {
-        return samples.to_vec();
-    }
-
-    let output_len = ((samples.len() as f64 * f64::from(target_rate_hz))
-        / f64::from(source_rate_hz))
-    .round() as usize;
-    let mut output = Vec::with_capacity(output_len);
-    let source_step = f64::from(source_rate_hz) / f64::from(target_rate_hz);
-
-    for output_idx in 0..output_len {
-        let source_pos = output_idx as f64 * source_step;
-        let left_idx = source_pos.floor() as usize;
-        let right_idx = (left_idx + 1).min(samples.len() - 1);
-        let fraction = (source_pos - left_idx as f64) as f32;
-        let left = samples[left_idx];
-        let right = samples[right_idx];
-        output.push(left + (right - left) * fraction);
-    }
-
-    output
-}
-
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",

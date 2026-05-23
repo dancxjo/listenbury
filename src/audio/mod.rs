@@ -11,6 +11,7 @@ pub mod frame;
 pub mod hypothesis;
 pub mod lattice;
 pub mod noise_floor;
+pub mod normalize;
 pub mod phone_class;
 pub mod ring;
 pub mod speech_likelihood;
@@ -36,6 +37,12 @@ pub use lattice::{
     SpeechHypothesisFusion, fuse_hypotheses,
 };
 pub use noise_floor::{AdaptiveNoiseFloor, NoiseFloorConfig, NoiseFloorObservation};
+pub use normalize::{
+    AudioConversionOp, AudioConversionReport, AudioFormat, MONO_CHANNELS, NormalizedAudio,
+    SampleKind, WHISPER_SAMPLE_RATE_HZ, convert_channels, f32_to_i16, mix_to_mono,
+    normalize_interleaved_f32, normalize_signed_sample, pad_silence_to_len,
+    resample_interleaved_linear, resample_linear, trim_trailing_silence,
+};
 pub use phone_class::{CoarsePhoneClass, classify_frame, generate_phone_class_hypotheses};
 pub use speech_likelihood::{
     SpeechLikelihood, SpeechLikelihoodConfig, build_speech_likelihood_stream,
@@ -45,8 +52,8 @@ pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };
 pub use wav::{
-    read_wav_as_audio_frames, read_wav_as_whisper_frames, read_wav_frames, write_wav,
-    write_wav_bytes,
+    read_wav_as_audio_frames, read_wav_as_audio_frames_with_report, read_wav_as_whisper_frames,
+    read_wav_as_whisper_frames_with_report, read_wav_frames, write_wav, write_wav_bytes,
 };
 
 pub trait AudioInput {
