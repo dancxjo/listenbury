@@ -33,9 +33,9 @@ const PHRASE_BREAK_SYMBOL: &str = "|";
 const BREATH_BREAK_WORD_INTERVAL: usize = 9;
 const BREATH_BREAK_MIN_WORDS_AFTER: usize = 4;
 const BREATH_BREAK_SEARCH_RADIUS: usize = 3;
-/// Minimum boundary-claim confidence required to override vocative/appositive span suppression.
+/// Minimum boundary-claim confidence required to place a break inside a vocative/appositive span.
 const BREATH_BOUNDARY_CONFIDENCE_MIN: f32 = 0.75;
-/// Minimum boundary-claim confidence required to outrank distance-only boundary selection.
+/// Minimum boundary-claim confidence required to prefer a boundary over proximity-only candidates.
 const BREATH_BOUNDARY_PRIORITY_MIN: f32 = 0.82;
 
 pub trait GraphemeToPhoneme {
@@ -948,9 +948,7 @@ fn best_syntax_guided_breath_boundary(
 
         let boundary_claim = best_boundary_claim(boundary, sentence_analysis);
         if let Some(span_link) = protected_span_crossing(boundary, sentence_analysis) {
-            let support = boundary_claim
-                .as_ref()
-                .is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_CONFIDENCE_MIN);
+            let support = is_high_confidence_boundary_claim(boundary_claim.as_ref());
             if !support {
                 suppressed.push(BreathBreakDiagnostic {
                     after_word: boundary,
@@ -970,14 +968,14 @@ fn best_syntax_guided_breath_boundary(
         }
 
         let distance = boundary.abs_diff(target);
-        let priority = usize::from(
+        let priority_tier = usize::from(
             !boundary_claim
                 .as_ref()
                 .is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_PRIORITY_MIN),
         );
         let key = BoundarySortKey {
             // 0 = strong, high-confidence boundary evidence; 1 = regular heuristic.
-            priority,
+            priority_tier,
             // Prefer candidates nearest the periodic target.
             distance,
             // Lower penalty means friendlier syntax/function-word context.
@@ -1015,7 +1013,7 @@ fn best_syntax_guided_breath_boundary(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct BoundarySortKey {
-    priority: usize,
+    priority_tier: usize,
     distance: usize,
     penalty: usize,
     backward_bias: usize,
@@ -1142,7 +1140,7 @@ fn breath_boundary_penalty(
     if ends_tight_syntactic_link(boundary, sentence_analysis) {
         penalty = penalty.saturating_sub(8);
     }
-    if boundary_claim.is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_CONFIDENCE_MIN) {
+    if is_high_confidence_boundary_claim(boundary_claim) {
         penalty = penalty.saturating_sub(6);
     }
 
@@ -1161,6 +1159,10 @@ fn ends_tight_syntactic_link(boundary: usize, sentence_analysis: &SentenceAnalys
                 )
         })
     })
+}
+
+fn is_high_confidence_boundary_claim(boundary_claim: Option<&BoundaryClaim>) -> bool {
+    boundary_claim.is_some_and(|claim| claim.confidence >= BREATH_BOUNDARY_CONFIDENCE_MIN)
 }
 
 fn word_text(sentence_analysis: &SentenceAnalysis, word_index: usize) -> Option<&str> {
