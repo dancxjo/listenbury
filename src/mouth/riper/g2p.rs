@@ -18,9 +18,9 @@ use crate::mouth::riper::prosody_audit::{
     PhraseBoundaryKind, ProminenceClass, Stress, WordProsodyInfo,
 };
 use crate::mouth::riper::sentence_analysis::{
-    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, ProsodicRole, ProsodyEnvironmentFacts,
-    ReductionStatus, SentenceAnalysis, SentenceAnalyzer, SyntacticLinkKind,
-    PROSODY_EVIDENCE_CONFIDENCE_MIN,
+    HeuristicSentenceAnalyzer, OrthographicEmphasisKind, PROSODY_EVIDENCE_CONFIDENCE_MIN,
+    ProsodicRole, ProsodyEnvironmentFacts, ReductionStatus, SentenceAnalysis, SentenceAnalyzer,
+    SyntacticLinkKind,
 };
 use crate::mouth::riper::text::{
     NormalizedToken, ProsodyBoundaryHint, ProsodyCommitment, PunctuationCommitmentState,
@@ -387,6 +387,8 @@ impl SimpleEnglishG2p {
             symbols.push(PHRASE_BREAK_SYMBOL.to_string());
             phoneme_to_word.push(None);
         }
+
+        apply_cross_word_intervocalic_flapping(&mut symbols, &phoneme_to_word, &sentence_analysis);
 
         let length_hints = symbols
             .iter()
@@ -818,6 +820,58 @@ fn should_insert_breath_break(
     emitted_pronounceable < pronounceable_count
         && !matches!(next_token, Some(NormalizedToken::PhraseBreak))
         && breath_break_after_words.contains(&after_word_index)
+}
+
+fn apply_cross_word_intervocalic_flapping(
+    symbols: &mut [String],
+    phoneme_to_word: &[Option<usize>],
+    sentence_analysis: &SentenceAnalysis,
+) {
+    if symbols.len() < 3 {
+        return;
+    }
+
+    for idx in 1..(symbols.len() - 1) {
+        if idx + 2 >= symbols.len() {
+            continue;
+        }
+        if !matches!(symbols[idx].as_str(), "T" | "D") {
+            continue;
+        }
+        if symbols[idx + 1] != WORD_SEPARATOR_SYMBOL {
+            continue;
+        }
+        if !is_nucleus_symbol(&symbols[idx - 1]) || !is_nucleus_symbol(&symbols[idx + 2]) {
+            continue;
+        }
+        let Some(word_index) = phoneme_to_word.get(idx).and_then(|mapping| *mapping) else {
+            continue;
+        };
+        if blocks_cross_word_flapping(word_index, sentence_analysis) {
+            continue;
+        }
+        symbols[idx] = "DX".to_string();
+    }
+}
+
+fn blocks_cross_word_flapping(word_index: usize, sentence_analysis: &SentenceAnalysis) -> bool {
+    let Some(facts) = sentence_analysis.prosody_environment_facts_for_word(word_index) else {
+        return false;
+    };
+
+    if !matches!(facts.phrase_boundary_after, PhraseBoundaryKind::None) {
+        return true;
+    }
+    if matches!(
+        facts.orthographic_emphasis,
+        OrthographicEmphasisKind::AllCapsEmphasis | OrthographicEmphasisKind::ExplicitCitationForm
+    ) {
+        return true;
+    }
+    matches!(
+        facts.prosodic_role,
+        ProsodicRole::Contrastive | ProsodicRole::Focus
+    )
 }
 
 fn syntax_guided_breath_breaks(
@@ -1876,6 +1930,44 @@ mod tests {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");
         assert_eq!(symbols(&unit.phonemes), vec!["B", "AA", "DX", "AH0", "L"]);
+    }
+
+    #[test]
+    fn applies_intervocalic_flap_across_word_boundary_for_but_i() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("but I always").expect("phonemize");
+        let but_target = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "but")
+            .expect("but target");
+        assert_eq!(
+            unit.phonemes.phonemes[but_target.phoneme_range.end - 1].0,
+            "DX",
+            "expected final /t/ in `but` to flap before vowel-initial `I`"
+        );
+        assert_eq!(
+            unit.phonemes.phonemes[but_target.phoneme_range.end].0, " ",
+            "expected weak word boundary between `but` and `I`"
+        );
+    }
+
+    #[test]
+    fn contrastive_all_caps_but_blocks_cross_word_flapping() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("I said BUT I did not say and.")
+            .expect("phonemize");
+        let but_target = unit
+            .word_targets
+            .iter()
+            .find(|target| target.normalized_text == "but")
+            .expect("but target");
+        assert_eq!(
+            unit.phonemes.phonemes[but_target.phoneme_range.end - 1].0,
+            "T",
+            "contrastive/citation-style `BUT` should preserve a hard /t/"
+        );
     }
 
     #[test]
