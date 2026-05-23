@@ -33,8 +33,15 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let config = vocoder_config_for_command(backend, &command)?;
     let mut renderer = backend_for_option(selector, config)?;
     let descriptor = renderer.descriptor();
-    let backend_kind = descriptor.backend_kind;
-    let detail = backend_detail_expectation(backend_kind);
+    let backend_kind = descriptor.backend_kind.ok_or_else(|| {
+        anyhow::anyhow!(
+            "backend `{}` has no sing-demo render contract",
+            descriptor.id
+        )
+    })?;
+    let detail = descriptor
+        .detail
+        .unwrap_or_else(|| backend_detail_expectation(backend_kind));
     let target_table = default_english_phone_targets();
     let render_plan = render_plan_for_backend(backend_kind, &plan, 0.7, &target_table);
     println!("sing-demo backend: {} ({detail:?})", descriptor.id);
@@ -544,7 +551,7 @@ mod tests {
             .iter()
             .find(|descriptor| descriptor.id == "klatt")
             .expect("klatt descriptor");
-        assert_eq!(mbrola.backend_kind, SungBackendKind::Mbrola);
+        assert_eq!(mbrola.backend_kind, Some(SungBackendKind::Mbrola));
         assert_ne!(
             mbrola.backend_kind, klatt.backend_kind,
             "MBROLA should no longer be identified as Klatt"

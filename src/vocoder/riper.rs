@@ -25,8 +25,8 @@ impl RiperKlattFallbackBackend {
             family: BackendFamily::Placeholder,
             capabilities,
             sample_rate_hz: KlattBackend::descriptor().sample_rate_hz,
-            backend_kind: SungBackendKind::RiperKlattFallback,
-            detail: SungBackendDetail::PhoneTimedViaKlattFallback,
+            backend_kind: Some(SungBackendKind::RiperKlattFallback),
+            detail: Some(SungBackendDetail::PhoneTimedViaKlattFallback),
             notes: &[
                 "Riper sing-demo currently routes through an explicit RiperKlattFallback sung path.",
                 "Riper's current sung stretch-synth path is Klatt source/filter until the ONNX path grows direct F0 and duration controls.",

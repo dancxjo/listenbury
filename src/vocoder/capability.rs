@@ -45,7 +45,7 @@ pub struct VocoderDescriptor {
     pub family: BackendFamily,
     pub capabilities: BackendCapabilities,
     pub sample_rate_hz: u32,
-    pub backend_kind: SungBackendKind,
-    pub detail: SungBackendDetail,
+    pub backend_kind: Option<SungBackendKind>,
+    pub detail: Option<SungBackendDetail>,
     pub notes: &'static [&'static str],
 }

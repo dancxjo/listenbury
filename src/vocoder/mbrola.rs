@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
@@ -39,8 +39,8 @@ impl MbrolaBackend {
                 streaming_safe: false,
             },
             sample_rate_hz: 16_000,
-            backend_kind: SungBackendKind::Mbrola,
-            detail: SungBackendDetail::PhoneTimed,
+            backend_kind: Some(SungBackendKind::Mbrola),
+            detail: Some(SungBackendDetail::PhoneTimed),
             notes: &[
                 "MBROLA loads a real voice database and validates the shared phone-timed plan against its symbol map.",
                 "Native MBROLA TD-PSOLA now matches shared phone durations and pitch targets while stitching real database waveforms without calling Klatt or the mbrola binary.",

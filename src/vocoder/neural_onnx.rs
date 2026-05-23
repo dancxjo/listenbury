@@ -4,7 +4,6 @@ use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
     BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
 };
-use crate::voice::articulator::{SungBackendDetail, SungBackendKind};
 
 pub struct RiperOnnxDirectBackend;
 
@@ -25,8 +24,8 @@ impl RiperOnnxDirectBackend {
                 streaming_safe: false,
             },
             sample_rate_hz: 24_000,
-            backend_kind: SungBackendKind::RiperOnnxDirect,
-            detail: SungBackendDetail::PartialPhoneProsody,
+            backend_kind: None,
+            detail: None,
             notes: &["Direct Riper ONNX control surface is a compile-safe placeholder."],
         }
     }

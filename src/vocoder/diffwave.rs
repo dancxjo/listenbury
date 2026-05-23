@@ -4,7 +4,6 @@ use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
     BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
 };
-use crate::voice::articulator::{SungBackendDetail, SungBackendKind};
 
 pub struct DiffwaveBackend;
 
@@ -25,8 +24,8 @@ impl DiffwaveBackend {
                 streaming_safe: false,
             },
             sample_rate_hz: 22_050,
-            backend_kind: SungBackendKind::RiperOnnxDirect,
-            detail: SungBackendDetail::PartialPhoneProsody,
+            backend_kind: None,
+            detail: None,
             notes: &["Future diffusion vocoder stub."],
         }
     }

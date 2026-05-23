@@ -30,8 +30,8 @@ impl KlattBackend {
                 streaming_safe: false,
             },
             sample_rate_hz: KlattRenderConfig::default().sample_rate,
-            backend_kind: SungBackendKind::Klatt,
-            detail: SungBackendDetail::PhoneTimed,
+            backend_kind: Some(SungBackendKind::Klatt),
+            detail: Some(SungBackendDetail::PhoneTimed),
             notes: &[
                 "Klatt consumes the shared phone-timed plan and nucleus-driven pitch sampling.",
                 "Per-syllable vibrato now modulates sustained nucleus F0 in the trajectory layer.",

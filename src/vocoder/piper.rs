@@ -51,8 +51,8 @@ impl PiperBackend {
                 streaming_safe: true,
             },
             sample_rate_hz: 22_050,
-            backend_kind: SungBackendKind::Piper,
-            detail: SungBackendDetail::CoarseHintsOnly,
+            backend_kind: Some(SungBackendKind::Piper),
+            detail: Some(SungBackendDetail::CoarseHintsOnly),
             notes: &[
                 "Piper currently consumes only coarse shared-plan text hints.",
                 "Piper currently ignores shared phones, note timing detail, and vibrato.",
@@ -122,7 +122,7 @@ impl VocoderBackend for PiperBackend {
         #[cfg(not(feature = "tts-piper"))]
         {
             let _ = text;
-            bail!("vocoder `piper` is registered but unavailable: build with feature `tts-piper`")
+            bail!("Piper backend is unavailable: rebuild with the `tts-piper` feature enabled")
         }
 
         #[cfg(feature = "tts-piper")]

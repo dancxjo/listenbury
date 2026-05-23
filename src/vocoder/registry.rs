@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::vocoder::bigvgan::BigVganBackend;
 use crate::vocoder::diffwave::DiffwaveBackend;
@@ -41,7 +41,9 @@ pub fn backend_for_option(
         SingDemoBackendSelector::Riper => Ok(Box::new(RiperKlattFallbackBackend::new())),
         SingDemoBackendSelector::Mbrola => {
             let voice = config.mbrola_voice.ok_or_else(|| {
-                anyhow::anyhow!("mbrola backend requires a resolved voice path in VocoderConfig")
+                anyhow::anyhow!(
+                    "MBROLA backend requires a voice path to be specified in the configuration"
+                )
             })?;
             Ok(Box::new(MbrolaBackend::new(voice)))
         }
@@ -106,7 +108,7 @@ mod tests {
     };
     use crate::vocoder::VocoderInput;
     use crate::voice::articulator::{
-        articulate, backend_detail_expectation, render_plan_for_backend, SungBackendKind,
+        SungBackendKind, articulate, backend_detail_expectation, render_plan_for_backend,
     };
     use crate::voice::tract::targets::default_english_phone_targets;
     use std::time::Duration;
@@ -243,9 +245,13 @@ mod tests {
             .find(|d| d.id == "klatt")
             .expect("klatt descriptor");
         assert_ne!(mbrola.backend_kind, klatt.backend_kind);
-        assert_eq!(mbrola.backend_kind, SungBackendKind::Mbrola);
+        assert_eq!(mbrola.backend_kind, Some(SungBackendKind::Mbrola));
         assert_eq!(
-            backend_detail_expectation(mbrola.backend_kind),
+            Some(backend_detail_expectation(
+                mbrola
+                    .backend_kind
+                    .expect("mbrola should have a render contract"),
+            )),
             mbrola.detail
         );
     }
@@ -258,9 +264,10 @@ mod tests {
         let err = backend
             .render(VocoderInput::PhoneTimed(&[]))
             .expect_err("piper should reject phone-timed input");
-        assert!(err
-            .to_string()
-            .contains("accepts only degraded coarse text input"));
+        assert!(
+            err.to_string()
+                .contains("accepts only degraded coarse text input")
+        );
     }
 
     #[test]
@@ -288,9 +295,10 @@ mod tests {
                     ssml_hint: None,
                 })
                 .expect_err("stub should return unimplemented error");
-            assert!(err
-                .to_string()
-                .contains("registered but not implemented yet"));
+            assert!(
+                err.to_string()
+                    .contains("registered but not implemented yet")
+            );
         }
     }
 }
