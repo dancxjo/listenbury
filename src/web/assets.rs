@@ -11,6 +11,8 @@ pub(super) const SCENE_HEADING_MJS: &str =
     include_str!("../../web/browser-transcript-player/scene-heading.mjs");
 pub(super) const SHARED_SPAN_MODEL_MJS: &str =
     include_str!("../../web/browser-transcript-player/shared-span-model.mjs");
+pub(super) const WAVEDECK_EDITOR_MODEL_MJS: &str =
+    include_str!("../../web/browser-transcript-player/wavedeck-editor-model.mjs");
 pub(super) const SCREENPLAY_CSS: &str =
     include_str!("../../web/browser-transcript-player/screenplay.css");
 pub(super) const REPLAY_HTML: &str =

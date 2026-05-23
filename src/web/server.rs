@@ -676,6 +676,10 @@ fn route_request_with_range_and_body(
             "application/javascript; charset=utf-8",
             assets::SHARED_SPAN_MODEL_MJS,
         ),
+        "/wavedeck-editor-model.mjs" | "/assets/wavedeck-editor-model.mjs" => HttpResponse::ok(
+            "application/javascript; charset=utf-8",
+            assets::WAVEDECK_EDITOR_MODEL_MJS,
+        ),
         // Shared live-event model modules
         "/assets/shared/events/schema.mjs" => HttpResponse::ok(
             "application/javascript; charset=utf-8",
@@ -1453,6 +1457,16 @@ mod tests {
         let module = route_request("GET", "/assets/timeline-viewport.mjs", &empty_state());
         assert_eq!(module.status, 200);
         assert_eq!(module.content_type, "application/javascript; charset=utf-8");
+
+        let editor_model =
+            route_request("GET", "/assets/wavedeck-editor-model.mjs", &empty_state());
+        assert_eq!(editor_model.status, 200);
+        assert_eq!(
+            editor_model.content_type,
+            "application/javascript; charset=utf-8"
+        );
+        let body = String::from_utf8(editor_model.body).expect("utf8");
+        assert!(body.contains("createWaveDeckEditSession"));
 
         let energy_module = route_request("GET", "/assets/energy-timing.mjs", &empty_state());
         assert_eq!(energy_module.status, 200);

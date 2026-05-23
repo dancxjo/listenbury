@@ -18,6 +18,10 @@ import {
   projectTimedWordsToSpans,
 } from "/assets/shared-span-model.mjs";
 import {
+  createWaveDeckEditorState,
+  reduceWaveDeckEditorState,
+} from "/assets/wavedeck-editor-model.mjs";
+import {
   LIVE_EVENT_LANE,
   SPAN_PAIRS,
   END_TO_START,
@@ -127,19 +131,21 @@ const LIVE_RENDER_DEBOUNCE_MS = 80;
 // Durable client-side live session model.  Each incoming SSE event is reduced
 // into this model exactly once; renderers read from it without mutating it.
 const liveSession = createLiveSession();
+const initialEditorState = createWaveDeckEditorState();
 
 const state = {
   payload: null,
   lanes: [],
-  selectedItem: null,
+  editor: initialEditorState,
+  selectedItem: initialEditorState.selectedItem,
   maxDurationMs: 1000,
   stopAtMs: null,
   playbackStopTimerId: null,
   // Custom timeline renderer state
   zoomPxPerSecond: DEFAULT_ZOOM_PX_PER_SECOND,
   followLatest: false,
-  dragSelection: null,
-  brushSelection: null,
+  dragSelection: initialEditorState.dragSelection,
+  brushSelection: initialEditorState.brushSelection,
   waveform: {
     url: null,
     levels: null,
@@ -165,6 +171,13 @@ const state = {
     neighborhood: true,
   },
 };
+
+function applyEditorStateAction(action) {
+  state.editor = reduceWaveDeckEditorState(state.editor, action);
+  state.selectedItem = state.editor.selectedItem;
+  state.brushSelection = state.editor.brushSelection;
+  state.dragSelection = state.editor.dragSelection;
+}
 
 const graphState = {
   cy: null,
@@ -2333,7 +2346,10 @@ function applyPayload(rawPayload, options = {}) {
 
   state.payload = normalized;
   state.lanes = buildLanes(normalized);
-  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
+  applyEditorStateAction({
+    type: "set_selected_item",
+    selectedItem: validSelection(previousSelection) ? previousSelection : firstItemSelection(),
+  });
   clearPlaybackStop();
   configureAudio(normalized.audio);
   syncMaxDurationWithAudio();
@@ -2364,7 +2380,10 @@ function reprojectWordTimingAgainstWaveform() {
   }
   const previousSelection = state.selectedItem;
   state.lanes = buildLanes(state.payload);
-  state.selectedItem = validSelection(previousSelection) ? previousSelection : firstItemSelection();
+  applyEditorStateAction({
+    type: "set_selected_item",
+    selectedItem: validSelection(previousSelection) ? previousSelection : firstItemSelection(),
+  });
   syncMaxDurationWithAudio();
 }
 
@@ -5436,8 +5455,7 @@ window.addEventListener("keydown", function onTimelineKeyDown(event) {
       }
       break;
     case "Escape":
-      state.selectedItem = null;
-      state.brushSelection = null;
+      applyEditorStateAction({ type: "clear_selection" });
       updateChipStates();
       updateTimeRangeSelectionOverlays();
       renderSelection();
@@ -5465,8 +5483,10 @@ function selectWord(laneIndex, wordIndex, seekAudio) {
     return;
   }
 
-  state.selectedItem = { type: "word", laneIndex, itemIndex: wordIndex };
-  state.brushSelection = null;
+  applyEditorStateAction({
+    type: "set_selected_item",
+    selectedItem: { type: "word", laneIndex, itemIndex: wordIndex },
+  });
   const target = wordPlaybackTarget(word);
   if (!target) {
     clearPlaybackStop();
@@ -5497,8 +5517,10 @@ function selectEvent(laneIndex, eventIndex, seekAudio) {
     return;
   }
 
-  state.selectedItem = { type: "event", laneIndex, itemIndex: eventIndex };
-  state.brushSelection = null;
+  applyEditorStateAction({
+    type: "set_selected_item",
+    selectedItem: { type: "event", laneIndex, itemIndex: eventIndex },
+  });
   const target = eventPlaybackTarget(event);
   if (!target) {
     clearPlaybackStop();
@@ -5756,13 +5778,16 @@ function startTimeRangeSelection(event) {
   }
 
   event.preventDefault();
-  state.dragSelection = {
-    pointerId: event.pointerId,
-    surface,
-    startClientX: event.clientX,
-    startMs,
-    endMs: startMs,
-  };
+  applyEditorStateAction({
+    type: "set_drag_selection",
+    dragSelection: {
+      pointerId: event.pointerId,
+      surface,
+      startClientX: event.clientX,
+      startMs,
+      endMs: startMs,
+    },
+  });
   const col = getScrollContainer();
   if (col) col.setPointerCapture(event.pointerId);
   updateTimeRangeSelectionOverlays();
@@ -5777,7 +5802,7 @@ function moveTimeRangeSelection(event) {
   if (endMs === null) {
     return;
   }
-  state.dragSelection.endMs = endMs;
+  applyEditorStateAction({ type: "set_drag_selection_end", endMs });
   updateTimeRangeSelectionOverlays();
 }
 
@@ -5792,7 +5817,7 @@ function finishTimeRangeSelection(event) {
     dragSelection.endMs = endMs;
   }
 
-  state.dragSelection = null;
+  applyEditorStateAction({ type: "set_drag_selection", dragSelection: null });
   const col = getScrollContainer();
   if (col && col.hasPointerCapture(event.pointerId)) {
     col.releasePointerCapture(event.pointerId);
@@ -5800,7 +5825,7 @@ function finishTimeRangeSelection(event) {
 
   const delta = Math.abs(event.clientX - dragSelection.startClientX);
   if (delta < RANGE_SELECTION_DRAG_THRESHOLD_PX) {
-    state.brushSelection = null;
+    applyEditorStateAction({ type: "set_brush_selection", brushSelection: null });
     if (audio.src && endMs !== null) {
       audio.currentTime = endMs / 1000;
       refreshPlaybackState();
@@ -5820,7 +5845,7 @@ function finishTimeRangeSelection(event) {
   window.setTimeout(() => {
     state.suppressTimelineClick = false;
   }, 0);
-  state.brushSelection = selection;
+  applyEditorStateAction({ type: "set_brush_selection", brushSelection: selection });
   zoomToTimeSelection(selection);
   renderShell();
 }
@@ -5830,7 +5855,7 @@ function cancelTimeRangeSelection(event) {
     return;
   }
 
-  state.dragSelection = null;
+  applyEditorStateAction({ type: "set_drag_selection", dragSelection: null });
   const col = getScrollContainer();
   if (col && col.hasPointerCapture(event.pointerId)) {
     col.releasePointerCapture(event.pointerId);
