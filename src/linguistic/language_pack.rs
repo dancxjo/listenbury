@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::linguistic::inventory::general_american_english;
 use crate::linguistic::PhonemicInventory;
+use crate::linguistic::inventory::general_american_english;
 
 static EN_US_PACK: OnceLock<LanguagePack> = OnceLock::new();
 
@@ -87,7 +87,7 @@ pub struct LanguagePackManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct PhonologyProfile {
     pub arpabet_vowels: Vec<String>,
     pub nucleus_symbols: Vec<String>,
@@ -97,7 +97,10 @@ pub struct PhonologyProfile {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InventoryProfileSection {
+    #[serde(default = "default_inventory_profile")]
     pub profile: String,
+    pub vowels: Vec<String>,
+    pub consonants: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -406,6 +409,20 @@ fn load_english_us_pack() -> Result<LanguagePack, LanguagePackDataError> {
             reason: "at least one nucleus symbol is required".to_string(),
         });
     }
+    if inventory_profile.vowels.is_empty() {
+        return Err(LanguagePackDataError::InvalidSection {
+            path: EN_US_INVENTORY_PATH,
+            section: "inventory.vowels",
+            reason: "at least one inventory vowel is required".to_string(),
+        });
+    }
+    if inventory_profile.consonants.is_empty() {
+        return Err(LanguagePackDataError::InvalidSection {
+            path: EN_US_INVENTORY_PATH,
+            section: "inventory.consonants",
+            reason: "at least one inventory consonant is required".to_string(),
+        });
+    }
 
     let mbrola_us1: BackendMapPack = parse_toml(
         include_str!("../../data/language-varieties/en-US/backend-maps/mbrola-us1.toml"),
@@ -552,6 +569,10 @@ fn parse_toml<T: for<'de> Deserialize<'de>>(
     path: &'static str,
 ) -> Result<T, LanguagePackDataError> {
     toml::from_str(data).map_err(|source| LanguagePackDataError::Parse { path, source })
+}
+
+fn default_inventory_profile() -> String {
+    "en-us-phoneme-inventory-v1".to_string()
 }
 
 fn validate_non_empty(
