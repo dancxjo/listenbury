@@ -1,8 +1,9 @@
 id = "en-029"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-029"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (Caribbean)"
 phonemes = "en-wi"
@@ -57,6 +58,156 @@ to = "a#"
 flags = 3
 from = "N"
 to = "n"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(Caribbean)",
+]
+content = "name English (Caribbean)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-029"]
+content = "language en-029"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en",
+    "10",
+]
+content = "language en 10"
+
+[[directives]]
+line = 5
+directive = "maintainer"
+args = [
+    "Reece",
+    "H.",
+    "Dunn",
+    "<msclrhd@gmail.com>",
+]
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[directives]]
+line = 6
+directive = "status"
+args = ["mature"]
+content = "status mature"
+
+[[directives]]
+line = 8
+directive = "phonemes"
+args = ["en-wi"]
+content = "phonemes en-wi"
+
+[[directives]]
+line = 9
+directive = "dictrules"
+args = ["8"]
+content = "dictrules 8"
+
+[[directives]]
+line = 10
+directive = "stressLength"
+args = [
+    "175",
+    "175",
+    "175",
+    "175",
+    "220",
+    "220",
+    "250",
+    "290",
+]
+content = "stressLength 175 175  175 175  220 220  250 290"
+
+[[directives]]
+line = 12
+directive = "replace"
+args = [
+    "00",
+    "D",
+    "d",
+]
+content = "replace 00 D d"
+
+[[directives]]
+line = 13
+directive = "replace"
+args = [
+    "00",
+    "T",
+    "t[",
+]
+content = "replace 00 T t["
+
+[[directives]]
+line = 14
+directive = "replace"
+args = [
+    "00",
+    "U@",
+    "o@",
+]
+content = "replace 00 U@ o@"
+
+[[directives]]
+line = 15
+directive = "replace"
+args = [
+    "03",
+    "@",
+    "a#",
+]
+content = "replace 03 @ a#"
+
+[[directives]]
+line = 16
+directive = "replace"
+args = [
+    "03",
+    "3",
+    "a#",
+]
+content = "replace 03 3 a#"
+
+[[directives]]
+line = 17
+directive = "replace"
+args = [
+    "03",
+    "N",
+    "n",
+]
+content = "replace 03 N n"
+
+[[directives]]
+line = 19
+directive = "formant"
+args = [
+    "1",
+    "98",
+    "100",
+    "100",
+]
+content = "formant 1  98  100 100"
+
+[[directives]]
+line = 20
+directive = "formant"
+args = [
+    "2",
+    "98",
+    "100",
+    "100",
+]
+content = "formant 2  98  100 100"
 
 [[unsupported]]
 line = 5

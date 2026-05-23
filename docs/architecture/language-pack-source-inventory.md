@@ -12,10 +12,20 @@ The `xtask` helper provides a repeatable source-analysis and conversion flow:
 
 ```text
 cargo xtask espeak-ng fetch
+cargo xtask espeak-ng languages --json out/espeak-ng-languages.json
 cargo xtask espeak-ng inventory --lang en
 cargo xtask espeak-ng convert --lang en --out data/language-varieties/en/generated/espeak-ng
 cargo xtask espeak-ng diff --lang en
 ```
+
+For a broad extraction pass across every discovered eSpeak-ng language/profile:
+
+```text
+cargo xtask espeak-ng convert-languages --out out/espeak-ng-language-varieties
+cargo xtask espeak-ng regen-all
+```
+
+`convert-languages` stages generated outputs under an explicit base directory, which is useful for inspection and smoke tests. `regen-all` writes to the repository's canonical `data/language-varieties/<lang>/generated/espeak-ng` layout.
 
 This workflow is for build/dev conversion only. eSpeak-ng remains source material and provenance input, not Listenbury's runtime ontology.
 

@@ -1,0 +1,109 @@
+id = "voices__mb__mb-en1"
+kind = "voice-profile"
+source = "espeak-ng"
+source_file = "espeak-ng-data/voices/mb/mb-en1"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GPL-3.0-or-later"
+converter_version = "0.1.0"
+name = "english-mb-en1"
+dictrules = []
+replacements = []
+
+[[language_tags]]
+tag = "en-uk"
+priority = 3
+
+[[language_tags]]
+tag = "en-gb"
+priority = 3
+
+[[language_tags]]
+tag = "en"
+priority = 2
+
+[stress]
+length = []
+amplitude = []
+
+[[directives]]
+line = 1
+directive = "name"
+args = ["english-mb-en1"]
+content = "name english-mb-en1"
+
+[[directives]]
+line = 2
+directive = "language"
+args = [
+    "en-uk",
+    "3",
+]
+content = "language en-uk  3"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en-gb",
+    "3",
+]
+content = "language en-gb  3"
+
+[[directives]]
+line = 4
+directive = "language"
+args = [
+    "en",
+    "2",
+]
+content = "language en 2"
+
+[[directives]]
+line = 5
+directive = "gender"
+args = ["male"]
+content = "gender male"
+
+[[directives]]
+line = 7
+directive = "voicing"
+args = ["150"]
+content = "voicing 150"
+
+[[directives]]
+line = 8
+directive = "pitch"
+args = [
+    "82",
+    "117",
+]
+content = "pitch 82 117"
+
+[[directives]]
+line = 9
+directive = "mbrola"
+args = [
+    "en1",
+    "en1_phtrans",
+]
+content = "mbrola en1 en1_phtrans"
+
+[[unsupported]]
+line = 5
+directive = "gender"
+content = "gender male"
+
+[[unsupported]]
+line = 7
+directive = "voicing"
+content = "voicing 150"
+
+[[unsupported]]
+line = 8
+directive = "pitch"
+content = "pitch 82 117"
+
+[[unsupported]]
+line = 9
+directive = "mbrola"
+content = "mbrola en1 en1_phtrans"

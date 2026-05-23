@@ -1,8 +1,9 @@
 id = "en-GB-x-rp"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-GB-x-rp"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (Received Pronunciation)"
 phonemes = "en-rp"
@@ -47,6 +48,113 @@ to = "a#"
 flags = 3
 from = "3"
 to = "a#"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(Received",
+    "Pronunciation)",
+]
+content = "name English (Received Pronunciation)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-gb-x-rp"]
+content = "language en-gb-x-rp"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en-gb",
+    "4",
+]
+content = "language en-gb  4"
+
+[[directives]]
+line = 4
+directive = "language"
+args = [
+    "en",
+    "5",
+]
+content = "language en 5"
+
+[[directives]]
+line = 6
+directive = "maintainer"
+args = [
+    "Reece",
+    "H.",
+    "Dunn",
+    "<msclrhd@gmail.com>",
+]
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[directives]]
+line = 7
+directive = "status"
+args = ["mature"]
+content = "status mature"
+
+[[directives]]
+line = 9
+directive = "phonemes"
+args = ["en-rp"]
+content = "phonemes en-rp"
+
+[[directives]]
+line = 11
+directive = "replace"
+args = [
+    "00",
+    "o@",
+    "O@",
+]
+content = "replace 00  o@  O@"
+
+[[directives]]
+line = 12
+directive = "replace"
+args = [
+    "03",
+    "I",
+    "i",
+]
+content = "replace 03 I i"
+
+[[directives]]
+line = 13
+directive = "replace"
+args = [
+    "03",
+    "I2",
+    "i",
+]
+content = "replace 03 I2 i"
+
+[[directives]]
+line = 14
+directive = "replace"
+args = [
+    "03",
+    "@",
+    "a#",
+]
+content = "replace 03 @ a#"
+
+[[directives]]
+line = 15
+directive = "replace"
+args = [
+    "03",
+    "3",
+    "a#",
+]
+content = "replace 03 3 a#"
 
 [[unsupported]]
 line = 6

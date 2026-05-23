@@ -1,8 +1,9 @@
 id = "en-GB-x-gbcwmd"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-GB-x-gbcwmd"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (West Midlands)"
 phonemes = "en-wm"
@@ -32,6 +33,93 @@ to = "NULL"
 flags = 0
 from = "o@"
 to = "O@"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(West",
+    "Midlands)",
+]
+content = "name English (West Midlands)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-gb-x-gbcwmd"]
+content = "language en-gb-x-gbcwmd"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en-gb",
+    "9",
+]
+content = "language en-gb 9"
+
+[[directives]]
+line = 4
+directive = "language"
+args = [
+    "en",
+    "9",
+]
+content = "language en 9"
+
+[[directives]]
+line = 6
+directive = "phonemes"
+args = ["en-wm"]
+content = "phonemes en-wm"
+
+[[directives]]
+line = 8
+directive = "replace"
+args = [
+    "00",
+    "h",
+    "NULL",
+]
+content = "replace 00 h NULL"
+
+[[directives]]
+line = 9
+directive = "replace"
+args = [
+    "00",
+    "o@",
+    "O@",
+]
+content = "replace 00 o@ O@"
+
+[[directives]]
+line = 10
+directive = "dictrules"
+args = ["6"]
+content = "dictrules 6"
+
+[[directives]]
+line = 11
+directive = "intonation"
+args = ["4"]
+content = "intonation 4"
+
+[[directives]]
+line = 12
+directive = "stressAdd"
+args = [
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "20",
+]
+content = "stressAdd 0 0 0 0 0 0 0 20"
 
 [[unsupported]]
 line = 11

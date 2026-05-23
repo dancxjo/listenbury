@@ -3,16 +3,22 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::provenance::{CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata};
+use super::{
+    discovery::discover_dictionary_files,
+    provenance::{CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata},
+};
 
 const SUPPORTED_DICTIONARY_FLAGS: &[char] = &['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictionaryEntry {
     pub token: String,
+    pub condition: Option<String>,
     pub pronunciation: String,
     pub kind: String,
     pub flags: Vec<String>,
+    pub mode: String,
+    pub raw: String,
     pub source_file: String,
     pub source_line: usize,
 }
@@ -53,6 +59,15 @@ fn classify_entry(token: &str, pronunciation: &str) -> String {
     if token.contains('_') {
         return "multiword".to_string();
     }
+    if token.contains(char::is_whitespace) {
+        return "multiword".to_string();
+    }
+    if token
+        .strip_prefix('_')
+        .is_some_and(|rest| rest.chars().any(|ch| ch.is_ascii_digit()))
+    {
+        return "number_fragment".to_string();
+    }
     if token
         .chars()
         .all(|ch| ch.is_ascii_digit() || matches!(ch, ',' | '.' | '-' | '/'))
@@ -81,11 +96,54 @@ fn classify_entry(token: &str, pronunciation: &str) -> String {
 
 fn parse_token_and_flags(raw_token: &str) -> (String, Vec<String>) {
     if let Some((token, flags)) = raw_token.split_once('/') {
+        if token.is_empty() || flags.is_empty() {
+            return (raw_token.to_string(), Vec::new());
+        }
         let parsed_flags = flags.chars().map(|ch| ch.to_string()).collect();
         (token.to_string(), parsed_flags)
     } else {
         (raw_token.to_string(), Vec::new())
     }
+}
+
+fn is_condition_token(token: &str) -> bool {
+    let rest = token
+        .strip_prefix("?!")
+        .or_else(|| token.strip_prefix("!?"))
+        .or_else(|| token.strip_prefix('?'));
+    rest.is_some_and(|value| value.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn split_dictionary_entry(line: &str) -> Option<(Option<String>, String, Vec<String>)> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut condition = None;
+    let mut body = trimmed;
+    if let Some(split_at) = trimmed.find(char::is_whitespace) {
+        let (first, rest) = trimmed.split_at(split_at);
+        if is_condition_token(first) {
+            condition = Some(first.to_string());
+            body = rest.trim_start();
+        }
+    }
+
+    if let Some(rest) = body.strip_prefix('(') {
+        if let Some(end) = rest.find(')') {
+            let token = rest[..end].trim().to_string();
+            let rest = rest[end + 1..]
+                .split_whitespace()
+                .map(|part| part.to_string())
+                .collect();
+            return Some((condition, token, rest));
+        }
+    }
+
+    let mut parts = body.split_whitespace();
+    let token = parts.next()?.to_string();
+    let rest = parts.map(|part| part.to_string()).collect();
+    Some((condition, token, rest))
 }
 
 fn parse_dictionary_file(
@@ -95,10 +153,21 @@ fn parse_dictionary_file(
     alt_definitions: &mut Vec<AltDefinition>,
     unsupported_flags: &mut Vec<UnsupportedFlag>,
 ) {
+    let mut mode = "phoneme".to_string();
+
     for (index, raw_line) in content.lines().enumerate() {
         let line_no = index + 1;
         let line = strip_comment(raw_line).trim();
         if line.is_empty() {
+            continue;
+        }
+
+        if line == "$textmode" {
+            mode = "text".to_string();
+            continue;
+        }
+        if line == "$phonememode" {
+            mode = "phoneme".to_string();
             continue;
         }
 
@@ -115,23 +184,35 @@ fn parse_dictionary_file(
             continue;
         }
 
-        let mut parts = line.split_whitespace();
-        let Some(raw_token) = parts.next() else {
+        let Some((condition, raw_token, rest)) = split_dictionary_entry(line) else {
             continue;
         };
-        let pronunciation = parts.collect::<Vec<_>>().join(" ");
+        let mut flags = Vec::new();
+        let mut pronunciation_parts = Vec::new();
+        for part in rest {
+            if part.starts_with('$') {
+                flags.push(part);
+            } else {
+                pronunciation_parts.push(part);
+            }
+        }
+        let pronunciation = pronunciation_parts.join(" ");
         if pronunciation.is_empty() {
-            continue;
+            if flags.is_empty() {
+                continue;
+            }
         }
 
-        let (token, flags) = parse_token_and_flags(raw_token);
+        let (token, mut token_flags) = parse_token_and_flags(&raw_token);
+        token_flags.append(&mut flags);
+        let flags = token_flags;
         let kind = classify_entry(&token, &pronunciation);
 
         for flag in &flags {
             let is_supported = flag
                 .chars()
                 .next()
-                .is_some_and(|value| SUPPORTED_DICTIONARY_FLAGS.contains(&value));
+                .is_some_and(|value| value == '$' || SUPPORTED_DICTIONARY_FLAGS.contains(&value));
             if !is_supported {
                 unsupported_flags.push(UnsupportedFlag {
                     token: token.clone(),
@@ -144,9 +225,12 @@ fn parse_dictionary_file(
 
         entries.push(DictionaryEntry {
             token,
+            condition,
             pronunciation,
             kind,
             flags,
+            mode: mode.clone(),
+            raw: line.to_string(),
             source_file: source_file.to_string(),
             source_line: line_no,
         });
@@ -166,12 +250,17 @@ pub fn convert_list(lang: &str, out: &Path) -> Result<()> {
     let mut alt_definitions = Vec::new();
     let mut unsupported_flags = Vec::new();
 
-    for source_file in [
-        format!("dictsource/{lang}_list"),
-        format!("dictsource/{lang}_extra"),
-    ] {
-        let path = cache.join(&source_file);
-        if !path.exists() {
+    for path in discover_dictionary_files(&cache, lang) {
+        let source_file = path
+            .strip_prefix(&cache)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .to_string();
+        if !source_file.ends_with("_list")
+            && !source_file.ends_with("_extra")
+            && !source_file.ends_with("_listx")
+            && !source_file.ends_with("_emoji")
+        {
             continue;
         }
         let content = fs::read_to_string(&path)

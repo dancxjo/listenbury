@@ -1,8 +1,9 @@
 id = "en-GB-x-gbclan"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-GB-x-gbclan"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (Lancaster)"
 phonemes = "en-n"
@@ -41,6 +42,97 @@ to = "n"
 flags = 3
 from = "i"
 to = "I2"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(Lancaster)",
+]
+content = "name English (Lancaster)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-gb-x-gbclan"]
+content = "language en-gb-x-gbclan"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en-gb",
+    "3",
+]
+content = "language en-gb  3"
+
+[[directives]]
+line = 4
+directive = "language"
+args = [
+    "en",
+    "5",
+]
+content = "language en 5"
+
+[[directives]]
+line = 6
+directive = "maintainer"
+args = [
+    "Reece",
+    "H.",
+    "Dunn",
+    "<msclrhd@gmail.com>",
+]
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[directives]]
+line = 7
+directive = "status"
+args = ["mature"]
+content = "status mature"
+
+[[directives]]
+line = 9
+directive = "phonemes"
+args = ["en-n"]
+content = "phonemes en-n"
+
+[[directives]]
+line = 11
+directive = "stressLength"
+args = [
+    "160",
+    "150",
+    "180",
+    "180",
+    "220",
+    "220",
+    "290",
+    "290",
+]
+content = "stressLength 160 150  180 180  220 220  290 290"
+
+[[directives]]
+line = 13
+directive = "replace"
+args = [
+    "03",
+    "N",
+    "n",
+]
+content = "replace 03 N n"
+
+[[directives]]
+line = 14
+directive = "replace"
+args = [
+    "03",
+    "i",
+    "I2",
+]
+content = "replace 03 i  I2"
 
 [[unsupported]]
 line = 6

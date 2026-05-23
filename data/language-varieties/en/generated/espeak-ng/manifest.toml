@@ -1,10 +1,11 @@
 lang = "en"
 source = "espeak-ng"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 outputs = [
     "dictionary",
     "profiles",
     "rules-inventory",
+    "voice-profiles",
 ]

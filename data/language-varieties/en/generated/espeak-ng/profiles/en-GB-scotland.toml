@@ -1,8 +1,9 @@
 id = "en-GB-scotland"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-GB-scotland"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (Scotland)"
 phonemes = "en-sc"
@@ -62,6 +63,139 @@ to = "a/"
 flags = 2
 from = "u:"
 to = "U"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(Scotland)",
+]
+content = "name English (Scotland)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-gb-scotland"]
+content = "language en-gb-scotland"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en",
+    "4",
+]
+content = "language en 4"
+
+[[directives]]
+line = 5
+directive = "maintainer"
+args = [
+    "Reece",
+    "H.",
+    "Dunn",
+    "<msclrhd@gmail.com>",
+]
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[directives]]
+line = 6
+directive = "status"
+args = ["mature"]
+content = "status mature"
+
+[[directives]]
+line = 8
+directive = "phonemes"
+args = ["en-sc"]
+content = "phonemes en-sc"
+
+[[directives]]
+line = 9
+directive = "dictrules"
+args = [
+    "2",
+    "5",
+    "6",
+    "7",
+]
+content = "dictrules 2 5 6 7"
+
+[[directives]]
+line = 10
+directive = "stressLength"
+args = [
+    "180",
+    "130",
+    "200",
+    "200",
+    "0",
+    "0",
+    "250",
+    "270",
+]
+content = "stressLength  180 130 200 200 0 0 250 270"
+
+[[directives]]
+line = 12
+directive = "replace"
+args = [
+    "03",
+    "@",
+    "V",
+]
+content = "replace 03 @ V"
+
+[[directives]]
+line = 13
+directive = "replace"
+args = [
+    "03",
+    "I",
+    "i",
+]
+content = "replace 03 I i"
+
+[[directives]]
+line = 14
+directive = "replace"
+args = [
+    "03",
+    "I2",
+    "i",
+]
+content = "replace 03 I2 i"
+
+[[directives]]
+line = 15
+directive = "replace"
+args = [
+    "01",
+    "aI",
+    "aI2",
+]
+content = "replace 01 aI aI2"
+
+[[directives]]
+line = 16
+directive = "replace"
+args = [
+    "02",
+    "a",
+    "a/",
+]
+content = "replace 02 a a/"
+
+[[directives]]
+line = 17
+directive = "replace"
+args = [
+    "02",
+    "u:",
+    "U",
+]
+content = "replace 02 u: U"
 
 [[unsupported]]
 line = 5

@@ -1,0 +1,334 @@
+id = "voices__!v__Storm"
+kind = "voice-profile"
+source = "espeak-ng"
+source_file = "espeak-ng-data/voices/!v/Storm"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GPL-3.0-or-later"
+converter_version = "0.1.0"
+name = "Storm"
+dictrules = []
+replacements = []
+
+[[language_tags]]
+tag = "variant"
+
+[[language_tags]]
+tag = "en-us"
+
+[stress]
+length = []
+amplitude = []
+
+[[directives]]
+line = 1
+directive = "language"
+args = ["variant"]
+content = "language variant"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-us"]
+content = "language en-us"
+
+[[directives]]
+line = 3
+directive = "name"
+args = ["Storm"]
+content = "name Storm"
+
+[[directives]]
+line = 4
+directive = "gender"
+args = ["male"]
+content = "gender male"
+
+[[directives]]
+line = 5
+directive = "formant"
+args = [
+    "0",
+    "100",
+    "100",
+    "100",
+]
+content = "formant 0 100 100 100"
+
+[[directives]]
+line = 6
+directive = "formant"
+args = [
+    "1",
+    "95",
+    "95",
+    "95",
+]
+content = "formant 1 95 95 95"
+
+[[directives]]
+line = 7
+directive = "formant"
+args = [
+    "2",
+    "95",
+    "95",
+    "95",
+]
+content = "formant 2 95 95 95"
+
+[[directives]]
+line = 8
+directive = "formant"
+args = [
+    "3",
+    "95",
+    "95",
+    "95",
+]
+content = "formant 3 95 95 95"
+
+[[directives]]
+line = 9
+directive = "formant"
+args = [
+    "4",
+    "70",
+    "70",
+    "70",
+]
+content = "formant 4 70 70 70"
+
+[[directives]]
+line = 10
+directive = "formant"
+args = [
+    "5",
+    "70",
+    "70",
+    "70",
+]
+content = "formant 5 70 70 70"
+
+[[directives]]
+line = 11
+directive = "formant"
+args = [
+    "6",
+    "25",
+    "25",
+    "25",
+]
+content = "formant 6 25 25 25"
+
+[[directives]]
+line = 12
+directive = "formant"
+args = [
+    "7",
+    "25",
+    "25",
+    "25",
+]
+content = "formant 7 25 25 25"
+
+[[directives]]
+line = 13
+directive = "formant"
+args = [
+    "8",
+    "25",
+    "25",
+    "25",
+]
+content = "formant 8 25 25 25"
+
+[[directives]]
+line = 14
+directive = "breath"
+args = [
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+]
+content = "breath 0 0 0 0 0 0 0 0"
+
+[[directives]]
+line = 15
+directive = "consonants"
+args = ["100"]
+content = "consonants 100"
+
+[[directives]]
+line = 16
+directive = "echo"
+args = [
+    "0",
+    "0",
+]
+content = "echo 0 0"
+
+[[directives]]
+line = 17
+directive = "flutter"
+args = ["0"]
+content = "flutter 0"
+
+[[directives]]
+line = 18
+directive = "intonation"
+args = ["3"]
+content = "intonation 3"
+
+[[directives]]
+line = 19
+directive = "pitch"
+args = [
+    "60",
+    "100",
+]
+content = "pitch 60 100"
+
+[[directives]]
+line = 20
+directive = "roughness"
+args = ["0"]
+content = "roughness 0"
+
+[[directives]]
+line = 21
+directive = "stressAdd"
+args = [
+    "5",
+    "5",
+    "3",
+    "3",
+    "0",
+    "0",
+    "-15",
+    "-15",
+]
+content = "stressAdd 5 5 3 3 0 0 -15 -15"
+
+[[directives]]
+line = 22
+directive = "tone"
+args = [
+    "500",
+    "255",
+    "1500",
+    "255",
+    "2500",
+    "255",
+]
+content = "tone 500 255 1500 255 2500 255"
+
+[[directives]]
+line = 23
+directive = "voicing"
+args = ["100"]
+content = "voicing 100"
+
+[[unsupported]]
+line = 4
+directive = "gender"
+content = "gender male"
+
+[[unsupported]]
+line = 5
+directive = "formant"
+content = "formant 0 100 100 100"
+
+[[unsupported]]
+line = 6
+directive = "formant"
+content = "formant 1 95 95 95"
+
+[[unsupported]]
+line = 7
+directive = "formant"
+content = "formant 2 95 95 95"
+
+[[unsupported]]
+line = 8
+directive = "formant"
+content = "formant 3 95 95 95"
+
+[[unsupported]]
+line = 9
+directive = "formant"
+content = "formant 4 70 70 70"
+
+[[unsupported]]
+line = 10
+directive = "formant"
+content = "formant 5 70 70 70"
+
+[[unsupported]]
+line = 11
+directive = "formant"
+content = "formant 6 25 25 25"
+
+[[unsupported]]
+line = 12
+directive = "formant"
+content = "formant 7 25 25 25"
+
+[[unsupported]]
+line = 13
+directive = "formant"
+content = "formant 8 25 25 25"
+
+[[unsupported]]
+line = 14
+directive = "breath"
+content = "breath 0 0 0 0 0 0 0 0"
+
+[[unsupported]]
+line = 15
+directive = "consonants"
+content = "consonants 100"
+
+[[unsupported]]
+line = 16
+directive = "echo"
+content = "echo 0 0"
+
+[[unsupported]]
+line = 17
+directive = "flutter"
+content = "flutter 0"
+
+[[unsupported]]
+line = 18
+directive = "intonation"
+content = "intonation 3"
+
+[[unsupported]]
+line = 19
+directive = "pitch"
+content = "pitch 60 100"
+
+[[unsupported]]
+line = 20
+directive = "roughness"
+content = "roughness 0"
+
+[[unsupported]]
+line = 21
+directive = "stressAdd"
+content = "stressAdd 5 5 3 3 0 0 -15 -15"
+
+[[unsupported]]
+line = 22
+directive = "tone"
+content = "tone 500 255 1500 255 2500 255"
+
+[[unsupported]]
+line = 23
+directive = "voicing"
+content = "voicing 100"

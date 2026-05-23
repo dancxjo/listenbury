@@ -1,8 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

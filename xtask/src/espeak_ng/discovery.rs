@@ -39,6 +39,8 @@ fn visit_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 }
 
 pub fn file_matches_lang(file_name: &str, lang: &str) -> bool {
+    let file_name = file_name.to_lowercase();
+    let lang = lang.to_lowercase();
     file_name == lang || file_name.starts_with(&format!("{lang}-"))
 }
 
@@ -87,8 +89,8 @@ pub fn discover_voice_files(cache: &Path, lang: &str) -> Result<Vec<PathBuf>> {
     visit_files(&cache.join("espeak-ng-data/voices"), &mut all)?;
     let mut files = Vec::new();
     for path in all {
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let tags = language_tags_in_profile(&content);
         if tags.iter().any(|tag| file_matches_lang(tag, lang)) {
             files.push(path);
@@ -118,8 +120,8 @@ pub fn discover_languages(cache: &Path) -> Result<Vec<LanguageSource>> {
 
     let dict_dir = cache.join("dictsource");
     if dict_dir.exists() {
-        for entry in
-            fs::read_dir(&dict_dir).with_context(|| format!("failed to read {}", dict_dir.display()))?
+        for entry in fs::read_dir(&dict_dir)
+            .with_context(|| format!("failed to read {}", dict_dir.display()))?
         {
             let path = entry?.path();
             if !path.is_file() {
@@ -148,8 +150,8 @@ pub fn discover_languages(cache: &Path) -> Result<Vec<LanguageSource>> {
     let mut voice_files = Vec::new();
     visit_files(&cache.join("espeak-ng-data/voices"), &mut voice_files)?;
     for path in voice_files {
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
         let rel = relative_path(cache, &path);
         for tag in language_tags_in_profile(&content) {
             for lang in &langs {

@@ -11,8 +11,8 @@ use tempfile::tempdir;
 
 use super::{
     RulesMode,
-    discovery::discover_languages,
     dictionary::convert_list,
+    discovery::discover_languages,
     profile::{convert_profiles, convert_voice_profiles},
     provenance::{
         CONVERTER_VERSION, current_revision, ensure_cache_exists, load_metadata, repo_root,
@@ -63,7 +63,7 @@ pub fn convert_all(lang: &str, out: &Path) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("failed to create {}", out.display()))?;
 
     let profiles_dir = out.join("profiles");
-    let voices_dir = out.join("voices");
+    let voices_dir = out.join("voice-profiles");
     let dictionary_dir = out.join("dictionary");
     let rules_dir = out.join("rules-inventory");
 
@@ -81,7 +81,10 @@ pub fn convert_all(lang: &str, out: &Path) -> Result<()> {
     let mut outputs = Vec::new();
     for entry in fs::read_dir(out).with_context(|| format!("failed to read {}", out.display()))? {
         let entry = entry?;
-        outputs.push(entry.file_name().to_string_lossy().to_string());
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if file_name != "manifest.toml" {
+            outputs.push(file_name);
+        }
     }
     outputs.sort();
 
@@ -132,6 +135,27 @@ pub fn regen_all(limit: Option<usize>) -> Result<()> {
     }
 
     println!("Regenerated {} eSpeak-ng language outputs", languages.len());
+    Ok(())
+}
+
+pub fn convert_languages(out: &Path, limit: Option<usize>) -> Result<()> {
+    let cache = ensure_cache_exists()?;
+    let mut languages = discover_languages(&cache)?;
+    if let Some(limit) = limit {
+        languages.truncate(limit);
+    }
+
+    for language in &languages {
+        let lang_out = out.join(&language.lang).join("generated").join("espeak-ng");
+        println!(
+            "Converting lang={} into {}",
+            language.lang,
+            lang_out.display()
+        );
+        convert_all(&language.lang, &lang_out)?;
+    }
+
+    println!("Converted {} eSpeak-ng language outputs", languages.len());
     Ok(())
 }
 

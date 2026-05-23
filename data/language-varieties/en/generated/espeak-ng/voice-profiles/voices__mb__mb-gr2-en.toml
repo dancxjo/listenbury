@@ -1,0 +1,83 @@
+id = "voices__mb__mb-gr2-en"
+kind = "voice-profile"
+source = "espeak-ng"
+source_file = "espeak-ng-data/voices/mb/mb-gr2-en"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GPL-3.0-or-later"
+converter_version = "0.1.0"
+name = "en-greek"
+dictrules = []
+replacements = []
+
+[[language_tags]]
+tag = "en"
+priority = 9
+
+[stress]
+length = []
+amplitude = []
+
+[[directives]]
+line = 1
+directive = "name"
+args = ["en-greek"]
+content = "name en-greek"
+
+[[directives]]
+line = 2
+directive = "language"
+args = [
+    "en",
+    "9",
+]
+content = "language en 9"
+
+[[directives]]
+line = 3
+directive = "gender"
+args = ["male"]
+content = "gender male"
+
+[[directives]]
+line = 5
+directive = "pitch"
+args = [
+    "82",
+    "117",
+]
+content = "pitch 82 117"
+
+[[directives]]
+line = 6
+directive = "voicing"
+args = ["65"]
+content = "voicing 65"
+
+[[directives]]
+line = 7
+directive = "mbrola"
+args = [
+    "gr2",
+    "gr2_phtrans",
+]
+content = "mbrola gr2 gr2_phtrans"
+
+[[unsupported]]
+line = 3
+directive = "gender"
+content = "gender male"
+
+[[unsupported]]
+line = 5
+directive = "pitch"
+content = "pitch 82 117"
+
+[[unsupported]]
+line = 6
+directive = "voicing"
+content = "voicing 65"
+
+[[unsupported]]
+line = 7
+directive = "mbrola"
+content = "mbrola gr2 gr2_phtrans"

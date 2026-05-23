@@ -357,7 +357,7 @@ mod trace;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use ear::TranscriptStabilityState;
+use listenbury::speech::transcript::TranscriptStabilityState;
 #[cfg(any(
     test,
     all(

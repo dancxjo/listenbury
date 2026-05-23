@@ -1,8 +1,9 @@
 id = "en-US"
+kind = "language-profile"
 source = "espeak-ng"
 source_file = "espeak-ng-data/lang/gmw/en-US"
 source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
-source_license = "GNU GENERAL PUBLIC LICENSE"
+source_license = "GPL-3.0-or-later"
 converter_version = "0.1.0"
 name = "English (America)"
 phonemes = "en-us"
@@ -50,6 +51,115 @@ to = "i"
 flags = 3
 from = "I2"
 to = "i"
+
+[[directives]]
+line = 1
+directive = "name"
+args = [
+    "English",
+    "(America)",
+]
+content = "name English (America)"
+
+[[directives]]
+line = 2
+directive = "language"
+args = [
+    "en-us",
+    "2",
+]
+content = "language en-us 2"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en",
+    "3",
+]
+content = "language en 3"
+
+[[directives]]
+line = 5
+directive = "maintainer"
+args = [
+    "Reece",
+    "H.",
+    "Dunn",
+    "<msclrhd@gmail.com>",
+]
+content = "maintainer Reece H. Dunn <msclrhd@gmail.com>"
+
+[[directives]]
+line = 6
+directive = "status"
+args = ["mature"]
+content = "status mature"
+
+[[directives]]
+line = 8
+directive = "phonemes"
+args = ["en-us"]
+content = "phonemes en-us"
+
+[[directives]]
+line = 9
+directive = "dictrules"
+args = [
+    "3",
+    "6",
+]
+content = "dictrules 3 6"
+
+[[directives]]
+line = 11
+directive = "stressLength"
+args = [
+    "140",
+    "120",
+    "190",
+    "170",
+    "0",
+    "0",
+    "255",
+    "300",
+]
+content = "stressLength 140 120 190 170 0 0 255 300"
+
+[[directives]]
+line = 12
+directive = "stressAmp"
+args = [
+    "17",
+    "16",
+    "19",
+    "19",
+    "19",
+    "19",
+    "21",
+    "19",
+]
+content = "stressAmp  17 16  19 19  19 19  21 19"
+
+[[directives]]
+line = 14
+directive = "replace"
+args = [
+    "03",
+    "I",
+    "i",
+]
+content = "replace 03 I  i"
+
+[[directives]]
+line = 15
+directive = "replace"
+args = [
+    "03",
+    "I2",
+    "i",
+]
+content = "replace 03 I2 i"
 
 [[unsupported]]
 line = 5

@@ -1,6 +1,6 @@
 mod convert;
-mod discovery;
 mod dictionary;
+mod discovery;
 mod fetch;
 mod inventory;
 mod profile;
@@ -69,6 +69,14 @@ enum EspeakNgSubcommand {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Convert every discovered language under an explicit output base.
+    ConvertLanguages {
+        #[arg(long)]
+        out: PathBuf,
+        /// Optional cap for smoke-testing the all-language pipeline.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
     /// Regenerate deterministic eSpeak-derived output in default location.
     Regen {
         #[arg(long, default_value = "en")]
@@ -109,6 +117,9 @@ pub fn run(cmd: EspeakNgCommand) -> Result<()> {
             rules::convert_rules(&lang, &out, mode)
         }
         EspeakNgSubcommand::Convert { lang, out } => convert::convert_all(&lang, &out),
+        EspeakNgSubcommand::ConvertLanguages { out, limit } => {
+            convert::convert_languages(&out, limit)
+        }
         EspeakNgSubcommand::Regen { lang } => convert::regen(&lang),
         EspeakNgSubcommand::RegenAll { limit } => convert::regen_all(limit),
         EspeakNgSubcommand::Diff { lang, out } => convert::diff(&lang, out.as_deref()),

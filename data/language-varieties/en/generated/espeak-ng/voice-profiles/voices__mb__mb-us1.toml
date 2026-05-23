@@ -1,0 +1,124 @@
+id = "voices__mb__mb-us1"
+kind = "voice-profile"
+source = "espeak-ng"
+source_file = "espeak-ng-data/voices/mb/mb-us1"
+source_revision = "fbe4b3764285c35b1f035cb8d09ad9fc19f71c30"
+source_license = "GPL-3.0-or-later"
+converter_version = "0.1.0"
+name = "us-mbrola-1"
+phonemes = "en-us"
+dictrules = [
+    3,
+    6,
+]
+replacements = []
+
+[[language_tags]]
+tag = "en-us"
+
+[[language_tags]]
+tag = "en"
+priority = 8
+
+[stress]
+length = [
+    170,
+    135,
+    205,
+    205,
+    0,
+    0,
+    245,
+    275,
+]
+amplitude = []
+
+[[directives]]
+line = 1
+directive = "name"
+args = ["us-mbrola-1"]
+content = "name us-mbrola-1"
+
+[[directives]]
+line = 2
+directive = "language"
+args = ["en-us"]
+content = "language en-us"
+
+[[directives]]
+line = 3
+directive = "language"
+args = [
+    "en",
+    "8",
+]
+content = "language en 8"
+
+[[directives]]
+line = 4
+directive = "gender"
+args = ["female"]
+content = "gender female"
+
+[[directives]]
+line = 6
+directive = "phonemes"
+args = ["en-us"]
+content = "phonemes en-us"
+
+[[directives]]
+line = 7
+directive = "dictrules"
+args = [
+    "3",
+    "6",
+]
+content = "dictrules 3 6"
+
+[[directives]]
+line = 9
+directive = "stressLength"
+args = [
+    "170",
+    "135",
+    "205",
+    "205",
+    "0",
+    "0",
+    "245",
+    "275",
+]
+content = "stressLength 170 135 205 205 0 0  245 275"
+
+[[directives]]
+line = 11
+directive = "pitch"
+args = [
+    "140",
+    "220",
+]
+content = "pitch 140 220"
+
+[[directives]]
+line = 12
+directive = "mbrola"
+args = [
+    "us1",
+    "us_phtrans",
+]
+content = "mbrola us1 us_phtrans"
+
+[[unsupported]]
+line = 4
+directive = "gender"
+content = "gender female"
+
+[[unsupported]]
+line = 11
+directive = "pitch"
+content = "pitch 140 220"
+
+[[unsupported]]
+line = 12
+directive = "mbrola"
+content = "mbrola us1 us_phtrans"
