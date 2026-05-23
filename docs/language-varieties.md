@@ -10,7 +10,7 @@ pack lives at:
 - `data/language-varieties/en-US/acoustic-tweaks.toml`
 - `data/language-varieties/en-US/spelling-rules.toml`
 - `data/language-varieties/en-US/pronunciation-rules.toml`
-- `data/language-varieties/en-US/pronunciation-rules.json`
+- `data/language-varieties/en-US/pronunciation-rules.json` (pronunciation rule catalog JSON)
 - `data/language-varieties/en-US/morphophonology.toml`
 - `data/language-varieties/en-US/prosody-rules.toml`
 - `data/language-varieties/en-US/punctuation-rules.toml`

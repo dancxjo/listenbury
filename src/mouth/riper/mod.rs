@@ -14,17 +14,18 @@ pub mod sentence_analysis;
 pub mod text;
 
 pub use crate::linguistic::language_pack_rules::{
-    EspeakNgSeedRuleTable, ImportedEnvironmentRule, LexicalProsodyFlag, LexicalProsodyFlagFact,
-    LinguisticVarieties, LinguisticVarietyRuleTable, MatchedWordSpan, MorphophonologyOutput,
-    MorphophonologyRule, MultiWordPronunciationRule, MultiWordRuleMatch, MultiWordRuleOutput,
-    MultiWordSeedRule, PhonemeMappingRule, PronunciationOverrideRule, PunctuationProsodyRule,
-    RuleContextConstraint, RuleOutput, RuleProvenance, SpellingRepairHint, StemRetranslationPolicy,
-    StressRule, ToRuleDescriptor, VoiceVariantRule, WeakFormRule, convert_multi_word_rule,
-    convert_punctuation_prosody_rule, convert_weak_form_rule, english_imported_multi_word_rules,
-    english_imported_punctuation_rules, english_imported_weak_form_rules,
-    english_lexical_flag_facts_for_rule, english_native_morphophonology_rules,
-    export_rule_table_to_json, import_rule_table_from_str, load_seed_rule_table,
-    match_multi_word_rule, rule_matches_context,
+    BoundaryProsodyRuleSeed, LanguagePackEnvironmentRule, LexicalProsodyFlag,
+    LexicalProsodyFlagFact, LinguisticVarieties, LinguisticVarietyRuleTable, MatchedWordSpan,
+    MorphophonologyOutput, MorphophonologyRule, MultiWordPronunciationRule, MultiWordRuleMatch,
+    MultiWordRuleOutput, PhonemeMappingRule, PhraseRuleEntry, PronunciationOverrideRule,
+    PronunciationRuleCatalog, RuleContextConstraint, RuleOutput, SourceProvenance,
+    SpellingRepairHint, StemRetranslationPolicy, StressRule, ToRuleDescriptor, VoiceVariantRule,
+    WeakFormRule, convert_multi_word_rule, convert_punctuation_prosody_rule,
+    convert_weak_form_rule, english_lexical_flag_facts_for_rule,
+    english_native_morphophonology_rules, english_pack_phrase_rules,
+    english_pack_punctuation_rules, english_pack_weak_form_rules, export_rule_catalog_to_json,
+    import_rule_catalog_from_str, load_pronunciation_rule_catalog, match_multi_word_rule,
+    rule_matches_context,
 };
 #[cfg(feature = "tts-riper")]
 pub use backend::{PiperModelContract, RiperBackend, RiperPcm};

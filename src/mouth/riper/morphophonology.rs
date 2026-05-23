@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::linguistic::cmudict::{self, CmuPhoneme, Stress as CmuStress};
 use crate::linguistic::language_pack_rules::{
-    MorphophonologyOutput, MorphophonologyRule, RuleProvenance, SpellingRepairHint,
+    MorphophonologyOutput, MorphophonologyRule, SourceProvenance, SpellingRepairHint,
     StemRetranslationPolicy, english_native_morphophonology_rules,
 };
 use crate::linguistic::orthography::OrthographicWord;
@@ -121,7 +121,7 @@ pub struct MorphologicalAnalysis {
     /// Provenance records for the morphophonology rules that fired.
     /// Empty for plain lexical lookups; populated for derived forms.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rule_provenance: Vec<RuleProvenance>,
+    pub rule_provenance: Vec<SourceProvenance>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

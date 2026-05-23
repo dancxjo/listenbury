@@ -699,7 +699,7 @@ fn pronounce_word_unit(
     environment_facts: Option<&ProsodyEnvironmentFacts>,
 ) -> Option<PronouncedWordUnit> {
     let word_realization = word_to_phones_with_metadata(word)?;
-    let has_unstressed_imported_flag = environment_facts.is_some_and(|facts| {
+    let has_unstressed_pack_flag = environment_facts.is_some_and(|facts| {
         facts
             .lexical_flags
             .iter()
@@ -708,8 +708,7 @@ fn pronounce_word_unit(
     let reduced_symbols = analyzed_token
         .and_then(|analysis| analysis.reduction_diagnostic.as_ref())
         .and_then(|diagnostic| {
-            if matches!(diagnostic.status, ReductionStatus::Applied) && has_unstressed_imported_flag
-            {
+            if matches!(diagnostic.status, ReductionStatus::Applied) && has_unstressed_pack_flag {
                 Some(
                     diagnostic
                         .realized
@@ -2096,7 +2095,7 @@ mod tests {
     }
 
     #[test]
-    fn unstressed_imported_flag_controls_to_reduction_realization() {
+    fn unstressed_pack_flag_controls_to_reduction_realization() {
         let normalized = TextNormalizer
             .normalize("I want to go.")
             .expect("text normalization");
