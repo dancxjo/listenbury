@@ -11,7 +11,8 @@ pub mod source_filter;
 pub use model::{AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame, SingingPlan};
 pub use neural::{
     FastSpeech2AcousticModel, MatchaAcousticModel, NeuralAcousticModel, NeuralAcousticModelKind,
-    SpeechT5AcousticModel, VitsPiperAcousticModel,
+    NeuralAcousticOnnxConfig, NeuralAcousticTensorNames, NeuralAcousticTrackContract,
+    NeuralMelOutputLayout, NeuralPhoneIdMap, SpeechT5AcousticModel, VitsPiperAcousticModel,
 };
 pub use registry::{AcousticModelDescriptor, acoustic_model_by_id, list_acoustic_models};
 pub use source_filter::{

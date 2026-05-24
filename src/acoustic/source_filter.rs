@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 
 use crate::acoustic::{
     AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
@@ -61,6 +61,11 @@ impl AcousticModelBackend for SourceFilterAcousticModel {
 
     fn generate(&mut self, input: AcousticInput<'_>) -> Result<AcousticFrameTrack> {
         match input {
+            AcousticInput::TokenIds(_) => {
+                bail!(
+                    "source-filter acoustic model requires phone-timed, singing, or source-filter input"
+                )
+            }
             AcousticInput::PhoneTimed(targets) => {
                 let source_filter = phone_timed_to_source_filter_track(targets)?;
                 acoustic_frame_track_from_source_filter(&source_filter)

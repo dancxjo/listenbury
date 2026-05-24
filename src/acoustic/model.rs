@@ -11,7 +11,9 @@ pub struct MelFrame {
 
 pub type SingingPlan = SungPhrase;
 
+#[derive(Clone, Copy)]
 pub enum AcousticInput<'a> {
+    TokenIds(&'a [i64]),
     PhoneTimed(&'a [PhoneTimedRenderTarget]),
     Singing(&'a SingingPlan),
     SourceFilterTrack(&'a SourceFilterTrack),

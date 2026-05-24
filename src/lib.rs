@@ -32,8 +32,10 @@ pub mod word;
 
 pub use acoustic::{
     AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
-    MelTemporalDiscontinuityStats, NeuralAcousticModel, NeuralAcousticModelKind, SingingPlan,
-    SourceFilterAcousticModel, acoustic_model_by_id, list_acoustic_models, mel_frame_delta_energy,
+    MelTemporalDiscontinuityStats, NeuralAcousticModel, NeuralAcousticModelKind,
+    NeuralAcousticOnnxConfig, NeuralAcousticTensorNames, NeuralAcousticTrackContract,
+    NeuralMelOutputLayout, NeuralPhoneIdMap, SingingPlan, SourceFilterAcousticModel,
+    acoustic_model_by_id, list_acoustic_models, mel_frame_delta_energy,
     summarize_mel_temporal_discontinuity, temporal_smooth_mel_frames,
 };
 pub use audio::frame::AudioFrame;
