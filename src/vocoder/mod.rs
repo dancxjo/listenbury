@@ -22,7 +22,7 @@ use crate::audio::frame::AudioFrame;
 
 pub use capability::{BackendCapabilities, BackendFamily, VocoderDescriptor};
 pub use hifigan::HifiganBackend;
-pub use input::{MelFrame, VocoderInput};
+pub use input::{MelConfig, MelFrame, MelScale, MelSpectrogram, MelTensorLayout, VocoderInput};
 pub use registry::{
     SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,
 };

@@ -189,6 +189,13 @@ This would allow the system to:
 
 This requires taking ownership of phonemicization and TTS model execution rather than treating TTS as a black-box command that consumes finished text. Piper can serve as an initial model source, but deeper control likely requires running the ONNX model directly and building Listenbury’s own text-to-phoneme, syllabification, duration, and prosody layers around it.
 
+## Neural Vocoder Mel Compatibility
+
+Listenbury’s neural vocoder boundary is an explicit mel spectrogram contract (configuration + frames), not raw phones or text.  
+HiFi-GAN-style ONNX inference is model-specific: sample rate, hop size, mel bin count, scale/compression, and tensor layout must match the model’s preprocessing contract.
+
+For real ONNX vocoding, Listenbury validates these values and fails loudly on mismatches instead of silently resampling bins, guessing mel scale, or guessing tensor orientation.
+
 ## Self-Hearing
 
 One of the long-term goals is for Listenbury to distinguish between:

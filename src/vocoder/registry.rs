@@ -87,7 +87,13 @@ pub fn list_backends() -> Vec<VocoderDescriptor> {
 pub fn backend_by_id(id: &str) -> Result<Box<dyn VocoderBackend>> {
     match id {
         "riper-onnx-direct" => Ok(Box::new(RiperOnnxDirectBackend)),
-        "hifigan" => Ok(Box::new(HifiganBackend::deterministic())),
+        "hifigan" => {
+            #[cfg(feature = "tts-riper")]
+            if let Some(model_path) = std::env::var_os("LISTENBURY_HIFIGAN_MODEL") {
+                return Ok(Box::new(HifiganBackend::load(PathBuf::from(model_path))?));
+            }
+            Ok(Box::new(HifiganBackend::deterministic()))
+        }
         "bigvgan" => Ok(Box::new(BigVganBackend)),
         "diffwave" => Ok(Box::new(DiffwaveBackend)),
         "source-filter-neural" => Ok(Box::new(NeuralSourceFilterBackend)),
@@ -194,8 +200,8 @@ mod tests {
         frames.iter().map(|frame| frame.samples.len()).sum()
     }
 
-    fn synthetic_mel_frames() -> Vec<crate::vocoder::MelFrame> {
-        (0..6)
+    fn synthetic_mel_frames() -> crate::vocoder::MelSpectrogram {
+        let frames = (0..6)
             .map(|frame_index| crate::vocoder::MelFrame {
                 bins: (0..8)
                     .map(|bin_index| {
@@ -204,7 +210,11 @@ mod tests {
                     })
                     .collect(),
             })
-            .collect()
+            .collect();
+        crate::vocoder::MelSpectrogram {
+            config: crate::vocoder::MelConfig::test_default(8),
+            frames,
+        }
     }
 
     #[test]
@@ -301,7 +311,7 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].sample_rate_hz, 22_050);
         assert_eq!(frames[0].channels, 1);
-        assert_eq!(frame_samples(&frames), mel.len() * 256);
+        assert_eq!(frame_samples(&frames), mel.frames.len() * 256);
         assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.0));
     }
 
@@ -309,7 +319,7 @@ mod tests {
     fn hifigan_backend_rejects_mismatched_f0_tracks() {
         let mel = synthetic_mel_frames();
         let f0_hz = vec![220.0];
-        let voiced = vec![true; mel.len()];
+        let voiced = vec![true; mel.frames.len()];
         let mut backend = backend_by_id("hifigan").expect("hifigan backend construction");
 
         let err = backend

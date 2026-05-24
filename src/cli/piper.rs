@@ -37,7 +37,9 @@ use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "tts-riper")]
-use listenbury::vocoder::{HifiganBackend, MelFrame, VocoderBackend, VocoderInput};
+use listenbury::vocoder::{
+    HifiganBackend, MelConfig, MelFrame, MelSpectrogram, VocoderBackend, VocoderInput,
+};
 #[cfg(feature = "tts-riper")]
 use listenbury::voice::diphone::{DiphoneCache, DiphoneVoiceManifest, NeuralDiphoneProvider};
 #[cfg(feature = "tts-riper")]
@@ -1369,12 +1371,14 @@ fn should_use_mbrola_backend(args: &SayArgs) -> bool {
 #[cfg(feature = "tts-riper")]
 fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     let text = &args.text;
+    let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
+    let mut backend = HifiganBackend::load(model_path)?;
+    let mel_config = backend.expected_mel_config();
     let phonemized = SimpleEnglishG2p::default()
         .phonemize_unit(text)
         .with_context(|| format!("listenbury say --hifigan could not phonemize `{text}`"))?;
-    let (mel, f0_hz, voiced) = hifigan_mel_f0_from_riper_phonemes(&phonemized.phonemes, text)?;
-    let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
-    let mut backend = HifiganBackend::load(model_path)?;
+    let (mel, f0_hz, voiced) =
+        hifigan_mel_f0_from_riper_phonemes_with_config(&phonemized.phonemes, text, &mel_config)?;
     let frames = backend
         .render(VocoderInput::MelF0 {
             mel: &mel,
@@ -1398,8 +1402,21 @@ fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
 fn hifigan_mel_f0_from_riper_phonemes(
     phonemes: &PiperPhonemeSequence,
     text: &str,
-) -> Result<(Vec<MelFrame>, Vec<f32>, Vec<bool>)> {
-    const MEL_BINS: usize = 24;
+) -> Result<(MelSpectrogram, Vec<f32>, Vec<bool>)> {
+    hifigan_mel_f0_from_riper_phonemes_with_config(
+        phonemes,
+        text,
+        &HifiganBackend::default_mel_config(),
+    )
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_mel_f0_from_riper_phonemes_with_config(
+    phonemes: &PiperPhonemeSequence,
+    text: &str,
+    mel_config: &MelConfig,
+) -> Result<(MelSpectrogram, Vec<f32>, Vec<bool>)> {
+    let mel_bins = mel_config.n_mels;
     let mut mel = Vec::new();
     let mut f0_hz = Vec::new();
     let mut voiced = Vec::new();
@@ -1411,7 +1428,7 @@ fn hifigan_mel_f0_from_riper_phonemes(
             continue;
         }
         if matches!(symbol, "_" | "|" | "‖" | "." | "," | "!" | "?") {
-            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, MEL_BINS);
+            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, mel_bins);
             continue;
         }
 
@@ -1445,7 +1462,7 @@ fn hifigan_mel_f0_from_riper_phonemes(
                 local_frame as f32 / (frames_for_phone - 1) as f32
             };
             let contour = (progress - 0.5) * 8.0;
-            mel.push(hifigan_mel_frame(MEL_BINS, energy, brightness));
+            mel.push(hifigan_mel_frame(mel_bins, energy, brightness));
             f0_hz.push((base_f0 + contour).clamp(80.0, 260.0));
             voiced.push(is_voiced);
             speech_frame_index += 1;
@@ -1457,8 +1474,15 @@ fn hifigan_mel_f0_from_riper_phonemes(
             .any(|frame| frame.bins.iter().any(|bin| *bin > 0.0)),
         "Riper produced no HiFi-GAN-renderable phones for `{text}`"
     );
-    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, MEL_BINS);
-    Ok((mel, f0_hz, voiced))
+    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, mel_bins);
+    Ok((
+        MelSpectrogram {
+            config: mel_config.clone(),
+            frames: mel,
+        },
+        f0_hz,
+        voiced,
+    ))
 }
 
 #[cfg(feature = "tts-riper")]
