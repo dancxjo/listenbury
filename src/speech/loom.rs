@@ -142,6 +142,100 @@ pub enum SpeechSourceOrigin {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AttributionSourceKind {
+    LiveVoice,
+    SynthesizedWaveform,
+    Echo,
+    Recording,
+    Overlap,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ConfidenceBool {
+    pub value: Option<bool>,
+    pub confidence: f32,
+}
+
+impl ConfidenceBool {
+    pub fn certain(value: bool, confidence: f32) -> Self {
+        Self {
+            value: Some(value),
+            confidence: confidence.clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn uncertain(confidence: f32) -> Self {
+        Self {
+            value: None,
+            confidence: confidence.clamp(0.0, 1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeakerHypothesis {
+    pub speaker_id: String,
+    pub confidence: f32,
+}
+
+impl SpeakerHypothesis {
+    pub fn new(speaker_id: impl Into<String>, confidence: f32) -> Self {
+        Self {
+            speaker_id: speaker_id.into(),
+            confidence: confidence.clamp(0.0, 1.0),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AudioChannel(pub String);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechAttribution {
+    pub speaker: Option<SpeakerHypothesis>,
+    pub is_self: ConfidenceBool,
+    pub channel: Option<AudioChannel>,
+    pub source: AttributionSourceKind,
+    pub evidence: Vec<String>,
+}
+
+impl SpeechAttribution {
+    pub fn new(source: AttributionSourceKind) -> Self {
+        Self {
+            speaker: None,
+            is_self: ConfidenceBool::uncertain(0.0),
+            channel: None,
+            source,
+            evidence: Vec::new(),
+        }
+    }
+
+    pub fn with_speaker(mut self, speaker_id: impl Into<String>, confidence: f32) -> Self {
+        self.speaker = Some(SpeakerHypothesis::new(speaker_id, confidence));
+        self
+    }
+
+    pub fn with_is_self(mut self, value: Option<bool>, confidence: f32) -> Self {
+        self.is_self = match value {
+            Some(value) => ConfidenceBool::certain(value, confidence),
+            None => ConfidenceBool::uncertain(confidence),
+        };
+        self
+    }
+
+    pub fn with_channel(mut self, channel: impl Into<String>) -> Self {
+        self.channel = Some(AudioChannel(channel.into()));
+        self
+    }
+
+    pub fn with_evidence(mut self, artifact_id: impl Into<String>) -> Self {
+        self.evidence.push(artifact_id.into());
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechProvenance {
     pub origin: SpeechSourceOrigin,
@@ -166,6 +260,48 @@ impl SpeechProvenance {
     pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
         self.source_id = Some(source_id.into());
         self
+    }
+
+    pub fn canonical_attribution(&self) -> SpeechAttribution {
+        let (source, is_self) = match self.origin {
+            SpeechSourceOrigin::SelfVoice => (
+                AttributionSourceKind::LiveVoice,
+                ConfidenceBool::certain(true, 1.0),
+            ),
+            SpeechSourceOrigin::OtherVoice => (
+                AttributionSourceKind::LiveVoice,
+                ConfidenceBool::certain(false, 1.0),
+            ),
+            SpeechSourceOrigin::Synthesized => (
+                AttributionSourceKind::SynthesizedWaveform,
+                ConfidenceBool::uncertain(0.0),
+            ),
+            SpeechSourceOrigin::Echo => (
+                AttributionSourceKind::Echo,
+                ConfidenceBool::certain(true, 0.7),
+            ),
+            SpeechSourceOrigin::Recording => (
+                AttributionSourceKind::Recording,
+                ConfidenceBool::uncertain(0.5),
+            ),
+            SpeechSourceOrigin::Overlap => (
+                AttributionSourceKind::Overlap,
+                ConfidenceBool::uncertain(0.5),
+            ),
+            SpeechSourceOrigin::Unknown => (
+                AttributionSourceKind::Unknown,
+                ConfidenceBool::uncertain(0.0),
+            ),
+        };
+        let mut attribution = SpeechAttribution::new(source);
+        attribution.is_self = is_self;
+        if let Some(speaker_id) = &self.speaker_id {
+            attribution.speaker = Some(SpeakerHypothesis::new(speaker_id.clone(), 1.0));
+        }
+        if let Some(source_id) = &self.source_id {
+            attribution.evidence.push(source_id.clone());
+        }
+        attribution
     }
 }
 
@@ -199,6 +335,7 @@ pub struct SpeechArtifact {
     pub span: SpeechSpan,
     pub content: SpeechArtifactContent,
     pub provenance: SpeechProvenance,
+    pub attributions: Vec<SpeechAttribution>,
     pub confidence: f32,
     pub revision: u32,
     pub dependencies: Vec<SpeechArtifactDependency>,
@@ -212,12 +349,14 @@ impl SpeechArtifact {
         provenance: SpeechProvenance,
         content: SpeechArtifactContent,
     ) -> Self {
+        let attribution = provenance.canonical_attribution();
         Self {
             id: id.into(),
             kind,
             span,
             content,
             provenance,
+            attributions: vec![attribution],
             confidence: 1.0,
             revision: 0,
             dependencies: Vec::new(),
@@ -243,6 +382,16 @@ impl SpeechArtifact {
             artifact_id: artifact_id.into(),
             relation,
         });
+        self
+    }
+
+    pub fn with_attribution(mut self, attribution: SpeechAttribution) -> Self {
+        self.attributions.push(attribution);
+        self
+    }
+
+    pub fn with_attributions(mut self, attributions: Vec<SpeechAttribution>) -> Self {
+        self.attributions = attributions;
         self
     }
 }
@@ -446,17 +595,37 @@ pub fn compare_intended_vs_heard_phones(document: &SpeechDocument) -> Vec<PhoneC
         let SpeechArtifactContent::PhoneSymbol(symbol) = &artifact.content else {
             continue;
         };
-        match artifact.provenance.origin {
-            SpeechSourceOrigin::Synthesized => {
+        let classify_from_provenance = || match artifact.provenance.origin {
+            SpeechSourceOrigin::Synthesized => Some("intended"),
+            SpeechSourceOrigin::SelfVoice
+            | SpeechSourceOrigin::OtherVoice
+            | SpeechSourceOrigin::Echo
+            | SpeechSourceOrigin::Recording
+            | SpeechSourceOrigin::Overlap => Some("heard"),
+            SpeechSourceOrigin::Unknown => None,
+        };
+
+        let classify_from_attribution =
+            artifact
+                .attributions
+                .iter()
+                .find_map(|attribution| match attribution.source {
+                    AttributionSourceKind::SynthesizedWaveform => Some("intended"),
+                    AttributionSourceKind::LiveVoice
+                    | AttributionSourceKind::Echo
+                    | AttributionSourceKind::Recording
+                    | AttributionSourceKind::Overlap => Some("heard"),
+                    AttributionSourceKind::Unknown => None,
+                });
+
+        match classify_from_attribution.or_else(classify_from_provenance) {
+            Some("intended") => {
                 intended.insert(span.start, symbol.clone());
             }
-            SpeechSourceOrigin::OtherVoice | SpeechSourceOrigin::SelfVoice => {
+            Some("heard") => {
                 heard.insert(span.start, symbol.clone());
             }
-            SpeechSourceOrigin::Echo
-            | SpeechSourceOrigin::Recording
-            | SpeechSourceOrigin::Overlap
-            | SpeechSourceOrigin::Unknown => {}
+            _ => {}
         }
     }
 
@@ -829,11 +998,11 @@ impl CurrentSayBackendKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANONICAL_SPEECH_LOOM_ID, CommitState, CurrentSayBackendKind, PhoneComparison, PhoneSpan,
-        SpeechArtifact, SpeechArtifactContent, SpeechArtifactKind, SpeechDocument,
-        SpeechProvenance, SpeechSourceOrigin, SpeechSpan, SpeechWorkKind, TimeSpan,
-        asr_word_hypothesis_artifacts, compare_intended_vs_heard_phones,
-        tts_alignment_from_asr_word_hypotheses,
+        AttributionSourceKind, CANONICAL_SPEECH_LOOM_ID, CommitState, CurrentSayBackendKind,
+        PhoneComparison, PhoneSpan, SpeechArtifact, SpeechArtifactContent, SpeechArtifactKind,
+        SpeechAttribution, SpeechDocument, SpeechProvenance, SpeechSourceOrigin, SpeechSpan,
+        SpeechWorkKind, SyllableSpan, TimeSpan, asr_word_hypothesis_artifacts,
+        compare_intended_vs_heard_phones, tts_alignment_from_asr_word_hypotheses,
     };
     use crate::word::TranscriptWord;
 
@@ -856,6 +1025,103 @@ mod tests {
 
         assert_eq!(heard.kind, generated.kind);
         assert_ne!(heard.provenance.origin, generated.provenance.origin);
+        assert_eq!(
+            heard.attributions[0].source,
+            AttributionSourceKind::LiveVoice
+        );
+        assert_eq!(
+            generated.attributions[0].source,
+            AttributionSourceKind::SynthesizedWaveform
+        );
+    }
+
+    #[test]
+    fn canonical_artifact_supports_competing_attributions_for_same_span() {
+        let canonical = SpeechArtifact::placeholder(
+            "phone-span-0",
+            SpeechArtifactKind::PhoneHypothesis,
+            SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+            SpeechProvenance::new(SpeechSourceOrigin::Unknown),
+            SpeechArtifactContent::PhoneSymbol("AH".to_string()),
+        )
+        .with_attributions(vec![
+            SpeechAttribution::new(AttributionSourceKind::LiveVoice)
+                .with_speaker("speaker-a", 0.71)
+                .with_is_self(None, 0.45)
+                .with_evidence("asr-hyp-a"),
+            SpeechAttribution::new(AttributionSourceKind::LiveVoice)
+                .with_speaker("speaker-b", 0.63)
+                .with_is_self(Some(false), 0.67)
+                .with_evidence("asr-hyp-b"),
+        ]);
+
+        assert_eq!(canonical.kind, SpeechArtifactKind::PhoneHypothesis);
+        assert_eq!(canonical.attributions.len(), 2);
+        assert_eq!(canonical.attributions[0].is_self.value, None);
+        assert_eq!(canonical.attributions[1].is_self.value, Some(false));
+    }
+
+    #[test]
+    fn self_and_other_heard_audio_share_canonical_artifact_kinds() {
+        let self_artifacts = vec![
+            SpeechArtifact::placeholder(
+                "self-phone",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::SelfVoice),
+                SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+            ),
+            SpeechArtifact::placeholder(
+                "self-syllable",
+                SpeechArtifactKind::Syllables,
+                SpeechSpan::Syllables(SyllableSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::SelfVoice),
+                SpeechArtifactContent::Opaque("self-syllable"),
+            ),
+            SpeechArtifact::placeholder(
+                "self-prosody",
+                SpeechArtifactKind::SyllableProsody,
+                SpeechSpan::Syllables(SyllableSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::SelfVoice),
+                SpeechArtifactContent::Opaque("self-prosody"),
+            ),
+        ];
+        let other_artifacts = vec![
+            SpeechArtifact::placeholder(
+                "other-phone",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::OtherVoice),
+                SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+            ),
+            SpeechArtifact::placeholder(
+                "other-syllable",
+                SpeechArtifactKind::Syllables,
+                SpeechSpan::Syllables(SyllableSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::OtherVoice),
+                SpeechArtifactContent::Opaque("other-syllable"),
+            ),
+            SpeechArtifact::placeholder(
+                "other-prosody",
+                SpeechArtifactKind::SyllableProsody,
+                SpeechSpan::Syllables(SyllableSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::OtherVoice),
+                SpeechArtifactContent::Opaque("other-prosody"),
+            ),
+        ];
+
+        for (self_artifact, other_artifact) in self_artifacts.iter().zip(other_artifacts.iter()) {
+            assert_eq!(self_artifact.kind, other_artifact.kind);
+            assert_eq!(self_artifact.span, other_artifact.span);
+            assert_eq!(
+                self_artifact.attributions[0].source,
+                other_artifact.attributions[0].source
+            );
+            assert_ne!(
+                self_artifact.attributions[0].is_self.value,
+                other_artifact.attributions[0].is_self.value
+            );
+        }
     }
 
     #[test]
@@ -1044,34 +1310,56 @@ mod tests {
     #[test]
     fn compares_tts_intended_phones_against_self_heard_asr() {
         let mut doc = SpeechDocument::new("self-monitor");
-        doc.upsert(SpeechArtifact::placeholder(
-            "tts-intended-0",
-            SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
-            SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source("tts"),
-            SpeechArtifactContent::PhoneSymbol("HH".to_string()),
-        ));
-        doc.upsert(SpeechArtifact::placeholder(
-            "tts-intended-1",
-            SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
-            SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source("tts"),
-            SpeechArtifactContent::PhoneSymbol("EH".to_string()),
-        ));
-        doc.upsert(SpeechArtifact::placeholder(
-            "asr-heard-0",
-            SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
-            SpeechProvenance::new(SpeechSourceOrigin::SelfVoice).with_source("asr"),
-            SpeechArtifactContent::PhoneSymbol("HH".to_string()),
-        ));
-        doc.upsert(SpeechArtifact::placeholder(
-            "asr-heard-1",
-            SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
-            SpeechProvenance::new(SpeechSourceOrigin::SelfVoice).with_source("asr"),
-            SpeechArtifactContent::PhoneSymbol("IH".to_string()),
-        ));
+        doc.upsert(
+            SpeechArtifact::placeholder(
+                "tts-intended-0",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::Unknown).with_source("tts"),
+                SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+            )
+            .with_attribution(
+                SpeechAttribution::new(AttributionSourceKind::SynthesizedWaveform)
+                    .with_is_self(Some(true), 0.9),
+            ),
+        );
+        doc.upsert(
+            SpeechArtifact::placeholder(
+                "tts-intended-1",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
+                SpeechProvenance::new(SpeechSourceOrigin::Unknown).with_source("tts"),
+                SpeechArtifactContent::PhoneSymbol("EH".to_string()),
+            )
+            .with_attribution(
+                SpeechAttribution::new(AttributionSourceKind::SynthesizedWaveform)
+                    .with_is_self(Some(true), 0.9),
+            ),
+        );
+        doc.upsert(
+            SpeechArtifact::placeholder(
+                "asr-heard-0",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+                SpeechProvenance::new(SpeechSourceOrigin::Unknown).with_source("asr"),
+                SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+            )
+            .with_attribution(
+                SpeechAttribution::new(AttributionSourceKind::LiveVoice).with_is_self(None, 0.55),
+            ),
+        );
+        doc.upsert(
+            SpeechArtifact::placeholder(
+                "asr-heard-1",
+                SpeechArtifactKind::PhoneHypothesis,
+                SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
+                SpeechProvenance::new(SpeechSourceOrigin::Unknown).with_source("asr"),
+                SpeechArtifactContent::PhoneSymbol("IH".to_string()),
+            )
+            .with_attribution(
+                SpeechAttribution::new(AttributionSourceKind::LiveVoice).with_is_self(None, 0.51),
+            ),
+        );
 
         assert_eq!(
             compare_intended_vs_heard_phones(&doc),
