@@ -140,8 +140,11 @@ fn vocoder_config_for_command(
     if backend == SingDemoBackendOption::Piper {
         #[cfg(feature = "tts-piper")]
         {
-            config.piper_voice = Some(resolve_piper_voice(command.piper_voice.clone())?);
-            config.piper_bin = Some(resolve_piper_bin(command.piper_bin.clone())?);
+            let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+            let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
+            let piper_config = crate::cli::piper::piper_config_for_voice(&piper_bin, piper_voice)?;
+            config.piper_voice = Some(piper_config.model_path);
+            config.piper_bin = Some(piper_bin);
             config.piper_timeout = Some(Duration::from_secs(30));
         }
     }
