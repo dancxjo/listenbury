@@ -660,6 +660,7 @@ struct WordPhoneRealization {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PronouncedWordUnit {
     orthography: String,
     phonemes: Vec<Phoneme>,

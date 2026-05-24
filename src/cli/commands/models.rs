@@ -332,12 +332,7 @@ fn verify_models(command: ModelsVerifyCommand) -> Result<()> {
             Some(_) => String::new(),
             None => " (no checksum in manifest)".dimmed().to_string(),
         };
-        println!(
-            "{} {}{}",
-            asset.id.bold(),
-            state,
-            checksum_note
-        );
+        println!("{} {}{}", asset.id.bold(), state, checksum_note);
         match integrity {
             AssetIntegrityState::PresentInvalidSize
             | AssetIntegrityState::PresentInvalidChecksum

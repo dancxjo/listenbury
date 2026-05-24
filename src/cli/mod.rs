@@ -719,6 +719,9 @@ pub(crate) enum DiphoneCommand {
     Forge(DiphoneCacheForgeCommand),
     /// Create a cache-backed diphone voice from a Piper/Riper ONNX model.
     Wizard(DiphoneWizardCommand),
+    /// Create a MBROLA voice database from a diphone PCM cache folder.
+    #[command(alias = "mbrola")]
+    MbrolaDatabase(DiphoneMbrolaDatabaseCommand),
     /// Build a full diphone inventory cache.
     #[command(alias = "build")]
     CacheBuild(DiphoneCacheBuildCommand),
@@ -837,6 +840,22 @@ pub(crate) struct DiphoneCacheBuildCommand {
     /// Directory for the diphone cache (defaults to `./diphone-cache`).
     #[arg(long, default_value = "diphone-cache")]
     pub(crate) cache_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DiphoneMbrolaDatabaseCommand {
+    /// Directory containing diphone cache `.json`/`.pcm` pairs.
+    #[arg(long, alias = "pcm-folder")]
+    pub(crate) pcm_dir: PathBuf,
+    /// Output MBROLA database path.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// Output database sample rate. Defaults to the cache metadata sample rate.
+    #[arg(long)]
+    pub(crate) sample_rate: Option<u32>,
+    /// MBROLA frame period in samples.
+    #[arg(long, default_value_t = 80)]
+    pub(crate) mbr_period: usize,
 }
 
 #[derive(Debug, Args)]
@@ -1036,6 +1055,33 @@ mod tests {
         };
         assert_eq!(command.inventory, "en-us-basic");
         assert!(command.force);
+    }
+
+    #[test]
+    fn diphone_mbrola_database_parses_pcm_dir_and_out() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "diphone",
+            "mbrola-database",
+            "--pcm-dir",
+            "diphone-cache",
+            "--out",
+            "voice/voice",
+            "--sample-rate",
+            "22050",
+        ])
+        .expect("diphone mbrola-database should parse");
+
+        let Some(Command::Diphone { command }) = cli.command else {
+            panic!("expected top-level diphone command");
+        };
+        let DiphoneCommand::MbrolaDatabase(command) = command else {
+            panic!("expected mbrola-database subcommand");
+        };
+        assert_eq!(command.pcm_dir, PathBuf::from("diphone-cache"));
+        assert_eq!(command.out, PathBuf::from("voice/voice"));
+        assert_eq!(command.sample_rate, Some(22_050));
+        assert_eq!(command.mbr_period, 80);
     }
 
     #[test]

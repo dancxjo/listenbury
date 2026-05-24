@@ -801,8 +801,7 @@ mod tests {
             Some("ccdbfb9993be88c536b0b7cd2abe60eda83c7ce1ad530c6a2ada81510ff1548c"),
         );
         // verify=false → should report PresentUnverified even if checksum would match.
-        let integrity =
-            verify_existing_asset(&asset_path, &asset, false).expect("verify existing");
+        let integrity = verify_existing_asset(&asset_path, &asset, false).expect("verify existing");
         assert_eq!(integrity, AssetIntegrityState::PresentUnverified);
     }
 

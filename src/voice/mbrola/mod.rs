@@ -18,7 +18,10 @@ pub mod symbols;
 pub mod units;
 pub mod voice;
 
-pub use database::{MbrolaDatabase, MbrolaDatabaseError, MbrolaDiphone};
+pub use database::{
+    MbrolaDatabase, MbrolaDatabaseError, MbrolaDatabaseUnit, MbrolaDatabaseWriteOptions,
+    MbrolaDiphone, encode_mbrola_database, write_mbrola_database,
+};
 pub use diphone_provider::{
     DiphoneKey, DiphoneLookup, DiphoneProvider, DiphoneUnit, DiphoneUnitMetadata,
     DiphoneUnitSource, ForgeProvenance, MbrolaDiphoneProvider,

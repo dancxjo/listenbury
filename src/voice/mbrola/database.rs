@@ -7,6 +7,7 @@ const MAGIC: &[u8; 6] = b"MBROLA";
 const HEADER_LEN: usize = 27;
 const VOICING_MASK: u8 = 2;
 const V_REG: u8 = VOICING_MASK;
+const DEFAULT_WRITER_VERSION: &[u8; 5] = b"2.060";
 
 #[derive(Debug, Clone)]
 pub struct MbrolaDatabase {
@@ -224,10 +225,184 @@ impl MbrolaDatabase {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MbrolaDatabaseUnit {
+    pub left: String,
+    pub right: String,
+    pub samples: Vec<f32>,
+    pub halfseg_samples: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MbrolaDatabaseWriteOptions {
+    pub sample_rate_hz: u32,
+    pub mbr_period: usize,
+}
+
+impl Default for MbrolaDatabaseWriteOptions {
+    fn default() -> Self {
+        Self {
+            sample_rate_hz: 16_000,
+            mbr_period: 80,
+        }
+    }
+}
+
+pub fn write_mbrola_database(
+    path: impl AsRef<Path>,
+    units: &[MbrolaDatabaseUnit],
+    options: &MbrolaDatabaseWriteOptions,
+) -> Result<(), MbrolaDatabaseError> {
+    let path = path.as_ref();
+    let bytes = encode_mbrola_database(units, options)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|source| MbrolaDatabaseError::Write {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    std::fs::write(path, bytes).map_err(|source| MbrolaDatabaseError::Write {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+pub fn encode_mbrola_database(
+    units: &[MbrolaDatabaseUnit],
+    options: &MbrolaDatabaseWriteOptions,
+) -> Result<Vec<u8>, MbrolaDatabaseError> {
+    if units.is_empty() {
+        return Err(MbrolaDatabaseError::NoDiphones);
+    }
+    if units.len() > i16::MAX as usize {
+        return Err(MbrolaDatabaseError::TooManyDiphones(units.len()));
+    }
+    if options.sample_rate_hz > i16::MAX as u32 {
+        return Err(MbrolaDatabaseError::UnsupportedSampleRate(
+            options.sample_rate_hz,
+        ));
+    }
+    if options.mbr_period == 0 || options.mbr_period > u8::MAX as usize {
+        return Err(MbrolaDatabaseError::UnsupportedMbrPeriod(
+            options.mbr_period,
+        ));
+    }
+
+    let mut normalized = Vec::<EncodedUnit>::with_capacity(units.len());
+    let mut total_pitch_marks = 0usize;
+    let mut raw = Vec::<u8>::new();
+    let mut seen = BTreeSet::<(String, String)>::new();
+
+    for unit in units {
+        if unit.left.is_empty() || unit.right.is_empty() {
+            return Err(MbrolaDatabaseError::EmptyPhoneSymbol);
+        }
+        if unit.left.as_bytes().contains(&0) || unit.right.as_bytes().contains(&0) {
+            return Err(MbrolaDatabaseError::NulPhoneSymbol);
+        }
+        if !seen.insert((unit.left.clone(), unit.right.clone())) {
+            return Err(MbrolaDatabaseError::DuplicateDiphone {
+                left: unit.left.clone(),
+                right: unit.right.clone(),
+            });
+        }
+
+        let logical_frames = unit.samples.len().div_ceil(options.mbr_period).max(1);
+        if logical_frames > u8::MAX as usize {
+            return Err(MbrolaDatabaseError::TooManyFrames {
+                left: unit.left.clone(),
+                right: unit.right.clone(),
+                frames: logical_frames,
+            });
+        }
+        let physical_frames = logical_frames;
+        let padded_samples = logical_frames * options.mbr_period;
+        for idx in 0..padded_samples {
+            let sample = unit.samples.get(idx).copied().unwrap_or_default();
+            raw.extend_from_slice(&f32_to_i16(sample).to_le_bytes());
+        }
+
+        let halfseg_samples = unit
+            .halfseg_samples
+            .min(padded_samples)
+            .min(i16::MAX as usize);
+        normalized.push(EncodedUnit {
+            left: unit.left.clone(),
+            right: unit.right.clone(),
+            halfseg_samples,
+            logical_frames,
+            physical_frames,
+        });
+        total_pitch_marks += logical_frames;
+    }
+
+    let mut table = Vec::<u8>::new();
+    for unit in &normalized {
+        table.extend_from_slice(unit.left.as_bytes());
+        table.push(0);
+        table.extend_from_slice(unit.right.as_bytes());
+        table.push(0);
+        table.extend_from_slice(&(unit.halfseg_samples as i16).to_le_bytes());
+        table.push(unit.logical_frames as u8);
+        table.push(unit.physical_frames as u8);
+    }
+
+    if raw.len() > i32::MAX as usize || total_pitch_marks > i32::MAX as usize {
+        return Err(MbrolaDatabaseError::DatabaseTooLarge);
+    }
+
+    let pitch_marks = pack_pitch_marks(total_pitch_marks, V_REG);
+    let mut out = Vec::with_capacity(HEADER_LEN + table.len() + pitch_marks.len() + raw.len());
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(DEFAULT_WRITER_VERSION);
+    out.extend_from_slice(&(units.len() as i16).to_le_bytes());
+    out.extend_from_slice(&0_u16.to_le_bytes());
+    out.extend_from_slice(&(total_pitch_marks as i32).to_le_bytes());
+    out.extend_from_slice(&(raw.len() as i32).to_le_bytes());
+    out.extend_from_slice(&(options.sample_rate_hz as i16).to_le_bytes());
+    out.push(options.mbr_period as u8);
+    out.push(1);
+    debug_assert_eq!(out.len(), HEADER_LEN);
+    out.extend_from_slice(&table);
+    out.extend_from_slice(&pitch_marks);
+    out.extend_from_slice(&raw);
+    Ok(out)
+}
+
+#[derive(Debug)]
+struct EncodedUnit {
+    left: String,
+    right: String,
+    halfseg_samples: usize,
+    logical_frames: usize,
+    physical_frames: usize,
+}
+
+fn pack_pitch_marks(count: usize, mark: u8) -> Vec<u8> {
+    let mut packed = vec![0_u8; count.div_ceil(4)];
+    for idx in 0..count {
+        packed[idx / 4] |= (mark & 0x03) << (2 * (idx % 4));
+    }
+    packed
+}
+
+fn f32_to_i16(sample: f32) -> i16 {
+    let scaled = sample.clamp(-1.0, 1.0) * i16::MAX as f32;
+    scaled.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16
+}
+
 #[derive(Debug, Error)]
 pub enum MbrolaDatabaseError {
     #[error("failed to read MBROLA database {path}")]
     Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("failed to write MBROLA database {path}")]
+    Write {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -243,6 +418,28 @@ pub enum MbrolaDatabaseError {
     MissingDiphone { left: String, right: String },
     #[error("internal header parser ended at byte {0}")]
     InternalHeaderLength(usize),
+    #[error("cannot write MBROLA database with no diphones")]
+    NoDiphones,
+    #[error("too many diphones for MBROLA header: {0}")]
+    TooManyDiphones(usize),
+    #[error("unsupported MBROLA sample rate {0}")]
+    UnsupportedSampleRate(u32),
+    #[error("unsupported MBROLA mbr period {0}")]
+    UnsupportedMbrPeriod(usize),
+    #[error("database is too large for MBROLA 32-bit size fields")]
+    DatabaseTooLarge,
+    #[error("phone symbols must not be empty")]
+    EmptyPhoneSymbol,
+    #[error("phone symbols must not contain NUL bytes")]
+    NulPhoneSymbol,
+    #[error("duplicate MBROLA diphone {left}-{right}")]
+    DuplicateDiphone { left: String, right: String },
+    #[error("too many frames for MBROLA diphone {left}-{right}: {frames}")]
+    TooManyFrames {
+        left: String,
+        right: String,
+        frames: usize,
+    },
 }
 
 struct Cursor<'a> {
@@ -325,5 +522,33 @@ mod tests {
             samples.iter().any(|sample| sample.abs() > 0.001),
             "real diphone samples should not be silent"
         );
+    }
+
+    #[test]
+    fn encoded_database_round_trips_units() {
+        let units = vec![
+            MbrolaDatabaseUnit {
+                left: "_".to_string(),
+                right: "h".to_string(),
+                samples: vec![0.0; 160],
+                halfseg_samples: 80,
+            },
+            MbrolaDatabaseUnit {
+                left: "h".to_string(),
+                right: "@".to_string(),
+                samples: (0..240).map(|i| (i as f32 * 0.05).sin() * 0.25).collect(),
+                halfseg_samples: 96,
+            },
+        ];
+        let options = MbrolaDatabaseWriteOptions::default();
+        let bytes = encode_mbrola_database(&units, &options).expect("encode database");
+        let db = MbrolaDatabase::from_bytes(PathBuf::from("test"), bytes).expect("parse database");
+
+        assert_eq!(db.sample_rate_hz, 16_000);
+        assert_eq!(db.mbr_period, 80);
+        assert!(db.diphone("_", "h").is_some());
+        let diphone = db.diphone("h", "@").expect("h-@ diphone");
+        assert_eq!(diphone.halfseg_samples, 96);
+        assert_eq!(db.samples_for_diphone(diphone).unwrap().len(), 240);
     }
 }

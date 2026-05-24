@@ -351,13 +351,6 @@ mod prompt;
 mod source;
 mod trace;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
-use listenbury::speech::transcript::TranscriptStabilityState;
 #[cfg(any(
     test,
     all(
@@ -368,6 +361,13 @@ use listenbury::speech::transcript::TranscriptStabilityState;
     )
 ))]
 use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::speech::transcript::TranscriptStabilityState;
 #[cfg(any(
     test,
     all(

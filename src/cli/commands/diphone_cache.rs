@@ -5,13 +5,15 @@ use anyhow::{Context, Result};
 
 use crate::cli::{
     DiphoneAuditPlanCommand, DiphoneCacheBuildCommand, DiphoneCacheCommand,
-    DiphoneCacheForgeCommand, DiphoneCacheListCommand, DiphoneCommand, DiphoneWizardCommand,
+    DiphoneCacheForgeCommand, DiphoneCacheListCommand, DiphoneCommand,
+    DiphoneMbrolaDatabaseCommand, DiphoneWizardCommand,
 };
 
 pub(crate) fn run_diphone(command: DiphoneCommand) -> Result<()> {
     match command {
         DiphoneCommand::Forge(cmd) => run_forge(cmd),
         DiphoneCommand::Wizard(cmd) => run_wizard(cmd),
+        DiphoneCommand::MbrolaDatabase(cmd) => run_mbrola_database(cmd),
         DiphoneCommand::CacheBuild(cmd) => run_build(cmd),
         DiphoneCommand::CacheList(cmd) => run_list(cmd),
         DiphoneCommand::AuditPlan(cmd) => run_audit_plan(cmd),
@@ -25,6 +27,133 @@ pub(crate) fn run_diphone_cache(command: DiphoneCacheCommand) -> Result<()> {
         DiphoneCacheCommand::List(cmd) => run_diphone(DiphoneCommand::CacheList(cmd)),
         DiphoneCacheCommand::AuditPlan(cmd) => run_diphone(DiphoneCommand::AuditPlan(cmd)),
     }
+}
+
+fn run_mbrola_database(cmd: DiphoneMbrolaDatabaseCommand) -> Result<()> {
+    let mut units = read_cache_pcm_units(&cmd.pcm_dir)?;
+    units.sort_by(|a, b| (&a.left, &a.right).cmp(&(&b.left, &b.right)));
+
+    let detected_sample_rates = units
+        .iter()
+        .map(|unit| unit.sample_rate_hz)
+        .collect::<BTreeSet<_>>();
+    let sample_rate_hz = match (cmd.sample_rate, detected_sample_rates.len()) {
+        (Some(sample_rate), _) => sample_rate,
+        (None, 1) => *detected_sample_rates
+            .iter()
+            .next()
+            .expect("non-empty set has a first sample rate"),
+        (None, _) => anyhow::bail!(
+            "cache contains mixed sample rates {}; pass --sample-rate to choose the output rate",
+            detected_sample_rates
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+
+    let mbrola_units = units
+        .into_iter()
+        .map(|unit| listenbury::voice::mbrola::MbrolaDatabaseUnit {
+            left: unit.left,
+            right: unit.right,
+            samples: unit.samples,
+            halfseg_samples: unit.halfseg_samples,
+        })
+        .collect::<Vec<_>>();
+    let options = listenbury::voice::mbrola::MbrolaDatabaseWriteOptions {
+        sample_rate_hz,
+        mbr_period: cmd.mbr_period,
+    };
+
+    listenbury::voice::mbrola::write_mbrola_database(&cmd.out, &mbrola_units, &options)
+        .with_context(|| format!("failed to write MBROLA database {}", cmd.out.display()))?;
+
+    let db = listenbury::voice::mbrola::MbrolaDatabase::load(&cmd.out)
+        .with_context(|| format!("wrote but could not reload {}", cmd.out.display()))?;
+    println!("MBROLA database written: {}", cmd.out.display());
+    println!("  Diphones   : {}", mbrola_units.len());
+    println!("  Sample rate: {} Hz", db.sample_rate_hz);
+    println!("  MBR period : {} samples", db.mbr_period);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct CachePcmUnit {
+    left: String,
+    right: String,
+    samples: Vec<f32>,
+    sample_rate_hz: u32,
+    halfseg_samples: usize,
+}
+
+fn read_cache_pcm_units(pcm_dir: &Path) -> Result<Vec<CachePcmUnit>> {
+    use listenbury::voice::diphone::CacheEntryMetadata;
+
+    let mut units = Vec::new();
+    for entry in std::fs::read_dir(pcm_dir)
+        .with_context(|| format!("failed to read PCM directory {}", pcm_dir.display()))?
+    {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("failed to read cache metadata {}", path.display()))?;
+        let meta: CacheEntryMetadata = serde_json::from_slice(&bytes)
+            .with_context(|| format!("invalid cache metadata JSON {}", path.display()))?;
+        let pcm_path = path.with_extension("pcm");
+        let pcm_bytes = std::fs::read(&pcm_path)
+            .with_context(|| format!("failed to read cache PCM {}", pcm_path.display()))?;
+        let samples = f32_samples_from_bytes(&pcm_bytes)
+            .with_context(|| format!("invalid f32 PCM bytes {}", pcm_path.display()))?;
+
+        if samples.len() != meta.sample_count {
+            anyhow::bail!(
+                "sample count mismatch for {}: metadata={}, pcm={}",
+                pcm_path.display(),
+                meta.sample_count,
+                samples.len()
+            );
+        }
+        if meta.halfseg_samples > samples.len() {
+            anyhow::bail!(
+                "halfseg out of bounds for {}: halfseg={}, samples={}",
+                pcm_path.display(),
+                meta.halfseg_samples,
+                samples.len()
+            );
+        }
+
+        units.push(CachePcmUnit {
+            left: meta.key.left,
+            right: meta.key.right,
+            samples,
+            sample_rate_hz: meta.key.sample_rate_hz,
+            halfseg_samples: meta.halfseg_samples,
+        });
+    }
+
+    if units.is_empty() {
+        anyhow::bail!(
+            "no cache metadata/PCM pairs found in {}; expected `<hash>.json` with sibling `<hash>.pcm`",
+            pcm_dir.display()
+        );
+    }
+    Ok(units)
+}
+
+fn f32_samples_from_bytes(bytes: &[u8]) -> Result<Vec<f32>> {
+    anyhow::ensure!(
+        bytes.len() % 4 == 0,
+        "PCM byte length {} is not divisible by 4",
+        bytes.len()
+    );
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect())
 }
 
 #[cfg(feature = "tts-riper")]

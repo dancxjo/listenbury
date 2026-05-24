@@ -83,6 +83,7 @@ pub fn list_backends() -> Vec<VocoderDescriptor> {
     ]
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn backend_by_id(id: &str) -> Result<Box<dyn VocoderBackend>> {
     match id {
         "riper-onnx-direct" => Ok(Box::new(RiperOnnxDirectBackend)),

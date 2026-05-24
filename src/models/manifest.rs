@@ -166,9 +166,7 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         expected_size_bytes: None,
         sha256: None,
         license: Some("LicenseRef-Llama-3.2"),
-        source: Some(
-            "https://huggingface.co/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF",
-        ),
+        source: Some("https://huggingface.co/hugging-quants/Llama-3.2-3B-Instruct-Q4_K_M-GGUF"),
     },
     ModelAsset {
         id: "gpt-oss-20b-mxfp4",
