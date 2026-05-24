@@ -1057,7 +1057,36 @@ mod tests {
 
         assert_eq!(canonical.kind, SpeechArtifactKind::PhoneHypothesis);
         assert_eq!(canonical.attributions.len(), 2);
+        assert_eq!(
+            canonical.attributions[0]
+                .speaker
+                .as_ref()
+                .map(|speaker| speaker.speaker_id.as_str()),
+            Some("speaker-a")
+        );
+        assert_eq!(
+            canonical.attributions[0]
+                .speaker
+                .as_ref()
+                .map(|speaker| speaker.confidence),
+            Some(0.71)
+        );
         assert_eq!(canonical.attributions[0].is_self.value, None);
+        assert_eq!(canonical.attributions[0].is_self.confidence, 0.45);
+        assert_eq!(
+            canonical.attributions[1]
+                .speaker
+                .as_ref()
+                .map(|speaker| speaker.speaker_id.as_str()),
+            Some("speaker-b")
+        );
+        assert_eq!(
+            canonical.attributions[1]
+                .speaker
+                .as_ref()
+                .map(|speaker| speaker.confidence),
+            Some(0.63)
+        );
         assert_eq!(canonical.attributions[1].is_self.value, Some(false));
     }
 
@@ -1369,5 +1398,11 @@ mod tests {
                 heard: "IH".to_string(),
             }]
         );
+        let heard = doc
+            .artifacts
+            .get("asr-heard-0")
+            .expect("asr-heard-0 should be in doc");
+        assert_eq!(heard.attributions[1].is_self.value, None);
+        assert_eq!(heard.attributions[1].is_self.confidence, 0.55);
     }
 }
