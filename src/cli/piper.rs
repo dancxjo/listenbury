@@ -37,7 +37,9 @@ use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "tts-riper")]
-use listenbury::vocoder::{HifiganBackend, MelFrame, VocoderBackend, VocoderInput};
+use listenbury::vocoder::{HifiganBackend, VocoderBackend, VocoderInput};
+#[cfg(feature = "tts-riper")]
+use listenbury::voice::articulator::PhoneTimedRenderTarget;
 #[cfg(feature = "tts-riper")]
 use listenbury::voice::diphone::{DiphoneCache, DiphoneVoiceManifest, NeuralDiphoneProvider};
 #[cfg(feature = "tts-riper")]
@@ -1369,18 +1371,35 @@ fn should_use_mbrola_backend(args: &SayArgs) -> bool {
 #[cfg(feature = "tts-riper")]
 fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     let text = &args.text;
-    let phonemized = SimpleEnglishG2p::default()
-        .phonemize_unit(text)
-        .with_context(|| format!("listenbury say --hifigan could not phonemize `{text}`"))?;
-    let (mel, f0_hz, voiced) = hifigan_mel_f0_from_riper_phonemes(&phonemized.phonemes, text)?;
+    let phone_string = klatt_phone_string_for_text(text)?;
+    let target_table = default_english_phone_targets();
+    let missing_phones: Vec<String> = phone_string
+        .phones
+        .iter()
+        .map(|phone| phone.ipa.as_str())
+        .filter(|ipa| !target_table.contains_key(*ipa))
+        .map(str::to_string)
+        .collect();
+    anyhow::ensure!(
+        missing_phones.is_empty(),
+        "listenbury say --hifigan cannot render phone(s): {}",
+        missing_phones.join(", ")
+    );
+    let phone_targets =
+        phone_render_targets_from_string(&phone_string, Some(150.0), 0.7, &target_table)
+            .into_iter()
+            .map(|target| PhoneTimedRenderTarget {
+                phone: target.phone,
+                duration_ms: target.duration_ms,
+                f0_hz: target.f0_hz,
+                amplitude: target.amplitude,
+                vibrato: target.vibrato,
+            })
+            .collect::<Vec<_>>();
     let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
     let mut backend = HifiganBackend::load(model_path)?;
     let frames = backend
-        .render(VocoderInput::MelF0 {
-            mel: &mel,
-            f0_hz: &f0_hz,
-            voiced: &voiced,
-        })
+        .render(VocoderInput::PhoneTimed(&phone_targets))
         .with_context(|| format!("listenbury say --hifigan failed to render `{text}`"))?;
     anyhow::ensure!(
         !frames.is_empty(),
@@ -1392,161 +1411,6 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
 #[cfg(not(feature = "tts-riper"))]
 fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
     anyhow::bail!("listenbury say --hifigan requires the `tts-riper` feature")
-}
-
-#[cfg(feature = "tts-riper")]
-fn hifigan_mel_f0_from_riper_phonemes(
-    phonemes: &PiperPhonemeSequence,
-    text: &str,
-) -> Result<(Vec<MelFrame>, Vec<f32>, Vec<bool>)> {
-    const MEL_BINS: usize = 24;
-    let mut mel = Vec::new();
-    let mut f0_hz = Vec::new();
-    let mut voiced = Vec::new();
-    let mut speech_frame_index = 0usize;
-
-    for phoneme in &phonemes.phonemes {
-        let symbol = phoneme.0.trim();
-        if symbol.is_empty() || matches!(symbol, "^" | "$") {
-            continue;
-        }
-        if matches!(symbol, "_" | "|" | "‖" | "." | "," | "!" | "?") {
-            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, MEL_BINS);
-            continue;
-        }
-
-        let is_vowel = mbrola_symbol_is_pitch_bearing(symbol);
-        let is_voiced = is_vowel || hifigan_symbol_is_voiced_consonant(symbol);
-        let frames_for_phone = if is_vowel {
-            5
-        } else if is_voiced {
-            3
-        } else {
-            2
-        };
-        let base_f0 = if is_vowel {
-            125.0 + ((speech_frame_index % 9) as f32 - 4.0) * 3.0
-        } else {
-            118.0
-        };
-        let brightness = hifigan_symbol_brightness(symbol, is_vowel, is_voiced);
-        let energy = if is_vowel {
-            0.18
-        } else if is_voiced {
-            0.105
-        } else {
-            0.075
-        };
-
-        for local_frame in 0..frames_for_phone {
-            let progress = if frames_for_phone <= 1 {
-                0.0
-            } else {
-                local_frame as f32 / (frames_for_phone - 1) as f32
-            };
-            let contour = (progress - 0.5) * 8.0;
-            mel.push(hifigan_mel_frame(MEL_BINS, energy, brightness));
-            f0_hz.push((base_f0 + contour).clamp(80.0, 260.0));
-            voiced.push(is_voiced);
-            speech_frame_index += 1;
-        }
-    }
-
-    anyhow::ensure!(
-        mel.iter()
-            .any(|frame| frame.bins.iter().any(|bin| *bin > 0.0)),
-        "Riper produced no HiFi-GAN-renderable phones for `{text}`"
-    );
-    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, MEL_BINS);
-    Ok((mel, f0_hz, voiced))
-}
-
-#[cfg(feature = "tts-riper")]
-fn hifigan_mel_frame(bin_count: usize, energy: f32, brightness: f32) -> MelFrame {
-    let tilt = 1.35 - brightness.clamp(0.0, 1.0);
-    MelFrame {
-        bins: (0..bin_count)
-            .map(|index| {
-                let position = index as f32 / (bin_count.saturating_sub(1).max(1)) as f32;
-                let envelope = (1.0 - position).powf(tilt).max(0.04);
-                let formant_lift = (1.0 - (position - brightness).abs() * 2.8).clamp(0.0, 1.0);
-                energy * (envelope + formant_lift * 0.45)
-            })
-            .collect(),
-    }
-}
-
-#[cfg(feature = "tts-riper")]
-fn push_hifigan_silence(
-    mel: &mut Vec<MelFrame>,
-    f0_hz: &mut Vec<f32>,
-    voiced: &mut Vec<bool>,
-    frames: usize,
-    mel_bins: usize,
-) {
-    for _ in 0..frames {
-        mel.push(MelFrame {
-            bins: vec![0.0; mel_bins],
-        });
-        f0_hz.push(120.0);
-        voiced.push(false);
-    }
-}
-
-#[cfg(feature = "tts-riper")]
-fn hifigan_symbol_brightness(symbol: &str, is_vowel: bool, is_voiced: bool) -> f32 {
-    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
-    if matches!(
-        base,
-        "S" | "Z" | "SH" | "ZH" | "s" | "z" | "ʃ" | "ʒ" | "F" | "V" | "f" | "v"
-    ) {
-        0.78
-    } else if matches!(base, "IY" | "IH" | "EY" | "i" | "ɪ" | "e") {
-        0.58
-    } else if matches!(base, "UW" | "UH" | "OW" | "u" | "ʊ" | "o" | "oʊ") {
-        0.28
-    } else if is_vowel {
-        0.42
-    } else if is_voiced {
-        0.35
-    } else {
-        0.68
-    }
-}
-
-#[cfg(feature = "tts-riper")]
-fn hifigan_symbol_is_voiced_consonant(symbol: &str) -> bool {
-    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
-    matches!(
-        base,
-        "B" | "D"
-            | "G"
-            | "JH"
-            | "L"
-            | "M"
-            | "N"
-            | "NG"
-            | "R"
-            | "V"
-            | "W"
-            | "Y"
-            | "Z"
-            | "ZH"
-            | "b"
-            | "d"
-            | "ɡ"
-            | "dʒ"
-            | "l"
-            | "m"
-            | "n"
-            | "ŋ"
-            | "ɹ"
-            | "v"
-            | "w"
-            | "j"
-            | "z"
-            | "ʒ"
-    )
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
