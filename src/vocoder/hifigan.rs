@@ -1,6 +1,7 @@
 use std::f32::consts::TAU;
 #[cfg(feature = "piper-compat")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 #[cfg(feature = "piper-compat")]
@@ -17,8 +18,7 @@ use crate::vocoder::{
 };
 
 pub struct HifiganBackend {
-    #[cfg(feature = "piper-compat")]
-    model_path: Option<PathBuf>,
+    checkpoint: HiFiGanCheckpoint,
     #[cfg(feature = "piper-compat")]
     session: Option<Session>,
 }
@@ -45,8 +45,13 @@ pub enum MelScale {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogCompression {
+    NaturalLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MelNormalization {
-    NaturalLogClamped,
+    Clamp { min: f32, max: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,56 +61,119 @@ pub enum MelTensorLayout {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MelContract {
+pub struct MelConfig {
     pub sample_rate_hz: u32,
-    pub hop_samples: usize,
     pub n_fft: usize,
+    pub hop_length: usize,
     pub win_length: usize,
-    pub mel_bins: usize,
+    pub n_mels: usize,
     pub f_min_hz: f32,
-    pub f_max_hz: f32,
+    pub f_max_hz: Option<f32>,
+    pub center: bool,
     pub scale: MelScale,
-    pub normalization: MelNormalization,
-    pub log_floor: f32,
-    pub log_ceiling: f32,
+    pub log_base: LogCompression,
+    pub normalize: MelNormalization,
 }
 
-pub const SPEECHT5_HIFIGAN_MEL_CONTRACT: MelContract = MelContract {
-    sample_rate_hz: SAMPLE_RATE_HZ,
-    hop_samples: HOP_SAMPLES,
-    n_fft: MODEL_N_FFT,
-    win_length: MODEL_WIN_LENGTH,
-    mel_bins: MODEL_MEL_BINS,
-    f_min_hz: MODEL_FMIN_HZ,
-    f_max_hz: MODEL_FMAX_HZ,
-    scale: MelScale::Htk,
-    normalization: MelNormalization::NaturalLogClamped,
-    log_floor: LOG_MEL_MIN,
-    log_ceiling: LOG_MEL_MAX,
-};
+pub type MelContract = MelConfig;
 
-impl HifiganBackend {
-    pub fn validate_acoustic_contract(sample_rate_hz: u32, hop_samples: usize) -> Result<()> {
-        let contract = SPEECHT5_HIFIGAN_MEL_CONTRACT;
+#[derive(Debug, Clone, PartialEq)]
+pub struct HiFiGanCheckpoint {
+    pub model_path: Option<PathBuf>,
+    pub mel_config: MelConfig,
+}
+
+impl MelConfig {
+    pub fn validate_timing(&self, sample_rate_hz: u32, hop_samples: usize) -> Result<()> {
         ensure!(
-            sample_rate_hz == contract.sample_rate_hz,
+            sample_rate_hz == self.sample_rate_hz,
             "hifigan backend requires {} Hz acoustic input sample rate, got {} Hz",
-            contract.sample_rate_hz,
+            self.sample_rate_hz,
             sample_rate_hz
         );
         ensure!(
-            hop_samples == contract.hop_samples,
+            hop_samples == self.hop_length,
             "hifigan backend requires {}-sample acoustic hop length, got {} samples",
-            contract.hop_samples,
+            self.hop_length,
             hop_samples
         );
         Ok(())
     }
 
+    pub fn validate_mel(&self, mel: &[MelFrame]) -> Result<()> {
+        let (min, max) = self.normalized_range();
+        ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
+        for (frame_index, frame) in mel.iter().enumerate() {
+            ensure!(
+                frame.bins.len() == self.n_mels,
+                "hifigan backend requires {} mel bins per frame; frame {} has {}",
+                self.n_mels,
+                frame_index,
+                frame.bins.len()
+            );
+            for (bin_index, bin) in frame.bins.iter().enumerate() {
+                ensure!(
+                    bin.is_finite(),
+                    "hifigan backend requires finite mel bins; frame {frame_index} bin {bin_index} is {bin}"
+                );
+                ensure!(
+                    *bin >= min && *bin <= max,
+                    "hifigan backend requires {:?} mel bins in [{}, {}]; frame {} bin {} is {}",
+                    self.log_base,
+                    min,
+                    max,
+                    frame_index,
+                    bin_index,
+                    bin
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn normalized_range(&self) -> (f32, f32) {
+        match self.normalize {
+            MelNormalization::Clamp { min, max } => (min, max),
+        }
+    }
+}
+
+impl HiFiGanCheckpoint {
+    pub fn speecht5(model_path: Option<PathBuf>) -> Self {
+        Self {
+            model_path,
+            mel_config: SPEECHT5_HIFIGAN_MEL_CONFIG,
+        }
+    }
+}
+
+pub const SPEECHT5_HIFIGAN_MEL_CONFIG: MelConfig = MelConfig {
+    sample_rate_hz: SAMPLE_RATE_HZ,
+    n_fft: MODEL_N_FFT,
+    hop_length: HOP_SAMPLES,
+    win_length: MODEL_WIN_LENGTH,
+    n_mels: MODEL_MEL_BINS,
+    f_min_hz: MODEL_FMIN_HZ,
+    f_max_hz: Some(MODEL_FMAX_HZ),
+    center: false,
+    scale: MelScale::Htk,
+    log_base: LogCompression::NaturalLog,
+    normalize: MelNormalization::Clamp {
+        min: LOG_MEL_MIN,
+        max: LOG_MEL_MAX,
+    },
+};
+
+pub const SPEECHT5_HIFIGAN_MEL_CONTRACT: MelContract = SPEECHT5_HIFIGAN_MEL_CONFIG;
+
+impl HifiganBackend {
+    pub fn validate_acoustic_contract(sample_rate_hz: u32, hop_samples: usize) -> Result<()> {
+        SPEECHT5_HIFIGAN_MEL_CONFIG.validate_timing(sample_rate_hz, hop_samples)
+    }
+
     pub fn deterministic() -> Self {
         Self {
-            #[cfg(feature = "piper-compat")]
-            model_path: None,
+            checkpoint: HiFiGanCheckpoint::speecht5(None),
             #[cfg(feature = "piper-compat")]
             session: None,
         }
@@ -148,9 +216,13 @@ impl HifiganBackend {
             })?;
 
         Ok(Self {
-            model_path: Some(model_path),
+            checkpoint: HiFiGanCheckpoint::speecht5(Some(model_path)),
             session: Some(session),
         })
+    }
+
+    pub fn checkpoint(&self) -> &HiFiGanCheckpoint {
+        &self.checkpoint
     }
 
     pub fn descriptor() -> VocoderDescriptor {
@@ -186,15 +258,16 @@ impl HifiganBackend {
         voiced: Option<&[bool]>,
     ) -> Result<Vec<AudioFrame>> {
         validate_mel_f0_tracks(mel, f0_hz, voiced)?;
-        validate_speecht5_hifigan_mel(mel)?;
-        log_hifigan_mel_summary(mel);
+        self.checkpoint.mel_config.validate_mel(mel)?;
+        log_hifigan_mel_summary(mel, &self.checkpoint.mel_config);
 
         #[cfg(feature = "piper-compat")]
         if self.session.is_some() {
             return self.render_mel_onnx(mel);
         }
 
-        let frames = Self::render_mel_deterministic(mel, f0_hz, voiced)?;
+        let frames =
+            Self::render_mel_deterministic(mel, f0_hz, voiced, &self.checkpoint.mel_config)?;
         log_hifigan_waveform_summary("deterministic", &frames);
         Ok(frames)
     }
@@ -203,10 +276,11 @@ impl HifiganBackend {
         mel: &[MelFrame],
         f0_hz: Option<&[f32]>,
         voiced: Option<&[bool]>,
+        mel_config: &MelConfig,
     ) -> Result<Vec<AudioFrame>> {
         let mut phase = 0.0f32;
         let mut noise_state = 0x4d59_4446u32;
-        let mut samples = Vec::with_capacity(mel.len() * HOP_SAMPLES);
+        let mut samples = Vec::with_capacity(mel.len() * mel_config.hop_length);
 
         for (frame_index, frame) in mel.iter().enumerate() {
             let next_frame = mel.get(frame_index + 1).unwrap_or(frame);
@@ -229,15 +303,15 @@ impl HifiganBackend {
             let brightness_start = brightness_for_frame(frame);
             let brightness_end = brightness_for_frame(next_frame);
 
-            for sample_index in 0..HOP_SAMPLES {
-                let t = sample_index as f32 / HOP_SAMPLES as f32;
+            for sample_index in 0..mel_config.hop_length {
+                let t = sample_index as f32 / mel_config.hop_length as f32;
                 let amp = lerp(amp_start, amp_end, t);
                 let brightness = lerp(brightness_start, brightness_end, t);
                 let frame_f0 = lerp(f0_start, f0_end, t);
                 let is_voiced = if t < 0.5 { voiced_start } else { voiced_end };
 
                 let value = if is_voiced {
-                    phase = (phase + TAU * frame_f0 / SAMPLE_RATE_HZ as f32) % TAU;
+                    phase = (phase + TAU * frame_f0 / mel_config.sample_rate_hz as f32) % TAU;
                     let harmonic_mix = 0.18 + brightness * 0.32;
                     let source = phase.sin()
                         + harmonic_mix * (phase * 2.0).sin()
@@ -255,7 +329,7 @@ impl HifiganBackend {
 
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
-            sample_rate_hz: SAMPLE_RATE_HZ,
+            sample_rate_hz: mel_config.sample_rate_hz,
             channels: 1,
             samples,
             voice_signatures: Vec::new(),
@@ -265,19 +339,22 @@ impl HifiganBackend {
     #[cfg(feature = "piper-compat")]
     fn render_mel_onnx(&mut self, mel: &[MelFrame]) -> Result<Vec<AudioFrame>> {
         let model_path = self
+            .checkpoint
             .model_path
             .as_ref()
             .context("HiFi-GAN ONNX model path is not loaded")?
             .clone();
+        let mel_config = self.checkpoint.mel_config;
         let session = self
             .session
             .as_mut()
             .context("HiFi-GAN ONNX session has not been loaded")?;
-        let (input_name, input_shape, layout) = resolve_hifigan_input(session, &model_path)?;
+        let (input_name, input_shape, layout) =
+            resolve_hifigan_input(session, &model_path, &mel_config)?;
         let output_name = resolve_hifigan_output_name(session, &model_path)?;
         let frames = i64::try_from(mel.len()).context("HiFi-GAN mel sequence is too long")?;
-        let bins = i64::try_from(MODEL_MEL_BINS).context("HiFi-GAN mel bin count is invalid")?;
-        let values = flatten_contract_mel(mel, layout);
+        let bins = i64::try_from(mel_config.n_mels).context("HiFi-GAN mel bin count is invalid")?;
+        let values = flatten_contract_mel(mel, layout, &mel_config);
         let shape = match input_shape.as_deref().map(|shape| shape.len()) {
             Some(2) => match layout {
                 MelTensorLayout::FramesBins => vec![frames, bins],
@@ -299,7 +376,7 @@ impl HifiganBackend {
             model_input_shape = ?input_shape,
             requested_shape = ?shape,
             mel_frames = mel.len(),
-            mel_bins = MODEL_MEL_BINS,
+            mel_bins = mel_config.n_mels,
             "hifigan onnx input contract"
         );
 
@@ -372,6 +449,7 @@ impl VocoderBackend for HifiganBackend {
 fn resolve_hifigan_input(
     session: &Session,
     model_path: &Path,
+    mel_config: &MelConfig,
 ) -> Result<(String, Option<Vec<i64>>, MelTensorLayout)> {
     let candidates = ["spectrogram", "input", "mel", "mel_spectrogram", "logmel"];
     for candidate in candidates {
@@ -386,7 +464,7 @@ fn resolve_hifigan_input(
                 model_path.display()
             );
             let shape = input.dtype().tensor_shape().map(|shape| shape.to_vec());
-            let layout = infer_mel_tensor_layout(shape.as_deref());
+            let layout = infer_mel_tensor_layout(shape.as_deref(), mel_config.n_mels);
             return Ok((candidate.to_string(), shape, layout));
         }
     }
@@ -403,7 +481,7 @@ fn resolve_hifigan_input(
         model_path.display()
     );
     let shape = input.dtype().tensor_shape().map(|shape| shape.to_vec());
-    let layout = infer_mel_tensor_layout(shape.as_deref());
+    let layout = infer_mel_tensor_layout(shape.as_deref(), mel_config.n_mels);
     Ok((input.name().to_string(), shape, layout))
 }
 
@@ -464,49 +542,21 @@ fn validate_mel_f0_tracks(
     Ok(())
 }
 
-fn validate_speecht5_hifigan_mel(mel: &[MelFrame]) -> Result<()> {
-    let contract = SPEECHT5_HIFIGAN_MEL_CONTRACT;
-    ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
-    for (frame_index, frame) in mel.iter().enumerate() {
-        ensure!(
-            frame.bins.len() == contract.mel_bins,
-            "hifigan backend requires {} mel bins per frame for the SpeechT5 HiFi-GAN contract; frame {} has {}",
-            contract.mel_bins,
-            frame_index,
-            frame.bins.len()
-        );
-        for (bin_index, bin) in frame.bins.iter().enumerate() {
-            ensure!(
-                bin.is_finite(),
-                "hifigan backend requires finite mel bins; frame {frame_index} bin {bin_index} is {bin}"
-            );
-            ensure!(
-                *bin >= contract.log_floor && *bin <= contract.log_ceiling,
-                "hifigan backend requires natural-log mel bins in [{}, {}]; frame {} bin {} is {}",
-                contract.log_floor,
-                contract.log_ceiling,
-                frame_index,
-                bin_index,
-                bin
-            );
-        }
-    }
-    Ok(())
-}
-
-fn log_hifigan_mel_summary(mel: &[MelFrame]) {
+fn log_hifigan_mel_summary(mel: &[MelFrame], mel_config: &MelConfig) {
     let stats = summarize_mel_values(mel);
-    let ranges = summarize_per_band_ranges(mel);
+    let ranges = summarize_per_band_ranges(mel, mel_config);
     tracing::debug!(
-        contract_sample_rate_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
-        contract_hop_samples = SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples,
-        contract_n_fft = SPEECHT5_HIFIGAN_MEL_CONTRACT.n_fft,
-        contract_win_length = SPEECHT5_HIFIGAN_MEL_CONTRACT.win_length,
-        contract_mel_bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins,
-        contract_f_min_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.f_min_hz,
-        contract_f_max_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.f_max_hz,
-        contract_scale = ?SPEECHT5_HIFIGAN_MEL_CONTRACT.scale,
-        contract_normalization = ?SPEECHT5_HIFIGAN_MEL_CONTRACT.normalization,
+        mel_sample_rate_hz = mel_config.sample_rate_hz,
+        mel_hop_length = mel_config.hop_length,
+        mel_n_fft = mel_config.n_fft,
+        mel_win_length = mel_config.win_length,
+        mel_n_mels = mel_config.n_mels,
+        mel_f_min_hz = mel_config.f_min_hz,
+        mel_f_max_hz = mel_config.f_max_hz,
+        mel_center = mel_config.center,
+        mel_scale = ?mel_config.scale,
+        mel_log_base = ?mel_config.log_base,
+        mel_normalize = ?mel_config.normalize,
         tensor_layout = ?MelTensorLayout::FramesBins,
         frame_count = mel.len(),
         value_count = stats.count,
@@ -616,8 +666,8 @@ fn summarize_mel_values(mel: &[MelFrame]) -> ScalarStats {
     }
 }
 
-fn summarize_per_band_ranges(mel: &[MelFrame]) -> Vec<(f32, f32)> {
-    let bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins;
+fn summarize_per_band_ranges(mel: &[MelFrame], mel_config: &MelConfig) -> Vec<(f32, f32)> {
+    let bins = mel_config.n_mels;
     let mut mins = vec![f32::INFINITY; bins];
     let mut maxes = vec![f32::NEG_INFINITY; bins];
     for frame in mel {
@@ -700,8 +750,12 @@ fn summarize_waveform_values(frames: &[AudioFrame]) -> WaveformStats {
 }
 
 #[cfg(feature = "piper-compat")]
-fn flatten_contract_mel(mel: &[MelFrame], layout: MelTensorLayout) -> Vec<f32> {
-    let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
+fn flatten_contract_mel(
+    mel: &[MelFrame],
+    layout: MelTensorLayout,
+    mel_config: &MelConfig,
+) -> Vec<f32> {
+    let mut values = Vec::with_capacity(mel.len() * mel_config.n_mels);
     match layout {
         MelTensorLayout::FramesBins => {
             for frame in mel {
@@ -709,7 +763,7 @@ fn flatten_contract_mel(mel: &[MelFrame], layout: MelTensorLayout) -> Vec<f32> {
             }
         }
         MelTensorLayout::BinsFrames => {
-            for bin_index in 0..SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins {
+            for bin_index in 0..mel_config.n_mels {
                 for frame in mel {
                     values.push(frame.bins[bin_index]);
                 }
@@ -719,23 +773,18 @@ fn flatten_contract_mel(mel: &[MelFrame], layout: MelTensorLayout) -> Vec<f32> {
     values
 }
 
-fn infer_mel_tensor_layout(shape: Option<&[i64]>) -> MelTensorLayout {
+fn infer_mel_tensor_layout(shape: Option<&[i64]>, mel_bins: usize) -> MelTensorLayout {
     let Some(shape) = shape else {
         return MelTensorLayout::FramesBins;
     };
+    let mel_bins = mel_bins as i64;
     match shape {
-        [left, right] => match (
-            *left == MODEL_MEL_BINS as i64,
-            *right == MODEL_MEL_BINS as i64,
-        ) {
+        [left, right] => match (*left == mel_bins, *right == mel_bins) {
             (true, false) => MelTensorLayout::BinsFrames,
             (false, true) => MelTensorLayout::FramesBins,
             _ => MelTensorLayout::FramesBins,
         },
-        [_, middle, right] => match (
-            *middle == MODEL_MEL_BINS as i64,
-            *right == MODEL_MEL_BINS as i64,
-        ) {
+        [_, middle, right] => match (*middle == mel_bins, *right == mel_bins) {
             (true, false) => MelTensorLayout::BinsFrames,
             (false, true) => MelTensorLayout::FramesBins,
             _ => MelTensorLayout::FramesBins,
@@ -853,15 +902,18 @@ mod contract_tests {
     #[test]
     fn infers_bins_frames_layout_from_3d_shape() {
         assert_eq!(
-            infer_mel_tensor_layout(Some(&[1, MODEL_MEL_BINS as i64, -1])),
+            infer_mel_tensor_layout(Some(&[1, MODEL_MEL_BINS as i64, -1]), MODEL_MEL_BINS),
             MelTensorLayout::BinsFrames
         );
         assert_eq!(
-            infer_mel_tensor_layout(Some(&[1, -1, MODEL_MEL_BINS as i64])),
+            infer_mel_tensor_layout(Some(&[1, -1, MODEL_MEL_BINS as i64]), MODEL_MEL_BINS),
             MelTensorLayout::FramesBins
         );
         assert_eq!(
-            infer_mel_tensor_layout(Some(&[1, MODEL_MEL_BINS as i64, MODEL_MEL_BINS as i64])),
+            infer_mel_tensor_layout(
+                Some(&[1, MODEL_MEL_BINS as i64, MODEL_MEL_BINS as i64]),
+                MODEL_MEL_BINS,
+            ),
             MelTensorLayout::FramesBins
         );
     }
@@ -870,8 +922,16 @@ mod contract_tests {
     #[test]
     fn flatten_contract_mel_transposes_for_bins_frames_layout() {
         let mel = synthetic_mel_frames();
-        let frames_bins = flatten_contract_mel(&mel, MelTensorLayout::FramesBins);
-        let bins_frames = flatten_contract_mel(&mel, MelTensorLayout::BinsFrames);
+        let frames_bins = flatten_contract_mel(
+            &mel,
+            MelTensorLayout::FramesBins,
+            &SPEECHT5_HIFIGAN_MEL_CONFIG,
+        );
+        let bins_frames = flatten_contract_mel(
+            &mel,
+            MelTensorLayout::BinsFrames,
+            &SPEECHT5_HIFIGAN_MEL_CONFIG,
+        );
         assert_eq!(frames_bins.len(), bins_frames.len());
         assert_eq!(frames_bins[0], mel[0].bins[0]);
         assert_eq!(bins_frames[0], mel[0].bins[0]);
@@ -883,12 +943,12 @@ mod contract_tests {
     fn validates_acoustic_contract_metadata() {
         HifiganBackend::validate_acoustic_contract(
             SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
-            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples,
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_length,
         )
         .expect("contract metadata should validate");
         let err = HifiganBackend::validate_acoustic_contract(
             SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
-            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples + 1,
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_length + 1,
         )
         .expect_err("mismatched hop should fail");
         assert!(err.to_string().contains("hop length"));
@@ -897,11 +957,26 @@ mod contract_tests {
     #[test]
     fn synthetic_mel_distribution_matches_contract_bounds() {
         let mel = synthetic_mel_frames();
-        validate_speecht5_hifigan_mel(&mel).expect("synthetic fixture should satisfy contract");
+        SPEECHT5_HIFIGAN_MEL_CONFIG
+            .validate_mel(&mel)
+            .expect("synthetic fixture should satisfy contract");
         let stats = summarize_mel_values(&mel);
-        assert!(stats.min >= SPEECHT5_HIFIGAN_MEL_CONTRACT.log_floor);
-        assert!(stats.max <= SPEECHT5_HIFIGAN_MEL_CONTRACT.log_ceiling);
+        let (min, max) = SPEECHT5_HIFIGAN_MEL_CONTRACT.normalized_range();
+        assert!(stats.min >= min);
+        assert!(stats.max <= max);
         assert!(stats.rms > 0.0);
+    }
+
+    #[test]
+    fn checkpoint_owns_vocoder_mel_config() {
+        let checkpoint = HiFiGanCheckpoint::speecht5(Some(PathBuf::from("speecht5_hifigan.onnx")));
+
+        assert_eq!(checkpoint.mel_config.n_mels, MODEL_MEL_BINS);
+        assert_eq!(checkpoint.mel_config.hop_length, HOP_SAMPLES);
+        assert_eq!(
+            checkpoint.model_path,
+            Some(PathBuf::from("speecht5_hifigan.onnx"))
+        );
     }
 }
 
