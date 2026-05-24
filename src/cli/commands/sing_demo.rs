@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use crate::cli::model_paths::resolve_hifigan_model;
 #[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
@@ -126,14 +126,14 @@ fn vocoder_config_for_command(
 
     if backend == SingDemoBackendOption::Hifigan {
         config.skip_gan = command.skip_gan;
-        #[cfg(feature = "tts-riper")]
+        #[cfg(feature = "piper-compat")]
         if !command.skip_gan {
             config.hifigan_model = Some(resolve_hifigan_model(command.hifigan_model.clone())?);
         }
-        #[cfg(not(feature = "tts-riper"))]
+        #[cfg(not(feature = "piper-compat"))]
         anyhow::ensure!(
             command.skip_gan,
-            "listenbury sing --hifigan requires the `tts-riper` feature unless --skip-gan is used"
+            "listenbury sing --hifigan requires the `piper-compat` feature unless --skip-gan is used"
         );
     }
 

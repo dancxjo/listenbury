@@ -1,15 +1,15 @@
 use std::f32::consts::TAU;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use ort::session::{Session, builder::GraphOptimizationLevel};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use ort::value::{DynTensorValueType, Tensor, TensorElementType};
 
 use crate::audio::frame::AudioFrame;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use crate::mouth::riper::backend::initialize_ort_runtime;
 use crate::time::ExactTimestamp;
 use crate::vocoder::{
@@ -17,9 +17,9 @@ use crate::vocoder::{
 };
 
 pub struct HifiganBackend {
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     model_path: Option<PathBuf>,
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     session: Option<Session>,
 }
 
@@ -104,14 +104,14 @@ impl HifiganBackend {
 
     pub fn deterministic() -> Self {
         Self {
-            #[cfg(feature = "tts-riper")]
+            #[cfg(feature = "piper-compat")]
             model_path: None,
-            #[cfg(feature = "tts-riper")]
+            #[cfg(feature = "piper-compat")]
             session: None,
         }
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     pub fn load(model_path: impl AsRef<Path>) -> Result<Self> {
         let model_path = model_path.as_ref().to_path_buf();
         ensure!(
@@ -189,7 +189,7 @@ impl HifiganBackend {
         validate_speecht5_hifigan_mel(mel)?;
         log_hifigan_mel_summary(mel);
 
-        #[cfg(feature = "tts-riper")]
+        #[cfg(feature = "piper-compat")]
         if self.session.is_some() {
             return self.render_mel_onnx(mel);
         }
@@ -262,7 +262,7 @@ impl HifiganBackend {
         }])
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn render_mel_onnx(&mut self, mel: &[MelFrame]) -> Result<Vec<AudioFrame>> {
         let model_path = self
             .model_path
@@ -368,7 +368,7 @@ impl VocoderBackend for HifiganBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn resolve_hifigan_input(
     session: &Session,
     model_path: &Path,
@@ -407,7 +407,7 @@ fn resolve_hifigan_input(
     Ok((input.name().to_string(), shape, layout))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn resolve_hifigan_output_name(session: &Session, model_path: &Path) -> Result<String> {
     let candidates = ["waveform", "output", "audio", "y"];
     for candidate in candidates {
@@ -699,7 +699,7 @@ fn summarize_waveform_values(frames: &[AudioFrame]) -> WaveformStats {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn flatten_contract_mel(mel: &[MelFrame], layout: MelTensorLayout) -> Vec<f32> {
     let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
     match layout {
@@ -866,7 +866,7 @@ mod contract_tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn flatten_contract_mel_transposes_for_bins_frames_layout() {
         let mel = synthetic_mel_frames();

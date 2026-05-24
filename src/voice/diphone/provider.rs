@@ -4,7 +4,7 @@
 //!
 //! - [`NeuralDiphoneProvider`] – checks the on-disk cache first; on a miss it
 //!   invokes the [`DiphoneForge`] to synthesize a fresh unit, stores it, and
-//!   returns it.  Requires the `tts-riper` feature.
+//!   returns it.  Requires the `piper-compat` feature.
 //! - [`FallbackDiphoneProvider`] – wraps a *primary* provider and a *secondary*
 //!   provider.  On a primary miss it tries the secondary.  This lets you layer
 //!   "MBROLA database" over "neural generated" so that MBROLA exact units are
@@ -33,8 +33,8 @@ use super::forge::{
 ///
 /// # Feature gate
 ///
-/// The `tts-riper` Cargo feature must be enabled to compile this type.
-#[cfg(feature = "tts-riper")]
+/// The `piper-compat` Cargo feature must be enabled to compile this type.
+#[cfg(feature = "piper-compat")]
 pub struct NeuralDiphoneProvider {
     backend: crate::mouth::riper::backend::RiperBackend,
     cache: DiphoneCache,
@@ -42,7 +42,7 @@ pub struct NeuralDiphoneProvider {
     speaker_id: String,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl NeuralDiphoneProvider {
     /// Create a new provider backed by `backend` and `cache`.
     pub fn new(backend: crate::mouth::riper::backend::RiperBackend, cache: DiphoneCache) -> Self {
@@ -81,7 +81,7 @@ impl NeuralDiphoneProvider {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl DiphoneProvider for NeuralDiphoneProvider {
     fn get_diphone(&mut self, left: &str, right: &str) -> Result<DiphoneLookup> {
         let key = self.cache_key(left, right);
@@ -126,7 +126,7 @@ impl DiphoneProvider for NeuralDiphoneProvider {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use anyhow::Context as _;
 
 // ── FallbackDiphoneProvider ───────────────────────────────────────────────────

@@ -174,8 +174,8 @@ pub fn build_carrier_sequence(left: &str, right: &str) -> CarrierSequence {
 ///
 /// # Feature gate
 ///
-/// This function is only available when the `tts-riper` Cargo feature is enabled.
-#[cfg(feature = "tts-riper")]
+/// This function is only available when the `piper-compat` Cargo feature is enabled.
+#[cfg(feature = "piper-compat")]
 pub fn forge_diphone(
     backend: &mut crate::mouth::riper::backend::RiperBackend,
     left: &str,
@@ -446,7 +446,7 @@ pub fn fingerprint_path(path: &Path) -> String {
 }
 
 /// Fingerprint the voice config via its phoneme map size and sample rate.
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 pub fn fingerprint_config(config: &crate::mouth::riper::config::PiperVoiceConfig) -> String {
     let mut hasher = Sha256::new();
     hasher.update(config.sample_rate_hz.to_le_bytes());

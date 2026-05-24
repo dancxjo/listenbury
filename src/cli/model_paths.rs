@@ -18,7 +18,7 @@ enum ModelKind {
     Llm,
     #[cfg(feature = "tts-piper")]
     Voice,
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     Vocoder,
     #[cfg(feature = "asr-whisper")]
     Whisper,
@@ -160,7 +160,7 @@ pub(crate) fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> 
     )
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 pub(crate) fn resolve_hifigan_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(
         explicit,

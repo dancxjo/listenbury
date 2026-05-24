@@ -1,4 +1,4 @@
-#![cfg(feature = "tts-riper")]
+#![cfg(feature = "piper-compat")]
 
 use std::{env, fs, path::PathBuf};
 

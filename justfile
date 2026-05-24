@@ -107,7 +107,7 @@ check:
 
 # Check the CUDA feature path without building every default dependency.
 check-cuda:
-    CUDA_LIBRARY_PATH="{{cuda-library-path}}" RUSTFLAGS="{{cuda-rustflags}}" cargo check --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda tts-piper model-download"
+    CUDA_LIBRARY_PATH="{{cuda-library-path}}" RUSTFLAGS="{{cuda-rustflags}}" cargo check --no-default-features --features "asr-whisper-cuda llm-llama-cpp-cuda piper-compat model-download"
 
 # Run the test suite.
 test:

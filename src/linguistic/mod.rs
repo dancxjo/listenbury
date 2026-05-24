@@ -3,7 +3,6 @@ pub mod cmudict;
 pub mod environment;
 pub mod inventory;
 pub mod language_pack;
-#[cfg(feature = "tts-riper")]
 pub mod language_pack_rules;
 pub mod language_variety;
 pub mod orthography;
