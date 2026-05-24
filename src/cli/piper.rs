@@ -33,6 +33,7 @@ use listenbury::mouth::riper::{
     SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind, SyntacticLinkParse,
 };
 use listenbury::mouth::tts::TextToSpeech;
+use listenbury::speech::pipeline::{PipelineDescriptor, SpeechPipelineKind};
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
@@ -69,6 +70,12 @@ const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
+    let pipeline = say_pipeline_descriptor(&piper_args);
+    tracing::debug!(
+        pipeline = pipeline.id,
+        fused = pipeline.fused,
+        "listenbury say selected speech pipeline"
+    );
     if piper_args.stdin_stream {
         return run_say_stdin_stream(piper_args);
     }
@@ -1370,6 +1377,24 @@ fn should_use_mbrola_backend(args: &SayArgs) -> bool {
     args.mbrola
 }
 
+fn say_pipeline_kind(args: &SayArgs) -> SpeechPipelineKind {
+    if should_use_klatt_backend(args) {
+        SpeechPipelineKind::Klatt
+    } else if should_use_hifigan_backend(args) {
+        SpeechPipelineKind::SourceFilterHifigan
+    } else if should_use_mbrola_backend(args) {
+        SpeechPipelineKind::MbrolaDiphone
+    } else if args.piper {
+        SpeechPipelineKind::PiperProcess
+    } else {
+        SpeechPipelineKind::PiperCompat
+    }
+}
+
+fn say_pipeline_descriptor(args: &SayArgs) -> PipelineDescriptor {
+    say_pipeline_kind(args).descriptor()
+}
+
 #[cfg(feature = "tts-riper")]
 fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     let text = &args.text;
@@ -2053,6 +2078,7 @@ mod tests {
         .expect("klatt should parse as a Riper backend alternative");
         assert!(args.klatt);
         assert!(should_use_klatt_backend(&args));
+        assert_eq!(say_pipeline_descriptor(&args).id, "klatt");
     }
 
     #[test]
@@ -2074,6 +2100,7 @@ mod tests {
         assert!(!args.klatt);
         assert!(args.hifigan);
         assert!(should_use_hifigan_backend(&args));
+        assert_eq!(say_pipeline_descriptor(&args).id, "source-filter-hifigan");
     }
 
     #[test]
@@ -2115,6 +2142,7 @@ mod tests {
         assert!(!args.klatt);
         assert!(should_use_mbrola_backend(&args));
         assert_eq!(args.mbrola_voice, Some(PathBuf::from("voices/us1")));
+        assert_eq!(say_pipeline_descriptor(&args).id, "mbrola-diphone");
     }
 
     #[test]
@@ -2134,6 +2162,124 @@ mod tests {
         })
         .expect("diphone should select the diphone voice backend");
         assert!(args.mbrola);
+        assert_eq!(say_pipeline_descriptor(&args).id, "mbrola-diphone");
+    }
+
+    #[test]
+    fn say_pipeline_descriptor_defaults_to_piper_compat() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("default say route should parse");
+        let descriptor = say_pipeline_descriptor(&args);
+        assert_eq!(descriptor.id, "piper-compat");
+        assert!(descriptor.fused);
+        assert_eq!(descriptor.stages.len(), 1);
+        assert_eq!(descriptor.stages[0].id, "piper-compatible-onnx");
+    }
+
+    #[test]
+    fn say_pipeline_descriptor_reports_external_piper_process() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: true,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("external piper route should parse");
+        let descriptor = say_pipeline_descriptor(&args);
+        assert_eq!(descriptor.id, "piper-process");
+        assert!(descriptor.fused);
+        assert_eq!(descriptor.stages.len(), 1);
+        assert_eq!(descriptor.stages[0].id, "piper-process-backend");
+    }
+
+    #[test]
+    fn say_pipeline_descriptor_reports_klatt_stage_contract() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: true,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("klatt route should parse");
+        let descriptor = say_pipeline_descriptor(&args);
+        assert_eq!(descriptor.id, "klatt");
+        assert!(!descriptor.fused);
+        assert_eq!(descriptor.stages.len(), 1);
+        assert_eq!(descriptor.stages[0].id, "klatt-formant-renderer");
+    }
+
+    #[test]
+    fn say_pipeline_descriptor_reports_mbrola_internal_stages() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: true,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("diphone route should parse");
+        let descriptor = say_pipeline_descriptor(&args);
+        assert_eq!(descriptor.id, "mbrola-diphone");
+        assert!(!descriptor.fused);
+        assert_eq!(descriptor.stages.len(), 2);
+        assert_eq!(descriptor.stages[0].id, "mbrola-diphone-selection");
+        assert_eq!(descriptor.stages[1].id, "mbrola-diphone-renderer");
+    }
+
+    #[test]
+    fn say_pipeline_descriptor_reports_hifigan_internal_stages() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: true,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("hifigan route should parse");
+        let descriptor = say_pipeline_descriptor(&args);
+        assert_eq!(descriptor.id, "source-filter-hifigan");
+        assert!(!descriptor.fused);
+        assert_eq!(descriptor.stages.len(), 2);
+        assert_eq!(descriptor.stages[0].id, "source-filter-acoustic-generator");
+        assert_eq!(descriptor.stages[1].id, "hifigan-vocoder");
     }
 
     #[test]
