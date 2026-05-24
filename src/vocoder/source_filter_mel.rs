@@ -11,8 +11,12 @@ use crate::voice::{
 const SOURCE_FILTER_SAMPLE_RATE_HZ: u32 = 16_000;
 const SOURCE_FILTER_FRAME_MS: u64 = 16;
 const MEL_BINS: usize = 80;
-const MEL_MIN_HZ: f32 = 80.0;
+const MEL_MIN_HZ: f32 = 0.0;
+const SPECTRAL_REFERENCE_HZ: f32 = 80.0;
 const MEL_MAX_HZ: f32 = 8_000.0;
+const MEL_SPECTRAL_FLOOR: f32 = 0.010;
+const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
+const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MelF0Track {
@@ -71,6 +75,8 @@ pub(crate) fn source_filter_track_to_mel_f0(track: &SourceFilterTrack) -> Result
         f0_hz.push(frame.voicing.f0_hz.unwrap_or(120.0).clamp(55.0, 1_200.0));
         voiced.push(frame.voicing.voicing_probability > 0.5);
     }
+
+    smooth_mel_track(&mut mel);
 
     ensure!(
         mel.iter()
@@ -132,10 +138,14 @@ fn source_filter_frame(
     let source = target.source.clone().unwrap_or_else(default_source);
     let amplitude = target.amplitude.clamp(0.0, 1.0) * envelope;
     let is_voiced = target.f0_hz.is_some() && acoustic.map(|target| target.voiced).unwrap_or(true);
-    let frication = acoustic.map(|target| target.frication_level).unwrap_or(0.0);
-    let aspiration = acoustic
+    let mut frication = acoustic.map(|target| target.frication_level).unwrap_or(0.0);
+    let mut aspiration = acoustic
         .map(|target| target.aspiration_level)
         .unwrap_or(0.0);
+    if target.phone.ipa.as_str() == "h" {
+        frication *= 0.16;
+        aspiration = aspiration.max(0.82);
+    }
     let is_stop = acoustic.map(|target| target.is_stop).unwrap_or(false);
     let burst = if is_stop && envelope > 0.55 {
         acoustic.and_then(|target| target.burst_hz_hint).is_some() as u8 as f32
@@ -183,10 +193,84 @@ fn source_filter_frame_to_mel(frame: &SourceFilterFrame) -> MelFrame {
                 let hz = mel_bin_center_hz(bin, MEL_BINS);
                 let source = source_spectrum(hz, tilt, voiced, noise);
                 let filter = filter_spectrum(hz, &frame.filter);
-                let frication = high_band_noise_profile(hz) * frame.noise.frication_energy;
-                (energy * (source * filter + frication * 0.9)).max(0.0)
+                let frication = high_band_noise_profile(hz) * frame.noise.frication_energy * 0.32;
+                let aspiration = aspiration_noise_profile(hz) * frame.source.breathiness * 0.18;
+                let broad_speech_bed = speech_band_profile(hz) * MEL_SPECTRAL_FLOOR;
+                (energy * (source * filter + frication + aspiration + broad_speech_bed)).max(0.0)
             })
             .collect(),
+    }
+}
+
+fn smooth_mel_track(mel: &mut [MelFrame]) {
+    for frame in mel.iter_mut() {
+        smooth_mel_bins(&mut frame.bins);
+        compress_mel_contrast(&mut frame.bins);
+    }
+
+    if mel.len() < 3 {
+        return;
+    }
+    let original = mel.to_vec();
+    for index in 1..mel.len() - 1 {
+        for bin in 0..mel[index].bins.len() {
+            let neighbor_mean =
+                (original[index - 1].bins[bin] + original[index + 1].bins[bin]) * 0.5;
+            mel[index].bins[bin] = lerp(
+                original[index].bins[bin],
+                neighbor_mean,
+                MEL_TEMPORAL_SMOOTHING,
+            );
+        }
+    }
+    smooth_frame_energy(mel);
+}
+
+fn smooth_mel_bins(bins: &mut [f32]) {
+    if bins.len() < 3 {
+        return;
+    }
+    let original = bins.to_vec();
+    for index in 1..bins.len() - 1 {
+        bins[index] = original[index] * 0.58
+            + (original[index - 1] + original[index + 1]) * 0.18
+            + (original[index.saturating_sub(2)] + original[(index + 2).min(original.len() - 1)])
+                * 0.03;
+    }
+}
+
+fn compress_mel_contrast(bins: &mut [f32]) {
+    let peak = bins.iter().copied().fold(0.0_f32, f32::max);
+    if peak <= f32::EPSILON {
+        return;
+    }
+    let floor = peak * 0.035;
+    for bin in bins {
+        *bin = (*bin + floor).powf(0.72);
+    }
+}
+
+fn smooth_frame_energy(mel: &mut [MelFrame]) {
+    if mel.len() < 3 {
+        return;
+    }
+    let energies = mel
+        .iter()
+        .map(|frame| frame.bins.iter().sum::<f32>())
+        .collect::<Vec<_>>();
+    for index in 1..mel.len() - 1 {
+        let local_energy =
+            energies[index - 1] * 0.25 + energies[index] * 0.5 + energies[index + 1] * 0.25;
+        if local_energy <= f32::EPSILON
+            || energies[index] >= local_energy * MEL_MIN_FRAME_ENERGY_RATIO
+        {
+            continue;
+        }
+        let target = local_energy * MEL_MIN_FRAME_ENERGY_RATIO;
+        let gain = (target / energies[index].max(f32::EPSILON)).min(4.0);
+        for bin in &mut mel[index].bins {
+            *bin *= gain;
+        }
     }
 }
 
@@ -228,7 +312,7 @@ fn formant_estimate(
 }
 
 fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
-    let mut energy = 0.08;
+    let mut energy = 0.18;
     for formant in [&filter.f1, &filter.f2, &filter.f3, &filter.f4]
         .into_iter()
         .flatten()
@@ -236,26 +320,39 @@ fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
         energy += gaussian_hz(
             hz,
             formant.frequency_hz,
-            formant.bandwidth_hz.unwrap_or(180.0).max(80.0) * 2.5,
+            formant.bandwidth_hz.unwrap_or(180.0).max(110.0) * 4.2,
         ) * db_to_linear(formant.amplitude_db);
     }
     energy
 }
 
 fn source_spectrum(hz: f32, tilt_db_per_octave: f32, voiced: f32, noise: f32) -> f32 {
-    let octaves = (hz.max(MEL_MIN_HZ) / MEL_MIN_HZ).log2();
-    let tilted = db_to_linear(tilt_db_per_octave * octaves).clamp(0.02, 4.0);
+    let octaves = (hz.max(SPECTRAL_REFERENCE_HZ) / SPECTRAL_REFERENCE_HZ).log2();
+    let tilted = db_to_linear(tilt_db_per_octave * 0.55 * octaves).clamp(0.08, 2.2);
     let broadband = high_band_noise_profile(hz).max(0.08);
-    voiced * tilted + noise.max(1.0 - voiced) * broadband * 0.45
+    let low_periodic_tamer = (hz / (hz + 180.0)).clamp(0.18, 1.0);
+    voiced * tilted * low_periodic_tamer * 0.72 + noise.max(1.0 - voiced) * broadband * 0.25
+}
+
+fn speech_band_profile(hz: f32) -> f32 {
+    gaussian_hz(hz, 550.0, 650.0) * 0.45
+        + gaussian_hz(hz, 1_600.0, 1_100.0) * 0.35
+        + gaussian_hz(hz, 3_000.0, 1_700.0) * 0.20
+}
+
+fn aspiration_noise_profile(hz: f32) -> f32 {
+    gaussian_hz(hz, 900.0, 1_200.0) * 0.55
+        + gaussian_hz(hz, 2_200.0, 1_700.0) * 0.35
+        + high_band_noise_profile(hz) * 0.10
 }
 
 fn phone_envelope(local_t: f32, frame_count: usize) -> f32 {
     if frame_count <= 2 {
-        return 0.85;
+        return 0.95;
     }
-    let attack = (local_t / 0.18).clamp(0.0, 1.0);
-    let release = ((1.0 - local_t) / 0.22).clamp(0.0, 1.0);
-    attack.min(release).powf(0.35).max(0.2)
+    let attack = (local_t / 0.12).clamp(0.0, 1.0);
+    let release = ((1.0 - local_t) / 0.16).clamp(0.0, 1.0);
+    attack.min(release).powf(0.45).max(0.55)
 }
 
 fn should_blend_filter(acoustic: Option<&PhoneAcousticTarget>) -> bool {
@@ -265,10 +362,10 @@ fn should_blend_filter(acoustic: Option<&PhoneAcousticTarget>) -> bool {
 }
 
 fn boundary_blend(local_t: f32) -> f32 {
-    if local_t < 0.72 {
+    if local_t < 0.45 {
         0.0
     } else {
-        smoothstep((local_t - 0.72) / 0.28) * 0.35
+        smoothstep((local_t - 0.45) / 0.55) * 0.65
     }
 }
 
@@ -326,7 +423,7 @@ fn default_source() -> crate::voice::GlottalSourceTarget {
 }
 
 fn high_band_noise_profile(hz: f32) -> f32 {
-    ((hz - 1_800.0) / 4_500.0).clamp(0.0, 1.0).powf(0.7)
+    ((hz - 2_400.0) / 4_200.0).clamp(0.0, 1.0).powf(0.9)
 }
 
 fn gaussian_hz(hz: f32, center_hz: f32, width_hz: f32) -> f32 {

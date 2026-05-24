@@ -402,19 +402,39 @@ fn resolve_hifigan_output_name(session: &Session, model_path: &Path) -> Result<S
 
 #[cfg(feature = "tts-riper")]
 fn normalize_mel_for_onnx(mel: &[MelFrame], target_bins: usize) -> Vec<f32> {
+    if mel.is_empty() || target_bins == 0 {
+        return Vec::new();
+    }
+
     let mut values = Vec::with_capacity(mel.len() * target_bins);
     for frame in mel {
+        let frame_peak = (0..target_bins)
+            .map(|index| resample_bin(&frame.bins, index, target_bins))
+            .fold(0.0_f32, f32::max);
+        let adaptive_floor = (frame_peak * 0.012).max(1.0e-5);
         for index in 0..target_bins {
             let source = resample_bin(&frame.bins, index, target_bins);
-            let db_like = if source <= 0.0 {
-                -11.5
-            } else {
-                (source.max(1.0e-5).ln() * 1.4).clamp(-11.5, 2.0)
-            };
-            values.push(db_like);
+            values.push(source.max(adaptive_floor).ln().clamp(-8.0, 2.0));
         }
     }
+    smooth_normalized_mel_frames(&mut values, target_bins);
     values
+}
+
+#[cfg(feature = "tts-riper")]
+fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
+    if bins == 0 || values.len() < bins * 3 {
+        return;
+    }
+    let original = values.to_vec();
+    let frames = values.len() / bins;
+    for frame_index in 1..frames - 1 {
+        for bin in 0..bins {
+            let index = frame_index * bins + bin;
+            let neighbor_mean = (original[index - bins] + original[index + bins]) * 0.5;
+            values[index] = original[index] * 0.82 + neighbor_mean * 0.18;
+        }
+    }
 }
 
 #[cfg(feature = "tts-riper")]
