@@ -389,6 +389,9 @@ pub(crate) struct SayCommand {
     pub(crate) hifigan: bool,
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
+    /// Debug the mel path by rendering the acoustic mel track without running HiFi-GAN.
+    #[arg(long)]
+    pub(crate) skip_gan: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
     pub(crate) rp: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan"])]
@@ -1341,6 +1344,19 @@ mod tests {
         assert!(command.hifigan);
         assert!(!command.klatt);
         assert!(!command.diphone);
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_skip_gan() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--diphone", "--skip-gan", "hello"])
+            .expect("say should parse skip-gan as a mel debug switch");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.diphone);
+        assert!(command.skip_gan);
         assert_eq!(command.words, ["hello"]);
     }
 
