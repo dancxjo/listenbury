@@ -1524,7 +1524,9 @@ fn hifigan_feature_stage() -> String {
         .map(|value| value.to_string_lossy().trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "0.0".to_string());
-    format!("mel/features: SpeechT5 HiFi-GAN mel/F0 contract, temporal smoothing {smoothing}")
+    format!(
+        "mel/features: source-filter spectral proxy for HiFi-GAN, temporal smoothing {smoothing}"
+    )
 }
 
 fn hifigan_vocoder_stage(args: &SayArgs) -> String {
@@ -1723,7 +1725,7 @@ fn maybe_write_hifigan_debug_artifacts(
     let diagnostics_path = debug_dir.join(format!("{stem}-temporal-diagnostics.txt"));
     let mut diagnostics = String::new();
     diagnostics.push_str(&format!("text={text}\n"));
-    diagnostics.push_str("mel_contract=SpeechT5-HiFi-GAN-compatible (validated)\n");
+    diagnostics.push_str("mel_contract=source-filter-spectral-proxy (shape/timing validated)\n");
     diagnostics.push_str(&format!(
         "temporal_smoothing_amount={smoothing_amount:.3}\n"
     ));
@@ -2649,7 +2651,7 @@ mod tests {
         let dump = format_say_pipeline(&args);
         assert!(dump.contains("speech pipeline: source-filter-hifigan"));
         assert!(dump.contains("-> acoustic generator: source-filter"));
-        assert!(dump.contains("-> mel/features: SpeechT5 HiFi-GAN mel/F0 contract"));
+        assert!(dump.contains("-> mel/features: source-filter spectral proxy for HiFi-GAN"));
         assert!(dump.contains("-> vocoder: hifigan"));
     }
 

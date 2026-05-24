@@ -47,8 +47,8 @@ impl SourceFilterAcousticModel {
         AcousticModelDescriptor {
             id: "source-filter",
             notes: &[
-                "Deterministic acoustic model that expands phone timing into source-filter frames, then derives mel/F0 tracks.",
-                "Owns duration-controlled frame layout for HiFi-GAN and other mel/F0 vocoders.",
+                "Deterministic acoustic model that expands phone timing into source-filter frames, then derives a spectral mel/F0 proxy.",
+                "Useful for debugging, singing, controllable articulatory work, and education; it is not a neural natural-mel predictor.",
             ],
         }
     }

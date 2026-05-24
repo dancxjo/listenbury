@@ -26,29 +26,31 @@ pub struct HifiganBackend {
 const SAMPLE_RATE_HZ: u32 = 16_000;
 const HOP_SAMPLES: usize = 256;
 const MODEL_MEL_BINS: usize = 80;
-const LOG_MEL_MIN: f32 = -8.0;
-const LOG_MEL_MAX: f32 = 2.0;
+const LOG_MEL_MIN: f32 = -10.0;
 const MIN_NORMALIZABLE_PEAK: f32 = 1.0e-4;
 const CLIP_THRESHOLD: f32 = 0.99;
 const SILENCE_THRESHOLD: f32 = 1.0e-5;
 const MODEL_N_FFT: usize = 1_024;
 const MODEL_WIN_LENGTH: usize = 1_024;
-const MODEL_FMIN_HZ: f32 = 0.0;
-const MODEL_FMAX_HZ: f32 = 8_000.0;
+const MODEL_FMIN_HZ: f32 = 80.0;
+const MODEL_FMAX_HZ: f32 = 7_600.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MelScale {
     Htk,
+    Slaney,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogCompression {
     NaturalLog,
+    Log10,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MelNormalization {
     Clamp { min: f32, max: f32 },
+    Floor { min: f32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +100,6 @@ impl MelConfig {
     }
 
     pub fn validate_mel(&self, mel: &[MelFrame]) -> Result<()> {
-        let (min, max) = self.normalized_range();
         ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
         for (frame_index, frame) in mel.iter().enumerate() {
             ensure!(
@@ -113,24 +114,36 @@ impl MelConfig {
                     bin.is_finite(),
                     "hifigan backend requires finite mel bins; frame {frame_index} bin {bin_index} is {bin}"
                 );
-                ensure!(
-                    *bin >= min && *bin <= max,
-                    "hifigan backend requires {:?} mel bins in [{}, {}]; frame {} bin {} is {}",
-                    self.log_base,
-                    min,
-                    max,
-                    frame_index,
-                    bin_index,
-                    bin
-                );
+                match self.normalize {
+                    MelNormalization::Clamp { min, max } => ensure!(
+                        *bin >= min && *bin <= max,
+                        "hifigan backend requires {:?} mel bins in [{}, {}]; frame {} bin {} is {}",
+                        self.log_base,
+                        min,
+                        max,
+                        frame_index,
+                        bin_index,
+                        bin
+                    ),
+                    MelNormalization::Floor { min } => ensure!(
+                        *bin >= min,
+                        "hifigan backend requires {:?} mel bins >= {}; frame {} bin {} is {}",
+                        self.log_base,
+                        min,
+                        frame_index,
+                        bin_index,
+                        bin
+                    ),
+                }
             }
         }
         Ok(())
     }
 
-    pub fn normalized_range(&self) -> (f32, f32) {
+    pub fn normalized_range(&self) -> (f32, Option<f32>) {
         match self.normalize {
-            MelNormalization::Clamp { min, max } => (min, max),
+            MelNormalization::Clamp { min, max } => (min, Some(max)),
+            MelNormalization::Floor { min } => (min, None),
         }
     }
 }
@@ -152,13 +165,10 @@ pub const SPEECHT5_HIFIGAN_MEL_CONFIG: MelConfig = MelConfig {
     n_mels: MODEL_MEL_BINS,
     f_min_hz: MODEL_FMIN_HZ,
     f_max_hz: Some(MODEL_FMAX_HZ),
-    center: false,
-    scale: MelScale::Htk,
-    log_base: LogCompression::NaturalLog,
-    normalize: MelNormalization::Clamp {
-        min: LOG_MEL_MIN,
-        max: LOG_MEL_MAX,
-    },
+    center: true,
+    scale: MelScale::Slaney,
+    log_base: LogCompression::Log10,
+    normalize: MelNormalization::Floor { min: LOG_MEL_MIN },
 };
 
 pub const SPEECHT5_HIFIGAN_MEL_CONTRACT: MelContract = SPEECHT5_HIFIGAN_MEL_CONFIG;
@@ -233,7 +243,7 @@ impl HifiganBackend {
             backend_kind: None,
             detail: None,
             notes: &[
-                "Expects SpeechT5 HiFi-GAN mel frames: 80-bin natural-log mel, clamped to [-8, 2], 16 kHz, 256-sample hop.",
+                "Expects SpeechT5 HiFi-GAN mel frames: 80-bin log10 Slaney mel, floored at 1e-10, 16 kHz, 1024-sample Hann window, 256-sample hop.",
                 "Duration control belongs to an upstream acoustic model that lays out mel/F0 frames.",
                 "Requires a HiFi-GAN-compatible ONNX model; mel debug rendering is provided by the separate mel-debug-renderer backend.",
             ],
@@ -821,7 +831,9 @@ mod contract_tests {
         let stats = summarize_mel_values(&mel);
         let (min, max) = SPEECHT5_HIFIGAN_MEL_CONTRACT.normalized_range();
         assert!(stats.min >= min);
-        assert!(stats.max <= max);
+        if let Some(max) = max {
+            assert!(stats.max <= max);
+        }
         assert!(stats.rms > 0.0);
     }
 

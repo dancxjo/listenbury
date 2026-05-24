@@ -32,9 +32,9 @@ pub mod word;
 
 pub use acoustic::{
     AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
-    MelTemporalDiscontinuityStats, SingingPlan, SourceFilterAcousticModel, acoustic_model_by_id,
-    list_acoustic_models, mel_frame_delta_energy, summarize_mel_temporal_discontinuity,
-    temporal_smooth_mel_frames,
+    MelTemporalDiscontinuityStats, NeuralAcousticModel, NeuralAcousticModelKind, SingingPlan,
+    SourceFilterAcousticModel, acoustic_model_by_id, list_acoustic_models, mel_frame_delta_energy,
+    summarize_mel_temporal_discontinuity, temporal_smooth_mel_frames,
 };
 pub use audio::frame::AudioFrame;
 pub use audio::{
@@ -122,16 +122,18 @@ pub use speech::synthetic_plan::{
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech::work::{
-    AcousticChunk, AcousticPhoneTiming, ArticulatoryChunk, AudioTime, BlockingVocoderRenderer,
-    Boundary, BoundaryHint, BreathPlan, BufferWatermarks, CANONICAL_SYNTHETIC_WORK_FLOW, Cadence,
-    ChunkId, CoarseTextChunk, CommitHorizons, Commitment, Curve, CurvePoint, LingChunk,
-    LpcNetChunk, MelChunk, MelF0Chunk, PartialProsodyChunk, PhonePlan, PhraseShape, PipelineTime,
-    RealtimeVocoderRenderer, RenderStatus, Renderer, RepairPlan, RepairStrategy,
-    RepresentationKind, RepresentationStream, StageReadiness, StageStatus, StreamChunk,
-    StreamStage, SyntheticClock, SyntheticClockKind, SyntheticEvent, SyntheticPipelineWatermarks,
-    SyntheticRepresentation, SyntheticStageRuntimePolicy, SyntheticWorkGraph,
-    SyntheticWorkStageKind, TextChunk, TextSource, TickStage, TimedItem, VoiceProfile, WaveChunk,
-    WavePassthroughRenderer, WordPlan, WorkBudget, WorldChunk, render_plan_to_representation,
+    AcousticChunk, AcousticPhoneTiming, AcousticStage, ArticulatoryChunk, AudioTime,
+    BlockingVocoderRenderer, Boundary, BoundaryHint, BreathPlan, BufferWatermarks,
+    CANONICAL_SYNTHETIC_WORK_FLOW, Cadence, ChunkId, CoarseTextChunk, CommitHorizons, Commitment,
+    Curve, CurvePoint, LingChunk, LingStage, LpcNetChunk, MelChunk, MelF0Chunk,
+    PartialProsodyChunk, PhonePlan, PhraseShape, PipelineTime, PlaybackStage,
+    RealtimeVocoderRenderer, RenderStage, RenderStatus, Renderer, RepairPlan, RepairStrategy,
+    RepresentationKind, RepresentationStage, RepresentationStream, SpeechWorkGraph, StageReadiness,
+    StageStatus, StreamChunk, StreamStage, SyntheticClock, SyntheticClockKind, SyntheticEvent,
+    SyntheticPipelineWatermarks, SyntheticRepresentation, SyntheticStageRuntimePolicy,
+    SyntheticWorkGraph, SyntheticWorkStageKind, TextChunk, TextSource, TextStage, TickStage,
+    TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan, WorkBudget, WorldChunk,
+    render_plan_to_representation,
 };
 pub use speech_timeline::{AudioClipId, SessionId, SyntheticUnitId, TranscriptRevisionId, TurnId};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};

@@ -16,6 +16,7 @@ mod piper;
 mod registry;
 mod riper;
 mod source_filter;
+mod speecht5_mel;
 
 use anyhow::Result;
 
@@ -25,13 +26,14 @@ pub use crate::acoustic::MelFrame;
 pub use capability::{BackendCapabilities, BackendFamily, VocoderDescriptor};
 pub use hifigan::{
     HiFiGanCheckpoint, HifiganBackend, LogCompression, MelConfig, MelContract, MelNormalization,
-    SPEECHT5_HIFIGAN_MEL_CONFIG, SPEECHT5_HIFIGAN_MEL_CONTRACT,
+    MelScale, SPEECHT5_HIFIGAN_MEL_CONFIG, SPEECHT5_HIFIGAN_MEL_CONTRACT,
 };
 pub use input::VocoderInput;
 pub use mel_debug::MelDebugRendererBackend;
 pub use registry::{
     SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,
 };
+pub use speecht5_mel::{SpeechT5MelExtraction, extract_speecht5_log_mel};
 
 pub trait SpeechSynthesizer {
     fn id(&self) -> &'static str;

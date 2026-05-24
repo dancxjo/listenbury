@@ -1088,6 +1088,21 @@ pub struct SyntheticWorkGraph {
     watermarks: SyntheticPipelineWatermarks,
 }
 
+pub type SpeechWorkGraph = SyntheticWorkGraph;
+
+#[allow(non_upper_case_globals)]
+pub const TextStage: SyntheticWorkStageKind = SyntheticWorkStageKind::TextStream;
+#[allow(non_upper_case_globals)]
+pub const LingStage: SyntheticWorkStageKind = SyntheticWorkStageKind::LinguisticPlanStream;
+#[allow(non_upper_case_globals)]
+pub const AcousticStage: SyntheticWorkStageKind = SyntheticWorkStageKind::AcousticPlanStream;
+#[allow(non_upper_case_globals)]
+pub const RepresentationStage: SyntheticWorkStageKind = SyntheticWorkStageKind::SpectralFrameStream;
+#[allow(non_upper_case_globals)]
+pub const RenderStage: SyntheticWorkStageKind = SyntheticWorkStageKind::RenderFrameStream;
+#[allow(non_upper_case_globals)]
+pub const PlaybackStage: SyntheticWorkStageKind = SyntheticWorkStageKind::AudioSink;
+
 impl SyntheticWorkGraph {
     pub fn new(watermarks: SyntheticPipelineWatermarks) -> Self {
         Self {

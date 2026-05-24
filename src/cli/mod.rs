@@ -92,6 +92,7 @@ enum DevCommand {
     Continue(ContinueCommand),
     TraceViewerExport(TraceViewerExportCommand),
     ProsodyPlan(ProsodyPlanCommand),
+    MelRoundtrip(MelRoundtripCommand),
     SingDemo(SingDemoCommand),
     RoundTripWav(RoundTripWavCommand),
     LiveHalfDuplex(LiveHalfDuplexCommand),
@@ -297,6 +298,21 @@ pub(crate) struct ProsodyPlanCommand {
     /// Optional SSML file with mark and break tags derived from the plan.
     #[arg(long)]
     pub(crate) ssml_output: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MelRoundtripCommand {
+    /// Reference WAV to extract SpeechT5 log-mel features from.
+    pub(crate) input_wav: PathBuf,
+    /// HiFi-GAN ONNX model compatible with SpeechT5 log-mel spectrograms.
+    #[arg(long = "hifigan-model")]
+    pub(crate) hifigan_model: PathBuf,
+    /// Destination reconstructed WAV path.
+    #[arg(long, default_value = "out/listenbury-mel-roundtrip.wav")]
+    pub(crate) output_wav: PathBuf,
+    /// Optional text dump of the extracted mel matrix.
+    #[arg(long)]
+    pub(crate) mel_dump: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -1007,6 +1023,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
         }
         DevCommand::TraceViewerExport(cmd) => commands::run_trace_viewer_export(cmd),
         DevCommand::ProsodyPlan(cmd) => commands::run_prosody_plan(cmd),
+        DevCommand::MelRoundtrip(cmd) => commands::run_mel_roundtrip(cmd),
         DevCommand::SingDemo(cmd) => commands::run_sing_demo(cmd),
         DevCommand::RoundTripWav(cmd) => commands::run_round_trip_wav(cmd),
         DevCommand::LiveHalfDuplex(cmd) => {
