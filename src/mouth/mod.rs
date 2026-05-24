@@ -5,6 +5,5 @@ pub mod piper;
 pub mod planner;
 pub mod player;
 pub mod read_aloud;
-#[cfg(feature = "tts-riper")]
 pub mod riper;
 pub mod tts;

@@ -62,7 +62,7 @@ enum Command {
         #[command(subcommand)]
         command: Option<ModelsCommand>,
     },
-    #[command(about = "Forge, inspect, and audit neural diphone caches (requires tts-riper)")]
+    #[command(about = "Forge, inspect, and audit neural diphone caches (requires piper-compat)")]
     Diphone {
         #[command(subcommand)]
         command: DiphoneCommand,
@@ -104,7 +104,7 @@ enum DevCommand {
         #[command(subcommand)]
         command: SpeechCacheCommand,
     },
-    #[command(about = "Build or inspect the neural diphone cache (requires tts-riper)")]
+    #[command(about = "Build or inspect the neural diphone cache (requires piper-compat)")]
     DiphoneCache {
         #[command(subcommand)]
         command: DiphoneCacheCommand,

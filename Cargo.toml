@@ -34,12 +34,12 @@ default = [
     "resample-rubato",
     "vad-silero",
     "vad-webrtc",
-    "llm-llama-cpp",
-    "asr-whisper",
-    "asr-whisper-async",
-    "asr-whisper-quantization",
     "tts-piper",
-    "tts-riper",
+    "tts-onnx",
+    "piper-compat",
+    "vocoder-klatt",
+    "vocoder-diphone",
+    "vocoder-hifigan",
     "vision-webcam",
     "model-download",
 ]
@@ -55,7 +55,12 @@ asr-whisper-cuda = ["asr-whisper", "whisper-cpp-plus/cuda"]
 asr-whisper-metal = ["asr-whisper", "whisper-cpp-plus/metal"]
 asr-whisper-quantization = ["asr-whisper", "whisper-cpp-plus/quantization"]
 tts-piper = []
-tts-riper = ["tts-piper", "dep:ort"]
+tts-onnx = ["dep:ort"]
+piper-compat = ["tts-piper", "tts-onnx"]
+vocoder-klatt = []
+vocoder-diphone = []
+vocoder-hifigan = ["tts-onnx"]
+tts-riper = ["piper-compat"]
 vision-webcam = []
 model-download = ["dep:ureq", "dep:dirs", "dep:inquire"]
 

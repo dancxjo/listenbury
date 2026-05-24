@@ -156,7 +156,7 @@ fn f32_samples_from_bytes(bytes: &[u8]) -> Result<Vec<f32>> {
         .collect())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_wizard(cmd: DiphoneWizardCommand) -> Result<()> {
     use listenbury::voice::diphone::{DIPHONE_VOICE_MANIFEST_FILE, DiphoneVoiceManifest};
 
@@ -200,12 +200,12 @@ fn run_wizard(cmd: DiphoneWizardCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn run_wizard(_cmd: DiphoneWizardCommand) -> Result<()> {
-    anyhow::bail!("listenbury diphone wizard requires the `tts-riper` feature")
+    anyhow::bail!("listenbury diphone wizard requires the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
     use listenbury::voice::diphone::ForgeSettings;
     use listenbury::voice::diphone::cache::{CacheLookup, DiphoneCache};
@@ -290,12 +290,12 @@ fn run_forge(cmd: DiphoneCacheForgeCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn run_forge(_cmd: DiphoneCacheForgeCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `tts-riper` feature")
+    anyhow::bail!("listenbury was built without the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
     use listenbury::voice::diphone::ForgeSettings;
     use listenbury::voice::diphone::cache::{CacheLookup, DiphoneCache};
@@ -376,12 +376,12 @@ fn run_build(cmd: DiphoneCacheBuildCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn run_build(_cmd: DiphoneCacheBuildCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `tts-riper` feature")
+    anyhow::bail!("listenbury was built without the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_list(cmd: DiphoneCacheListCommand) -> Result<()> {
     use listenbury::voice::diphone::cache::{CacheEntryMetadata, DiphoneCache};
     use listenbury::voice::diphone::forge::{fingerprint_config, fingerprint_path};
@@ -453,12 +453,12 @@ fn run_list(cmd: DiphoneCacheListCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn run_list(_cmd: DiphoneCacheListCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `tts-riper` feature")
+    anyhow::bail!("listenbury was built without the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_audit_plan(cmd: DiphoneAuditPlanCommand) -> Result<()> {
     use listenbury::voice::diphone::cache::{CacheLookup, DiphoneCache};
     use listenbury::voice::mbrola::MbrolaDatabase;
@@ -540,12 +540,12 @@ fn run_audit_plan(cmd: DiphoneAuditPlanCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn run_audit_plan(_cmd: DiphoneAuditPlanCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `tts-riper` feature")
+    anyhow::bail!("listenbury was built without the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn load_backend(
     model: &Path,
     config_path: &Path,
@@ -556,7 +556,7 @@ fn load_backend(
         .with_context(|| format!("failed to load Riper backend from {}", model.display()))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn load_config(config_path: &Path) -> Result<listenbury::mouth::riper::PiperVoiceConfig> {
     use listenbury::mouth::riper::PiperVoiceConfig;
     let config_json = std::fs::read_to_string(config_path).with_context(|| {
@@ -573,7 +573,7 @@ fn load_config(config_path: &Path) -> Result<listenbury::mouth::riper::PiperVoic
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn cache_key_for_backend(
     backend: &listenbury::mouth::riper::RiperBackend,
     left: &str,
@@ -597,7 +597,7 @@ fn cache_key_for_backend(
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn cache_key_from_parts(
     model: &Path,
     config: &listenbury::mouth::riper::PiperVoiceConfig,
@@ -622,7 +622,7 @@ fn cache_key_from_parts(
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn forge_for_cli(
     backend: &mut listenbury::mouth::riper::RiperBackend,
     left: &str,
@@ -654,7 +654,7 @@ fn forge_for_cli(
     Ok((forged, carrier_pcm.samples))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn cache_metadata(
     key: &listenbury::voice::diphone::cache::CacheKey,
     forged: &listenbury::voice::diphone::ForgedUnit,
@@ -691,7 +691,7 @@ fn cache_metadata(
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn emit_forge_result(
     status: &str,
     unit: &listenbury::voice::mbrola::diphone_provider::DiphoneUnit,
@@ -709,7 +709,7 @@ fn emit_forge_result(
     );
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn maybe_write_debug_outputs(
     cmd: &DiphoneCacheForgeCommand,
     forged: &listenbury::voice::diphone::ForgedUnit,
@@ -774,7 +774,7 @@ fn maybe_write_debug_outputs(
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn write_debug_wav(path: &Path, samples: &[f32], sample_rate_hz: u32) -> Result<()> {
     let spec = hound::WavSpec {
         channels: 1,
@@ -805,7 +805,7 @@ fn sanitize_phone_symbol(symbol: &str) -> String {
         .collect()
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn print_license_notice(config: &listenbury::mouth::riper::PiperVoiceConfig) {
     let license = resolved_model_license(config);
     if license == "unknown" {
@@ -816,7 +816,7 @@ fn print_license_notice(config: &listenbury::mouth::riper::PiperVoiceConfig) {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn resolved_model_license(config: &listenbury::mouth::riper::PiperVoiceConfig) -> String {
     for (key, value) in &config.model_metadata {
         let lower = key.to_ascii_lowercase();
@@ -881,7 +881,7 @@ fn builtin_inventory_names() -> Vec<&'static str> {
     vec!["en-us-basic"]
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn infer_piper_config_path(model: &Path) -> Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(file_name) = model.file_name().and_then(|name| name.to_str()) {
@@ -915,12 +915,12 @@ fn infer_piper_config_path(model: &Path) -> Result<PathBuf> {
     )
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn absolute_or_original(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn load_phone_plan(path: &Path) -> Result<listenbury::voice::mbrola::PhoneTimedPlan> {
     use listenbury::voice::mbrola::pho::parse_pho;
     use listenbury::voice::mbrola::{PhoneTimedPlan, read_pho_file};
@@ -935,7 +935,7 @@ fn load_phone_plan(path: &Path) -> Result<listenbury::voice::mbrola::PhoneTimedP
     parse_pho(&text).with_context(|| format!("failed to parse phone plan {}", path.display()))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn plan_pairs(plan: &listenbury::voice::mbrola::PhoneTimedPlan) -> Vec<(String, String)> {
     let mut symbols = Vec::with_capacity(plan.phones.len() + 2);
     symbols.push("_".to_string());
@@ -947,7 +947,7 @@ fn plan_pairs(plan: &listenbury::voice::mbrola::PhoneTimedPlan) -> Vec<(String, 
         .collect()
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn is_generatable_pair(
     config: &listenbury::mouth::riper::PiperVoiceConfig,
     left: &str,

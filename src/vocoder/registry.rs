@@ -74,7 +74,7 @@ pub fn backend_for_option(
                 return Ok(Box::new(HifiganBackend::deterministic()));
             }
 
-            #[cfg(feature = "tts-riper")]
+            #[cfg(feature = "piper-compat")]
             {
                 let model_path = config.hifigan_model.ok_or_else(|| {
                     anyhow::anyhow!("hifigan backend requires a HiFi-GAN model path")
@@ -82,9 +82,11 @@ pub fn backend_for_option(
                 Ok(Box::new(HifiganBackend::load(model_path)?))
             }
 
-            #[cfg(not(feature = "tts-riper"))]
+            #[cfg(not(feature = "piper-compat"))]
             {
-                bail!("hifigan backend requires the `tts-riper` feature unless --skip-gan is used")
+                bail!(
+                    "hifigan backend requires the `piper-compat` feature unless --skip-gan is used"
+                )
             }
         }
     }

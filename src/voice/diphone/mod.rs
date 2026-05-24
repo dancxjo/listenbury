@@ -13,7 +13,7 @@
 //! | [`CacheKey`] | Stable hash key that includes model/config/phones/versions |
 //! | [`CacheEntryMetadata`] | Provenance JSON stored alongside each PCM file |
 //! | [`FallbackDiphoneProvider`] | Primary + secondary provider chain |
-//! | [`NeuralDiphoneProvider`] | Cache-first; forges on miss (requires `tts-riper`) |
+//! | [`NeuralDiphoneProvider`] | Cache-first; forges on miss (requires `piper-compat`) |
 //! | [`ForgeSettings`] | Tuning parameters for the carrier synthesis pipeline |
 //!
 //! # Licensing note
@@ -40,5 +40,5 @@ pub use manifest::{DIPHONE_VOICE_MANIFEST_FILE, DiphoneVoiceManifest};
 pub use normalize::NormalizationReport;
 pub use provider::FallbackDiphoneProvider;
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 pub use provider::NeuralDiphoneProvider;

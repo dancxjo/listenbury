@@ -11,18 +11,18 @@ use tracing::debug;
 use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
 use crate::mouth::planner::{SpeechPlan, strip_emoji};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use crate::mouth::riper::{
     PiperIdSequence, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend, SimpleEnglishG2p,
 };
 use crate::mouth::tts::TextToSpeech;
 use crate::time::ExactTimestamp;
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const RIPER_TEXT_OUTPUT_GAIN: f32 = 1.5;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const RIPER_SENTENCE_PAUSE_MS: u64 = 260;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const RIPER_CHANNELS: u16 = 1;
 
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ impl TtsBackend for ProcessPiperBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PiperBackendPreference {
     Process,
@@ -88,7 +88,7 @@ pub enum PiperBackendPreference {
     RiperWithProcessFallback,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl PiperBackendPreference {
     fn from_env() -> Self {
         match std::env::var("LISTENBURY_PIPER_BACKEND")
@@ -110,7 +110,7 @@ impl PiperBackendPreference {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug)]
 struct RiperTextBackend {
     backend: RiperBackend,
@@ -118,7 +118,7 @@ struct RiperTextBackend {
     frame_samples: usize,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl RiperTextBackend {
     fn load(config: &PiperConfig) -> Result<Self> {
         let config_path = riper_config_path(config).with_context(|| {
@@ -154,7 +154,7 @@ impl RiperTextBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl TtsBackend for RiperTextBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let t0 = Instant::now();
@@ -198,14 +198,14 @@ impl TtsBackend for RiperTextBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RiperTextChunk<'a> {
     text: &'a str,
     sentence_final: bool,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn riper_sentence_chunks(text: &str) -> Vec<RiperTextChunk<'_>> {
     let mut chunks = Vec::new();
     let mut start = 0usize;
@@ -243,7 +243,7 @@ fn riper_sentence_chunks(text: &str) -> Vec<RiperTextChunk<'_>> {
     chunks
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn riper_text_chunk(
     text: &str,
     start: usize,
@@ -257,12 +257,12 @@ fn riper_text_chunk(
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn is_riper_sentence_terminal(ch: char) -> bool {
     matches!(ch, '.' | '!' | '?')
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn riper_silence_frames(
     sample_rate_hz: u32,
     channels: u16,
@@ -294,7 +294,7 @@ fn riper_silence_frames(
     frames
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn apply_frame_gain(frames: &mut [AudioFrame], gain: f32) {
     if (gain - 1.0).abs() <= f32::EPSILON {
         return;
@@ -304,7 +304,7 @@ fn apply_frame_gain(frames: &mut [AudioFrame], gain: f32) {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 trait RiperTextPhonemeIds {
     fn to_riper_text_ids(
         &self,
@@ -313,7 +313,7 @@ trait RiperTextPhonemeIds {
     ) -> Result<PiperIdSequence>;
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl RiperTextPhonemeIds for PiperPhonemeSequence {
     fn to_riper_text_ids(
         &self,
@@ -329,7 +329,7 @@ impl RiperTextPhonemeIds for PiperPhonemeSequence {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 struct RiperPreferredBackend<P, N> {
     process: P,
     riper: Option<N>,
@@ -337,7 +337,7 @@ struct RiperPreferredBackend<P, N> {
     riper_init_error: Option<String>,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl<P, N> RiperPreferredBackend<P, N> {
     fn new(
         process: P,
@@ -354,7 +354,7 @@ impl<P, N> RiperPreferredBackend<P, N> {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl<P: TtsBackend, N: TtsBackend> TtsBackend for RiperPreferredBackend<P, N> {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         if self.preference == PiperBackendPreference::Process {
@@ -401,7 +401,7 @@ impl<P: TtsBackend, N: TtsBackend> TtsBackend for RiperPreferredBackend<P, N> {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn riper_config_path(config: &PiperConfig) -> Option<PathBuf> {
     config
         .config_path
@@ -428,7 +428,7 @@ impl PiperTextToSpeech {
         Self::with_boxed_backend(default_piper_backend(config))
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     pub fn new_with_backend_preference(
         config: PiperConfig,
         preference: PiperBackendPreference,
@@ -461,18 +461,18 @@ impl PiperTextToSpeech {
 }
 
 fn default_piper_backend(config: PiperConfig) -> Box<dyn TtsBackend> {
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     {
         piper_backend_with_preference(config, PiperBackendPreference::from_env())
     }
 
-    #[cfg(not(feature = "tts-riper"))]
+    #[cfg(not(feature = "piper-compat"))]
     {
         Box::new(ProcessPiperBackend::new(config))
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn piper_backend_with_preference(
     config: PiperConfig,
     preference: PiperBackendPreference,
@@ -743,12 +743,12 @@ mod tests {
         assert!(!frames.is_empty(), "expected audio after stop+enqueue");
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     struct AlwaysFailBackend {
         calls: usize,
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     impl TtsBackend for AlwaysFailBackend {
         fn synthesize(&mut self, _text: &str) -> Result<Vec<AudioFrame>> {
             self.calls += 1;
@@ -756,7 +756,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_sentence_chunks_split_sentence_final_text() {
         let chunks = riper_sentence_chunks("Okay. Again? Done!");
@@ -780,7 +780,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_sentence_chunks_leave_trailing_fragment_without_pause() {
         let chunks = riper_sentence_chunks("Okay. still thinking");
@@ -800,7 +800,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_silence_frames_match_pause_duration() {
         let frames = riper_silence_frames(1_000, 1, 128, 260);
@@ -814,7 +814,7 @@ mod tests {
         assert!(frames.iter().all(|frame| frame.channels == 1));
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn apply_frame_gain_boosts_and_clips_samples() {
         let mut frames = vec![AudioFrame {
@@ -830,7 +830,7 @@ mod tests {
         assert_eq!(frames[0].samples, vec![0.3, -0.75, 1.0, -1.0]);
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_backend_preference_uses_riper_when_it_succeeds() {
         let process = MockTtsBackend::new();
@@ -852,7 +852,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_fallback_mode_uses_process_when_riper_fails() {
         let process = MockTtsBackend::new();
@@ -870,7 +870,7 @@ mod tests {
         assert_eq!(backend.riper.as_ref().expect("riper").calls, 1);
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_mode_returns_clear_error_when_riper_is_unavailable() {
         let process = MockTtsBackend::new();
@@ -888,7 +888,7 @@ mod tests {
         assert!(error.to_string().contains("missing Riper config"));
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_text_id_conversion_accepts_cmudict_uw_for_espeak_voice_maps() {
         let config = PiperVoiceConfig::from_json_str(
@@ -921,7 +921,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_text_id_conversion_preserves_already_d_for_espeak_voice_maps() {
         let config = PiperVoiceConfig::from_json_str(
@@ -960,7 +960,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     #[test]
     fn riper_text_backend_reports_missing_config_path_clearly() {
         let mut config = PiperConfig::new(

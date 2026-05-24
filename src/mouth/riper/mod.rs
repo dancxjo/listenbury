@@ -1,4 +1,4 @@
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 pub mod backend;
 pub mod config;
 pub mod echo;
@@ -27,7 +27,7 @@ pub use crate::linguistic::language_pack_rules::{
     import_rule_catalog_from_str, load_pronunciation_rule_catalog, match_multi_word_rule,
     rule_matches_context,
 };
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 pub use backend::{PiperModelContract, RiperBackend, RiperPcm};
 pub use config::{PiperVoiceConfig, PiperVoiceConfigError};
 pub use echo::{

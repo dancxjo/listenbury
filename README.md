@@ -265,13 +265,21 @@ Default local build:
 just build
 ```
 
-The default build enables the portable local stack, including audio capture,
-resampling, WebRTC VAD, ASR, local LLM, Piper TTS, Riper scaffolding,
-webcam support, and model download support. Riper is Listenbury's own custom
-translation of Piper: it runs Piper-compatible voice models through our local
-phoneme, prosody, and ONNX execution path instead of shelling out to the Piper
-process. CUDA and Metal accelerator variants remain explicit opt-ins because
-they depend on the target machine and platform.
+The default build enables the ordinary local synthesis stack (Piper-compatible
+TTS, Klatt, diphone/MBROLA abstractions, and HiFi-GAN abstractions), plus audio
+capture, resampling, VAD, webcam support, and model download support.
+
+Heavy/runtime-sensitive integrations stay opt-in:
+
+- `asr-whisper` (+ `asr-whisper-cuda` / `asr-whisper-metal`)
+- `llm-llama-cpp` (+ `llm-llama-cpp-cuda`)
+
+Feature naming now follows capability/dependency boundaries:
+
+- `piper-compat` enables Listenbury's Piper-compatible synthesis path
+- `tts-onnx` gates ONNX Runtime
+- `vocoder-hifigan` gates HiFi-GAN ONNX usage
+- `tts-riper` is kept as a legacy alias of `piper-compat`
 
 CUDA build:
 
@@ -282,13 +290,13 @@ just build-cuda
 Minimal build example:
 
 ```bash
-cargo build --no-default-features --features tts-piper
+cargo build --no-default-features --features piper-compat
 ```
 
 Selected local AI stack:
 
 ```bash
-cargo build --no-default-features --features "asr-whisper llm-llama-cpp tts-piper model-download"
+cargo build --no-default-features --features "asr-whisper llm-llama-cpp piper-compat model-download"
 ```
 
 When switching between CPU and CUDA builds, a clean rebuild may avoid stale native artifacts:

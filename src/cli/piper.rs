@@ -1,57 +1,57 @@
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::{play_audio_frame_stream, play_audio_frames};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use crate::cli::model_paths::resolve_hifigan_model;
 use crate::cli::model_paths::resolve_piper_voice;
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use crate::cli::model_paths::resolve_whisper_model;
 use crate::cli::{EchoCommand, RiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::WhisperSpeechRecognizer;
 use listenbury::audio::frame::AudioFrame;
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::audio::read_wav_as_whisper_frames;
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::audio::streaming_prosody::StreamingProsodyAnalyzer;
 use listenbury::audio::write_wav;
 #[cfg(test)]
 use listenbury::audio::write_wav_bytes;
 use listenbury::linguistic::phonology::{Phone, PhoneString};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::mouth::backend::TtsBackend;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
     SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind, SyntacticLinkParse,
 };
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::vocoder::{HifiganBackend, VocoderBackend, VocoderInput};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::voice::articulator::PhoneTimedRenderTarget;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::voice::diphone::{DiphoneCache, DiphoneVoiceManifest, NeuralDiphoneProvider};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::voice::mbrola::render_phone_plan_with_diphone_provider_to_frames;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::voice::mbrola::{MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, PhoneTimedPlan};
 use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::{
     default_english_phone_targets, phone_render_targets_from_string,
 };
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use listenbury::{
     AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
     MelTemporalDiscontinuityStats, SourceFilterAcousticModel, summarize_mel_temporal_discontinuity,
@@ -60,22 +60,22 @@ use listenbury::{
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "audio-cpal")]
 use std::io::BufRead;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 use std::process::{Command, Stdio};
 #[cfg(feature = "audio-cpal")]
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const HIFIGAN_TEMPORAL_BANDING_MEAN_DELTA_THRESHOLD: f32 = 0.20;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const HIFIGAN_TEMPORAL_BANDING_P95_DELTA_THRESHOLD: f32 = 0.30;
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 const HIFIGAN_SMOOTHING_EFFECT_RATIO: f32 = 0.85;
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
@@ -276,7 +276,7 @@ fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToS
     say_riper_tts_for_voice(piper_voice)
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn say_mbrola_tts_for_args(args: &SayArgs) -> Result<PiperTextToSpeech> {
     let voice = resolve_mbrola_voice(args.mbrola_voice.clone())?;
     if voice == received_pronunciation_mbrola_voice() && !voice.is_file() {
@@ -290,12 +290,12 @@ fn say_mbrola_tts_for_args(args: &SayArgs) -> Result<PiperTextToSpeech> {
     )?))
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn say_mbrola_tts_for_args(_args: &SayArgs) -> Result<PiperTextToSpeech> {
-    anyhow::bail!("listenbury say --diphone requires the `tts-riper` feature")
+    anyhow::bail!("listenbury say --diphone requires the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     Ok(PiperTextToSpeech::new_with_backend_preference(
         piper_config_for_riper_voice(piper_voice)?,
@@ -303,14 +303,14 @@ fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     ))
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn say_riper_tts_for_voice(_piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     anyhow::bail!(
-        "listenbury say requires the `tts-riper` feature (or pass --piper for the external Piper binary)"
+        "listenbury say requires the `piper-compat` feature (or pass --piper for the external Piper binary)"
     )
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 enum MbrolaTextBackend {
     Native {
         renderer: MbrolaRenderer,
@@ -325,7 +325,7 @@ enum MbrolaTextBackend {
     },
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl MbrolaTextBackend {
     fn load(voice_path: PathBuf) -> Result<Self> {
         if let Some(manifest) = DiphoneVoiceManifest::load_if_present(&voice_path)? {
@@ -373,7 +373,7 @@ impl MbrolaTextBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl TtsBackend for MbrolaTextBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         match self {
@@ -426,7 +426,7 @@ impl TtsBackend for MbrolaTextBackend {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn mbrola_plan_from_riper_phonemes(
     phonemes: &PiperPhonemeSequence,
     text: &str,
@@ -479,7 +479,7 @@ fn mbrola_plan_from_riper_phonemes(
     Ok(PhoneTimedPlan::new(phones))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn diphone_cache_plan_from_riper_phonemes(
     phonemes: &PiperPhonemeSequence,
     text: &str,
@@ -526,7 +526,7 @@ fn diphone_cache_plan_from_riper_phonemes(
     Ok(PhoneTimedPlan::new(phones))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn mbrola_default_phone_duration_ms(symbol: &str) -> u32 {
     if mbrola_symbol_is_pitch_bearing(symbol) {
         145
@@ -535,7 +535,7 @@ fn mbrola_default_phone_duration_ms(symbol: &str) -> u32 {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn mbrola_symbol_is_pitch_bearing(symbol: &str) -> bool {
     let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
     matches!(
@@ -569,12 +569,12 @@ fn mbrola_symbol_is_pitch_bearing(symbol: &str) -> bool {
     )
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn neutral_source_period_samples(sample_rate_hz: u32) -> usize {
     (sample_rate_hz / 125).max(1) as usize
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn resolve_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
     explicit
         .or_else(|| std::env::var_os("LISTENBURY_MBROLA_VOICE").map(PathBuf::from))
@@ -593,34 +593,36 @@ fn resolve_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 pub(crate) fn run_riper_compare(command: RiperCompareCommand) -> Result<()> {
-    #[cfg(not(feature = "tts-riper"))]
+    #[cfg(not(feature = "piper-compat"))]
     {
         let _ = command;
         anyhow::bail!(
-            "listenbury riper-compare requires the `tts-riper` feature to compare Riper synthesis"
+            "listenbury riper-compare requires the `piper-compat` feature to compare Riper synthesis"
         );
     }
 
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     {
         run_riper_compare_impl(command)
     }
 }
 
 pub(crate) fn run_echo(command: EchoCommand) -> Result<()> {
-    #[cfg(not(all(feature = "asr-whisper", feature = "tts-riper")))]
+    #[cfg(not(all(feature = "asr-whisper", feature = "piper-compat")))]
     {
         let _ = command;
-        anyhow::bail!("listenbury echo requires both the `asr-whisper` and `tts-riper` features");
+        anyhow::bail!(
+            "listenbury echo requires both the `asr-whisper` and `piper-compat` features"
+        );
     }
 
-    #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+    #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
     {
         run_echo_impl(command)
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 fn run_echo_impl(command: EchoCommand) -> Result<()> {
     let whisper_model = resolve_whisper_model(command.whisper_model)?;
     let riper_model_path = resolve_piper_voice(command.piper_voice)?;
@@ -736,7 +738,7 @@ fn run_echo_impl(command: EchoCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
     let args = RiperCompareArgs::from_command(command)?;
 
@@ -778,7 +780,7 @@ fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug)]
 struct RiperCompareArgs {
     piper_bin: Option<PathBuf>,
@@ -791,7 +793,7 @@ struct RiperCompareArgs {
     text: String,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl RiperCompareArgs {
     fn from_command(command: RiperCompareCommand) -> Result<Self> {
         anyhow::ensure!(
@@ -817,7 +819,7 @@ impl RiperCompareArgs {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone)]
 struct SynthesisStats {
     frames: Vec<AudioFrame>,
@@ -825,7 +827,7 @@ struct SynthesisStats {
     audio: AudioStats,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, PartialEq)]
 struct AudioStats {
     sample_rate_hz: u32,
@@ -836,7 +838,7 @@ struct AudioStats {
     peak_abs: f32,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProcessNativePhonemes {
     voice: String,
@@ -844,7 +846,7 @@ struct ProcessNativePhonemes {
     ipa: std::result::Result<String, String>,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, PartialEq)]
 struct RiperPhonemeReport {
     source: &'static str,
@@ -854,7 +856,7 @@ struct RiperPhonemeReport {
     sentence_analysis: Option<SentenceAnalysis>,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 impl AudioStats {
     fn from_frames(frames: &[AudioFrame], label: &str) -> Result<Self> {
         let Some(first) = frames.first() else {
@@ -912,7 +914,7 @@ impl AudioStats {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<SynthesisStats> {
     let mut backend = ProcessPiperBackend::new(config.clone());
     let t0 = Instant::now();
@@ -926,7 +928,7 @@ fn synthesize_process_for_compare(config: &PiperConfig, text: &str) -> Result<Sy
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn synthesize_riper_for_compare(
     model_path: &Path,
     config: &PiperVoiceConfig,
@@ -956,7 +958,7 @@ fn synthesize_riper_for_compare(
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn resolve_riper_phoneme_report(
     args: &RiperCompareArgs,
     config: &PiperVoiceConfig,
@@ -1009,7 +1011,7 @@ fn resolve_riper_phoneme_report(
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn read_riper_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
     let json = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read Riper config at {}", path.display()))?;
@@ -1017,7 +1019,7 @@ fn read_riper_voice_config(path: &Path) -> Result<PiperVoiceConfig> {
         .with_context(|| format!("failed to parse Riper config JSON at {}", path.display()))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn process_native_phonemes_for_compare(
     config_path: Option<&Path>,
     text: &str,
@@ -1033,14 +1035,14 @@ fn process_native_phonemes_for_compare(
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EspeakPhonemeNotation {
     Mnemonic,
     Ipa,
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn espeak_voice_from_config(path: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
@@ -1052,7 +1054,7 @@ fn espeak_voice_from_config(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn run_espeak_ng_phonemes(
     voice: &str,
     text: &str,
@@ -1108,7 +1110,7 @@ fn run_espeak_ng_phonemes(
         .join(" "))
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn report_compare_phonemes(process: &ProcessNativePhonemes, riper: &RiperPhonemeReport) {
     println!("process native phonemes (eSpeak {}, -x):", process.voice);
     println!("  {}", render_phoneme_result(&process.mnemonic));
@@ -1125,7 +1127,7 @@ fn report_compare_phonemes(process: &ProcessNativePhonemes, riper: &RiperPhoneme
     report_link_grammar(&riper.sentence_analysis);
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn report_link_grammar(sentence_analysis: &Option<SentenceAnalysis>) {
     let Some(analysis) = sentence_analysis else {
         println!("Riper link grammar:");
@@ -1149,7 +1151,7 @@ fn report_link_grammar(sentence_analysis: &Option<SentenceAnalysis>) {
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn format_sentence_tokens(analysis: &SentenceAnalysis) -> String {
     analysis
         .tokens
@@ -1163,7 +1165,7 @@ fn format_sentence_tokens(analysis: &SentenceAnalysis) -> String {
         .join(" ")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn format_noun_compounds(analysis: &SentenceAnalysis) -> Vec<String> {
     let words = word_texts(analysis);
     analysis
@@ -1184,7 +1186,7 @@ fn format_noun_compounds(analysis: &SentenceAnalysis) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn format_syntactic_links(analysis: &SentenceAnalysis, parse: &SyntacticLinkParse) -> String {
     if parse.links.is_empty() {
         return "(none)".to_string();
@@ -1206,7 +1208,7 @@ fn format_syntactic_links(analysis: &SentenceAnalysis, parse: &SyntacticLinkPars
         .join(", ")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn word_texts(analysis: &SentenceAnalysis) -> Vec<Option<String>> {
     let mut words = Vec::new();
     for token in &analysis.tokens {
@@ -1221,7 +1223,7 @@ fn word_texts(analysis: &SentenceAnalysis) -> Vec<Option<String>> {
     words
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn render_phoneme_result(result: &std::result::Result<String, String>) -> String {
     match result {
         Ok(value) if value.is_empty() => "(empty)".to_string(),
@@ -1230,7 +1232,7 @@ fn render_phoneme_result(result: &std::result::Result<String, String>) -> String
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn format_phoneme_sequence(sequence: &PiperPhonemeSequence) -> String {
     sequence
         .phonemes
@@ -1240,7 +1242,7 @@ fn format_phoneme_sequence(sequence: &PiperPhonemeSequence) -> String {
         .join(" ")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
     println!("process runtime: {}ms", process.runtime.as_millis());
     println!("Riper inference: {}ms", riper.runtime.as_millis());
@@ -1267,7 +1269,7 @@ struct SayArgs {
     piper: bool,
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     hifigan_model: Option<PathBuf>,
     mbrola: bool,
     mbrola_voice: Option<PathBuf>,
@@ -1365,7 +1367,7 @@ impl SayArgs {
         Ok(Self {
             piper_bin,
             piper_voice,
-            #[cfg(feature = "tts-riper")]
+            #[cfg(feature = "piper-compat")]
             hifigan_model: command.hifigan_model,
             mbrola,
             mbrola_voice,
@@ -1422,7 +1424,7 @@ fn say_backend_graph(args: &SayArgs) -> CurrentBackendGraphView {
     say_backend_kind(args).current_backend_graph()
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     let text = &args.text;
     let phone_string = klatt_phone_string_for_text(text)?;
@@ -1506,12 +1508,12 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     Ok(frames)
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
-    anyhow::bail!("listenbury say --hifigan requires the `tts-riper` feature")
+    anyhow::bail!("listenbury say --hifigan requires the `piper-compat` feature")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn maybe_render_source_filter_reference(
     mel: &[MelFrame],
     f0_hz: &[f32],
@@ -1526,7 +1528,7 @@ fn maybe_render_source_filter_reference(
         .context("failed to render deterministic source-filter A/B reference")
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn maybe_write_hifigan_debug_artifacts(
     text: &str,
     acoustic_track: &AcousticFrameTrack,
@@ -1652,7 +1654,7 @@ fn maybe_write_hifigan_debug_artifacts(
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn write_hifigan_mel_dump(
     path: &Path,
     text: &str,
@@ -1682,7 +1684,7 @@ fn write_hifigan_mel_dump(
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn hifigan_temporal_smoothing_amount() -> Result<f32> {
     let Some(value) = std::env::var_os("LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING")
         .map(|value| value.to_string_lossy().trim().to_string())
@@ -1702,7 +1704,7 @@ fn hifigan_temporal_smoothing_amount() -> Result<f32> {
     Ok(amount)
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn hifigan_artifact_attribution(
     raw: MelTemporalDiscontinuityStats,
     input: MelTemporalDiscontinuityStats,
@@ -1755,18 +1757,18 @@ fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
 }
 
 fn klatt_phone_string_for_text(text: &str) -> Result<PhoneString> {
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     {
         klatt_phone_string_from_riper(text)
     }
 
-    #[cfg(not(feature = "tts-riper"))]
+    #[cfg(not(feature = "piper-compat"))]
     {
         klatt_phone_string_from_demo_lexicon(text)
     }
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn klatt_phone_string_from_riper(text: &str) -> Result<PhoneString> {
     let unit = SimpleEnglishG2p::default()
         .phonemize_unit(text)
@@ -1797,7 +1799,7 @@ fn klatt_phone_string_from_riper(text: &str) -> Result<PhoneString> {
     Ok(PhoneString { phones })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn klatt_ipa_segments_for_riper_symbol(symbol: &str) -> Option<&'static [&'static str]> {
     let stress = symbol.chars().next_back();
     let base = symbol
@@ -1895,7 +1897,7 @@ fn klatt_ipa_segments_for_riper_symbol(symbol: &str) -> Option<&'static [&'stati
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn is_riper_vowel_symbol(symbol: &str) -> bool {
     matches!(
         symbol,
@@ -1916,7 +1918,7 @@ fn is_riper_vowel_symbol(symbol: &str) -> bool {
     )
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn klatt_phone_string_from_demo_lexicon(text: &str) -> Result<PhoneString> {
     let mut phones = Vec::new();
     let mut unknown_words = Vec::new();
@@ -1952,7 +1954,7 @@ fn klatt_phone_string_from_demo_lexicon(text: &str) -> Result<PhoneString> {
     Ok(PhoneString { phones })
 }
 
-#[cfg(not(feature = "tts-riper"))]
+#[cfg(not(feature = "piper-compat"))]
 fn klatt_word_phones(word: &str) -> Option<&'static [&'static str]> {
     const HELLO: [&str; 5] = ["h", "ɛ", "l", "o", "ʊ"];
     const MY: [&str; 3] = ["m", "ɑ", "ɪ"];
@@ -2040,7 +2042,7 @@ fn find_piper_executable(name: &str) -> Option<PathBuf> {
     })
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     if frame.sample_rate_hz == 0 || frame.channels == 0 {
         return 0;
@@ -2061,7 +2063,7 @@ pub(crate) fn piper_config_for_voice(
     piper_config_for_model_path(piper_bin, model_path)
 }
 
-#[cfg(feature = "tts-riper")]
+#[cfg(feature = "piper-compat")]
 fn piper_config_for_riper_voice(model_path: impl Into<PathBuf>) -> Result<PiperConfig> {
     piper_config_for_model_path("piper", model_path.into())
 }
@@ -2766,7 +2768,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn klatt_uses_riper_pronunciation_for_mixed_prose() {
         let frames = synthesize_klatt_for_say(
             "MBROLA was created by Thierry Dutoit. It's a speech synthesizer based on the concatenation of diphones.",
@@ -2777,7 +2779,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn klatt_riper_phone_bridge_splits_diphthongs_and_affricates() {
         let phone_string = klatt_phone_string_for_text("Okay, Charlie.")
             .expect("Riper phones should convert to Klatt render phones");
@@ -2787,7 +2789,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn frame_duration_ms_handles_zero_values() {
         let frame = AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -2809,7 +2811,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn frame_duration_ms_preserves_fractional_millisecond_precision() {
         let frame = AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -2823,7 +2825,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn riper_compare_args_joins_words_into_text() {
         let args = RiperCompareArgs::from_command(RiperCompareCommand {
             piper_bin: None,
@@ -2871,7 +2873,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn espeak_compatible_ids_match_piper_debug_shape_for_okay() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
@@ -2913,7 +2915,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn espeak_compatible_ids_support_lollipop_guild_sentence_symbols() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
@@ -2962,7 +2964,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn espeak_compatible_ids_map_arpabet_flap_symbol() {
         let config = PiperVoiceConfig::from_json_str(
             r#"
@@ -3002,7 +3004,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "tts-riper")]
+    #[cfg(feature = "piper-compat")]
     fn audio_stats_computes_duration_rms_and_peak() {
         let stats = AudioStats::from_frames(
             &[AudioFrame {
