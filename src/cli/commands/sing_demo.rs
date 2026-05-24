@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+#[cfg(feature = "audio-cpal")]
+use super::play_audio_frames;
 use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 
 #[cfg(feature = "piper-compat")]
@@ -63,10 +65,7 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
                 voiced: &acoustic_track.voiced,
             })
             .context("failed to render sing-demo mel/F0 track with HiFi-GAN")?;
-        let output_path = command
-            .output_wav
-            .unwrap_or_else(|| default_output_wav_path(backend));
-        write_demo_wav(&output_path, &frames)?;
+        emit_demo_audio(command.output_wav.as_deref(), &frames, "HiFi-GAN sing-demo")?;
         return Ok(());
     }
 
@@ -89,15 +88,20 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
 
     let frames = renderer.render(VocoderInput::RenderPlan(&render_plan))?;
 
-    let output_path = command
-        .output_wav
-        .unwrap_or_else(|| default_output_wav_path(backend));
-    write_demo_wav(&output_path, &frames)?;
+    emit_demo_audio(
+        command.output_wav.as_deref(),
+        &frames,
+        &format!("{} sing-demo", descriptor.id),
+    )?;
     Ok(())
 }
 
-fn default_output_wav_path(backend: SingDemoBackendOption) -> PathBuf {
-    PathBuf::from(format!("out/hello-ragtime-{}.wav", backend.as_str()))
+fn emit_demo_audio(output_path: Option<&Path>, frames: &[AudioFrame], source: &str) -> Result<()> {
+    if let Some(output_path) = output_path {
+        write_demo_wav(output_path, frames)
+    } else {
+        play_demo_audio(frames, source)
+    }
 }
 
 fn selector_for_backend(backend: SingDemoBackendOption) -> SingDemoBackendSelector {
@@ -170,6 +174,18 @@ fn write_demo_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
         output_path.display()
     );
     Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
+fn play_demo_audio(frames: &[AudioFrame], source: &str) -> Result<()> {
+    play_audio_frames(frames, source)
+}
+
+#[cfg(not(feature = "audio-cpal"))]
+fn play_demo_audio(_frames: &[AudioFrame], _source: &str) -> Result<()> {
+    anyhow::bail!(
+        "listenbury sing needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
+    )
 }
 
 fn timed_phone(ipa: &str, start_ms: u64, end_ms: u64) -> Result<TimedPhoneRef> {
@@ -407,18 +423,6 @@ fn build_ragtime_phrase() -> Result<SungPhrase> {
     let _ = t;
 
     Ok(phrase)
-}
-
-impl SingDemoBackendOption {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Klatt => "klatt",
-            Self::Riper => "riper",
-            Self::Mbrola => "mbrola",
-            Self::Piper => "piper",
-            Self::Hifigan => "hifigan",
-        }
-    }
 }
 
 fn resolve_sing_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
