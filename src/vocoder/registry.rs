@@ -87,7 +87,7 @@ pub fn list_backends() -> Vec<VocoderDescriptor> {
 pub fn backend_by_id(id: &str) -> Result<Box<dyn VocoderBackend>> {
     match id {
         "riper-onnx-direct" => Ok(Box::new(RiperOnnxDirectBackend)),
-        "hifigan" => Ok(Box::new(HifiganBackend)),
+        "hifigan" => Ok(Box::new(HifiganBackend::deterministic())),
         "bigvgan" => Ok(Box::new(BigVganBackend)),
         "diffwave" => Ok(Box::new(DiffwaveBackend)),
         "source-filter-neural" => Ok(Box::new(NeuralSourceFilterBackend)),
@@ -194,6 +194,19 @@ mod tests {
         frames.iter().map(|frame| frame.samples.len()).sum()
     }
 
+    fn synthetic_mel_frames() -> Vec<crate::vocoder::MelFrame> {
+        (0..6)
+            .map(|frame_index| crate::vocoder::MelFrame {
+                bins: (0..8)
+                    .map(|bin_index| {
+                        let envelope = 1.0 - (bin_index as f32 / 8.0);
+                        (0.12 + frame_index as f32 * 0.01) * envelope
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
     #[test]
     fn klatt_backend_renders_non_empty_audio() {
         let phrase = ragtime_phrase();
@@ -259,9 +272,7 @@ mod tests {
 
     #[test]
     fn piper_backend_rejects_phone_timed_input() {
-        let mut backend =
-            backend_for_option(SingDemoBackendSelector::Piper, VocoderConfig::default())
-                .expect("piper backend");
+        let mut backend = PiperBackend::new(None);
         let err = backend
             .render(VocoderInput::PhoneTimed(&[]))
             .expect_err("piper should reject phone-timed input");
@@ -272,9 +283,49 @@ mod tests {
     }
 
     #[test]
-    fn neural_stubs_are_registered_and_return_clear_errors() {
+    fn hifigan_backend_renders_mel_f0_audio() {
+        let mel = synthetic_mel_frames();
+        let f0_hz = vec![220.0, 225.0, 230.0, 235.0, 240.0, 245.0];
+        let voiced = vec![true, true, true, true, true, true];
+        let mut backend = backend_by_id("hifigan").expect("hifigan backend construction");
+
+        let frames = backend
+            .render(VocoderInput::MelF0 {
+                mel: &mel,
+                f0_hz: &f0_hz,
+                voiced: &voiced,
+            })
+            .expect("hifigan render");
+
+        assert_eq!(backend.id(), "hifigan");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].sample_rate_hz, 22_050);
+        assert_eq!(frames[0].channels, 1);
+        assert_eq!(frame_samples(&frames), mel.len() * 256);
+        assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.0));
+    }
+
+    #[test]
+    fn hifigan_backend_rejects_mismatched_f0_tracks() {
+        let mel = synthetic_mel_frames();
+        let f0_hz = vec![220.0];
+        let voiced = vec![true; mel.len()];
+        let mut backend = backend_by_id("hifigan").expect("hifigan backend construction");
+
+        let err = backend
+            .render(VocoderInput::MelF0 {
+                mel: &mel,
+                f0_hz: &f0_hz,
+                voiced: &voiced,
+            })
+            .expect_err("hifigan should validate F0 length");
+
+        assert!(err.to_string().contains("F0 values"));
+    }
+
+    #[test]
+    fn remaining_neural_stubs_are_registered_and_return_clear_errors() {
         for id in [
-            "hifigan",
             "bigvgan",
             "diffwave",
             "source-filter-neural",

@@ -194,7 +194,7 @@ fn run_wizard(cmd: DiphoneWizardCommand) -> Result<()> {
         voice_dir.join(DIPHONE_VOICE_MANIFEST_FILE).display()
     );
     println!(
-        "Try: MBROLA_VOICE={} listenbury say --mbrola \"Hello, my baby.\"",
+        "Try: MBROLA_VOICE={} listenbury say --diphone \"Hello, my baby.\"",
         voice_dir.display()
     );
     Ok(())

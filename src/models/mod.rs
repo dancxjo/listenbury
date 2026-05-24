@@ -54,6 +54,7 @@ pub struct FetchProgress {
 pub struct ModelSelection {
     pub llm: Option<String>,
     pub voice: Option<String>,
+    pub vocoder: Option<String>,
     pub whisper: Option<String>,
 }
 
@@ -96,6 +97,7 @@ pub fn default_bundle_id(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llama-3-2-3b-instruct-q4-k-m",
         ModelKind::Voice => "ryan",
+        ModelKind::Vocoder => "speecht5-hifigan",
         ModelKind::Whisper => "whisper-large-v3-turbo",
     }
 }
@@ -129,6 +131,9 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
         ModelKind::Voice => std::env::var("PETE_VOICE")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_VOICE").ok()),
+        ModelKind::Vocoder => std::env::var("PETE_VOCODER")
+            .ok()
+            .or_else(|| std::env::var("LISTENBURY_VOCODER").ok()),
         ModelKind::Whisper => std::env::var("PETE_WHISPER")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_WHISPER").ok()),
@@ -143,6 +148,7 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
             selection.and_then(|selection| match kind {
                 ModelKind::Llm => selection.llm,
                 ModelKind::Voice => selection.voice,
+                ModelKind::Vocoder => selection.vocoder,
                 ModelKind::Whisper => selection.whisper,
             })
         })
@@ -160,6 +166,7 @@ pub fn model_kind_label(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llm",
         ModelKind::Voice => "voice",
+        ModelKind::Vocoder => "vocoder",
         ModelKind::Whisper => "whisper",
     }
 }
@@ -248,6 +255,7 @@ pub fn fetch_selected_assets_with_progress_and_jobs_and_verify(
         selected_bundle(ModelKind::Whisper)?,
         selected_bundle(ModelKind::Llm)?,
         selected_bundle(ModelKind::Voice)?,
+        selected_bundle(ModelKind::Vocoder)?,
     ];
     fetch_bundles_with_progress(&bundles, jobs, verify_existing, &mut progress)
 }

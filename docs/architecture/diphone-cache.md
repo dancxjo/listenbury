@@ -30,7 +30,7 @@ prewarms `ryan/diphone-cache/`, and writes `ryan/listenbury-diphone-voice.json`.
 The resulting directory can be used as an MBROLA-compatible local voice:
 
 ```bash
-MBROLA_VOICE=ryan listenbury say --mbrola "Ooooh! Let's get married in Urartu, love."
+MBROLA_VOICE=ryan listenbury say --diphone "Ooooh! Let's get married in Urartu, love."
 ```
 
 Single-unit forge optionally writes debug artifacts with `--debug-dir`:

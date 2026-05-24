@@ -1,5 +1,7 @@
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::{play_audio_frame_stream, play_audio_frames};
+#[cfg(feature = "tts-riper")]
+use crate::cli::model_paths::resolve_hifigan_model;
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use crate::cli::model_paths::resolve_whisper_model;
@@ -34,6 +36,8 @@ use listenbury::mouth::tts::TextToSpeech;
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
+#[cfg(feature = "tts-riper")]
+use listenbury::vocoder::{HifiganBackend, MelFrame, VocoderBackend, VocoderInput};
 #[cfg(feature = "tts-riper")]
 use listenbury::voice::diphone::{DiphoneCache, DiphoneVoiceManifest, NeuralDiphoneProvider};
 #[cfg(feature = "tts-riper")]
@@ -70,7 +74,17 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
         if let Some(output_path) = piper_args.output_wav {
             write_say_wav(&output_path, &frames)?;
         } else {
-            play_say_audio(&frames)?;
+            play_say_audio_with_source(&frames, "Klatt")?;
+        }
+        return Ok(());
+    }
+
+    if should_use_hifigan_backend(&piper_args) {
+        let frames = synthesize_hifigan_for_say(&piper_args)?;
+        if let Some(output_path) = piper_args.output_wav {
+            write_say_wav(&output_path, &frames)?;
+        } else {
+            play_say_audio_with_source(&frames, "HiFi-GAN")?;
         }
         return Ok(());
     }
@@ -83,16 +97,9 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
         if let Some(output_path) = piper_args.output_wav {
             write_say_wav(&output_path, &frames)?;
         } else {
-            play_say_audio(&frames)?;
+            play_say_audio_with_source(&frames, "MBROLA")?;
         }
         return Ok(());
-    }
-
-    #[cfg(not(feature = "tts-riper"))]
-    if piper_args.riper {
-        anyhow::bail!(
-            "listenbury say --riper requires the `tts-riper` feature (--klatt is only available with --riper)"
-        );
     }
 
     let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
@@ -128,6 +135,8 @@ fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
 
         let synthesis_result = if should_use_klatt_backend(&piper_args) {
             stream_klatt_stdin_to_frames(frame_tx)
+        } else if should_use_hifigan_backend(&piper_args) {
+            stream_hifigan_stdin_to_frames(piper_args, frame_tx)
         } else if should_use_mbrola_backend(&piper_args) {
             stream_mbrola_stdin_to_frames(piper_args, frame_tx)
         } else {
@@ -166,17 +175,31 @@ fn stream_klatt_stdin_to_frames(
 }
 
 #[cfg(feature = "audio-cpal")]
+fn stream_hifigan_stdin_to_frames(
+    mut piper_args: SayArgs,
+    frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+) -> Result<()> {
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let text = line.context("failed to read stdin for listenbury say --hifigan -")?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        piper_args.text = text.to_string();
+        let frames = synthesize_hifigan_for_say(&piper_args)?;
+        frame_tx
+            .send(frames)
+            .context("failed to send HiFi-GAN stdin audio to playback")?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
 fn stream_piper_stdin_to_frames(
     piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
 ) -> Result<()> {
-    #[cfg(not(feature = "tts-riper"))]
-    if piper_args.riper {
-        anyhow::bail!(
-            "listenbury say --riper requires the `tts-riper` feature (--klatt is only available with --riper)"
-        );
-    }
-
     let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
     let mut tts = say_tts_for_args(&piper_args, piper_voice)?;
     let stdin = std::io::stdin();
@@ -203,7 +226,7 @@ fn stream_mbrola_stdin_to_frames(
     let mut tts = say_mbrola_tts_for_args(&piper_args)?;
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
-        let text = line.context("failed to read stdin for listenbury say --riper --mbrola -")?;
+        let text = line.context("failed to read stdin for listenbury say --diphone -")?;
         let text = text.trim();
         if text.is_empty() {
             continue;
@@ -218,15 +241,15 @@ fn stream_mbrola_stdin_to_frames(
 }
 
 fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
-    if args.riper {
-        return say_riper_tts_for_voice(piper_voice);
+    if args.piper {
+        let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
+        return Ok(PiperTextToSpeech::new(piper_config_for_voice(
+            piper_bin,
+            piper_voice,
+        )?));
     }
 
-    let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
-    Ok(PiperTextToSpeech::new(piper_config_for_voice(
-        piper_bin,
-        piper_voice,
-    )?))
+    say_riper_tts_for_voice(piper_voice)
 }
 
 #[cfg(feature = "tts-riper")]
@@ -245,7 +268,7 @@ fn say_mbrola_tts_for_args(args: &SayArgs) -> Result<PiperTextToSpeech> {
 
 #[cfg(not(feature = "tts-riper"))]
 fn say_mbrola_tts_for_args(_args: &SayArgs) -> Result<PiperTextToSpeech> {
-    anyhow::bail!("listenbury say --riper --mbrola requires the `tts-riper` feature")
+    anyhow::bail!("listenbury say --diphone requires the `tts-riper` feature")
 }
 
 #[cfg(feature = "tts-riper")]
@@ -258,7 +281,9 @@ fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
 
 #[cfg(not(feature = "tts-riper"))]
 fn say_riper_tts_for_voice(_piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
-    anyhow::bail!("listenbury say --riper requires the `tts-riper` feature")
+    anyhow::bail!(
+        "listenbury say requires the `tts-riper` feature (or pass --piper for the external Piper binary)"
+    )
 }
 
 #[cfg(feature = "tts-riper")]
@@ -539,7 +564,7 @@ fn resolve_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
             fetched.is_file().then_some(fetched)
         })
         .with_context(|| {
-            "failed to find MBROLA voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --mbrola-voice"
+            "failed to find diphone voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --diphone-voice"
         })
 }
 
@@ -1215,31 +1240,42 @@ fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
 
 #[derive(Debug)]
 struct SayArgs {
+    piper: bool,
     piper_bin: Option<PathBuf>,
     piper_voice: Option<PathBuf>,
+    #[cfg(feature = "tts-riper")]
+    hifigan_model: Option<PathBuf>,
     mbrola: bool,
     mbrola_voice: Option<PathBuf>,
     output_wav: Option<PathBuf>,
-    riper: bool,
     klatt: bool,
+    hifigan: bool,
     stdin_stream: bool,
     text: String,
 }
 
 impl SayArgs {
     fn from_command(command: SayCommand) -> Result<Self> {
-        let mut riper = command.riper;
+        let mut piper = command.piper;
         let mut klatt = command.klatt;
+        let mut hifigan = command.hifigan;
         let mut rp = command.rp;
+        let mut diphone = command.diphone;
         let mut words = command
             .words
             .into_iter()
             .filter_map(|word| {
-                if word == "--riper" {
-                    riper = true;
+                if word == "--piper" {
+                    piper = true;
                     None
                 } else if word == "--klatt" {
                     klatt = true;
+                    None
+                } else if word == "--hifigan" {
+                    hifigan = true;
+                    None
+                } else if word == "--diphone" {
+                    diphone = true;
                     None
                 } else if word == "--rp" {
                     rp = true;
@@ -1249,6 +1285,11 @@ impl SayArgs {
                 }
             })
             .collect::<Vec<_>>();
+        anyhow::ensure!(
+            !words.iter().any(|word| word == "--riper"),
+            "listenbury say: --riper has been removed; Riper is the default"
+        );
+        let explicit_piper_bin = command.piper_bin.is_some();
         let mut piper_bin = command.piper_bin;
         let mut piper_voice = command.piper_voice;
 
@@ -1265,32 +1306,40 @@ impl SayArgs {
             mbrola_voice = Some(received_pronunciation_mbrola_voice());
         }
 
-        let mbrola = command.mbrola || mbrola_voice.is_some() || rp;
-        if mbrola {
-            riper = true;
-        }
+        let mbrola = diphone || mbrola_voice.is_some() || rp;
         if words.is_empty() && mbrola {
             words.push("Hello, my baby.".to_string());
         }
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
-            !klatt || riper,
-            "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
+            !(piper && (klatt || hifigan || mbrola)),
+            "listenbury say: --piper cannot be combined with --klatt, --hifigan, or --diphone"
         );
         anyhow::ensure!(
-            !klatt || !mbrola,
-            "listenbury say: choose either --klatt or the MBROLA/RP voice path"
+            piper || !explicit_piper_bin,
+            "listenbury say: --piper-bin only applies to the external Piper binary; pass --piper"
+        );
+        anyhow::ensure!(
+            [klatt, hifigan, mbrola]
+                .into_iter()
+                .filter(|set| *set)
+                .count()
+                <= 1,
+            "listenbury say: choose only one of --klatt, --hifigan, or the MBROLA/RP voice path"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
         Ok(Self {
             piper_bin,
             piper_voice,
+            #[cfg(feature = "tts-riper")]
+            hifigan_model: command.hifigan_model,
             mbrola,
             mbrola_voice,
             output_wav: command.output_wav,
-            riper,
+            piper,
             klatt,
+            hifigan,
             stdin_stream,
             text: if stdin_stream {
                 String::new()
@@ -1309,8 +1358,195 @@ fn should_use_klatt_backend(args: &SayArgs) -> bool {
     args.klatt
 }
 
+fn should_use_hifigan_backend(args: &SayArgs) -> bool {
+    args.hifigan
+}
+
 fn should_use_mbrola_backend(args: &SayArgs) -> bool {
     args.mbrola
+}
+
+#[cfg(feature = "tts-riper")]
+fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
+    let text = &args.text;
+    let phonemized = SimpleEnglishG2p::default()
+        .phonemize_unit(text)
+        .with_context(|| format!("listenbury say --hifigan could not phonemize `{text}`"))?;
+    let (mel, f0_hz, voiced) = hifigan_mel_f0_from_riper_phonemes(&phonemized.phonemes, text)?;
+    let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
+    let mut backend = HifiganBackend::load(model_path)?;
+    let frames = backend
+        .render(VocoderInput::MelF0 {
+            mel: &mel,
+            f0_hz: &f0_hz,
+            voiced: &voiced,
+        })
+        .with_context(|| format!("listenbury say --hifigan failed to render `{text}`"))?;
+    anyhow::ensure!(
+        !frames.is_empty(),
+        "listenbury say --hifigan produced no audio for `{text}`"
+    );
+    Ok(frames)
+}
+
+#[cfg(not(feature = "tts-riper"))]
+fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
+    anyhow::bail!("listenbury say --hifigan requires the `tts-riper` feature")
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_mel_f0_from_riper_phonemes(
+    phonemes: &PiperPhonemeSequence,
+    text: &str,
+) -> Result<(Vec<MelFrame>, Vec<f32>, Vec<bool>)> {
+    const MEL_BINS: usize = 24;
+    let mut mel = Vec::new();
+    let mut f0_hz = Vec::new();
+    let mut voiced = Vec::new();
+    let mut speech_frame_index = 0usize;
+
+    for phoneme in &phonemes.phonemes {
+        let symbol = phoneme.0.trim();
+        if symbol.is_empty() || matches!(symbol, "^" | "$") {
+            continue;
+        }
+        if matches!(symbol, "_" | "|" | "‖" | "." | "," | "!" | "?") {
+            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, MEL_BINS);
+            continue;
+        }
+
+        let is_vowel = mbrola_symbol_is_pitch_bearing(symbol);
+        let is_voiced = is_vowel || hifigan_symbol_is_voiced_consonant(symbol);
+        let frames_for_phone = if is_vowel {
+            5
+        } else if is_voiced {
+            3
+        } else {
+            2
+        };
+        let base_f0 = if is_vowel {
+            125.0 + ((speech_frame_index % 9) as f32 - 4.0) * 3.0
+        } else {
+            118.0
+        };
+        let brightness = hifigan_symbol_brightness(symbol, is_vowel, is_voiced);
+        let energy = if is_vowel {
+            0.18
+        } else if is_voiced {
+            0.105
+        } else {
+            0.075
+        };
+
+        for local_frame in 0..frames_for_phone {
+            let progress = if frames_for_phone <= 1 {
+                0.0
+            } else {
+                local_frame as f32 / (frames_for_phone - 1) as f32
+            };
+            let contour = (progress - 0.5) * 8.0;
+            mel.push(hifigan_mel_frame(MEL_BINS, energy, brightness));
+            f0_hz.push((base_f0 + contour).clamp(80.0, 260.0));
+            voiced.push(is_voiced);
+            speech_frame_index += 1;
+        }
+    }
+
+    anyhow::ensure!(
+        mel.iter()
+            .any(|frame| frame.bins.iter().any(|bin| *bin > 0.0)),
+        "Riper produced no HiFi-GAN-renderable phones for `{text}`"
+    );
+    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, MEL_BINS);
+    Ok((mel, f0_hz, voiced))
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_mel_frame(bin_count: usize, energy: f32, brightness: f32) -> MelFrame {
+    let tilt = 1.35 - brightness.clamp(0.0, 1.0);
+    MelFrame {
+        bins: (0..bin_count)
+            .map(|index| {
+                let position = index as f32 / (bin_count.saturating_sub(1).max(1)) as f32;
+                let envelope = (1.0 - position).powf(tilt).max(0.04);
+                let formant_lift = (1.0 - (position - brightness).abs() * 2.8).clamp(0.0, 1.0);
+                energy * (envelope + formant_lift * 0.45)
+            })
+            .collect(),
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn push_hifigan_silence(
+    mel: &mut Vec<MelFrame>,
+    f0_hz: &mut Vec<f32>,
+    voiced: &mut Vec<bool>,
+    frames: usize,
+    mel_bins: usize,
+) {
+    for _ in 0..frames {
+        mel.push(MelFrame {
+            bins: vec![0.0; mel_bins],
+        });
+        f0_hz.push(120.0);
+        voiced.push(false);
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_symbol_brightness(symbol: &str, is_vowel: bool, is_voiced: bool) -> f32 {
+    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
+    if matches!(
+        base,
+        "S" | "Z" | "SH" | "ZH" | "s" | "z" | "ʃ" | "ʒ" | "F" | "V" | "f" | "v"
+    ) {
+        0.78
+    } else if matches!(base, "IY" | "IH" | "EY" | "i" | "ɪ" | "e") {
+        0.58
+    } else if matches!(base, "UW" | "UH" | "OW" | "u" | "ʊ" | "o" | "oʊ") {
+        0.28
+    } else if is_vowel {
+        0.42
+    } else if is_voiced {
+        0.35
+    } else {
+        0.68
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_symbol_is_voiced_consonant(symbol: &str) -> bool {
+    let base = symbol.trim_end_matches(|ch: char| ch.is_ascii_digit());
+    matches!(
+        base,
+        "B" | "D"
+            | "G"
+            | "JH"
+            | "L"
+            | "M"
+            | "N"
+            | "NG"
+            | "R"
+            | "V"
+            | "W"
+            | "Y"
+            | "Z"
+            | "ZH"
+            | "b"
+            | "d"
+            | "ɡ"
+            | "dʒ"
+            | "l"
+            | "m"
+            | "n"
+            | "ŋ"
+            | "ɹ"
+            | "v"
+            | "w"
+            | "j"
+            | "z"
+            | "ʒ"
+    )
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {
@@ -1586,7 +1822,12 @@ fn write_say_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
 
 #[cfg(feature = "audio-cpal")]
 fn play_say_audio(frames: &[AudioFrame]) -> Result<()> {
-    play_audio_frames(frames, "Piper TTS")
+    play_say_audio_with_source(frames, "Piper TTS")
+}
+
+#[cfg(feature = "audio-cpal")]
+fn play_say_audio_with_source(frames: &[AudioFrame], source: &str) -> Result<()> {
+    play_audio_frames(frames, source)
 }
 
 #[cfg(not(feature = "audio-cpal"))]
@@ -1594,6 +1835,11 @@ fn play_say_audio(_frames: &[AudioFrame]) -> Result<()> {
     anyhow::bail!(
         "listenbury say needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
     )
+}
+
+#[cfg(not(feature = "audio-cpal"))]
+fn play_say_audio_with_source(frames: &[AudioFrame], _source: &str) -> Result<()> {
+    play_say_audio(frames)
 }
 
 fn looks_like_piper_bin(word: &str) -> bool {
@@ -1791,13 +2037,15 @@ mod tests {
     #[test]
     fn say_args_treats_single_word_as_text() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
@@ -1811,20 +2059,22 @@ mod tests {
     #[test]
     fn say_args_accepts_legacy_piper_bin_position() {
         let args = SayArgs::from_command(SayCommand {
+            piper: true,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
                 "hello".to_string(),
             ],
         })
-        .expect("legacy Piper executable should be accepted");
+        .expect("legacy Piper executable should be accepted when --piper is selected");
 
         assert_eq!(
             args.piper_bin,
@@ -1837,13 +2087,15 @@ mod tests {
     #[test]
     fn say_args_accepts_legacy_voice_position() {
         let args = SayArgs::from_command(SayCommand {
+            piper: true,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec![
                 "/snap/bin/piper-tts.piper-cli".to_string(),
@@ -1862,15 +2114,17 @@ mod tests {
     }
 
     #[test]
-    fn say_args_accepts_trailing_riper_flag() {
-        let args = SayArgs::from_command(SayCommand {
+    fn say_args_rejects_trailing_riper_flag() {
+        let error = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec![
                 "hello".to_string(),
@@ -1878,105 +2132,150 @@ mod tests {
                 "--riper".to_string(),
             ],
         })
-        .expect("trailing Riper flag should be accepted");
-
-        assert!(args.riper);
-        assert!(!args.klatt);
-        assert_eq!(args.text, "hello there");
-    }
-
-    #[test]
-    fn say_args_accepts_trailing_klatt_flag() {
-        let error = SayArgs::from_command(SayCommand {
-            piper_bin: None,
-            piper_voice: None,
-            output_wav: None,
-            riper: false,
-            klatt: false,
-            rp: false,
-            mbrola: false,
-            mbrola_voice: None,
-            words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
-        })
-        .expect_err("klatt should require riper");
+        .expect_err("--riper should be removed");
         assert!(
-            error.to_string().contains("pass --riper --klatt"),
+            error.to_string().contains("--riper"),
             "unexpected error: {error}"
         );
     }
 
     #[test]
-    fn say_args_accepts_riper_and_klatt_together() {
-        let args = SayArgs::from_command(SayCommand {
+    fn say_args_accepts_trailing_klatt_flag() {
+        let error = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: true,
-            klatt: true,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
+        })
+        .expect("Klatt is a default Riper-path backend");
+        assert!(error.klatt);
+        assert_eq!(error.text, "hello my");
+    }
+
+    #[test]
+    fn say_args_accepts_klatt() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: true,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
-        .expect("riper+klatt should parse, with klatt selecting the non-ONNX backend");
-        assert!(args.riper);
+        .expect("klatt should parse as a Riper backend alternative");
         assert!(args.klatt);
         assert!(should_use_klatt_backend(&args));
     }
 
     #[test]
-    fn say_args_accepts_riper_mbrola_voice() {
+    fn say_args_accepts_hifigan() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: true,
             klatt: false,
+            hifigan: true,
+            hifigan_model: None,
             rp: false,
-            mbrola: true,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("hifigan should parse, selecting the mel vocoder backend");
+        assert!(!args.klatt);
+        assert!(args.hifigan);
+        assert!(should_use_hifigan_backend(&args));
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_hifigan_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "--hifigan".to_string()],
+        })
+        .expect("trailing HiFi-GAN flag should be accepted");
+        assert!(args.hifigan);
+        assert_eq!(args.text, "hello");
+    }
+
+    #[test]
+    fn say_args_accepts_diphone_voice() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            rp: false,
+            diphone: true,
             mbrola_voice: Some(PathBuf::from("voices/us1")),
             words: vec!["hello".to_string()],
         })
-        .expect("riper+mbrola should select MBROLA as the voice backend");
-        assert!(args.riper);
+        .expect("diphone should select the diphone voice backend");
         assert!(!args.klatt);
         assert!(should_use_mbrola_backend(&args));
         assert_eq!(args.mbrola_voice, Some(PathBuf::from("voices/us1")));
     }
 
     #[test]
-    fn say_args_auto_selects_riper_for_mbrola() {
+    fn say_args_accepts_diphone() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: true,
+            diphone: true,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
-        .expect("mbrola should imply the Riper planning path");
-        assert!(args.riper);
+        .expect("diphone should select the diphone voice backend");
         assert!(args.mbrola);
     }
 
     #[test]
     fn say_args_rp_selects_en1_mbrola_voice() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: true,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
         .expect("RP shorthand should select the en1 MBROLA voice");
-        assert!(args.riper);
         assert!(args.mbrola);
         assert_eq!(
             args.mbrola_voice,
@@ -1987,18 +2286,19 @@ mod tests {
     #[test]
     fn say_args_accepts_trailing_rp_flag() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["hello".to_string(), "--rp".to_string()],
         })
         .expect("trailing RP shorthand should be accepted");
-        assert!(args.riper);
         assert!(args.mbrola);
         assert_eq!(args.text, "hello");
         assert_eq!(
@@ -2010,13 +2310,15 @@ mod tests {
     #[test]
     fn say_args_rejects_rp_with_klatt() {
         let error = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: false,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: true,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["hello".to_string(), "--klatt".to_string()],
         })
@@ -2028,39 +2330,42 @@ mod tests {
     }
 
     #[test]
-    fn say_args_uses_default_mbrola_demo_text() {
+    fn say_args_uses_default_diphone_demo_text() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: true,
             klatt: false,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: true,
+            diphone: true,
             mbrola_voice: None,
             words: Vec::new(),
         })
-        .expect("riper+mbrola should have a default smoke utterance");
+        .expect("diphone should have a default smoke utterance");
         assert_eq!(args.text, "Hello, my baby.");
     }
 
     #[test]
     fn say_args_treats_dash_as_stdin_stream() {
         let args = SayArgs::from_command(SayCommand {
+            piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
-            riper: true,
             klatt: true,
+            hifigan: false,
+            hifigan_model: None,
             rp: false,
-            mbrola: false,
+            diphone: false,
             mbrola_voice: None,
             words: vec!["-".to_string()],
         })
         .expect("dash should select stdin streaming");
 
         assert!(args.stdin_stream);
-        assert!(args.riper);
         assert!(args.klatt);
         assert!(args.text.is_empty());
     }

@@ -399,7 +399,7 @@ impl RiperBackend {
     }
 }
 
-fn initialize_ort_runtime() -> Result<()> {
+pub(crate) fn initialize_ort_runtime() -> Result<()> {
     if let Some(path) = std::env::var_os("ORT_DYLIB_PATH").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(path);
         ensure!(

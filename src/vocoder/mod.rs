@@ -21,8 +21,11 @@ use anyhow::Result;
 use crate::audio::frame::AudioFrame;
 
 pub use capability::{BackendCapabilities, BackendFamily, VocoderDescriptor};
+pub use hifigan::HifiganBackend;
 pub use input::{MelFrame, VocoderInput};
-pub use registry::{SingDemoBackendSelector, VocoderConfig, backend_for_option, list_backends};
+pub use registry::{
+    SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,
+};
 
 pub trait VocoderBackend {
     fn id(&self) -> &'static str;

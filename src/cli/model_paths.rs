@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::download_progress::DownloadProgress;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchProgress, bundle_assets, bundle_primary_path, find_asset, find_bundle,
+    FetchProgress, bundle_assets, bundle_primary_path, find_asset,
     manifest::{ModelBundle, ModelKind},
     paths::{asset_path, resolve_listenbury_home},
     selected_bundle,
@@ -18,6 +18,8 @@ enum ModelKind {
     Llm,
     #[cfg(feature = "tts-piper")]
     Voice,
+    #[cfg(feature = "tts-riper")]
+    Vocoder,
     #[cfg(feature = "asr-whisper")]
     Whisper,
 }
@@ -116,7 +118,7 @@ pub(crate) fn resolve_refine_whisper_model(explicit: Option<PathBuf>) -> Result<
 
     #[cfg(feature = "model-download")]
     {
-        let bundle = find_bundle(ModelKind::Whisper, "whisper-large-v3-turbo")
+        let bundle = listenbury::models::find_bundle(ModelKind::Whisper, "whisper-large-v3-turbo")
             .context("Whisper large v3 turbo bundle is not registered")?;
         ensure_bundle_available(bundle)?;
         bundle_primary_path(bundle)
@@ -155,6 +157,25 @@ pub(crate) fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> 
         Some("piper-ryan-medium"),
         Some(ModelKind::Voice),
         |path| path.extension().is_some_and(|ext| ext == "onnx"),
+    )
+}
+
+#[cfg(feature = "tts-riper")]
+pub(crate) fn resolve_hifigan_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    resolve_model_path(
+        explicit,
+        "LISTENBURY_HIFIGAN_MODEL",
+        "HiFi-GAN vocoder",
+        "--hifigan-model",
+        Some("hifigan-speecht5"),
+        Some(ModelKind::Vocoder),
+        |path| {
+            path.extension().is_some_and(|ext| ext == "onnx")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.to_ascii_lowercase().contains("hifigan"))
+        },
     )
 }
 

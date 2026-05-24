@@ -370,7 +370,7 @@ fn resolve_sing_mbrola_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
             fetched.is_file().then_some(fetched)
         })
         .with_context(|| {
-            "failed to find MBROLA voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --mbrola-voice"
+            "failed to find diphone voice; run `just fetch` or set LISTENBURY_MBROLA_VOICE / MBROLA_VOICE / --diphone-voice"
         })
 }
 

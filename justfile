@@ -24,7 +24,7 @@ say *args:
 
 # Speak through the Riper MBROLA backend. Run `just fetch` first for the default us3/en1 voices.
 say-mbrola text:
-    cargo run -- say --riper --mbrola "{{text}}"
+    cargo run -- say --diphone "{{text}}"
 
 # Speak through the Received Pronunciation MBROLA shortcut. Run `just fetch` first.
 say-rp text:
@@ -32,7 +32,7 @@ say-rp text:
 
 # Render the ragtime singing demo through the Riper MBROLA probe backend.
 sing-mbrola:
-    cargo run -- sing --riper --mbrola
+    cargo run -- sing --diphone
 
 # Inspect a MBROLA voice database: phoneme inventory, diphone count, halfseg stats, and license manifest status.
 mbrola-inventory voice:

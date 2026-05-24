@@ -553,22 +553,22 @@ listenbury transcribe input.wav
 
 ### `say`
 
-Synthesizes and plays speech using Piper, or the Riper pipeline (`--riper`). Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, and `--mbrola` loads a real MBROLA voice database for the native Rust MBROLA diphone path.
+Synthesizes and plays speech using the Riper pipeline by default. Pass `--piper` to use the external Piper binary. Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, and `--diphone` loads a real MBROLA-compatible voice database for the native Rust diphone path.
 
 Here, "MBROLA" means compatibility with MBROLA file/data conventions (`.pho` + voice databases), not copied upstream MBROLA implementation code. See `docs/legal/mbrola-psola-audit.md` for the patent/license/compliance boundary.
 
 ```bash
 listenbury say "Testing one two three."
 listenbury say --rp "Testing one two three."
-listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
-listenbury say --riper --mbrola "Hello, my baby."
-listenbury sing --riper --mbrola
-printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --riper --klatt -
+listenbury say --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
+listenbury say --diphone "Hello, my baby."
+listenbury sing --diphone
+printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --klatt -
 ```
 
 #### Klatt refinement notes
 
-- Klatt stays on the shared `--riper --klatt` phone/prosody path and now renders from a smoothed parameter trajectory (rather than only per-phone static blobs).
+- Klatt stays on the shared Riper `--klatt` phone/prosody path and now renders from a smoothed parameter trajectory (rather than only per-phone static blobs).
 - Phone acoustic targets are now derived from `FeatureBundle` (`klatt_targets_from_features`) and then optionally tuned per symbol via `default_english_phone_targets()` overrides in `src/voice/tract/targets.rs`.
 - Trajectory interpolation, range clamping, and coarticulation live in:
   - `src/voice/tract/klatt/params.rs`

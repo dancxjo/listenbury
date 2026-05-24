@@ -293,15 +293,15 @@ pub(crate) struct ProsodyPlanCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct SingDemoCommand {
-    #[arg(long, value_enum, conflicts_with = "riper")]
+    #[arg(long, value_enum, conflicts_with_all = ["piper", "klatt", "diphone"])]
     pub(crate) backend: Option<SingDemoBackendOption>,
-    #[arg(long, conflicts_with = "backend")]
-    pub(crate) riper: bool,
-    #[arg(long, requires = "riper")]
+    #[arg(long, conflicts_with_all = ["backend", "klatt", "diphone"])]
+    pub(crate) piper: bool,
+    #[arg(long, conflicts_with_all = ["backend", "piper", "diphone"])]
     pub(crate) klatt: bool,
-    #[arg(long, requires = "riper", conflicts_with = "klatt")]
-    pub(crate) mbrola: bool,
-    #[arg(long, requires = "mbrola")]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt"])]
+    pub(crate) diphone: bool,
+    #[arg(long = "diphone-voice", requires = "diphone")]
     pub(crate) mbrola_voice: Option<PathBuf>,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
@@ -313,14 +313,14 @@ pub(crate) struct SingDemoCommand {
 
 impl SingDemoCommand {
     pub(crate) fn selected_backend(&self) -> SingDemoBackendOption {
-        if self.riper {
-            if self.mbrola {
-                SingDemoBackendOption::Mbrola
-            } else {
-                SingDemoBackendOption::Riper
-            }
+        if self.piper {
+            SingDemoBackendOption::Piper
+        } else if self.klatt {
+            SingDemoBackendOption::Klatt
+        } else if self.diphone {
+            SingDemoBackendOption::Mbrola
         } else {
-            self.backend.unwrap_or_default()
+            self.backend.unwrap_or(SingDemoBackendOption::Riper)
         }
     }
 }
@@ -376,20 +376,24 @@ pub(crate) struct TranscribeCommand {
 #[derive(Debug, Args)]
 pub(crate) struct SayCommand {
     #[arg(long)]
+    pub(crate) piper: bool,
+    #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) riper: bool,
-    #[arg(long, requires = "riper")]
+    #[arg(long, conflicts_with_all = ["piper", "hifigan", "diphone"])]
     pub(crate) klatt: bool,
-    #[arg(long, conflicts_with_all = ["klatt", "mbrola_voice"])]
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "diphone", "rp"])]
+    pub(crate) hifigan: bool,
+    #[arg(long = "hifigan-model", requires = "hifigan")]
+    pub(crate) hifigan_model: Option<PathBuf>,
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
     pub(crate) rp: bool,
-    #[arg(long, conflicts_with = "klatt")]
-    pub(crate) mbrola: bool,
-    #[arg(long, requires = "mbrola")]
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan"])]
+    pub(crate) diphone: bool,
+    #[arg(long = "diphone-voice", requires = "diphone")]
     pub(crate) mbrola_voice: Option<PathBuf>,
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) words: Vec<String>,
@@ -662,6 +666,7 @@ pub(crate) struct ModelsUseCommand {
 pub(crate) enum ModelsUseKind {
     Llm,
     Voice,
+    Vocoder,
     Whisper,
 }
 
@@ -1265,9 +1270,9 @@ mod tests {
         assert!(command.piper_bin.is_none());
         assert!(command.piper_voice.is_none());
         assert!(command.output_wav.is_none());
-        assert!(!command.riper);
+        assert!(!command.piper);
         assert!(!command.klatt);
-        assert!(!command.mbrola);
+        assert!(!command.diphone);
         assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello", "there"]);
     }
@@ -1288,90 +1293,76 @@ mod tests {
             panic!("expected say command");
         };
         assert_eq!(command.output_wav, Some(PathBuf::from("out/test.wav")));
-        assert!(!command.riper);
+        assert!(!command.piper);
         assert!(!command.klatt);
-        assert!(!command.mbrola);
+        assert!(!command.diphone);
         assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello", "there"]);
     }
 
     #[test]
-    fn say_accepts_riper_flag_before_text() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "hello", "there"])
-            .expect("say should parse Riper mode before text");
-
-        let Some(Command::Say(command)) = cli.command else {
-            panic!("expected say command");
-        };
-        assert!(command.riper);
-        assert!(!command.klatt);
-        assert!(!command.mbrola);
-        assert!(command.mbrola_voice.is_none());
-        assert_eq!(command.words, ["hello", "there"]);
+    fn say_rejects_riper_flag_before_text() {
+        let error = Cli::try_parse_from(["listenbury", "say", "--riper", "hello", "there"])
+            .expect_err("--riper should be removed");
+        assert!(error.to_string().contains("--riper"));
     }
 
     #[test]
-    fn say_accepts_riper_flag_after_text() {
+    fn say_keeps_riper_flag_after_text_for_runtime_rejection() {
         let cli = Cli::try_parse_from(["listenbury", "say", "hello", "there", "--riper"])
-            .expect("say should accept Riper mode after trailing text");
+            .expect("say trailing text is collected before runtime validation");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(!command.riper);
+        assert!(!command.piper);
         assert!(!command.klatt);
         assert_eq!(command.words, ["hello", "there", "--riper"]);
     }
 
     #[test]
-    fn say_rejects_klatt_without_riper() {
-        let error = Cli::try_parse_from(["listenbury", "say", "--klatt", "hello", "there"])
-            .expect_err("say should require --riper when --klatt is set");
-        assert!(
-            error.to_string().contains("--riper"),
-            "expected clap requires error, got: {error}"
-        );
+    fn say_accepts_klatt() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--klatt", "hello", "there"])
+            .expect("say should parse Klatt as a default Riper-path backend");
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.klatt);
     }
 
     #[test]
-    fn say_accepts_riper_and_klatt_flags_together() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "--klatt", "hello"])
-            .expect("say should parse combined riper/klatt flags");
+    fn say_accepts_hifigan() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--hifigan", "hello"])
+            .expect("say should parse hifigan");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(command.riper);
-        assert!(command.klatt);
+        assert!(command.hifigan);
+        assert!(!command.klatt);
+        assert!(!command.diphone);
         assert_eq!(command.words, ["hello"]);
     }
 
     #[test]
-    fn say_accepts_riper_mbrola_voice() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "--mbrola", "hello"])
-            .expect("say should parse MBROLA as a Riper backend voice");
+    fn say_accepts_diphone_voice() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--diphone", "hello"])
+            .expect("say should parse diphone as a Riper backend voice");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(command.riper);
         assert!(!command.klatt);
-        assert!(command.mbrola);
+        assert!(command.diphone);
         assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello"]);
     }
 
     #[test]
-    fn say_accepts_mbrola_without_explicit_riper() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--mbrola", "hello"])
-            .expect("say should parse MBROLA shorthand");
-
-        let Some(Command::Say(command)) = cli.command else {
-            panic!("expected say command");
-        };
-        assert!(!command.riper);
-        assert!(command.mbrola);
-        assert_eq!(command.words, ["hello"]);
+    fn say_rejects_mbrola_flag() {
+        let error = Cli::try_parse_from(["listenbury", "say", "--mbrola", "hello"])
+            .expect_err("--mbrola should be renamed");
+        assert!(error.to_string().contains("--mbrola"));
     }
 
     #[test]
@@ -1383,9 +1374,9 @@ mod tests {
             panic!("expected say command");
         };
         assert!(command.rp);
-        assert!(!command.riper);
+        assert!(!command.piper);
         assert!(!command.klatt);
-        assert!(!command.mbrola);
+        assert!(!command.diphone);
         assert!(command.mbrola_voice.is_none());
         assert_eq!(command.words, ["hello"]);
     }
@@ -1406,8 +1397,8 @@ mod tests {
             "listenbury",
             "say",
             "--rp",
-            "--mbrola",
-            "--mbrola-voice",
+            "--diphone",
+            "--diphone-voice",
             "data/mbrola/us3/us3",
             "hello",
         ])
@@ -1419,35 +1410,33 @@ mod tests {
     }
 
     #[test]
-    fn say_accepts_riper_mbrola_without_text_for_smoke_demo() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--mbrola", "--riper"])
-            .expect("say should parse MBROLA smoke command without text");
+    fn say_accepts_diphone_without_text_for_smoke_demo() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--diphone"])
+            .expect("say should parse diphone smoke command without text");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(command.riper);
-        assert!(command.mbrola);
+        assert!(command.diphone);
         assert!(command.words.is_empty());
     }
 
     #[test]
-    fn say_accepts_riper_mbrola_explicit_voice() {
+    fn say_accepts_diphone_explicit_voice() {
         let cli = Cli::try_parse_from([
             "listenbury",
             "say",
-            "--riper",
-            "--mbrola",
-            "--mbrola-voice",
+            "--diphone",
+            "--diphone-voice",
             "data/mbrola/en1/en1",
             "hello",
         ])
-        .expect("say should parse explicit MBROLA voice");
+        .expect("say should parse explicit diphone voice");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(command.mbrola);
+        assert!(command.diphone);
         assert_eq!(
             command.mbrola_voice,
             Some(PathBuf::from("data/mbrola/en1/en1"))
@@ -2248,14 +2237,14 @@ mod tests {
             panic!("expected sing-demo command");
         };
         assert_eq!(command.backend, None);
-        assert_eq!(command.selected_backend(), SingDemoBackendOption::Klatt);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
         assert!(command.output_wav.is_none());
     }
 
     #[test]
-    fn dev_sing_demo_accepts_riper_and_klatt_flags() {
-        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--riper", "--klatt"])
-            .expect("sing-demo should parse combined riper/klatt flags");
+    fn dev_sing_demo_accepts_klatt_flag() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--klatt"])
+            .expect("sing-demo should parse klatt flag");
 
         let Some(Command::Dev {
             command: DevCommand::SingDemo(command),
@@ -2263,15 +2252,21 @@ mod tests {
         else {
             panic!("expected sing-demo command");
         };
-        assert!(command.riper);
         assert!(command.klatt);
-        assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Klatt);
     }
 
     #[test]
-    fn dev_sing_demo_accepts_riper_without_klatt() {
-        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--riper"])
-            .expect("sing-demo should parse riper flag");
+    fn dev_sing_demo_rejects_riper_flag() {
+        let error = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--riper"])
+            .expect_err("--riper should be removed");
+        assert!(error.to_string().contains("--riper"));
+    }
+
+    #[test]
+    fn dev_sing_demo_defaults_to_riper() {
+        let cli = Cli::try_parse_from(["listenbury", "dev", "sing-demo"])
+            .expect("sing-demo should parse default Riper backend");
 
         let Some(Command::Dev {
             command: DevCommand::SingDemo(command),
@@ -2279,44 +2274,33 @@ mod tests {
         else {
             panic!("expected sing-demo command");
         };
-        assert!(command.riper);
         assert!(!command.klatt);
         assert_eq!(command.selected_backend(), SingDemoBackendOption::Riper);
     }
 
     #[test]
-    fn top_level_sing_accepts_riper_mbrola() {
-        let cli = Cli::try_parse_from(["listenbury", "sing", "--mbrola", "--riper"])
-            .expect("top-level sing should parse MBROLA as a Riper backend voice");
+    fn top_level_sing_accepts_diphone() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--diphone"])
+            .expect("top-level sing should parse diphone as a Riper backend voice");
 
         let Some(Command::Sing(command)) = cli.command else {
             panic!("expected top-level sing command");
         };
-        assert!(command.riper);
-        assert!(command.mbrola);
+        assert!(command.diphone);
         assert_eq!(command.selected_backend(), SingDemoBackendOption::Mbrola);
     }
 
     #[test]
-    fn dev_sing_demo_rejects_klatt_without_riper() {
-        let error = Cli::try_parse_from(["listenbury", "dev", "sing-demo", "--klatt"])
-            .expect_err("sing-demo should require --riper when --klatt is set");
-        assert!(
-            error.to_string().contains("--riper"),
-            "unexpected error: {error}"
-        );
+    fn top_level_sing_rejects_mbrola() {
+        let error = Cli::try_parse_from(["listenbury", "sing", "--mbrola"])
+            .expect_err("--mbrola should be renamed");
+        assert!(error.to_string().contains("--mbrola"));
     }
 
     #[test]
     fn sing_routes_to_shared_sing_demo_command() {
-        let cli = Cli::try_parse_from([
-            "listenbury",
-            "sing",
-            "--riper",
-            "--output-wav",
-            "out/sing.wav",
-        ])
-        .expect("top-level sing should parse sing-demo flags");
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--output-wav", "out/sing.wav"])
+            .expect("top-level sing should parse sing-demo flags");
 
         let Some(Command::Sing(command)) = cli.command else {
             panic!("expected top-level sing command");

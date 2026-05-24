@@ -25,6 +25,7 @@ pub struct ModelAsset {
 pub enum ModelKind {
     Llm,
     Voice,
+    Vocoder,
     Whisper,
 }
 
@@ -338,6 +339,26 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         license: Some("CC-BY-4.0"),
         source: Some("https://huggingface.co/rhasspy/piper-voices"),
     },
+    ModelAsset {
+        id: "hifigan-speecht5",
+        filename: "speecht5_hifigan.onnx",
+        relative_path: "models/vocoder/speecht5_hifigan.onnx",
+        url: "https://huggingface.co/Xenova/speecht5_hifigan/resolve/main/onnx/model.onnx",
+        expected_size_bytes: None,
+        sha256: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/Xenova/speecht5_hifigan"),
+    },
+    ModelAsset {
+        id: "hifigan-speecht5-config",
+        filename: "speecht5_hifigan.config.json",
+        relative_path: "models/vocoder/speecht5_hifigan.config.json",
+        url: "https://huggingface.co/Xenova/speecht5_hifigan/resolve/main/config.json",
+        expected_size_bytes: None,
+        sha256: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/Xenova/speecht5_hifigan"),
+    },
 ];
 
 pub const MODEL_BUNDLES: &[ModelBundle] = &[
@@ -536,5 +557,13 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         asset_ids: &["piper-libritts-high", "piper-libritts-high-config"],
         primary_asset_id: "piper-libritts-high",
         aliases: &["piper-libritts-high"],
+    },
+    ModelBundle {
+        id: "speecht5-hifigan",
+        display_name: "SpeechT5 HiFi-GAN",
+        kind: ModelKind::Vocoder,
+        asset_ids: &["hifigan-speecht5", "hifigan-speecht5-config"],
+        primary_asset_id: "hifigan-speecht5",
+        aliases: &["hifigan", "hifigan-speecht5", "speecht5_hifigan"],
     },
 ];
