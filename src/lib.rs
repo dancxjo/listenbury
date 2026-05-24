@@ -1,3 +1,4 @@
+pub mod acoustic;
 pub mod audio;
 pub mod config;
 pub mod diagnostics;
@@ -29,6 +30,10 @@ pub mod voice;
 pub mod web;
 pub mod word;
 
+pub use acoustic::{
+    AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame, SingingPlan,
+    SourceFilterAcousticModel, acoustic_model_by_id, list_acoustic_models,
+};
 pub use audio::frame::AudioFrame;
 pub use audio::{
     AcousticAnalysis, AudioInput, AudioOutput, SpeechLikelihood, SpeechLikelihoodConfig,

@@ -1,11 +1,15 @@
 use anyhow::{Result, ensure};
 
-use crate::vocoder::MelFrame;
+use crate::acoustic::{
+    AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
+    registry::AcousticModelDescriptor,
+};
 use crate::voice::{
     FormantEstimation, GlottalSourceEstimate, NoiseEstimate, PhoneAcousticTarget,
     PhoneRenderTarget, PhoneTimedRenderTarget, SourceFilterFrame, SourceFilterTrack,
-    VocalTractFilterEstimate, VocalTractFilterTarget, VoicingEstimate,
+    VocalTractFilterEstimate, VocalTractFilterTarget, VoicingEstimate, articulate,
     default_english_phone_targets, klatt_render_targets_from_phone_timed,
+    phone_timed_targets_from_articulator_plan,
 };
 
 const SOURCE_FILTER_SAMPLE_RATE_HZ: u32 = 16_000;
@@ -17,15 +21,57 @@ const MEL_MAX_HZ: f32 = 8_000.0;
 const MEL_SPECTRAL_FLOOR: f32 = 0.006;
 const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
 const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
+const LOG_MEL_MIN: f32 = -8.0;
+const LOG_MEL_MAX: f32 = 2.0;
+
+pub struct SourceFilterAcousticModel;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MelF0Track {
-    pub(crate) mel: Vec<MelFrame>,
-    pub(crate) f0_hz: Vec<f32>,
-    pub(crate) voiced: Vec<bool>,
+pub struct MelF0Track {
+    pub mel: Vec<MelFrame>,
+    pub f0_hz: Vec<f32>,
+    pub voiced: Vec<bool>,
 }
 
-pub(crate) fn phone_timed_to_source_filter_track(
+impl SourceFilterAcousticModel {
+    pub fn descriptor() -> AcousticModelDescriptor {
+        AcousticModelDescriptor {
+            id: "source-filter",
+            notes: &[
+                "Deterministic acoustic model that expands phone timing into source-filter frames, then derives mel/F0 tracks.",
+                "Owns duration-controlled frame layout for HiFi-GAN and other mel/F0 vocoders.",
+            ],
+        }
+    }
+}
+
+impl AcousticModelBackend for SourceFilterAcousticModel {
+    fn id(&self) -> &'static str {
+        Self::descriptor().id
+    }
+
+    fn generate(&mut self, input: AcousticInput<'_>) -> Result<AcousticFrameTrack> {
+        match input {
+            AcousticInput::PhoneTimed(targets) => {
+                let source_filter = phone_timed_to_source_filter_track(targets)?;
+                acoustic_frame_track_from_source_filter(&source_filter)
+            }
+            AcousticInput::Singing(plan) => {
+                let acoustic_table = default_english_phone_targets();
+                let articulation = articulate(plan);
+                let phone_timed =
+                    phone_timed_targets_from_articulator_plan(&articulation, 0.7, &acoustic_table);
+                let source_filter = phone_timed_to_source_filter_track(&phone_timed)?;
+                acoustic_frame_track_from_source_filter(&source_filter)
+            }
+            AcousticInput::SourceFilterTrack(track) => {
+                acoustic_frame_track_from_source_filter(track)
+            }
+        }
+    }
+}
+
+pub fn phone_timed_to_source_filter_track(
     targets: &[PhoneTimedRenderTarget],
 ) -> Result<SourceFilterTrack> {
     ensure!(
@@ -60,7 +106,7 @@ pub(crate) fn phone_timed_to_source_filter_track(
     })
 }
 
-pub(crate) fn source_filter_track_to_mel_f0(track: &SourceFilterTrack) -> Result<MelF0Track> {
+pub fn source_filter_track_to_mel_f0(track: &SourceFilterTrack) -> Result<MelF0Track> {
     ensure!(
         !track.frames.is_empty(),
         "mel bridge received empty source-filter track"
@@ -77,14 +123,91 @@ pub(crate) fn source_filter_track_to_mel_f0(track: &SourceFilterTrack) -> Result
     }
 
     smooth_mel_track(&mut mel);
+    mel = energy_mel_to_log_mel(&mel);
 
     ensure!(
         mel.iter()
-            .any(|frame| frame.bins.iter().any(|bin| *bin > 0.0)),
+            .any(|frame| frame.bins.iter().any(|bin| bin.is_finite())),
         "mel bridge produced no mel energy from source-filter track"
     );
 
     Ok(MelF0Track { mel, f0_hz, voiced })
+}
+
+fn acoustic_frame_track_from_source_filter(
+    track: &SourceFilterTrack,
+) -> Result<AcousticFrameTrack> {
+    let mel_f0 = source_filter_track_to_mel_f0(track)?;
+    Ok(AcousticFrameTrack {
+        mel: mel_f0.mel,
+        f0_hz: mel_f0.f0_hz,
+        voiced: mel_f0.voiced,
+        sample_rate_hz: track.sample_rate,
+        hop_samples: ((track.sample_rate as f32 * track.hop_ms) / 1_000.0).round() as usize,
+    })
+}
+
+fn energy_mel_to_log_mel(mel: &[MelFrame]) -> Vec<MelFrame> {
+    if mel.is_empty() {
+        return Vec::new();
+    }
+
+    let mut values = Vec::with_capacity(mel.len() * MEL_BINS);
+    for frame in mel {
+        let frame_peak = (0..MEL_BINS)
+            .map(|index| resample_bin(&frame.bins, index, MEL_BINS))
+            .fold(0.0_f32, f32::max);
+        let adaptive_floor = (frame_peak * 0.006).max(1.0e-5);
+        for index in 0..MEL_BINS {
+            let source = resample_bin(&frame.bins, index, MEL_BINS);
+            values.push(
+                source
+                    .max(adaptive_floor)
+                    .ln()
+                    .clamp(LOG_MEL_MIN, LOG_MEL_MAX),
+            );
+        }
+    }
+    smooth_normalized_mel_frames(&mut values, MEL_BINS);
+    values
+        .chunks_exact(MEL_BINS)
+        .map(|bins| MelFrame {
+            bins: bins.to_vec(),
+        })
+        .collect()
+}
+
+fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
+    if bins == 0 || values.len() < bins * 3 {
+        return;
+    }
+    let original = values.to_vec();
+    let frames = values.len() / bins;
+    for frame_index in 1..frames - 1 {
+        for bin in 0..bins {
+            let index = frame_index * bins + bin;
+            let neighbor_mean = (original[index - bins] + original[index + bins]) * 0.5;
+            values[index] = original[index] * 0.82 + neighbor_mean * 0.18;
+        }
+    }
+}
+
+fn resample_bin(bins: &[f32], target_index: usize, target_bins: usize) -> f32 {
+    if bins.is_empty() {
+        return 0.0;
+    }
+    if bins.len() == 1 || target_bins <= 1 {
+        return bins[0];
+    }
+    let source_position =
+        target_index as f32 * (bins.len() - 1) as f32 / (target_bins - 1).max(1) as f32;
+    let left = source_position.floor() as usize;
+    let right = source_position.ceil() as usize;
+    if left == right {
+        bins[left]
+    } else {
+        lerp(bins[left], bins[right], source_position - left as f32)
+    }
 }
 
 fn append_phone_source_filter_frames(
@@ -537,7 +660,7 @@ mod tests {
             mel.mel
                 .iter()
                 .flat_map(|frame| frame.bins.iter())
-                .any(|bin| *bin > 0.0)
+                .all(|bin| bin.is_finite() && (LOG_MEL_MIN..=LOG_MEL_MAX).contains(bin))
         );
     }
 }

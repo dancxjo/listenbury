@@ -1,12 +1,8 @@
+use crate::acoustic::MelFrame;
 use crate::voice::articulator::{
     PartialProsodyPhone, PhoneTimedRenderTarget, PitchHint, RenderPlan,
 };
 use crate::voice::tract::SourceFilterTrack;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MelFrame {
-    pub bins: Vec<f32>,
-}
 
 pub enum VocoderInput<'a> {
     RenderPlan(&'a RenderPlan),

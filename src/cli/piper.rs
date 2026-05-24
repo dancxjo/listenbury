@@ -50,6 +50,8 @@ use listenbury::voice::tract::klatt::{KlattRenderConfig, render_phone_string};
 use listenbury::voice::tract::targets::{
     default_english_phone_targets, phone_render_targets_from_string,
 };
+#[cfg(feature = "tts-riper")]
+use listenbury::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "audio-cpal")]
 use std::io::BufRead;
@@ -1397,9 +1399,19 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
             })
             .collect::<Vec<_>>();
     let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
+    let mut acoustic = SourceFilterAcousticModel;
+    let acoustic_track = acoustic
+        .generate(AcousticInput::PhoneTimed(&phone_targets))
+        .with_context(|| {
+            format!("listenbury say --hifigan failed to generate acoustic frames for `{text}`")
+        })?;
     let mut backend = HifiganBackend::load(model_path)?;
     let frames = backend
-        .render(VocoderInput::PhoneTimed(&phone_targets))
+        .render(VocoderInput::MelF0 {
+            mel: &acoustic_track.mel,
+            f0_hz: &acoustic_track.f0_hz,
+            voiced: &acoustic_track.voiced,
+        })
         .with_context(|| format!("listenbury say --hifigan failed to render `{text}`"))?;
     anyhow::ensure!(
         !frames.is_empty(),

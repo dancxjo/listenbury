@@ -15,15 +15,15 @@ mod piper;
 mod registry;
 mod riper;
 mod source_filter;
-mod source_filter_mel;
 
 use anyhow::Result;
 
 use crate::audio::frame::AudioFrame;
 
+pub use crate::acoustic::MelFrame;
 pub use capability::{BackendCapabilities, BackendFamily, VocoderDescriptor};
 pub use hifigan::{HifiganBackend, MelContract, SPEECHT5_HIFIGAN_MEL_CONTRACT};
-pub use input::{MelFrame, VocoderInput};
+pub use input::VocoderInput;
 pub use registry::{
     SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,
 };

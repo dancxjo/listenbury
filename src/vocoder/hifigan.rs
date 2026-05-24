@@ -12,14 +12,9 @@ use crate::audio::frame::AudioFrame;
 #[cfg(feature = "tts-riper")]
 use crate::mouth::riper::backend::initialize_ort_runtime;
 use crate::time::ExactTimestamp;
-use crate::vocoder::source_filter_mel::{
-    phone_timed_to_source_filter_track, source_filter_track_to_mel_f0,
-};
 use crate::vocoder::{
     BackendCapabilities, BackendFamily, MelFrame, VocoderBackend, VocoderDescriptor, VocoderInput,
 };
-use crate::voice::articulator::{PhoneTimedRenderTarget, RenderPlan};
-use crate::voice::tract::SourceFilterTrack;
 
 pub struct HifiganBackend {
     #[cfg(feature = "tts-riper")]
@@ -112,12 +107,12 @@ impl HifiganBackend {
             id: "hifigan",
             family: BackendFamily::NeuralVocoder,
             capabilities: BackendCapabilities {
-                accepts_phone_timed: true,
+                accepts_phone_timed: false,
                 accepts_partial_prosody: false,
                 accepts_coarse_text: false,
                 accepts_mel: true,
                 accepts_mel_f0: true,
-                honors_explicit_duration: true,
+                honors_explicit_duration: false,
                 honors_explicit_f0: false,
                 honors_vibrato: false,
                 streaming_safe: false,
@@ -127,7 +122,7 @@ impl HifiganBackend {
             detail: None,
             notes: &[
                 "Expects SpeechT5 HiFi-GAN mel frames: 80-bin natural-log mel, clamped to [-8, 2], 16 kHz, 256-sample hop.",
-                "Phone-timed and source-filter inputs are adapter paths that synthesize mel frames for the same contract.",
+                "Duration control belongs to an upstream acoustic model that lays out mel/F0 frames.",
                 "Runs a real HiFi-GAN-compatible ONNX mel vocoder when loaded with a model; the deterministic renderer is a compile-safe fallback.",
             ],
         }
@@ -148,20 +143,6 @@ impl HifiganBackend {
         }
 
         Self::render_mel_deterministic(mel, f0_hz, voiced)
-    }
-
-    fn render_phone_timed(
-        &mut self,
-        targets: &[PhoneTimedRenderTarget],
-    ) -> Result<Vec<AudioFrame>> {
-        let source_filter = phone_timed_to_source_filter_track(targets)?;
-        self.render_source_filter_track(&source_filter)
-    }
-
-    fn render_source_filter_track(&mut self, track: &SourceFilterTrack) -> Result<Vec<AudioFrame>> {
-        let mut mel_f0 = source_filter_track_to_mel_f0(track)?;
-        mel_f0.mel = energy_mel_to_speecht5_log_mel(&mel_f0.mel);
-        self.render_mel(&mel_f0.mel, Some(&mel_f0.f0_hz), Some(&mel_f0.voiced))
     }
 
     fn render_mel_deterministic(
@@ -306,19 +287,11 @@ impl VocoderBackend for HifiganBackend {
 
     fn render(&mut self, input: VocoderInput<'_>) -> Result<Vec<AudioFrame>> {
         match input {
-            VocoderInput::RenderPlan(RenderPlan::PhoneTimed(targets)) => {
-                self.render_phone_timed(targets)
-            }
-            VocoderInput::RenderPlan(_) => {
-                bail!("hifigan backend requires a phone-timed render plan or mel input")
-            }
-            VocoderInput::PhoneTimed(targets) => self.render_phone_timed(targets),
-            VocoderInput::SourceFilterTrack(track) => self.render_source_filter_track(track),
             VocoderInput::Mel(mel) => self.render_mel(mel, None, None),
             VocoderInput::MelF0 { mel, f0_hz, voiced } => {
                 self.render_mel(mel, Some(f0_hz), Some(voiced))
             }
-            _ => bail!("hifigan backend requires PhoneTimed, Mel, or MelF0 input"),
+            _ => bail!("hifigan backend requires Mel or MelF0 input from an acoustic model"),
         }
     }
 }
@@ -448,37 +421,6 @@ fn validate_speecht5_hifigan_mel(mel: &[MelFrame]) -> Result<()> {
     Ok(())
 }
 
-fn energy_mel_to_speecht5_log_mel(mel: &[MelFrame]) -> Vec<MelFrame> {
-    if mel.is_empty() {
-        return Vec::new();
-    }
-
-    let target_bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins;
-    let mut values = Vec::with_capacity(mel.len() * target_bins);
-    for frame in mel {
-        let frame_peak = (0..target_bins)
-            .map(|index| resample_bin(&frame.bins, index, target_bins))
-            .fold(0.0_f32, f32::max);
-        let adaptive_floor = (frame_peak * 0.006).max(1.0e-5);
-        for index in 0..target_bins {
-            let source = resample_bin(&frame.bins, index, target_bins);
-            values.push(
-                source
-                    .max(adaptive_floor)
-                    .ln()
-                    .clamp(LOG_MEL_MIN, LOG_MEL_MAX),
-            );
-        }
-    }
-    smooth_normalized_mel_frames(&mut values, target_bins);
-    values
-        .chunks_exact(target_bins)
-        .map(|bins| MelFrame {
-            bins: bins.to_vec(),
-        })
-        .collect()
-}
-
 #[cfg(feature = "tts-riper")]
 fn flatten_contract_mel(mel: &[MelFrame]) -> Vec<f32> {
     let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
@@ -486,39 +428,6 @@ fn flatten_contract_mel(mel: &[MelFrame]) -> Vec<f32> {
         values.extend_from_slice(&frame.bins);
     }
     values
-}
-
-fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
-    if bins == 0 || values.len() < bins * 3 {
-        return;
-    }
-    let original = values.to_vec();
-    let frames = values.len() / bins;
-    for frame_index in 1..frames - 1 {
-        for bin in 0..bins {
-            let index = frame_index * bins + bin;
-            let neighbor_mean = (original[index - bins] + original[index + bins]) * 0.5;
-            values[index] = original[index] * 0.82 + neighbor_mean * 0.18;
-        }
-    }
-}
-
-fn resample_bin(bins: &[f32], target_index: usize, target_bins: usize) -> f32 {
-    if bins.is_empty() {
-        return 0.0;
-    }
-    if bins.len() == 1 || target_bins <= 1 {
-        return bins[0];
-    }
-    let source_position =
-        target_index as f32 * (bins.len() - 1) as f32 / (target_bins - 1).max(1) as f32;
-    let left = source_position.floor() as usize;
-    let right = source_position.ceil() as usize;
-    if left == right {
-        bins[left]
-    } else {
-        lerp(bins[left], bins[right], source_position - left as f32)
-    }
 }
 
 fn amplitude_for_frame(frame: &MelFrame) -> f32 {
@@ -627,7 +536,9 @@ fn normalize_peak(samples: &mut [f32], target_peak: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acoustic::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
     use crate::linguistic::phonology::Phone;
+    use crate::voice::articulator::PhoneTimedRenderTarget;
 
     #[test]
     fn normalize_peak_lifts_quiet_vocoder_output() {
@@ -652,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_phone_timed_targets_through_mel_adapter() {
+    fn rejects_phone_timed_targets_without_acoustic_model() {
         let targets = vec![
             PhoneTimedRenderTarget {
                 phone: Phone::new_ipa("h"),
@@ -671,19 +582,15 @@ mod tests {
         ];
         let mut backend = HifiganBackend::deterministic();
 
-        let frames = backend
+        let err = backend
             .render(VocoderInput::PhoneTimed(&targets))
-            .expect("phone-timed HiFi-GAN render");
+            .expect_err("HiFi-GAN should require acoustic frames");
 
-        assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].sample_rate_hz, SAMPLE_RATE_HZ);
-        assert_eq!(frames[0].channels, 1);
-        assert!(frames[0].samples.len() >= HOP_SAMPLES * 2);
-        assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.0));
+        assert!(err.to_string().contains("acoustic model"));
     }
 
     #[test]
-    fn renders_source_filter_track_through_mel_adapter() {
+    fn renders_acoustic_model_mel_f0_track() {
         let targets = vec![PhoneTimedRenderTarget {
             phone: Phone::new_ipa("ɑ"),
             duration_ms: 96,
@@ -691,12 +598,19 @@ mod tests {
             amplitude: 0.7,
             vibrato: None,
         }];
-        let track = phone_timed_to_source_filter_track(&targets).expect("source-filter track");
+        let mut acoustic = SourceFilterAcousticModel;
+        let track = acoustic
+            .generate(AcousticInput::PhoneTimed(&targets))
+            .expect("acoustic track");
         let mut backend = HifiganBackend::deterministic();
 
         let frames = backend
-            .render(VocoderInput::SourceFilterTrack(&track))
-            .expect("source-filter HiFi-GAN render");
+            .render(VocoderInput::MelF0 {
+                mel: &track.mel,
+                f0_hz: &track.f0_hz,
+                voiced: &track.voiced,
+            })
+            .expect("acoustic track HiFi-GAN render");
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].channels, 1);
