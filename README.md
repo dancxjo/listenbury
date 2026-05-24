@@ -561,13 +561,14 @@ listenbury transcribe input.wav
 
 ### `say`
 
-Synthesizes and plays speech using the Riper pipeline by default. Pass `--piper` to use the external Piper binary. Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, and `--diphone` loads a real MBROLA-compatible voice database for the native Rust diphone path.
+Synthesizes and plays speech using the Riper pipeline by default. Pass `--piper` to use the external Piper binary. Within the Riper pipeline, `--klatt` switches the synthesizer backend from ONNX to Klatt, `--hifigan` selects the SpeechT5 acoustic route with SpeechT5 HiFi-GAN vocoding, and `--diphone` loads a real MBROLA-compatible voice database for the native Rust diphone path.
 
 Here, "MBROLA" means compatibility with MBROLA file/data conventions (`.pho` + voice databases), not copied upstream MBROLA implementation code. See `docs/legal/mbrola-psola-audit.md` for the patent/license/compliance boundary.
 
 ```bash
 listenbury say "Testing one two three."
 listenbury say --dump-pipeline "Testing one two three."
+listenbury say --dump-phonemes "Testing one two three."
 listenbury say --rp "Testing one two three."
 listenbury say --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
 listenbury say --diphone "Hello, my baby."

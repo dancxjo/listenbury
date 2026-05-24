@@ -423,21 +423,25 @@ pub(crate) struct SayCommand {
     /// Print the selected speech pipeline before synthesis.
     #[arg(long, alias = "trace-speech-pipeline")]
     pub(crate) dump_pipeline: bool,
-    #[arg(long, conflicts_with_all = ["piper", "hifigan", "diphone"])]
+    /// Print phoneme and phone translations before synthesis.
+    #[arg(long)]
+    pub(crate) dump_phonemes: bool,
+    #[arg(long, conflicts_with_all = ["piper", "hifigan", "speecht5", "diphone"])]
     pub(crate) klatt: bool,
-    #[arg(long, conflicts_with_all = ["piper", "klatt", "diphone", "rp"])]
-    /// HiFi-GAN mel-vocoder route. Optional debug env vars:
-    /// LISTENBURY_HIFIGAN_DEBUG_DIR dumps raw/input mel + temporal diagnostics + wav outputs.
-    /// LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING (0.0-1.0) applies pre-vocoder temporal smoothing.
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "speecht5", "diphone", "rp"])]
+    /// Native SpeechT5 acoustic route with SpeechT5 HiFi-GAN vocoding.
     pub(crate) hifigan: bool,
-    #[arg(long = "hifigan-model", requires = "hifigan")]
+    /// Native SpeechT5 acoustic route: text/tokenizer -> SpeechT5 encoder/decoder mel -> SpeechT5 HiFi-GAN.
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "diphone", "rp"])]
+    pub(crate) speecht5: bool,
+    #[arg(long = "hifigan-model")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
     pub(crate) skip_gan: bool,
-    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "speecht5", "mbrola_voice"])]
     pub(crate) rp: bool,
-    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan"])]
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "speecht5"])]
     pub(crate) diphone: bool,
     #[arg(long = "diphone-voice", requires = "diphone")]
     pub(crate) mbrola_voice: Option<PathBuf>,
@@ -1385,6 +1389,18 @@ mod tests {
             panic!("expected say command");
         };
         assert!(command.klatt);
+    }
+
+    #[test]
+    fn say_accepts_dump_phonemes() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--dump-phonemes", "hello"])
+            .expect("say should parse phoneme dump flag");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.dump_phonemes);
+        assert_eq!(command.words, ["hello"]);
     }
 
     #[test]

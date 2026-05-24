@@ -7,6 +7,7 @@ mod model;
 pub mod neural;
 pub mod registry;
 pub mod source_filter;
+pub mod speecht5;
 
 pub use model::{AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame, SingingPlan};
 pub use neural::{
@@ -20,3 +21,4 @@ pub use source_filter::{
     phone_timed_to_source_filter_track, source_filter_track_to_mel_f0,
     summarize_mel_temporal_discontinuity, temporal_smooth_mel_frames,
 };
+pub use speecht5::{SpeechT5OnnxAcousticGenerator, SpeechT5OnnxPaths};

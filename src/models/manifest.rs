@@ -460,6 +460,16 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
         license: Some("MIT"),
         source: Some("https://huggingface.co/Xenova/speecht5_tts"),
     },
+    ModelAsset {
+        id: "speecht5-tts-speaker-embeddings",
+        filename: "speaker_embeddings.bin",
+        relative_path: "models/acoustic/speecht5_tts/speaker_embeddings.bin",
+        url: "https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin",
+        expected_size_bytes: Some(2048),
+        sha256: None,
+        license: Some("MIT"),
+        source: Some("https://huggingface.co/datasets/Xenova/transformers.js-docs"),
+    },
 ];
 
 pub const MODEL_BUNDLES: &[ModelBundle] = &[
@@ -682,6 +692,7 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
             "speecht5-tts-special-tokens-map",
             "speecht5-tts-added-tokens",
             "speecht5-tts-spm-char",
+            "speecht5-tts-speaker-embeddings",
         ],
         primary_asset_id: "speecht5-tts-decoder-merged-quantized",
         aliases: &["speecht5", "speecht5-acoustic", "speecht5_tts", "speech-t5"],

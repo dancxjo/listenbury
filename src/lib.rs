@@ -35,8 +35,8 @@ pub use acoustic::{
     MelTemporalDiscontinuityStats, NeuralAcousticModel, NeuralAcousticModelKind,
     NeuralAcousticOnnxConfig, NeuralAcousticTensorNames, NeuralAcousticTrackContract,
     NeuralMelOutputLayout, NeuralPhoneIdMap, SingingPlan, SourceFilterAcousticModel,
-    acoustic_model_by_id, list_acoustic_models, mel_frame_delta_energy,
-    summarize_mel_temporal_discontinuity, temporal_smooth_mel_frames,
+    SpeechT5OnnxAcousticGenerator, SpeechT5OnnxPaths, acoustic_model_by_id, list_acoustic_models,
+    mel_frame_delta_energy, summarize_mel_temporal_discontinuity, temporal_smooth_mel_frames,
 };
 pub use audio::frame::AudioFrame;
 pub use audio::{

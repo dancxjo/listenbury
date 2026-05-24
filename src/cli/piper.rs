@@ -1,10 +1,10 @@
 #[cfg(feature = "audio-cpal")]
 use crate::cli::commands::{play_audio_frame_stream, play_audio_frames};
-#[cfg(feature = "piper-compat")]
-use crate::cli::model_paths::resolve_hifigan_model;
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use crate::cli::model_paths::resolve_whisper_model;
+#[cfg(feature = "piper-compat")]
+use crate::cli::model_paths::{resolve_hifigan_model, resolve_speecht5_acoustic_dir};
 use crate::cli::{EchoCommand, RiperCompareCommand, SayCommand};
 use anyhow::{Context, Result};
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
@@ -63,6 +63,8 @@ use listenbury::{
     temporal_smooth_mel_frames,
 };
 use listenbury::{PiperConfig, PiperTextToSpeech};
+#[cfg(feature = "piper-compat")]
+use listenbury::{SpeechT5OnnxAcousticGenerator, SpeechT5OnnxPaths};
 #[cfg(feature = "audio-cpal")]
 use std::io::BufRead;
 #[cfg(feature = "piper-compat")]
@@ -97,6 +99,9 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     if piper_args.dump_pipeline {
         print_say_pipeline(&piper_args);
     }
+    if piper_args.dump_phonemes && !piper_args.stdin_stream {
+        print_say_phonemes(&piper_args)?;
+    }
     if piper_args.stdin_stream {
         return run_say_stdin_stream(piper_args);
     }
@@ -111,7 +116,17 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
         return Ok(());
     }
 
-    if should_use_hifigan_backend(&piper_args) {
+    if should_use_speecht5_backend(&piper_args) {
+        let frames = synthesize_speecht5_for_say(&piper_args)?;
+        if let Some(output_path) = piper_args.output_wav {
+            write_say_wav(&output_path, &frames)?;
+        } else {
+            play_say_audio_with_source(&frames, "SpeechT5")?;
+        }
+        return Ok(());
+    }
+
+    if should_use_source_filter_hifigan_backend(&piper_args) {
         let frames = synthesize_hifigan_for_say(&piper_args)?;
         if let Some(output_path) = piper_args.output_wav {
             write_say_wav(&output_path, &frames)?;
@@ -170,9 +185,11 @@ fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
         let playback = thread::spawn(move || play_audio_frame_stream(frame_rx, "Piper stdin TTS"));
 
         let synthesis_result = if should_use_klatt_backend(&piper_args) {
-            stream_klatt_stdin_to_frames(frame_tx)
-        } else if should_use_hifigan_backend(&piper_args) {
+            stream_klatt_stdin_to_frames(piper_args, frame_tx)
+        } else if should_use_source_filter_hifigan_backend(&piper_args) {
             stream_hifigan_stdin_to_frames(piper_args, frame_tx)
+        } else if should_use_speecht5_backend(&piper_args) {
+            stream_speecht5_stdin_to_frames(piper_args, frame_tx)
         } else if should_use_mbrola_backend(&piper_args) {
             stream_mbrola_stdin_to_frames(piper_args, frame_tx)
         } else {
@@ -193,6 +210,7 @@ fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
 
 #[cfg(feature = "audio-cpal")]
 fn stream_klatt_stdin_to_frames(
+    mut piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
 ) -> Result<()> {
     let stdin = std::io::stdin();
@@ -201,6 +219,10 @@ fn stream_klatt_stdin_to_frames(
         let text = text.trim();
         if text.is_empty() {
             continue;
+        }
+        piper_args.text = text.to_string();
+        if piper_args.dump_phonemes {
+            print_say_phonemes(&piper_args)?;
         }
         let frames = synthesize_klatt_for_say(text)?;
         frame_tx
@@ -223,10 +245,37 @@ fn stream_hifigan_stdin_to_frames(
             continue;
         }
         piper_args.text = text.to_string();
+        if piper_args.dump_phonemes {
+            print_say_phonemes(&piper_args)?;
+        }
         let frames = synthesize_hifigan_for_say(&piper_args)?;
         frame_tx
             .send(frames)
             .context("failed to send HiFi-GAN stdin audio to playback")?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "audio-cpal")]
+fn stream_speecht5_stdin_to_frames(
+    mut piper_args: SayArgs,
+    frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
+) -> Result<()> {
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let text = line.context("failed to read stdin for listenbury say --speecht5 -")?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        piper_args.text = text.to_string();
+        if piper_args.dump_phonemes {
+            print_say_phonemes(&piper_args)?;
+        }
+        let frames = synthesize_speecht5_for_say(&piper_args)?;
+        frame_tx
+            .send(frames)
+            .context("failed to send SpeechT5 stdin audio to playback")?;
     }
     Ok(())
 }
@@ -244,6 +293,10 @@ fn stream_piper_stdin_to_frames(
         let text = text.trim();
         if text.is_empty() {
             continue;
+        }
+        if piper_args.dump_phonemes {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_phonemes(&line_args)?;
         }
         tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             text.to_string(),
@@ -268,6 +321,10 @@ fn stream_mbrola_stdin_to_frames(
         let text = text.trim();
         if text.is_empty() {
             continue;
+        }
+        if piper_args.dump_phonemes {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_phonemes(&line_args)?;
         }
         tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             text.to_string(),
@@ -1447,6 +1504,70 @@ fn format_phoneme_sequence(sequence: &PiperPhonemeSequence) -> String {
         .join(" ")
 }
 
+fn format_phone_string(phone_string: &PhoneString) -> String {
+    phone_string.ipa_segments().join(" ")
+}
+
+#[cfg(feature = "piper-compat")]
+fn klatt_phone_string_from_riper_symbols(sequence: &PiperPhonemeSequence) -> Result<PhoneString> {
+    let mut phones = Vec::new();
+    let mut unsupported_symbols = Vec::new();
+
+    for phoneme in &sequence.phonemes {
+        match klatt_ipa_segments_for_riper_symbol(&phoneme.0) {
+            Some(segments) => phones.extend(segments.iter().copied().map(Phone::new_ipa)),
+            None => unsupported_symbols.push(phoneme.0.clone()),
+        }
+    }
+
+    if !unsupported_symbols.is_empty() {
+        unsupported_symbols.sort_unstable();
+        unsupported_symbols.dedup();
+        anyhow::bail!(
+            "cannot convert Riper phoneme(s) for acoustic phones: {}",
+            unsupported_symbols.join(", ")
+        );
+    }
+
+    Ok(PhoneString { phones })
+}
+
+#[cfg(feature = "piper-compat")]
+fn phone_segments_for_riper_symbols(symbols: &[&str]) -> std::result::Result<String, String> {
+    let mut phones = Vec::new();
+    let mut unsupported_symbols = Vec::new();
+    for symbol in symbols {
+        match klatt_ipa_segments_for_riper_symbol(symbol) {
+            Some(segments) => phones.extend(segments.iter().copied()),
+            None => unsupported_symbols.push((*symbol).to_string()),
+        }
+    }
+    if unsupported_symbols.is_empty() {
+        Ok(phones.join(" "))
+    } else {
+        unsupported_symbols.sort_unstable();
+        unsupported_symbols.dedup();
+        Err(unsupported_symbols.join(", "))
+    }
+}
+
+#[cfg(feature = "piper-compat")]
+fn backend_phone_translation_note(args: &SayArgs) -> String {
+    if should_use_klatt_backend(args) {
+        "acoustic IPA targets -> Klatt formant renderer".to_string()
+    } else if should_use_source_filter_hifigan_backend(args) {
+        "acoustic IPA targets -> source-filter mel/F0 -> mel debug renderer".to_string()
+    } else if should_use_speecht5_backend(args) {
+        "Riper phonemes -> SpeechT5 tokenizer/model tokens -> SpeechT5 mel -> HiFi-GAN".to_string()
+    } else if should_use_mbrola_backend(args) {
+        "Riper surface phones -> MBROLA voice symbol map -> timed .pho plan".to_string()
+    } else if args.piper {
+        "Riper phonemes -> Piper/eSpeak-compatible symbols -> external Piper IDs".to_string()
+    } else {
+        "Riper phonemes -> Piper/eSpeak-compatible symbols -> internal Piper IDs".to_string()
+    }
+}
+
 #[cfg(feature = "piper-compat")]
 fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
     println!("process runtime: {}ms", process.runtime.as_millis());
@@ -1469,7 +1590,7 @@ fn report_compare_stats(process: &SynthesisStats, riper: &SynthesisStats) {
     );
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SayArgs {
     piper: bool,
     piper_bin: Option<PathBuf>,
@@ -1480,20 +1601,30 @@ struct SayArgs {
     mbrola_voice: Option<PathBuf>,
     output_wav: Option<PathBuf>,
     dump_pipeline: bool,
+    dump_phonemes: bool,
     klatt: bool,
     hifigan: bool,
+    speecht5: bool,
     skip_gan: bool,
     stdin_stream: bool,
     text: String,
 }
 
 impl SayArgs {
+    fn clone_for_text(&self, text: &str) -> Self {
+        let mut args = self.clone();
+        args.text = text.to_string();
+        args
+    }
+
     fn from_command(command: SayCommand) -> Result<Self> {
         let mut piper = command.piper;
         let mut klatt = command.klatt;
         let mut hifigan = command.hifigan;
+        let mut speecht5 = command.speecht5;
         let mut skip_gan = command.skip_gan;
         let mut dump_pipeline = command.dump_pipeline;
+        let mut dump_phonemes = command.dump_phonemes;
         let mut rp = command.rp;
         let mut diphone = command.diphone;
         let mut words = command
@@ -1509,11 +1640,17 @@ impl SayArgs {
                 } else if word == "--hifigan" {
                     hifigan = true;
                     None
+                } else if word == "--speecht5" {
+                    speecht5 = true;
+                    None
                 } else if word == "--skip-gan" || word == "--hifigan-fallback" {
                     skip_gan = true;
                     None
                 } else if word == "--dump-pipeline" || word == "--trace-speech-pipeline" {
                     dump_pipeline = true;
+                    None
+                } else if word == "--dump-phonemes" {
+                    dump_phonemes = true;
                     None
                 } else if word == "--diphone" {
                     diphone = true;
@@ -1531,6 +1668,7 @@ impl SayArgs {
             "listenbury say: --riper has been removed; Riper is the default"
         );
         let explicit_piper_bin = command.piper_bin.is_some();
+        let explicit_hifigan_model = command.hifigan_model.is_some();
         let mut piper_bin = command.piper_bin;
         let mut piper_voice = command.piper_voice;
 
@@ -1553,8 +1691,8 @@ impl SayArgs {
         }
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
-            !(piper && (klatt || hifigan || mbrola)),
-            "listenbury say: --piper cannot be combined with --klatt, --hifigan, or --diphone"
+            !(piper && (klatt || hifigan || speecht5 || mbrola)),
+            "listenbury say: --piper cannot be combined with --klatt, --hifigan, --speecht5, or --diphone"
         );
         anyhow::ensure!(
             hifigan || !skip_gan,
@@ -1565,12 +1703,16 @@ impl SayArgs {
             "listenbury say: --piper-bin only applies to the external Piper binary; pass --piper"
         );
         anyhow::ensure!(
-            [klatt, hifigan, mbrola]
+            hifigan || speecht5 || !explicit_hifigan_model,
+            "listenbury say: --hifigan-model only applies when --hifigan or --speecht5 is selected"
+        );
+        anyhow::ensure!(
+            [klatt, hifigan, speecht5, mbrola]
                 .into_iter()
                 .filter(|set| *set)
                 .count()
                 <= 1,
-            "listenbury say: choose only one of --klatt, --hifigan, or the MBROLA/RP voice path"
+            "listenbury say: choose only one of --klatt, --hifigan, --speecht5, or the MBROLA/RP voice path"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
@@ -1583,9 +1725,11 @@ impl SayArgs {
             mbrola_voice,
             output_wav: command.output_wav,
             dump_pipeline,
+            dump_phonemes,
             piper,
             klatt,
             hifigan,
+            speecht5,
             skip_gan,
             stdin_stream,
             text: if stdin_stream {
@@ -1605,8 +1749,12 @@ fn should_use_klatt_backend(args: &SayArgs) -> bool {
     args.klatt
 }
 
-fn should_use_hifigan_backend(args: &SayArgs) -> bool {
-    args.hifigan
+fn should_use_source_filter_hifigan_backend(args: &SayArgs) -> bool {
+    args.hifigan && args.skip_gan
+}
+
+fn should_use_speecht5_backend(args: &SayArgs) -> bool {
+    args.speecht5 || (args.hifigan && !args.skip_gan)
 }
 
 fn should_use_mbrola_backend(args: &SayArgs) -> bool {
@@ -1616,8 +1764,10 @@ fn should_use_mbrola_backend(args: &SayArgs) -> bool {
 fn say_backend_kind(args: &SayArgs) -> CurrentSayBackendKind {
     if should_use_klatt_backend(args) {
         CurrentSayBackendKind::Klatt
-    } else if should_use_hifigan_backend(args) {
+    } else if should_use_source_filter_hifigan_backend(args) {
         CurrentSayBackendKind::SourceFilterHifigan
+    } else if should_use_speecht5_backend(args) {
+        CurrentSayBackendKind::SpeechT5Hifigan
     } else if should_use_mbrola_backend(args) {
         CurrentSayBackendKind::MbrolaDiphone
     } else if args.piper {
@@ -1639,6 +1789,11 @@ fn print_say_pipeline(args: &SayArgs) {
     print!("{}", format_say_pipeline(args));
 }
 
+fn print_say_phonemes(args: &SayArgs) -> Result<()> {
+    print!("{}", format_say_phonemes(args)?);
+    Ok(())
+}
+
 fn format_say_pipeline(args: &SayArgs) -> String {
     let backend_graph = say_backend_graph(args);
     let mut output = String::new();
@@ -1652,6 +1807,62 @@ fn format_say_pipeline(args: &SayArgs) -> String {
         output.push_str(&format!("  - {}\n", worker.id));
     }
     output
+}
+
+#[cfg(feature = "piper-compat")]
+fn format_say_phonemes(args: &SayArgs) -> Result<String> {
+    let unit = SimpleEnglishG2p::default()
+        .phonemize_unit(&args.text)
+        .with_context(|| format!("failed to phonemize `{}`", args.text))?;
+    let riper_symbols = format_phoneme_sequence(&unit.phonemes);
+    let acoustic_phones = klatt_phone_string_from_riper_symbols(&unit.phonemes)?;
+
+    let mut output = String::new();
+    output.push_str(&format!("phoneme dump: {}\n", say_backend_graph(args).id));
+    output.push_str(&format!("input text: {}\n", args.text));
+    output.push_str(&format!("riper phonemes: {riper_symbols}\n"));
+    output.push_str(&format!(
+        "acoustic phones: {}\n",
+        format_phone_string(&acoustic_phones)
+    ));
+    output.push_str("word phones:\n");
+    for target in &unit.word_targets {
+        let symbols = unit.phonemes.phonemes[target.phoneme_range.clone()]
+            .iter()
+            .map(|phoneme| phoneme.0.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let phones = phone_segments_for_riper_symbols(
+            &unit.phonemes.phonemes[target.phoneme_range.clone()]
+                .iter()
+                .map(|phoneme| phoneme.0.as_str())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|error| format!("(unavailable: {error})"));
+        output.push_str(&format!(
+            "  - {}: {} -> {}\n",
+            target.normalized_text, symbols, phones
+        ));
+    }
+    output.push_str(&format!(
+        "backend phones: {}\n",
+        backend_phone_translation_note(args)
+    ));
+    Ok(output)
+}
+
+#[cfg(not(feature = "piper-compat"))]
+fn format_say_phonemes(args: &SayArgs) -> Result<String> {
+    let acoustic_phones = klatt_phone_string_for_text(&args.text)?;
+    let mut output = String::new();
+    output.push_str(&format!("phoneme dump: {}\n", say_backend_graph(args).id));
+    output.push_str(&format!("input text: {}\n", args.text));
+    output.push_str(&format!(
+        "acoustic phones: {}\n",
+        format_phone_string(&acoustic_phones)
+    ));
+    output.push_str("backend phones: klatt/demo lexicon -> acoustic IPA targets\n");
+    Ok(output)
 }
 
 fn say_pipeline_stages(args: &SayArgs) -> Vec<String> {
@@ -1671,11 +1882,18 @@ fn say_pipeline_stages(args: &SayArgs) -> Vec<String> {
             "mel/features: disabled".to_string(),
             "vocoder: disabled".to_string(),
         ]);
-    } else if should_use_hifigan_backend(args) {
+    } else if should_use_source_filter_hifigan_backend(args) {
         stages.extend([
             "acoustic generator: source-filter".to_string(),
             hifigan_feature_stage(),
             hifigan_vocoder_stage(args),
+        ]);
+    } else if should_use_speecht5_backend(args) {
+        stages.extend([
+            "tokenizer: SpeechT5 tokenizer".to_string(),
+            "acoustic generator: SpeechT5 encoder/decoder ONNX".to_string(),
+            "mel/features: SpeechT5 mel spectrogram".to_string(),
+            speecht5_vocoder_stage(args),
         ]);
     } else if should_use_mbrola_backend(args) {
         stages.extend([
@@ -1731,6 +1949,17 @@ fn hifigan_vocoder_stage(args: &SayArgs) -> String {
         }
         "vocoder: hifigan ONNX (model resolved at runtime)".to_string()
     }
+}
+
+fn speecht5_vocoder_stage(args: &SayArgs) -> String {
+    if args.skip_gan {
+        return "vocoder: deterministic-fallback mel debug renderer (explicit --skip-gan/--hifigan-fallback)".to_string();
+    }
+    #[cfg(feature = "piper-compat")]
+    if let Some(model) = &args.hifigan_model {
+        return format!("vocoder: SpeechT5 HiFi-GAN ONNX ({})", model.display());
+    }
+    "vocoder: SpeechT5 HiFi-GAN ONNX (model resolved at runtime)".to_string()
 }
 
 fn mbrola_voice_stage(args: &SayArgs) -> String {
@@ -1866,6 +2095,62 @@ fn synthesize_hifigan_text(
 #[cfg(not(feature = "piper-compat"))]
 fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
     anyhow::bail!("listenbury say --hifigan requires the `piper-compat` feature")
+}
+
+#[cfg(feature = "piper-compat")]
+fn synthesize_speecht5_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
+    let acoustic_dir = resolve_speecht5_acoustic_dir()?;
+    let mut acoustic =
+        SpeechT5OnnxAcousticGenerator::load(SpeechT5OnnxPaths::from_dir(&acoustic_dir))
+            .with_context(|| {
+                format!(
+                    "failed to load SpeechT5 acoustic model from {}",
+                    acoustic_dir.display()
+                )
+            })?;
+    let acoustic_track = acoustic
+        .generate_text(&args.text)
+        .with_context(|| format!("SpeechT5 failed to generate mel frames for `{}`", args.text))?;
+    HifiganBackend::validate_acoustic_contract(
+        acoustic_track.sample_rate_hz,
+        acoustic_track.hop_samples,
+    )?;
+
+    let mut backend = if args.skip_gan {
+        eprintln!(
+            "WARNING: listenbury say --hifigan using deterministic-fallback mel debug renderer, not ONNX HiFi-GAN."
+        );
+        Box::new(MelDebugRendererBackend::new()) as Box<dyn SpeechSynthesizer>
+    } else {
+        let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
+        eprintln!(
+            "listenbury say using SpeechT5 acoustic model: {}",
+            acoustic_dir.display()
+        );
+        eprintln!(
+            "listenbury say using SpeechT5 HiFi-GAN model: {}",
+            model_path.display()
+        );
+        Box::new(HifiganBackend::load(model_path)?) as Box<dyn SpeechSynthesizer>
+    };
+    let frames = backend
+        .render(VocoderInput::MelF0 {
+            mel: &acoustic_track.mel,
+            f0_hz: &acoustic_track.f0_hz,
+            voiced: &acoustic_track.voiced,
+        })
+        .with_context(|| format!("SpeechT5 HiFi-GAN failed to render `{}`", args.text))?;
+    anyhow::ensure!(
+        !frames.is_empty(),
+        "SpeechT5 HiFi-GAN produced no audio for `{}`",
+        args.text
+    );
+    Ok(frames)
+}
+
+#[cfg(not(feature = "piper-compat"))]
+fn synthesize_speecht5_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
+    anyhow::bail!("listenbury say --speecht5 requires the `piper-compat` feature")
 }
 
 #[cfg(feature = "piper-compat")]
@@ -2627,8 +2912,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2651,8 +2938,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: true,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2670,6 +2959,63 @@ mod tests {
     }
 
     #[test]
+    fn say_args_accepts_dump_phonemes_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: true,
+            klatt: false,
+            hifigan: false,
+            speecht5: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("--dump-phonemes should parse without changing the default route");
+
+        assert!(args.dump_phonemes);
+        let dump = format_say_phonemes(&args).expect("phoneme dump should format");
+        assert!(dump.contains("phoneme dump: piper-compat"));
+        assert!(dump.contains("riper phonemes:"));
+        assert!(dump.contains("acoustic phones:"));
+        assert!(dump.contains("word phones:"));
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_dump_phonemes_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            klatt: false,
+            hifigan: true,
+            speecht5: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "--dump-phonemes".to_string()],
+        })
+        .expect("trailing phoneme dump flag should be accepted");
+
+        assert!(args.dump_phonemes);
+        assert_eq!(args.text, "hello");
+        let dump = format_say_phonemes(&args).expect("phoneme dump should format");
+        assert!(dump.contains("phoneme dump: speecht5-hifigan"));
+        assert!(dump.contains("SpeechT5"));
+    }
+
+    #[test]
     fn say_args_accepts_trailing_trace_speech_pipeline_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
@@ -2677,8 +3023,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: true,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2705,8 +3053,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2735,8 +3085,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2766,8 +3118,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2794,8 +3148,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2816,8 +3172,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: true,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2840,8 +3198,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: true,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2849,20 +3209,112 @@ mod tests {
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
-        .expect("hifigan should parse, selecting the mel vocoder backend");
+        .expect("hifigan should parse, selecting the SpeechT5 acoustic route");
         assert!(!args.klatt);
         assert!(args.hifigan);
-        assert!(should_use_hifigan_backend(&args));
-        assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
+        assert!(should_use_speecht5_backend(&args));
+        assert!(!should_use_source_filter_hifigan_backend(&args));
+        assert_eq!(say_backend_graph(&args).id, "speecht5-hifigan");
         assert_eq!(
             say_speech_loom(&args).projection,
-            "current-backend/source-filter-hifigan"
+            "current-backend/speecht5-hifigan"
         );
         let dump = format_say_pipeline(&args);
-        assert!(dump.contains("speech pipeline: source-filter-hifigan"));
-        assert!(dump.contains("-> acoustic generator: source-filter"));
-        assert!(dump.contains("-> mel/features: source-filter spectral proxy for HiFi-GAN"));
-        assert!(dump.contains("-> vocoder: hifigan"));
+        assert!(dump.contains("speech pipeline: speecht5-hifigan"));
+        assert!(dump.contains("-> tokenizer: SpeechT5 tokenizer"));
+        assert!(dump.contains("-> acoustic generator: SpeechT5 encoder/decoder ONNX"));
+        assert!(dump.contains("-> mel/features: SpeechT5 mel spectrogram"));
+        assert!(dump.contains("-> vocoder: SpeechT5 HiFi-GAN ONNX"));
+        assert!(!dump.contains("source-filter spectral proxy"));
+    }
+
+    #[test]
+    fn say_args_accepts_speecht5_as_native_acoustic_route() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            klatt: false,
+            hifigan: false,
+            speecht5: true,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("speecht5 should parse as a native acoustic route");
+        assert!(!args.hifigan);
+        assert!(args.speecht5);
+        assert!(should_use_speecht5_backend(&args));
+        assert_eq!(say_backend_graph(&args).id, "speecht5-hifigan");
+        assert_eq!(
+            say_speech_loom(&args).projection,
+            "current-backend/speecht5-hifigan"
+        );
+        let dump = format_say_pipeline(&args);
+        assert!(dump.contains("speech pipeline: speecht5-hifigan"));
+        assert!(dump.contains("-> tokenizer: SpeechT5 tokenizer"));
+        assert!(dump.contains("-> acoustic generator: SpeechT5 encoder/decoder ONNX"));
+        assert!(dump.contains("-> mel/features: SpeechT5 mel spectrogram"));
+        assert!(dump.contains("-> vocoder: SpeechT5 HiFi-GAN ONNX"));
+        assert!(!dump.contains("source-filter spectral proxy"));
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_speecht5_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            klatt: false,
+            hifigan: false,
+            speecht5: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "--speecht5".to_string()],
+        })
+        .expect("trailing SpeechT5 flag should be accepted");
+        assert!(args.speecht5);
+        assert_eq!(args.text, "hello");
+    }
+
+    #[test]
+    fn say_args_rejects_hifigan_model_without_hifigan_or_speecht5() {
+        let error = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            klatt: false,
+            hifigan: false,
+            speecht5: false,
+            hifigan_model: Some(PathBuf::from("speecht5_hifigan.onnx")),
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect_err("--hifigan-model should require a HiFi-GAN route");
+        assert!(
+            error
+                .to_string()
+                .contains("--hifigan-model only applies when --hifigan or --speecht5"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -2873,8 +3325,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2895,8 +3349,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: true,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: true,
             rp: false,
@@ -2904,10 +3360,11 @@ mod tests {
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
-        .expect("--hifigan --skip-gan should select the mel debug route");
+        .expect("--hifigan --skip-gan should select the source-filter mel debug route");
         assert!(args.hifigan);
         assert!(args.skip_gan);
-        assert!(should_use_hifigan_backend(&args));
+        assert!(should_use_source_filter_hifigan_backend(&args));
+        assert!(!should_use_speecht5_backend(&args));
         assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
     }
 
@@ -2919,8 +3376,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2946,8 +3405,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2967,8 +3428,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -2991,8 +3454,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3013,8 +3478,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3040,8 +3507,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3065,8 +3534,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: true,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3090,8 +3561,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3112,15 +3585,17 @@ mod tests {
     }
 
     #[test]
-    fn say_backend_graph_reports_hifigan_feature_bridge_workers() {
+    fn say_backend_graph_reports_hifigan_speecht5_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: true,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3129,6 +3604,40 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("hifigan route should parse");
+        let backend_graph = say_backend_graph(&args);
+        let loom = say_speech_loom(&args);
+        assert_eq!(backend_graph.id, "speecht5-hifigan");
+        assert!(!backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 3);
+        assert_eq!(backend_graph.workers[0].id, "speecht5-tokenizer");
+        assert_eq!(
+            backend_graph.workers[1].id,
+            "speecht5-encoder-decoder-acoustic-generator"
+        );
+        assert_eq!(backend_graph.workers[2].id, "speecht5-hifigan-vocoder");
+        assert_eq!(loom.projection, "current-backend/speecht5-hifigan");
+    }
+
+    #[test]
+    fn say_backend_graph_reports_hifigan_fallback_feature_bridge_workers() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            klatt: false,
+            hifigan: true,
+            speecht5: false,
+            hifigan_model: None,
+            skip_gan: true,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("hifigan fallback route should parse");
         let backend_graph = say_backend_graph(&args);
         let loom = say_speech_loom(&args);
         assert_eq!(backend_graph.id, "source-filter-hifigan");
@@ -3158,8 +3667,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: true,
@@ -3183,8 +3694,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3209,8 +3722,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: true,
@@ -3233,8 +3748,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: false,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,
@@ -3254,8 +3771,10 @@ mod tests {
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
+            dump_phonemes: false,
             klatt: true,
             hifigan: false,
+            speecht5: false,
             hifigan_model: None,
             skip_gan: false,
             rp: false,

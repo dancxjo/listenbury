@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::cli::download_progress::DownloadProgress;
 #[cfg(feature = "model-download")]
 use listenbury::models::{
-    FetchProgress, bundle_assets, bundle_primary_path, find_asset,
+    FetchProgress, bundle_assets, bundle_primary_path, find_asset, find_bundle,
     manifest::{ModelBundle, ModelKind},
     paths::{asset_path, resolve_listenbury_home},
     selected_bundle,
@@ -177,6 +177,35 @@ pub(crate) fn resolve_hifigan_model(explicit: Option<PathBuf>) -> Result<PathBuf
                     .is_some_and(|name| name.to_ascii_lowercase().contains("hifigan"))
         },
     )
+}
+
+#[cfg(feature = "piper-compat")]
+pub(crate) fn resolve_speecht5_acoustic_dir() -> Result<PathBuf> {
+    #[cfg(feature = "model-download")]
+    {
+        let bundle = find_bundle(ModelKind::Acoustic, "speecht5-tts")
+            .context("SpeechT5 acoustic bundle is not registered")?;
+        ensure_bundle_available(bundle)?;
+        let decoder_path = bundle_primary_path(bundle)?;
+        return decoder_path
+            .parent()
+            .map(Path::to_path_buf)
+            .context("SpeechT5 acoustic decoder path has no parent directory");
+    }
+
+    #[cfg(not(feature = "model-download"))]
+    {
+        let decoder_path = discover_model_file(&|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "decoder_model_merged_quantized.onnx")
+        })?
+        .context("could not discover SpeechT5 acoustic model directory; install the speecht5-tts bundle or set LISTENBURY_HOME")?;
+        decoder_path
+            .parent()
+            .map(Path::to_path_buf)
+            .context("SpeechT5 acoustic decoder path has no parent directory")
+    }
 }
 
 #[cfg(any(

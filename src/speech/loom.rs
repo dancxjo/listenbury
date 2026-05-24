@@ -824,6 +824,7 @@ pub enum CurrentSayBackendKind {
     Klatt,
     MbrolaDiphone,
     SourceFilterHifigan,
+    SpeechT5Hifigan,
 }
 
 impl CurrentSayBackendKind {
@@ -842,6 +843,7 @@ impl CurrentSayBackendKind {
             Self::Klatt => "current-backend/klatt",
             Self::MbrolaDiphone => "current-backend/mbrola-diphone",
             Self::SourceFilterHifigan => "current-backend/source-filter-hifigan",
+            Self::SpeechT5Hifigan => "current-backend/speecht5-hifigan",
         }
     }
 
@@ -852,6 +854,7 @@ impl CurrentSayBackendKind {
             Self::Klatt => "klatt",
             Self::MbrolaDiphone => "mbrola-diphone",
             Self::SourceFilterHifigan => "source-filter-hifigan",
+            Self::SpeechT5Hifigan => "speecht5-hifigan",
         }
     }
 
@@ -975,6 +978,44 @@ impl CurrentSayBackendKind {
                         SpeechArtifactKind::F0Track,
                         SpeechArtifactKind::MelF0Track,
                     ],
+                    vec![
+                        SpeechArtifactKind::WaveformTile,
+                        SpeechArtifactKind::AudioFrames,
+                    ],
+                    SpeechWorkKind::Vocoder,
+                )
+                .with_span_behavior(SpeechSpanBehavior::StreamingTimeAligned)
+                .with_ordering(SpeechOrdering::InOrder)
+                .with_deadline_behavior(SpeechDeadlineBehavior::CommitFrontier(
+                    CommitState::Buffered,
+                ))
+                .with_commit_state(CommitState::Buffered),
+            ],
+            Self::SpeechT5Hifigan => vec![
+                SpeechWorkerDescriptor::new(
+                    "speecht5-tokenizer",
+                    vec![SpeechArtifactKind::Text],
+                    vec![SpeechArtifactKind::TokenHypothesis],
+                    SpeechWorkKind::Planner,
+                )
+                .with_span_behavior(SpeechSpanBehavior::Global)
+                .with_ordering(SpeechOrdering::InOrder)
+                .with_commit_state(CommitState::Planned),
+                SpeechWorkerDescriptor::new(
+                    "speecht5-encoder-decoder-acoustic-generator",
+                    vec![SpeechArtifactKind::TokenHypothesis],
+                    vec![SpeechArtifactKind::MelSpectrogramTile],
+                    SpeechWorkKind::AcousticModel,
+                )
+                .with_span_behavior(SpeechSpanBehavior::StreamingTimeAligned)
+                .with_ordering(SpeechOrdering::InOrder)
+                .with_deadline_behavior(SpeechDeadlineBehavior::CommitFrontier(
+                    CommitState::AcousticReady,
+                ))
+                .with_commit_state(CommitState::AcousticReady),
+                SpeechWorkerDescriptor::new(
+                    "speecht5-hifigan-vocoder",
+                    vec![SpeechArtifactKind::MelSpectrogramTile],
                     vec![
                         SpeechArtifactKind::WaveformTile,
                         SpeechArtifactKind::AudioFrames,
@@ -1295,6 +1336,50 @@ mod tests {
         );
         assert_eq!(graph.workers[3].work_kind, SpeechWorkKind::Vocoder);
         assert_eq!(graph.workers[3].commit_state, CommitState::Buffered);
+    }
+
+    #[test]
+    fn speecht5_hifigan_graph_reports_native_acoustic_then_vocoder() {
+        let loom = CurrentSayBackendKind::SpeechT5Hifigan.loom();
+        let graph = CurrentSayBackendKind::SpeechT5Hifigan.current_backend_graph();
+
+        assert_eq!(loom.id, CANONICAL_SPEECH_LOOM_ID);
+        assert_eq!(loom.projection, "current-backend/speecht5-hifigan");
+        assert_eq!(graph.id, "speecht5-hifigan");
+        assert!(!graph.fused);
+        assert_eq!(graph.workers.len(), 3);
+        assert_eq!(graph.workers[0].id, "speecht5-tokenizer");
+        assert_eq!(graph.workers[0].consumes, vec![SpeechArtifactKind::Text]);
+        assert_eq!(
+            graph.workers[0].produces,
+            vec![SpeechArtifactKind::TokenHypothesis]
+        );
+        assert_eq!(
+            graph.workers[1].id,
+            "speecht5-encoder-decoder-acoustic-generator"
+        );
+        assert_eq!(
+            graph.workers[1].consumes,
+            vec![SpeechArtifactKind::TokenHypothesis]
+        );
+        assert_eq!(
+            graph.workers[1].produces,
+            vec![SpeechArtifactKind::MelSpectrogramTile]
+        );
+        assert_eq!(graph.workers[1].work_kind, SpeechWorkKind::AcousticModel);
+        assert_eq!(graph.workers[2].id, "speecht5-hifigan-vocoder");
+        assert_eq!(
+            graph.workers[2].consumes,
+            vec![SpeechArtifactKind::MelSpectrogramTile]
+        );
+        assert_eq!(
+            graph.workers[2].produces,
+            vec![
+                SpeechArtifactKind::WaveformTile,
+                SpeechArtifactKind::AudioFrames
+            ]
+        );
+        assert_eq!(graph.workers[2].work_kind, SpeechWorkKind::Vocoder);
     }
 
     #[test]
