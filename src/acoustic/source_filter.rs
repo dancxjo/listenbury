@@ -21,6 +21,7 @@ const MEL_MAX_HZ: f32 = 8_000.0;
 const MEL_SPECTRAL_FLOOR: f32 = 0.006;
 const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
 const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
+const TEMPORAL_TRANSITION_GUARD_DELTA: f32 = 0.65;
 const LOG_MEL_MIN: f32 = -8.0;
 const LOG_MEL_MAX: f32 = 2.0;
 
@@ -204,7 +205,8 @@ pub fn temporal_smooth_mel_frames(mel: &[MelFrame], amount: f32) -> Vec<MelFrame
             continue;
         }
         let local_discontinuity = deltas[frame_index - 1].max(deltas[frame_index]);
-        let transition_guard = (1.0 - (local_discontinuity / 0.65)).clamp(0.0, 1.0);
+        let transition_guard =
+            (1.0 - (local_discontinuity / TEMPORAL_TRANSITION_GUARD_DELTA)).clamp(0.0, 1.0);
         let blend = amount * transition_guard;
         if blend <= f32::EPSILON {
             continue;
@@ -793,8 +795,10 @@ mod tests {
         let smoothed = temporal_smooth_mel_frames(&mel, 0.9);
         let after = summarize_mel_temporal_discontinuity(&smoothed);
         assert!(after.mean_abs_delta < baseline.mean_abs_delta);
+        let original_jump = (mel[1].bins[0] - mel[2].bins[0]).abs();
+        let smoothed_jump = (smoothed[1].bins[0] - smoothed[2].bins[0]).abs();
         assert!(
-            smoothed[2].bins[0].abs() < mel[2].bins[0].abs() + 0.1,
+            smoothed_jump <= original_jump,
             "smoothing should not create larger jumps"
         );
     }

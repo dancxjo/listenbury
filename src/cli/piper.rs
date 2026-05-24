@@ -71,6 +71,12 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(feature = "tts-riper"))]
 const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_TEMPORAL_BANDING_MEAN_DELTA_THRESHOLD: f32 = 0.20;
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_TEMPORAL_BANDING_P95_DELTA_THRESHOLD: f32 = 0.30;
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_SMOOTHING_EFFECT_RATIO: f32 = 0.85;
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
@@ -1455,14 +1461,14 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         acoustic_track.hop_samples,
     )?;
     let temporal_smoothing = hifigan_temporal_smoothing_amount()?;
-    let raw_mel = acoustic_track.mel.clone();
-    let raw_discontinuity = summarize_mel_temporal_discontinuity(&raw_mel);
+    let raw_mel = &acoustic_track.mel;
+    let raw_discontinuity = summarize_mel_temporal_discontinuity(raw_mel);
     let smoothed_mel = if temporal_smoothing > 0.0 {
-        Some(temporal_smooth_mel_frames(&raw_mel, temporal_smoothing))
+        Some(temporal_smooth_mel_frames(raw_mel, temporal_smoothing))
     } else {
         None
     };
-    let hifigan_input_mel = smoothed_mel.as_deref().unwrap_or(&raw_mel);
+    let hifigan_input_mel = smoothed_mel.as_deref().unwrap_or(raw_mel);
     let hifigan_input_discontinuity = summarize_mel_temporal_discontinuity(hifigan_input_mel);
     let source_filter_frames = maybe_render_source_filter_reference(
         hifigan_input_mel,
@@ -1489,7 +1495,7 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     maybe_write_hifigan_debug_artifacts(
         text,
         &acoustic_track,
-        &raw_mel,
+        raw_mel,
         hifigan_input_mel,
         temporal_smoothing,
         raw_discontinuity,
@@ -1702,9 +1708,11 @@ fn hifigan_artifact_attribution(
     input: MelTemporalDiscontinuityStats,
     smoothing_amount: f32,
 ) -> &'static str {
-    let temporal_banding_detected = raw.mean_abs_delta >= 0.20 || raw.p95_abs_delta >= 0.30;
-    let smoothing_reduced_modulation =
-        smoothing_amount > 0.0 && input.mean_abs_delta <= raw.mean_abs_delta * 0.85;
+    let temporal_banding_detected = raw.mean_abs_delta
+        >= HIFIGAN_TEMPORAL_BANDING_MEAN_DELTA_THRESHOLD
+        || raw.p95_abs_delta >= HIFIGAN_TEMPORAL_BANDING_P95_DELTA_THRESHOLD;
+    let smoothing_reduced_modulation = smoothing_amount > 0.0
+        && input.mean_abs_delta <= raw.mean_abs_delta * HIFIGAN_SMOOTHING_EFFECT_RATIO;
     if temporal_banding_detected && smoothing_reduced_modulation {
         "temporal_banding_primary"
     } else if temporal_banding_detected {
