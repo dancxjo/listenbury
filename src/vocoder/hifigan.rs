@@ -24,11 +24,13 @@ pub struct HifiganBackend {
 }
 
 const SAMPLE_RATE_HZ: u32 = 22_050;
+const SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ: u32 = 16_000;
 const HOP_SAMPLES: usize = 256;
 const MIN_F0_HZ: f32 = 55.0;
 const MAX_F0_HZ: f32 = 1_200.0;
 const NOISE_GAIN: f32 = 0.018;
 const MODEL_MEL_BINS: usize = 80;
+const MIN_NORMALIZABLE_PEAK: f32 = 1.0e-4;
 
 impl HifiganBackend {
     pub fn deterministic() -> Self {
@@ -268,7 +270,7 @@ impl HifiganBackend {
         normalize_peak(&mut samples, 0.92);
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
-            sample_rate_hz: SAMPLE_RATE_HZ,
+            sample_rate_hz: SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ,
             channels: 1,
             samples,
             voice_signatures: Vec::new(),
@@ -463,10 +465,37 @@ fn normalize_peak(samples: &mut [f32], target_peak: f32) {
         .iter()
         .map(|sample| sample.abs())
         .fold(0.0f32, f32::max);
-    if peak > target_peak && peak.is_finite() {
+    if peak >= MIN_NORMALIZABLE_PEAK && peak.is_finite() && target_peak.is_finite() {
         let gain = target_peak / peak;
         for sample in samples {
             *sample *= gain;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_peak_lifts_quiet_vocoder_output() {
+        let mut samples = vec![0.0, 0.01, -0.02, 0.005];
+
+        normalize_peak(&mut samples, 0.92);
+
+        let peak = samples
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0f32, f32::max);
+        assert!((peak - 0.92).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn normalize_peak_keeps_near_silence_silent() {
+        let mut samples = vec![0.0, 0.000_001, -0.000_002];
+
+        normalize_peak(&mut samples, 0.92);
+
+        assert_eq!(samples, vec![0.0, 0.000_001, -0.000_002]);
     }
 }
