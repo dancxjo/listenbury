@@ -216,7 +216,7 @@ impl HifiganBackend {
         }
 
         ensure!(!samples.is_empty(), "hifigan backend produced no audio");
-        normalize_peak(&mut samples, 0.92);
+        normalize_loudness(&mut samples, 0.09, 0.92);
 
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -285,7 +285,7 @@ impl HifiganBackend {
         );
 
         let mut samples = samples.to_vec();
-        normalize_peak(&mut samples, 0.92);
+        normalize_loudness(&mut samples, 0.09, 0.92);
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ,
@@ -506,6 +506,40 @@ fn next_noise_sample(state: &mut u32) -> f32 {
     ((*state >> 8) as f32) / ((u32::MAX >> 8) as f32)
 }
 
+fn normalize_loudness(samples: &mut [f32], target_rms: f32, ceiling: f32) {
+    if samples.is_empty() || !target_rms.is_finite() || !ceiling.is_finite() {
+        return;
+    }
+
+    let rms =
+        (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32).sqrt();
+    if rms >= MIN_NORMALIZABLE_PEAK && rms.is_finite() {
+        let gain = (target_rms / rms).clamp(0.25, 16.0);
+        for sample in samples.iter_mut() {
+            *sample *= gain;
+        }
+    }
+
+    let limit = ceiling.abs().max(MIN_NORMALIZABLE_PEAK);
+    let knee = limit * 0.72;
+    for sample in samples.iter_mut() {
+        *sample = soft_limit(*sample, knee, limit);
+    }
+}
+
+fn soft_limit(sample: f32, knee: f32, limit: f32) -> f32 {
+    let sign = sample.signum();
+    let magnitude = sample.abs();
+    if magnitude <= knee {
+        return sample;
+    }
+
+    let headroom = (limit - knee).max(MIN_NORMALIZABLE_PEAK);
+    let curved = knee + (1.0 - (-(magnitude - knee) / headroom).exp()) * headroom;
+    sign * curved.min(limit)
+}
+
+#[cfg(test)]
 fn normalize_peak(samples: &mut [f32], target_peak: f32) {
     let peak = samples
         .iter()

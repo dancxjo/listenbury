@@ -148,11 +148,11 @@ fn source_filter_frame(
     }
     let is_stop = acoustic.map(|target| target.is_stop).unwrap_or(false);
     let burst = if is_stop && envelope > 0.55 {
-        acoustic.and_then(|target| target.burst_hz_hint).is_some() as u8 as f32
+        acoustic.and_then(|target| target.burst_hz_hint).is_some() as u8 as f32 * 0.28
     } else {
         0.0
     };
-    let noise_ratio = (frication.max(aspiration) + burst).clamp(0.0, 1.0);
+    let noise_ratio = frication.max(aspiration).max(burst).clamp(0.0, 1.0);
 
     SourceFilterFrame {
         frame_start_ms,
@@ -174,7 +174,7 @@ fn source_filter_frame(
         },
         filter: filter.map(filter_estimate).unwrap_or_default(),
         noise: NoiseEstimate {
-            frication_energy: (frication + burst).clamp(0.0, 1.0),
+            frication_energy: (frication + burst * 0.45).clamp(0.0, 1.0),
             noise_ratio,
         },
         confidence: amplitude,
@@ -193,7 +193,7 @@ fn source_filter_frame_to_mel(frame: &SourceFilterFrame) -> MelFrame {
                 let hz = mel_bin_center_hz(bin, MEL_BINS);
                 let source = source_spectrum(hz, tilt, voiced, noise);
                 let filter = filter_spectrum(hz, &frame.filter);
-                let frication = high_band_noise_profile(hz) * frame.noise.frication_energy * 0.24;
+                let frication = consonant_noise_profile(hz) * frame.noise.frication_energy * 0.22;
                 let aspiration = aspiration_noise_profile(hz) * frame.source.breathiness * 0.11;
                 let broad_speech_bed = speech_band_profile(hz) * MEL_SPECTRAL_FLOOR;
                 (energy * (source * filter + frication + aspiration + broad_speech_bed)).max(0.0)
@@ -424,6 +424,12 @@ fn default_source() -> crate::voice::GlottalSourceTarget {
 
 fn high_band_noise_profile(hz: f32) -> f32 {
     ((hz - 2_400.0) / 4_200.0).clamp(0.0, 1.0).powf(0.9)
+}
+
+fn consonant_noise_profile(hz: f32) -> f32 {
+    high_band_noise_profile(hz) * 0.55
+        + gaussian_hz(hz, 2_600.0, 1_700.0) * 0.30
+        + gaussian_hz(hz, 4_200.0, 2_000.0) * 0.15
 }
 
 fn gaussian_hz(hz: f32, center_hz: f32, width_hz: f32) -> f32 {
