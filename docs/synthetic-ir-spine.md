@@ -137,8 +137,10 @@ by rewriting audio that already left the speaker.
 - MBROLA lowering now flows through `SyntheticPlan` in `prosody_timing_plan_to_phone_timed_plan`.
 - Piper timing lowering now flows through `SyntheticPlan` in `prosody_plan_to_piper_timing`.
 - `listenbury prosody-plan` builds a `SyntheticPlan` internally before reporting summary counts.
-- `speech::work::BlockingVocoderRenderer` adapts existing `VocoderBackend`
-  implementations into the representation-to-wave layer.
+- `speech::work::RealtimeVocoderRenderer` adapts existing blocking
+  `SpeechSynthesizer` implementations into a worker-backed representation-to-wave
+  layer, so graph ticks enqueue and poll render work instead of calling the
+  vocoder on the tick path.
 - `SyntheticClock`, `SyntheticPipelineWatermarks`, and
   `SyntheticStageRuntimePolicy` make stage timing explicit without forcing mel to
   be the universal middle.

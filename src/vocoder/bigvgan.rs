@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 
 pub struct BigVganBackend;
@@ -31,7 +31,7 @@ impl BigVganBackend {
     }
 }
 
-impl VocoderBackend for BigVganBackend {
+impl SpeechSynthesizer for BigVganBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

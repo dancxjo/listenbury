@@ -8,13 +8,14 @@ use crate::vocoder::diffwave::DiffwaveBackend;
 use crate::vocoder::hifigan::HifiganBackend;
 use crate::vocoder::klatt::KlattBackend;
 use crate::vocoder::mbrola::MbrolaBackend;
+use crate::vocoder::mel_debug::MelDebugRendererBackend;
 use crate::vocoder::neural_onnx::RiperOnnxDirectBackend;
 use crate::vocoder::piper::PiperBackend;
 #[cfg(feature = "tts-piper")]
 use crate::vocoder::piper::PiperBackendConfig;
 use crate::vocoder::riper::RiperKlattFallbackBackend;
 use crate::vocoder::source_filter::NeuralSourceFilterBackend;
-use crate::vocoder::{VocoderBackend, VocoderDescriptor};
+use crate::vocoder::{SpeechSynthesizer, VocoderDescriptor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SingDemoBackendSelector {
@@ -38,7 +39,7 @@ pub struct VocoderConfig {
 pub fn backend_for_option(
     option: SingDemoBackendSelector,
     config: VocoderConfig,
-) -> Result<Box<dyn VocoderBackend>> {
+) -> Result<Box<dyn SpeechSynthesizer>> {
     match option {
         SingDemoBackendSelector::Klatt => Ok(Box::new(KlattBackend)),
         SingDemoBackendSelector::Riper => Ok(Box::new(RiperKlattFallbackBackend::new())),
@@ -71,13 +72,15 @@ pub fn backend_for_option(
         }
         SingDemoBackendSelector::Hifigan => {
             if config.skip_gan {
-                return Ok(Box::new(HifiganBackend::deterministic()));
+                return Ok(Box::new(MelDebugRendererBackend::new()));
             }
 
             #[cfg(feature = "piper-compat")]
             {
                 let model_path = config.hifigan_model.ok_or_else(|| {
-                    anyhow::anyhow!("hifigan backend requires a HiFi-GAN model path")
+                    anyhow::anyhow!(
+                        "HiFi-GAN model is unavailable: specify --hifigan-model or install the default hifigan-speecht5 model; use --skip-gan only for the mel debug renderer"
+                    )
                 })?;
                 Ok(Box::new(HifiganBackend::load(model_path)?))
             }
@@ -100,6 +103,7 @@ pub fn list_backends() -> Vec<VocoderDescriptor> {
         PiperBackend::descriptor(),
         RiperOnnxDirectBackend::descriptor(),
         HifiganBackend::descriptor(),
+        MelDebugRendererBackend::descriptor(),
         BigVganBackend::descriptor(),
         DiffwaveBackend::descriptor(),
         NeuralSourceFilterBackend::descriptor(),
@@ -107,10 +111,13 @@ pub fn list_backends() -> Vec<VocoderDescriptor> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn backend_by_id(id: &str) -> Result<Box<dyn VocoderBackend>> {
+pub fn backend_by_id(id: &str) -> Result<Box<dyn SpeechSynthesizer>> {
     match id {
         "riper-onnx-direct" => Ok(Box::new(RiperOnnxDirectBackend)),
-        "hifigan" => Ok(Box::new(HifiganBackend::deterministic())),
+        "hifigan" => bail!(
+            "HiFi-GAN model is unavailable: construct the hifigan backend with a model path; use `mel-debug-renderer` only when that debug renderer is explicitly selected"
+        ),
+        "mel-debug-renderer" => Ok(Box::new(MelDebugRendererBackend::new())),
         "bigvgan" => Ok(Box::new(BigVganBackend)),
         "diffwave" => Ok(Box::new(DiffwaveBackend)),
         "source-filter-neural" => Ok(Box::new(NeuralSourceFilterBackend)),
@@ -306,11 +313,12 @@ mod tests {
     }
 
     #[test]
-    fn hifigan_backend_renders_mel_f0_audio() {
+    fn mel_debug_renderer_backend_renders_mel_f0_audio_when_selected() {
         let mel = synthetic_mel_frames();
         let f0_hz = vec![220.0, 225.0, 230.0, 235.0, 240.0, 245.0];
         let voiced = vec![true, true, true, true, true, true];
-        let mut backend = backend_by_id("hifigan").expect("hifigan backend construction");
+        let mut backend =
+            backend_by_id("mel-debug-renderer").expect("mel debug backend construction");
 
         let frames = backend
             .render(VocoderInput::MelF0 {
@@ -318,9 +326,9 @@ mod tests {
                 f0_hz: &f0_hz,
                 voiced: &voiced,
             })
-            .expect("hifigan render");
+            .expect("mel debug render");
 
-        assert_eq!(backend.id(), "hifigan");
+        assert_eq!(backend.id(), "mel-debug-renderer");
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].sample_rate_hz, 16_000);
         assert_eq!(frames[0].channels, 1);
@@ -329,11 +337,22 @@ mod tests {
     }
 
     #[test]
-    fn hifigan_backend_rejects_mismatched_f0_tracks() {
+    fn hifigan_backend_by_id_reports_missing_model() {
+        let err = match backend_by_id("hifigan") {
+            Ok(_) => panic!("hifigan requires a model path"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains("HiFi-GAN model is unavailable"));
+    }
+
+    #[test]
+    fn mel_debug_renderer_backend_rejects_mismatched_f0_tracks() {
         let mel = synthetic_mel_frames();
         let f0_hz = vec![220.0];
         let voiced = vec![true; mel.len()];
-        let mut backend = backend_by_id("hifigan").expect("hifigan backend construction");
+        let mut backend =
+            backend_by_id("mel-debug-renderer").expect("mel debug backend construction");
 
         let err = backend
             .render(VocoderInput::MelF0 {
@@ -341,7 +360,7 @@ mod tests {
                 f0_hz: &f0_hz,
                 voiced: &voiced,
             })
-            .expect_err("hifigan should validate F0 length");
+            .expect_err("mel debug renderer should validate F0 length");
 
         assert!(err.to_string().contains("F0 values"));
     }

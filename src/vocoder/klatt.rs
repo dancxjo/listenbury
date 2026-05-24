@@ -3,7 +3,7 @@ use anyhow::{Result, bail, ensure};
 use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 use crate::voice::articulator::{
     RenderPlan, SungBackendDetail, SungBackendKind, klatt_render_targets_from_phone_timed,
@@ -74,7 +74,7 @@ impl KlattBackend {
     }
 }
 
-impl VocoderBackend for KlattBackend {
+impl SpeechSynthesizer for KlattBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

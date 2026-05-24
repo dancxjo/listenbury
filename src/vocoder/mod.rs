@@ -10,6 +10,7 @@ mod hifigan;
 mod input;
 mod klatt;
 mod mbrola;
+mod mel_debug;
 mod neural_onnx;
 mod piper;
 mod registry;
@@ -27,11 +28,12 @@ pub use hifigan::{
     SPEECHT5_HIFIGAN_MEL_CONFIG, SPEECHT5_HIFIGAN_MEL_CONTRACT,
 };
 pub use input::VocoderInput;
+pub use mel_debug::MelDebugRendererBackend;
 pub use registry::{
     SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,
 };
 
-pub trait VocoderBackend {
+pub trait SpeechSynthesizer {
     fn id(&self) -> &'static str;
     fn descriptor(&self) -> VocoderDescriptor;
     fn render(&mut self, input: VocoderInput<'_>) -> Result<Vec<AudioFrame>>;

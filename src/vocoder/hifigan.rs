@@ -1,4 +1,3 @@
-use std::f32::consts::TAU;
 #[cfg(feature = "piper-compat")]
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,20 +13,18 @@ use crate::audio::frame::AudioFrame;
 use crate::mouth::riper::backend::initialize_ort_runtime;
 use crate::time::ExactTimestamp;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, MelFrame, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, MelFrame, SpeechSynthesizer, VocoderDescriptor,
+    VocoderInput,
 };
 
 pub struct HifiganBackend {
     checkpoint: HiFiGanCheckpoint,
     #[cfg(feature = "piper-compat")]
-    session: Option<Session>,
+    session: Session,
 }
 
 const SAMPLE_RATE_HZ: u32 = 16_000;
 const HOP_SAMPLES: usize = 256;
-const MIN_F0_HZ: f32 = 55.0;
-const MAX_F0_HZ: f32 = 1_200.0;
-const NOISE_GAIN: f32 = 0.018;
 const MODEL_MEL_BINS: usize = 80;
 const LOG_MEL_MIN: f32 = -8.0;
 const LOG_MEL_MAX: f32 = 2.0;
@@ -171,14 +168,6 @@ impl HifiganBackend {
         SPEECHT5_HIFIGAN_MEL_CONFIG.validate_timing(sample_rate_hz, hop_samples)
     }
 
-    pub fn deterministic() -> Self {
-        Self {
-            checkpoint: HiFiGanCheckpoint::speecht5(None),
-            #[cfg(feature = "piper-compat")]
-            session: None,
-        }
-    }
-
     #[cfg(feature = "piper-compat")]
     pub fn load(model_path: impl AsRef<Path>) -> Result<Self> {
         let model_path = model_path.as_ref().to_path_buf();
@@ -217,7 +206,7 @@ impl HifiganBackend {
 
         Ok(Self {
             checkpoint: HiFiGanCheckpoint::speecht5(Some(model_path)),
-            session: Some(session),
+            session,
         })
     }
 
@@ -246,7 +235,7 @@ impl HifiganBackend {
             notes: &[
                 "Expects SpeechT5 HiFi-GAN mel frames: 80-bin natural-log mel, clamped to [-8, 2], 16 kHz, 256-sample hop.",
                 "Duration control belongs to an upstream acoustic model that lays out mel/F0 frames.",
-                "Runs a real HiFi-GAN-compatible ONNX mel vocoder when loaded with a model; the deterministic renderer is a compile-safe fallback.",
+                "Requires a HiFi-GAN-compatible ONNX model; mel debug rendering is provided by the separate mel-debug-renderer backend.",
             ],
         }
     }
@@ -262,78 +251,12 @@ impl HifiganBackend {
         log_hifigan_mel_summary(mel, &self.checkpoint.mel_config);
 
         #[cfg(feature = "piper-compat")]
-        if self.session.is_some() {
-            return self.render_mel_onnx(mel);
-        }
+        return self.render_mel_onnx(mel);
 
-        let frames =
-            Self::render_mel_deterministic(mel, f0_hz, voiced, &self.checkpoint.mel_config)?;
-        log_hifigan_waveform_summary("deterministic", &frames);
-        Ok(frames)
-    }
-
-    fn render_mel_deterministic(
-        mel: &[MelFrame],
-        f0_hz: Option<&[f32]>,
-        voiced: Option<&[bool]>,
-        mel_config: &MelConfig,
-    ) -> Result<Vec<AudioFrame>> {
-        let mut phase = 0.0f32;
-        let mut noise_state = 0x4d59_4446u32;
-        let mut samples = Vec::with_capacity(mel.len() * mel_config.hop_length);
-
-        for (frame_index, frame) in mel.iter().enumerate() {
-            let next_frame = mel.get(frame_index + 1).unwrap_or(frame);
-            let f0_start = f0_for_frame(frame, f0_hz.map(|values| values[frame_index]));
-            let f0_end = f0_for_frame(
-                next_frame,
-                f0_hz.map(|values| {
-                    values
-                        .get(frame_index + 1)
-                        .copied()
-                        .unwrap_or(values[frame_index])
-                }),
-            );
-            let voiced_start = voiced.map(|values| values[frame_index]).unwrap_or(true);
-            let voiced_end = voiced
-                .map(|values| values.get(frame_index + 1).copied().unwrap_or(voiced_start))
-                .unwrap_or(voiced_start);
-            let amp_start = amplitude_for_frame(frame);
-            let amp_end = amplitude_for_frame(next_frame);
-            let brightness_start = brightness_for_frame(frame);
-            let brightness_end = brightness_for_frame(next_frame);
-
-            for sample_index in 0..mel_config.hop_length {
-                let t = sample_index as f32 / mel_config.hop_length as f32;
-                let amp = lerp(amp_start, amp_end, t);
-                let brightness = lerp(brightness_start, brightness_end, t);
-                let frame_f0 = lerp(f0_start, f0_end, t);
-                let is_voiced = if t < 0.5 { voiced_start } else { voiced_end };
-
-                let value = if is_voiced {
-                    phase = (phase + TAU * frame_f0 / mel_config.sample_rate_hz as f32) % TAU;
-                    let harmonic_mix = 0.18 + brightness * 0.32;
-                    let source = phase.sin()
-                        + harmonic_mix * (phase * 2.0).sin()
-                        + (harmonic_mix * 0.45) * (phase * 3.0).sin();
-                    source * amp
-                } else {
-                    (next_noise_sample(&mut noise_state) * 2.0 - 1.0) * amp * NOISE_GAIN
-                };
-                samples.push(value.clamp(-1.0, 1.0));
-            }
-        }
-
-        ensure!(!samples.is_empty(), "hifigan backend produced no audio");
-        normalize_loudness(&mut samples, 0.075, 0.92);
-
-        Ok(vec![AudioFrame {
-            captured_at: ExactTimestamp::now(),
-            sample_rate_hz: mel_config.sample_rate_hz,
-            channels: 1,
-            samples,
-            voice_signatures: Vec::new(),
-        }])
+        #[cfg(not(feature = "piper-compat"))]
+        bail!(
+            "HiFi-GAN backend is unavailable because this build lacks the `piper-compat` feature; use --skip-gan to select the mel debug renderer"
+        )
     }
 
     #[cfg(feature = "piper-compat")]
@@ -345,10 +268,7 @@ impl HifiganBackend {
             .context("HiFi-GAN ONNX model path is not loaded")?
             .clone();
         let mel_config = self.checkpoint.mel_config;
-        let session = self
-            .session
-            .as_mut()
-            .context("HiFi-GAN ONNX session has not been loaded")?;
+        let session = &mut self.session;
         let (input_name, input_shape, layout) =
             resolve_hifigan_input(session, &model_path, &mel_config)?;
         let output_name = resolve_hifigan_output_name(session, &model_path)?;
@@ -419,13 +339,7 @@ impl HifiganBackend {
     }
 }
 
-impl Default for HifiganBackend {
-    fn default() -> Self {
-        Self::deterministic()
-    }
-}
-
-impl VocoderBackend for HifiganBackend {
+impl SpeechSynthesizer for HifiganBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }
@@ -793,62 +707,6 @@ fn infer_mel_tensor_layout(shape: Option<&[i64]>, mel_bins: usize) -> MelTensorL
     }
 }
 
-fn amplitude_for_frame(frame: &MelFrame) -> f32 {
-    if frame.bins.is_empty() {
-        return 0.0;
-    }
-    let level = frame
-        .bins
-        .iter()
-        .map(|bin| mel_bin_energy(*bin))
-        .sum::<f32>()
-        / frame.bins.len() as f32;
-    level.sqrt().clamp(0.0, 0.35)
-}
-
-fn brightness_for_frame(frame: &MelFrame) -> f32 {
-    if frame.bins.is_empty() {
-        return 0.0;
-    }
-    let mut weighted = 0.0f32;
-    let mut total = 0.0f32;
-    let max_index = (frame.bins.len() - 1).max(1) as f32;
-    for (index, bin) in frame.bins.iter().enumerate() {
-        let energy = mel_bin_energy(*bin);
-        weighted += energy * (index as f32 / max_index);
-        total += energy;
-    }
-    if total <= f32::EPSILON {
-        0.0
-    } else {
-        (weighted / total).clamp(0.0, 1.0)
-    }
-}
-
-fn mel_bin_energy(bin: f32) -> f32 {
-    if (LOG_MEL_MIN..=LOG_MEL_MAX).contains(&bin) {
-        bin.exp()
-    } else {
-        bin.max(0.0)
-    }
-}
-
-fn f0_for_frame(frame: &MelFrame, explicit_f0: Option<f32>) -> f32 {
-    explicit_f0
-        .filter(|hz| hz.is_finite() && *hz > 0.0)
-        .unwrap_or_else(|| 90.0 + brightness_for_frame(frame).powf(1.4) * 410.0)
-        .clamp(MIN_F0_HZ, MAX_F0_HZ)
-}
-
-fn lerp(start: f32, end: f32, t: f32) -> f32 {
-    start + (end - start) * t.clamp(0.0, 1.0)
-}
-
-fn next_noise_sample(state: &mut u32) -> f32 {
-    *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-    ((*state >> 8) as f32) / ((u32::MAX >> 8) as f32)
-}
-
 fn normalize_loudness(samples: &mut [f32], target_rms: f32, ceiling: f32) {
     if samples.is_empty() || !target_rms.is_finite() || !ceiling.is_finite() {
         return;
@@ -999,6 +857,7 @@ mod tests {
     use super::*;
     use crate::acoustic::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
     use crate::linguistic::phonology::Phone;
+    use crate::vocoder::MelDebugRendererBackend;
     use crate::voice::articulator::PhoneTimedRenderTarget;
 
     #[test]
@@ -1041,17 +900,17 @@ mod tests {
                 vibrato: None,
             },
         ];
-        let mut backend = HifiganBackend::deterministic();
+        let mut backend = MelDebugRendererBackend::new();
 
         let err = backend
             .render(VocoderInput::PhoneTimed(&targets))
-            .expect_err("HiFi-GAN should require acoustic frames");
+            .expect_err("mel debug renderer should require acoustic frames");
 
         assert!(err.to_string().contains("acoustic model"));
     }
 
     #[test]
-    fn renders_acoustic_model_mel_f0_track() {
+    fn mel_debug_renderer_renders_acoustic_model_mel_f0_track() {
         let targets = vec![PhoneTimedRenderTarget {
             phone: Phone::new_ipa("ɑ"),
             duration_ms: 96,
@@ -1063,7 +922,7 @@ mod tests {
         let track = acoustic
             .generate(AcousticInput::PhoneTimed(&targets))
             .expect("acoustic track");
-        let mut backend = HifiganBackend::deterministic();
+        let mut backend = MelDebugRendererBackend::new();
 
         let frames = backend
             .render(VocoderInput::MelF0 {
@@ -1071,7 +930,7 @@ mod tests {
                 f0_hz: &track.f0_hz,
                 voiced: &track.voiced,
             })
-            .expect("acoustic track HiFi-GAN render");
+            .expect("acoustic track mel debug render");
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].channels, 1);

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 use crate::voice::articulator::{RenderPlan, SungBackendDetail, SungBackendKind};
 use crate::{MbrolaPhone, MbrolaPitchTarget, MbrolaRenderer, PhoneTimedPlan};
@@ -99,7 +99,7 @@ impl MbrolaBackend {
     }
 }
 
-impl VocoderBackend for MbrolaBackend {
+impl SpeechSynthesizer for MbrolaBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

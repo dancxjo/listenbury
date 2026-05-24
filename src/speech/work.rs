@@ -1,12 +1,15 @@
 use std::collections::VecDeque;
+use std::marker::PhantomData;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::Result;
+use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
 use crate::acoustic::MelFrame;
 use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
-use crate::vocoder::{BackendFamily, VocoderBackend, VocoderInput};
+use crate::vocoder::{BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput};
 use crate::voice::articulator::{
     PartialProsodyPhone, PhoneTimedRenderTarget, PitchHint, RenderPlan,
 };
@@ -721,79 +724,215 @@ pub trait Renderer: TickStage {
     fn drain(&mut self) -> Vec<WaveChunk>;
 }
 
-pub struct BlockingVocoderRenderer<B> {
+struct RenderWork {
+    input: SyntheticRepresentation,
+    start_time: AudioTime,
+}
+
+fn render_representation_with_backend<B>(
+    backend: &mut B,
+    input: &SyntheticRepresentation,
+) -> Result<Vec<AudioFrame>>
+where
+    B: SpeechSynthesizer,
+{
+    match input {
+        SyntheticRepresentation::Mel(chunk) => backend.render(VocoderInput::Mel(&chunk.frames)),
+        SyntheticRepresentation::MelF0(chunk) => backend.render(VocoderInput::MelF0 {
+            mel: &chunk.mel,
+            f0_hz: &chunk.f0_hz,
+            voiced: &chunk.voiced,
+        }),
+        SyntheticRepresentation::Articulatory(chunk) => {
+            backend.render(VocoderInput::PhoneTimed(&chunk.targets))
+        }
+        SyntheticRepresentation::PhoneTimed(targets) => {
+            backend.render(VocoderInput::PhoneTimed(targets))
+        }
+        SyntheticRepresentation::PartialProsody(chunk) => {
+            backend.render(VocoderInput::PartialProsody {
+                text: &chunk.text,
+                phones: &chunk.phones,
+                pitch_hints: &chunk.pitch_hints,
+            })
+        }
+        SyntheticRepresentation::CoarseText(chunk) => backend.render(VocoderInput::CoarseText {
+            text: &chunk.text,
+            ssml_hint: chunk.ssml_hint.as_deref(),
+        }),
+        SyntheticRepresentation::SourceFilterTrack(track) => {
+            backend.render(VocoderInput::SourceFilterTrack(track))
+        }
+        SyntheticRepresentation::World(_)
+        | SyntheticRepresentation::LpcNet(_)
+        | SyntheticRepresentation::Wave(_) => Ok(Vec::new()),
+    }
+}
+
+fn frames_to_wave_chunks(frames: Vec<AudioFrame>, start_time: AudioTime) -> Vec<WaveChunk> {
+    let mut cursor = start_time;
+    frames
+        .into_iter()
+        .map(|frame| {
+            let mut chunk = WaveChunk::from(frame);
+            if cursor.sample_rate_hz != chunk.sample_rate_hz {
+                cursor = AudioTime::zero(chunk.sample_rate_hz);
+            }
+            let channel_count = usize::from(chunk.channels.max(1));
+            let frame_count = chunk.samples.len() / channel_count;
+            chunk.start_time = cursor;
+            chunk.end_time = cursor.advance_samples(frame_count);
+            cursor = chunk.end_time;
+            chunk
+        })
+        .collect()
+}
+
+fn representation_start_time(input: &SyntheticRepresentation, fallback: AudioTime) -> AudioTime {
+    match input {
+        SyntheticRepresentation::Mel(chunk) => chunk.time_start,
+        SyntheticRepresentation::MelF0(chunk) => chunk.time_start,
+        SyntheticRepresentation::World(chunk) => chunk.time_start,
+        SyntheticRepresentation::LpcNet(chunk) => chunk.time_start,
+        SyntheticRepresentation::Articulatory(chunk) => chunk.time_start,
+        SyntheticRepresentation::PartialProsody(chunk) => chunk.time_start,
+        SyntheticRepresentation::Wave(chunk) => chunk.start_time,
+        SyntheticRepresentation::PhoneTimed(_)
+        | SyntheticRepresentation::CoarseText(_)
+        | SyntheticRepresentation::SourceFilterTrack(_) => fallback,
+    }
+}
+
+fn accepts_representation(descriptor: &VocoderDescriptor, kind: RepresentationKind) -> bool {
+    let capabilities = &descriptor.capabilities;
+    match kind {
+        RepresentationKind::Mel => capabilities.accepts_mel,
+        RepresentationKind::MelF0 => capabilities.accepts_mel_f0,
+        RepresentationKind::Articulatory | RepresentationKind::PhoneTimed => {
+            capabilities.accepts_phone_timed
+        }
+        RepresentationKind::PartialProsody => capabilities.accepts_partial_prosody,
+        RepresentationKind::CoarseText => capabilities.accepts_coarse_text,
+        RepresentationKind::SourceFilterTrack => matches!(
+            descriptor.family,
+            BackendFamily::FormantSourceFilter | BackendFamily::NeuralSourceFilter
+        ),
+        RepresentationKind::Wave => true,
+        RepresentationKind::World | RepresentationKind::LpcNet => false,
+    }
+}
+
+/// Worker-backed renderer adapter for existing synchronous vocoder backends.
+///
+/// `tick` only moves accepted representations onto a bounded worker queue and
+/// polls completed wave chunks. The backend's blocking `render` call runs on
+/// the worker thread so the synthetic work graph can keep its audio/frame pulse.
+pub struct RealtimeVocoderRenderer<B> {
     id: &'static str,
-    backend: B,
+    descriptor: VocoderDescriptor,
+    work_tx: Sender<RenderWork>,
+    result_rx: Receiver<Result<Vec<WaveChunk>>>,
     pending: VecDeque<SyntheticRepresentation>,
     rendered: VecDeque<WaveChunk>,
+    in_flight: usize,
+    failed_jobs: usize,
     last_status: StageStatus,
+    _worker: JoinHandle<()>,
+    _backend: PhantomData<B>,
 }
 
-impl<B> BlockingVocoderRenderer<B>
+impl<B> RealtimeVocoderRenderer<B>
 where
-    B: VocoderBackend,
+    B: SpeechSynthesizer + Send + 'static,
 {
     pub fn new(id: &'static str, backend: B) -> Self {
+        Self::with_queue_capacity(id, backend, 2)
+    }
+
+    pub fn with_queue_capacity(id: &'static str, mut backend: B, queue_capacity: usize) -> Self {
+        let descriptor = backend.descriptor();
+        let (work_tx, work_rx) = crossbeam_channel::bounded::<RenderWork>(queue_capacity.max(1));
+        let (result_tx, result_rx) = crossbeam_channel::unbounded();
+        let worker = thread::Builder::new()
+            .name(format!("{id}-worker"))
+            .spawn(move || {
+                while let Ok(work) = work_rx.recv() {
+                    let result = render_representation_with_backend(&mut backend, &work.input)
+                        .map(|frames| frames_to_wave_chunks(frames, work.start_time));
+                    if result_tx.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn realtime vocoder renderer worker");
+
         Self {
             id,
-            backend,
+            descriptor,
+            work_tx,
+            result_rx,
             pending: VecDeque::new(),
             rendered: VecDeque::new(),
+            in_flight: 0,
+            failed_jobs: 0,
             last_status: StageStatus::new(id, StageReadiness::NeedsInput, 0, 0),
+            _worker: worker,
+            _backend: PhantomData,
         }
     }
 
-    fn render_representation(
-        &mut self,
-        input: &SyntheticRepresentation,
-    ) -> Result<Vec<AudioFrame>> {
-        match input {
-            SyntheticRepresentation::Mel(chunk) => {
-                self.backend.render(VocoderInput::Mel(&chunk.frames))
+    fn collect_finished(&mut self) {
+        loop {
+            match self.result_rx.try_recv() {
+                Ok(Ok(chunks)) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
+                    self.rendered.extend(chunks);
+                }
+                Ok(Err(_)) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
+                    self.failed_jobs = self.failed_jobs.saturating_add(1);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    if self.in_flight > 0 {
+                        self.failed_jobs = self.failed_jobs.saturating_add(self.in_flight);
+                        self.in_flight = 0;
+                    }
+                    break;
+                }
             }
-            SyntheticRepresentation::MelF0(chunk) => self.backend.render(VocoderInput::MelF0 {
-                mel: &chunk.mel,
-                f0_hz: &chunk.f0_hz,
-                voiced: &chunk.voiced,
-            }),
-            SyntheticRepresentation::Articulatory(chunk) => self
-                .backend
-                .render(VocoderInput::PhoneTimed(&chunk.targets)),
-            SyntheticRepresentation::PhoneTimed(targets) => {
-                self.backend.render(VocoderInput::PhoneTimed(targets))
-            }
-            SyntheticRepresentation::PartialProsody(chunk) => {
-                self.backend.render(VocoderInput::PartialProsody {
-                    text: &chunk.text,
-                    phones: &chunk.phones,
-                    pitch_hints: &chunk.pitch_hints,
-                })
-            }
-            SyntheticRepresentation::CoarseText(chunk) => {
-                self.backend.render(VocoderInput::CoarseText {
-                    text: &chunk.text,
-                    ssml_hint: chunk.ssml_hint.as_deref(),
-                })
-            }
-            SyntheticRepresentation::SourceFilterTrack(track) => {
-                self.backend.render(VocoderInput::SourceFilterTrack(track))
-            }
-            SyntheticRepresentation::World(_)
-            | SyntheticRepresentation::LpcNet(_)
-            | SyntheticRepresentation::Wave(_) => Ok(Vec::new()),
         }
+    }
+
+    fn current_status(&self) -> StageStatus {
+        let readiness = if self.failed_jobs > 0 {
+            StageReadiness::Blocked
+        } else if !self.pending.is_empty() {
+            StageReadiness::Ready
+        } else if self.in_flight > 0 {
+            StageReadiness::WaitingForLookahead
+        } else {
+            StageReadiness::NeedsInput
+        };
+        StageStatus::new(
+            self.id,
+            readiness,
+            self.pending.len() + self.in_flight,
+            self.rendered.len(),
+        )
     }
 }
 
-impl<B> TickStage for BlockingVocoderRenderer<B>
+impl<B> TickStage for RealtimeVocoderRenderer<B>
 where
-    B: VocoderBackend,
+    B: SpeechSynthesizer + Send + 'static,
 {
     fn id(&self) -> &'static str {
         self.id
     }
 
     fn tick(&mut self, now: PipelineTime, budget: WorkBudget) -> StageStatus {
+        self.collect_finished();
         let mut processed = 0usize;
         while processed < budget.max_items {
             let Some(input) = self.pending.pop_front() else {
@@ -804,42 +943,28 @@ where
                 processed += 1;
                 continue;
             }
-            match self.render_representation(&input) {
-                Ok(frames) => {
-                    let mut cursor = now.audio;
-                    for frame in frames {
-                        let mut chunk = WaveChunk::from(frame);
-                        if cursor.sample_rate_hz != chunk.sample_rate_hz {
-                            cursor = AudioTime::zero(chunk.sample_rate_hz);
-                        }
-                        let channel_count = usize::from(chunk.channels.max(1));
-                        let frame_count = chunk.samples.len() / channel_count;
-                        chunk.start_time = cursor;
-                        chunk.end_time = cursor.advance_samples(frame_count);
-                        cursor = chunk.end_time;
-                        self.rendered.push_back(chunk);
-                    }
+            let work = RenderWork {
+                start_time: representation_start_time(&input, now.audio),
+                input,
+            };
+            match self.work_tx.try_send(work) {
+                Ok(()) => {
+                    self.in_flight += 1;
                 }
-                Err(_) => {
-                    self.last_status = StageStatus::new(
-                        self.id,
-                        StageReadiness::Blocked,
-                        self.pending.len(),
-                        self.rendered.len(),
-                    );
-                    return self.last_status.clone();
+                Err(TrySendError::Full(work)) => {
+                    self.pending.push_front(work.input);
+                    break;
+                }
+                Err(TrySendError::Disconnected(work)) => {
+                    self.pending.push_front(work.input);
+                    self.failed_jobs = self.failed_jobs.saturating_add(1);
+                    break;
                 }
             }
             processed += 1;
         }
 
-        let readiness = if self.pending.is_empty() {
-            StageReadiness::NeedsInput
-        } else {
-            StageReadiness::Ready
-        };
-        self.last_status =
-            StageStatus::new(self.id, readiness, self.pending.len(), self.rendered.len());
+        self.last_status = self.current_status();
         self.last_status.clone()
     }
 
@@ -848,28 +973,12 @@ where
     }
 }
 
-impl<B> Renderer for BlockingVocoderRenderer<B>
+impl<B> Renderer for RealtimeVocoderRenderer<B>
 where
-    B: VocoderBackend,
+    B: SpeechSynthesizer + Send + 'static,
 {
     fn accepts(&self, kind: RepresentationKind) -> bool {
-        let descriptor = self.backend.descriptor();
-        let capabilities = descriptor.capabilities;
-        match kind {
-            RepresentationKind::Mel => capabilities.accepts_mel,
-            RepresentationKind::MelF0 => capabilities.accepts_mel_f0,
-            RepresentationKind::Articulatory | RepresentationKind::PhoneTimed => {
-                capabilities.accepts_phone_timed
-            }
-            RepresentationKind::PartialProsody => capabilities.accepts_partial_prosody,
-            RepresentationKind::CoarseText => capabilities.accepts_coarse_text,
-            RepresentationKind::SourceFilterTrack => matches!(
-                descriptor.family,
-                BackendFamily::FormantSourceFilter | BackendFamily::NeuralSourceFilter
-            ),
-            RepresentationKind::Wave => true,
-            RepresentationKind::World | RepresentationKind::LpcNet => false,
-        }
+        accepts_representation(&self.descriptor, kind)
     }
 
     fn push(&mut self, input: SyntheticRepresentation) -> RenderStatus {
@@ -887,9 +996,15 @@ where
     }
 
     fn drain(&mut self) -> Vec<WaveChunk> {
-        self.rendered.drain(..).collect()
+        self.collect_finished();
+        let drained = self.rendered.drain(..).collect();
+        self.last_status = self.current_status();
+        drained
     }
 }
+
+/// Compatibility alias for callers that used the original blocking adapter.
+pub type BlockingVocoderRenderer<B> = RealtimeVocoderRenderer<B>;
 
 pub struct WavePassthroughRenderer {
     pending: VecDeque<WaveChunk>,
@@ -1043,10 +1158,11 @@ pub fn render_plan_to_representation(
 mod tests {
     use super::*;
     use crate::vocoder::{BackendCapabilities, BackendFamily, VocoderDescriptor};
+    use std::time::Instant;
 
     struct SilentMelBackend;
 
-    impl VocoderBackend for SilentMelBackend {
+    impl SpeechSynthesizer for SilentMelBackend {
         fn id(&self) -> &'static str {
             "silent-mel"
         }
@@ -1077,6 +1193,58 @@ mod tests {
                 _ => Ok(Vec::new()),
             }
         }
+    }
+
+    struct SlowMelBackend {
+        delay: Duration,
+    }
+
+    impl SpeechSynthesizer for SlowMelBackend {
+        fn id(&self) -> &'static str {
+            "slow-mel"
+        }
+
+        fn descriptor(&self) -> VocoderDescriptor {
+            let mut capabilities = BackendCapabilities::unsupported();
+            capabilities.accepts_mel = true;
+            VocoderDescriptor {
+                id: "slow-mel",
+                family: BackendFamily::NeuralVocoder,
+                capabilities,
+                sample_rate_hz: 24_000,
+                backend_kind: None,
+                detail: None,
+                notes: &["test backend"],
+            }
+        }
+
+        fn render(&mut self, input: VocoderInput<'_>) -> Result<Vec<AudioFrame>> {
+            std::thread::sleep(self.delay);
+            match input {
+                VocoderInput::Mel(frames) => Ok(vec![AudioFrame {
+                    captured_at: ExactTimestamp::from_unix_nanos(1),
+                    sample_rate_hz: 24_000,
+                    channels: 1,
+                    samples: vec![0.0; frames.len() * 240],
+                    voice_signatures: Vec::new(),
+                }]),
+                _ => Ok(Vec::new()),
+            }
+        }
+    }
+
+    fn drain_until_rendered<B>(renderer: &mut RealtimeVocoderRenderer<B>) -> Vec<WaveChunk>
+    where
+        B: SpeechSynthesizer + Send + 'static,
+    {
+        for _ in 0..100 {
+            let rendered = renderer.drain();
+            if !rendered.is_empty() {
+                return rendered;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        renderer.drain()
     }
 
     #[test]
@@ -1187,8 +1355,8 @@ mod tests {
     }
 
     #[test]
-    fn blocking_vocoder_renderer_adapts_mel_representation() {
-        let mut renderer = BlockingVocoderRenderer::new("test-hifigan-slot", SilentMelBackend);
+    fn realtime_vocoder_renderer_adapts_mel_representation() {
+        let mut renderer = RealtimeVocoderRenderer::new("test-hifigan-slot", SilentMelBackend);
         let status = renderer.push(SyntheticRepresentation::Mel(MelChunk {
             config: "test".to_string(),
             frames: vec![MelFrame { bins: vec![0.0] }, MelFrame { bins: vec![1.0] }],
@@ -1203,13 +1371,55 @@ mod tests {
             PipelineTime::from_audio(AudioTime::zero(24_000)),
             WorkBudget::single_item(),
         );
-        let rendered = renderer.drain();
+        assert_eq!(status.input_len + status.output_len, 1);
+
+        let rendered = drain_until_rendered(&mut renderer);
+        let status = renderer.status();
 
         assert_eq!(status.input_len, 0);
-        assert_eq!(status.output_len, 1);
+        assert_eq!(status.output_len, 0);
         assert_eq!(rendered.len(), 1);
         assert_eq!(rendered[0].samples.len(), 480);
         assert_eq!(rendered[0].end_time.sample_index, 480);
+    }
+
+    #[test]
+    fn realtime_vocoder_renderer_tick_does_not_wait_for_backend_render() {
+        let mut renderer = RealtimeVocoderRenderer::new(
+            "slow-hifigan-slot",
+            SlowMelBackend {
+                delay: Duration::from_millis(120),
+            },
+        );
+        let status = renderer.push(SyntheticRepresentation::Mel(MelChunk {
+            config: "test".to_string(),
+            frames: vec![MelFrame { bins: vec![0.0] }],
+            frame_hop_samples: 240,
+            sample_rate_hz: 24_000,
+            time_start: AudioTime::zero(24_000),
+            commitment: Commitment::Planned,
+        }));
+        assert!(matches!(status, RenderStatus::Accepted { queued: 1 }));
+
+        let started = Instant::now();
+        let status = renderer.tick(
+            PipelineTime::from_audio(AudioTime::zero(24_000)),
+            WorkBudget::single_item(),
+        );
+        let tick_elapsed = started.elapsed();
+
+        assert!(
+            tick_elapsed < Duration::from_millis(60),
+            "tick should enqueue render work without waiting for the backend, elapsed={tick_elapsed:?}"
+        );
+        assert_eq!(status.readiness, StageReadiness::WaitingForLookahead);
+        assert_eq!(status.input_len, 1);
+        assert_eq!(status.output_len, 0);
+
+        let rendered = drain_until_rendered(&mut renderer);
+
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].samples.len(), 240);
     }
 
     #[test]

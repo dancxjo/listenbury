@@ -38,7 +38,9 @@ use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, S
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
 #[cfg(feature = "piper-compat")]
-use listenbury::vocoder::{HifiganBackend, VocoderBackend, VocoderInput};
+use listenbury::vocoder::{
+    HifiganBackend, MelDebugRendererBackend, SpeechSynthesizer, VocoderInput,
+};
 #[cfg(feature = "piper-compat")]
 use listenbury::voice::articulator::PhoneTimedRenderTarget;
 #[cfg(feature = "piper-compat")]
@@ -1527,7 +1529,7 @@ fn hifigan_feature_stage() -> String {
 
 fn hifigan_vocoder_stage(args: &SayArgs) -> String {
     if args.skip_gan {
-        "vocoder: hifigan skipped (deterministic mel debug renderer)".to_string()
+        "vocoder: mel debug renderer (HiFi-GAN skipped by request)".to_string()
     } else {
         #[cfg(feature = "piper-compat")]
         if let Some(model) = &args.hifigan_model {
@@ -1619,10 +1621,10 @@ fn synthesize_hifigan_text(
         &acoustic_track.voiced,
     )?;
     let mut backend = if skip_gan {
-        HifiganBackend::deterministic()
+        Box::new(MelDebugRendererBackend::new()) as Box<dyn SpeechSynthesizer>
     } else {
         let model_path = resolve_hifigan_model(hifigan_model)?;
-        HifiganBackend::load(model_path)?
+        Box::new(HifiganBackend::load(model_path)?) as Box<dyn SpeechSynthesizer>
     };
     let frames = backend
         .render(VocoderInput::MelF0 {
@@ -1663,10 +1665,10 @@ fn maybe_render_source_filter_reference(
     if std::env::var_os("LISTENBURY_HIFIGAN_DEBUG_DIR").is_none() {
         return Ok(Vec::new());
     }
-    let mut deterministic = HifiganBackend::deterministic();
-    deterministic
+    let mut debug_renderer = MelDebugRendererBackend::new();
+    debug_renderer
         .render(VocoderInput::MelF0 { mel, f0_hz, voiced })
-        .context("failed to render deterministic source-filter A/B reference")
+        .context("failed to render mel debug source-filter A/B reference")
 }
 
 #[cfg(feature = "piper-compat")]

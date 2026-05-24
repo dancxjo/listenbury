@@ -49,7 +49,7 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
         println!(
             "sing-demo hifigan mode: {}",
             if command.skip_gan {
-                "skip-gan deterministic mel debug"
+                "skip-gan mel debug renderer"
             } else {
                 "ONNX HiFi-GAN"
             }

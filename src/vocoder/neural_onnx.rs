@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 
 pub struct RiperOnnxDirectBackend;
@@ -31,7 +31,7 @@ impl RiperOnnxDirectBackend {
     }
 }
 
-impl VocoderBackend for RiperOnnxDirectBackend {
+impl SpeechSynthesizer for RiperOnnxDirectBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

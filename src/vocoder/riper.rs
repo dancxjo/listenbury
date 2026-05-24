@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 
 use crate::audio::frame::AudioFrame;
-use crate::vocoder::{BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput};
+use crate::vocoder::{BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput};
 use crate::voice::articulator::{SungBackendDetail, SungBackendKind};
 
 use super::klatt::KlattBackend;
@@ -41,7 +41,7 @@ impl Default for RiperKlattFallbackBackend {
     }
 }
 
-impl VocoderBackend for RiperKlattFallbackBackend {
+impl SpeechSynthesizer for RiperKlattFallbackBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

@@ -230,7 +230,7 @@ pub(crate) struct ContinueCommand {
     pub(crate) hifigan: bool,
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
-    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long, requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long)]
@@ -325,7 +325,7 @@ pub(crate) struct SingDemoCommand {
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long = "hifigan-model")]
     pub(crate) hifigan_model: Option<PathBuf>,
-    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long)]
     pub(crate) skip_gan: bool,
 }
@@ -416,7 +416,7 @@ pub(crate) struct SayCommand {
     pub(crate) hifigan: bool,
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
-    /// Debug the mel path by rendering the acoustic mel track without running HiFi-GAN.
+    /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long, requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
@@ -585,7 +585,7 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) hifigan: bool,
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
-    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long, requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
@@ -1386,7 +1386,7 @@ mod tests {
     #[test]
     fn say_accepts_skip_gan() {
         let cli = Cli::try_parse_from(["listenbury", "say", "--hifigan", "--skip-gan", "hello"])
-            .expect("say should parse skip-gan as a hifigan debug switch");
+            .expect("say should parse skip-gan as a mel debug switch");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
@@ -2410,7 +2410,7 @@ mod tests {
     #[test]
     fn top_level_sing_accepts_skip_gan_with_hifigan_backend() {
         let cli = Cli::try_parse_from(["listenbury", "sing", "--backend", "hifigan", "--skip-gan"])
-            .expect("top-level sing should parse skip-gan as a hifigan modifier");
+            .expect("top-level sing should parse skip-gan as a mel debug modifier");
 
         let Some(Command::Sing(command)) = cli.command else {
             panic!("expected top-level sing command");

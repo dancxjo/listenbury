@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 use crate::voice::articulator::{RenderPlan, SungBackendDetail, SungBackendKind};
 
@@ -107,7 +107,7 @@ impl PiperBackend {
     }
 }
 
-impl VocoderBackend for PiperBackend {
+impl SpeechSynthesizer for PiperBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }

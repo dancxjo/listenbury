@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::audio::frame::AudioFrame;
 use crate::vocoder::{
-    BackendCapabilities, BackendFamily, VocoderBackend, VocoderDescriptor, VocoderInput,
+    BackendCapabilities, BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput,
 };
 
 pub struct NeuralSourceFilterBackend;
@@ -31,7 +31,7 @@ impl NeuralSourceFilterBackend {
     }
 }
 
-impl VocoderBackend for NeuralSourceFilterBackend {
+impl SpeechSynthesizer for NeuralSourceFilterBackend {
     fn id(&self) -> &'static str {
         Self::descriptor().id
     }
