@@ -25,13 +25,16 @@ use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 #[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
-#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
-use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
 #[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::{
-    PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend,
-    SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind, SyntacticLinkParse,
+    BreathGroupProsodyPlanner, PhonemeProsodyCandidate, PhonemeProsodyCandidateEvent,
+    PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, ProsodyEnergy,
+    ProsodyList, ProsodyOp, ProsodyPitchShape, ProsodyTarget, RiperBackend,
+    RiperProsodyRealization, SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind,
+    SyntacticLinkParse,
 };
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
+use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
@@ -394,11 +397,13 @@ impl TtsBackend for MbrolaTextBackend {
                 renderer,
                 phonemizer,
             } => {
-                let phonemes = phonemizer
-                    .phonemize_unit(text)
-                    .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
-                    .phonemes;
-                let plan = mbrola_plan_from_riper_phonemes(&phonemes, text, renderer.voice())?;
+                let voice = renderer.voice();
+                let plan = planned_phone_timed_plan_for_text(
+                    *phonemizer,
+                    text,
+                    |symbol| Ok(voice.symbol_map.map_phone(symbol)?),
+                    &voice.name,
+                )?;
                 let frames = renderer
                     .render_phone_plan_to_frames(&plan)
                     .with_context(|| format!("native MBROLA diphone render failed for `{text}`"))?;
@@ -415,11 +420,12 @@ impl TtsBackend for MbrolaTextBackend {
                 sample_rate_hz,
                 source_period_samples,
             } => {
-                let phonemes = phonemizer
-                    .phonemize_unit(text)
-                    .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
-                    .phonemes;
-                let plan = diphone_cache_plan_from_riper_phonemes(&phonemes, text, voice_name)?;
+                let plan = planned_phone_timed_plan_for_text(
+                    *phonemizer,
+                    text,
+                    |symbol| Ok(symbol.to_string()),
+                    voice_name,
+                )?;
                 let frames = render_phone_plan_with_diphone_provider_to_frames(
                     &plan,
                     provider,
@@ -440,41 +446,57 @@ impl TtsBackend for MbrolaTextBackend {
 }
 
 #[cfg(feature = "piper-compat")]
-fn mbrola_plan_from_riper_phonemes(
-    phonemes: &PiperPhonemeSequence,
+fn planned_phone_timed_plan_for_text(
+    phonemizer: SimpleEnglishG2p,
     text: &str,
-    voice: &listenbury::MbrolaVoice,
+    map_phone: impl Fn(&str) -> Result<String>,
+    voice_name: &str,
 ) -> Result<PhoneTimedPlan> {
+    let mut tracker = listenbury::mouth::riper::PhonemeProsodyCandidateTracker::new(phonemizer);
+    let mut candidate = tracker
+        .ingest_text(text)
+        .with_context(|| format!("failed to realize Riper phonemes for `{text}`"))?
+        .into_iter()
+        .find_map(|event| match event {
+            PhonemeProsodyCandidateEvent::CandidateUpdated { candidate } => Some(candidate),
+            _ => None,
+        })
+        .with_context(|| format!("Riper produced no candidate for `{text}`"))?;
+    candidate.mark_committed();
+
+    let mut planner = BreathGroupProsodyPlanner::new();
+    let planned = planner.plan_candidate(&candidate);
+    phone_timed_plan_from_planned_prosody(&candidate, &planned, map_phone, text, voice_name)
+}
+
+#[cfg(feature = "piper-compat")]
+fn phone_timed_plan_from_planned_prosody(
+    candidate: &PhonemeProsodyCandidate,
+    planned: &ProsodyList,
+    map_phone: impl Fn(&str) -> Result<String>,
+    text: &str,
+    voice_name: &str,
+) -> Result<PhoneTimedPlan> {
+    let realization = planned.realize_for_riper(candidate);
+    let pauses_after_word = pauses_after_words(candidate, &realization);
+    let utterance_pauses = utterance_pauses(&realization);
     let mut phones = Vec::new();
-    for phoneme in &phonemes.phonemes {
+
+    for (index, phoneme) in candidate.phonemes.phonemes.iter().enumerate() {
         let symbol = phoneme.0.as_str();
-        if symbol.trim().is_empty()
-            || matches!(symbol, "_" | "^" | "$" | "|" | "‖" | "." | "," | "!" | "?")
-        {
+        let word_index = candidate.phoneme_to_word.get(index).and_then(|word| *word);
+        if word_index.is_none() || !is_renderable_riper_symbol(symbol) {
             continue;
         }
-        let mapped = voice.symbol_map.map_phone(symbol).with_context(|| {
+
+        let mapped = map_phone(symbol).with_context(|| {
             format!(
-                "failed to map Riper phone `{symbol}` to MBROLA voice `{}` while rendering `{text}`",
-                voice.name
+                "failed to map Riper phone `{symbol}` to diphone voice `{voice_name}` while rendering `{text}`"
             )
         })?;
-        let duration_ms = mbrola_default_phone_duration_ms(symbol);
+        let duration_ms = planned_phone_duration_ms(candidate, &realization, index);
         let pitch_targets = if mbrola_symbol_is_pitch_bearing(symbol) {
-            vec![
-                MbrolaPitchTarget {
-                    percent: 0,
-                    hz: 125.0,
-                },
-                MbrolaPitchTarget {
-                    percent: 60,
-                    hz: 135.0,
-                },
-                MbrolaPitchTarget {
-                    percent: 100,
-                    hz: 128.0,
-                },
-            ]
+            planned_pitch_targets(candidate, planned, index)
         } else {
             Vec::new()
         };
@@ -483,55 +505,24 @@ fn mbrola_plan_from_riper_phonemes(
             duration_ms,
             pitch_targets,
         });
-    }
-    phones.push(MbrolaPhone::new("_", 120));
-    anyhow::ensure!(
-        phones.iter().any(|phone| phone.symbol != "_"),
-        "Riper produced no MBROLA-renderable phones for `{text}`"
-    );
-    Ok(PhoneTimedPlan::new(phones))
-}
 
-#[cfg(feature = "piper-compat")]
-fn diphone_cache_plan_from_riper_phonemes(
-    phonemes: &PiperPhonemeSequence,
-    text: &str,
-    voice_name: &str,
-) -> Result<PhoneTimedPlan> {
-    let mut phones = Vec::new();
-    for phoneme in &phonemes.phonemes {
-        let symbol = phoneme.0.as_str();
-        if symbol.trim().is_empty()
-            || matches!(symbol, "_" | "^" | "$" | "|" | "‖" | "." | "," | "!" | "?")
+        if let Some(word_index) = word_index
+            && is_last_phone_in_word(candidate, index, word_index)
         {
-            continue;
+            if let Some(pauses) = pauses_after_word.get(word_index) {
+                phones.extend(pauses.iter().map(|millis| MbrolaPhone::new("_", *millis)));
+            }
         }
-        let duration_ms = mbrola_default_phone_duration_ms(symbol);
-        let pitch_targets = if mbrola_symbol_is_pitch_bearing(symbol) {
-            vec![
-                MbrolaPitchTarget {
-                    percent: 0,
-                    hz: 125.0,
-                },
-                MbrolaPitchTarget {
-                    percent: 60,
-                    hz: 135.0,
-                },
-                MbrolaPitchTarget {
-                    percent: 100,
-                    hz: 128.0,
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        phones.push(MbrolaPhone {
-            symbol: symbol.to_string(),
-            duration_ms,
-            pitch_targets,
-        });
     }
-    phones.push(MbrolaPhone::new("_", 120));
+
+    phones.extend(
+        utterance_pauses
+            .into_iter()
+            .map(|millis| MbrolaPhone::new("_", millis)),
+    );
+    if phones.last().is_none_or(|phone| phone.symbol != "_") {
+        phones.push(MbrolaPhone::new("_", 80));
+    }
     anyhow::ensure!(
         phones.iter().any(|phone| phone.symbol != "_"),
         "Riper produced no cache-renderable phones for `{text}` with diphone voice `{voice_name}`"
@@ -540,12 +531,213 @@ fn diphone_cache_plan_from_riper_phonemes(
 }
 
 #[cfg(feature = "piper-compat")]
-fn mbrola_default_phone_duration_ms(symbol: &str) -> u32 {
-    if mbrola_symbol_is_pitch_bearing(symbol) {
-        145
-    } else {
-        75
+fn planned_phone_duration_ms(
+    candidate: &PhonemeProsodyCandidate,
+    realization: &RiperProsodyRealization,
+    phoneme_index: usize,
+) -> u32 {
+    let base = candidate
+        .phone_hints
+        .iter()
+        .find(|hint| hint.phoneme_index == phoneme_index)
+        .and_then(|hint| hint.approximate_duration_ms)
+        .unwrap_or(90);
+    let mut duration = base as f32;
+
+    if let Some(word_index) = candidate
+        .phoneme_to_word
+        .get(phoneme_index)
+        .and_then(|word| *word)
+        && let Some(Some(word_duration)) = realization.word_duration_overrides_ms.get(word_index)
+        && let Some(word_base) = candidate
+            .word_hints
+            .iter()
+            .find(|hint| hint.word_index == word_index)
+            .and_then(|hint| hint.approximate_duration_ms)
+        && word_base > 0
+    {
+        duration *= *word_duration as f32 / word_base as f32;
     }
+
+    if let Some(Some(phone_duration)) = realization.phone_duration_overrides_ms.get(phoneme_index)
+        && base > 0
+    {
+        duration *= *phone_duration as f32 / base as f32;
+    }
+
+    duration.round().clamp(1.0, u32::MAX as f32) as u32
+}
+
+#[cfg(feature = "piper-compat")]
+fn planned_pitch_targets(
+    candidate: &PhonemeProsodyCandidate,
+    planned: &ProsodyList,
+    phoneme_index: usize,
+) -> Vec<MbrolaPitchTarget> {
+    let Some((shape, strength)) = planned
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            ProsodyOp::SetPitchShape {
+                target,
+                shape,
+                strength,
+            } if prosody_target_contains_phoneme(candidate, target, phoneme_index) => {
+                Some((*shape, *strength))
+            }
+            _ => None,
+        })
+        .last()
+    else {
+        return Vec::new();
+    };
+
+    pitch_targets_for_shape(shape, strength, planned.base.contour.energy)
+}
+
+#[cfg(feature = "piper-compat")]
+fn pitch_targets_for_shape(
+    shape: ProsodyPitchShape,
+    strength: u8,
+    energy: ProsodyEnergy,
+) -> Vec<MbrolaPitchTarget> {
+    let base_hz = match energy {
+        ProsodyEnergy::Low => 118.0,
+        ProsodyEnergy::Neutral => 125.0,
+        ProsodyEnergy::Elevated => 132.0,
+    };
+    let range_hz = 8.0 + 18.0 * (f32::from(strength.min(100)) / 100.0);
+    let targets = match shape {
+        ProsodyPitchShape::Level => vec![(0, base_hz), (100, base_hz)],
+        ProsodyPitchShape::Rise => vec![
+            (0, base_hz - range_hz * 0.35),
+            (65, base_hz + range_hz * 0.40),
+            (100, base_hz + range_hz * 0.60),
+        ],
+        ProsodyPitchShape::Fall => vec![
+            (0, base_hz + range_hz * 0.55),
+            (55, base_hz),
+            (100, base_hz - range_hz * 0.55),
+        ],
+        ProsodyPitchShape::RiseFall => vec![
+            (0, base_hz - range_hz * 0.30),
+            (50, base_hz + range_hz * 0.65),
+            (100, base_hz - range_hz * 0.20),
+        ],
+        ProsodyPitchShape::FallRise => vec![
+            (0, base_hz + range_hz * 0.35),
+            (50, base_hz - range_hz * 0.45),
+            (100, base_hz + range_hz * 0.25),
+        ],
+    };
+
+    targets
+        .into_iter()
+        .map(|(percent, hz)| MbrolaPitchTarget {
+            percent,
+            hz: hz.max(60.0),
+        })
+        .collect()
+}
+
+#[cfg(feature = "piper-compat")]
+fn pauses_after_words(
+    candidate: &PhonemeProsodyCandidate,
+    realization: &RiperProsodyRealization,
+) -> Vec<Vec<u32>> {
+    let mut pauses = vec![Vec::new(); candidate.word_targets.len()];
+    for pause in &realization.pauses {
+        match &pause.after {
+            ProsodyTarget::WordIndex { index } => {
+                if let Some(slot) = pauses.get_mut(*index) {
+                    slot.push(clamp_duration_u64_to_u32(pause.millis));
+                }
+            }
+            ProsodyTarget::WordRange { end, .. } => {
+                if let Some(index) = end.checked_sub(1)
+                    && let Some(slot) = pauses.get_mut(index)
+                {
+                    slot.push(clamp_duration_u64_to_u32(pause.millis));
+                }
+            }
+            ProsodyTarget::PhonemeRange { end, .. } => {
+                if let Some(index) = end
+                    .checked_sub(1)
+                    .and_then(|idx| candidate.phoneme_to_word.get(idx))
+                    .and_then(|word| *word)
+                    && let Some(slot) = pauses.get_mut(index)
+                {
+                    slot.push(clamp_duration_u64_to_u32(pause.millis));
+                }
+            }
+            ProsodyTarget::WholeCandidate => {}
+        }
+    }
+    pauses
+}
+
+#[cfg(feature = "piper-compat")]
+fn utterance_pauses(realization: &RiperProsodyRealization) -> Vec<u32> {
+    realization
+        .pauses
+        .iter()
+        .filter_map(|pause| {
+            matches!(pause.after, ProsodyTarget::WholeCandidate)
+                .then(|| clamp_duration_u64_to_u32(pause.millis))
+        })
+        .collect()
+}
+
+#[cfg(feature = "piper-compat")]
+fn prosody_target_contains_phoneme(
+    candidate: &PhonemeProsodyCandidate,
+    target: &ProsodyTarget,
+    phoneme_index: usize,
+) -> bool {
+    match target {
+        ProsodyTarget::WholeCandidate => true,
+        ProsodyTarget::WordIndex { index } => {
+            candidate
+                .phoneme_to_word
+                .get(phoneme_index)
+                .and_then(|word| *word)
+                == Some(*index)
+        }
+        ProsodyTarget::WordRange { start, end } => candidate
+            .phoneme_to_word
+            .get(phoneme_index)
+            .and_then(|word| *word)
+            .is_some_and(|word| word >= *start && word < *end),
+        ProsodyTarget::PhonemeRange { start, end } => {
+            phoneme_index >= *start && phoneme_index < *end
+        }
+    }
+}
+
+#[cfg(feature = "piper-compat")]
+fn is_last_phone_in_word(
+    candidate: &PhonemeProsodyCandidate,
+    phoneme_index: usize,
+    word_index: usize,
+) -> bool {
+    candidate
+        .phoneme_to_word
+        .iter()
+        .enumerate()
+        .skip(phoneme_index + 1)
+        .find_map(|(_, word)| word.map(|word| word != word_index))
+        .unwrap_or(true)
+}
+
+#[cfg(feature = "piper-compat")]
+fn is_renderable_riper_symbol(symbol: &str) -> bool {
+    !symbol.trim().is_empty()
+        && !matches!(symbol, "_" | "^" | "$" | "|" | "‖" | "." | "," | "!" | "?")
+}
+
+#[cfg(feature = "piper-compat")]
+fn clamp_duration_u64_to_u32(millis: u64) -> u32 {
+    millis.clamp(1, u64::from(u32::MAX)) as u32
 }
 
 #[cfg(feature = "piper-compat")]
@@ -3115,6 +3307,39 @@ mod tests {
         let ipas = phone_string.ipa_segments();
         assert!(ipas.windows(2).any(|phones| phones == ["o", "ʊ"]));
         assert!(ipas.windows(2).any(|phones| phones == ["t", "ʃ"]));
+    }
+
+    #[test]
+    #[cfg(feature = "piper-compat")]
+    fn diphone_plan_uses_planned_durations_pitches_and_pause() {
+        let plan = planned_phone_timed_plan_for_text(
+            SimpleEnglishG2p::default(),
+            "The red machine.",
+            |symbol| Ok(symbol.to_string()),
+            "test",
+        )
+        .expect("planned diphone plan");
+
+        assert!(
+            plan.phones.iter().any(|phone| phone.symbol != "_"
+                && phone.duration_ms != 75
+                && phone.duration_ms != 145),
+            "planned durations should replace the old canned consonant/vowel defaults: {:?}",
+            plan.phones
+        );
+        assert!(
+            plan.phones.iter().any(|phone| phone
+                .pitch_targets
+                .iter()
+                .any(|target| (target.hz - 135.0).abs() > 0.01)),
+            "planned pitch shapes should replace the old canned vowel pitch triplet: {:?}",
+            plan.phones
+        );
+        assert_eq!(
+            plan.phones.last(),
+            Some(&MbrolaPhone::new("_", 260)),
+            "committed full-turn say should use the planner final pause"
+        );
     }
 
     #[test]
