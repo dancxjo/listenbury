@@ -399,6 +399,9 @@ fn analyze_un_plus_stem_plus_ed(surface: &str) -> Option<MorphophonologyResult> 
     if !lower.starts_with("un") || !lower.ends_with("ed") {
         return None;
     }
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
     let inner = &surface[2..surface.len().saturating_sub(2)];
     if inner.is_empty() {
         return None;
@@ -572,6 +575,9 @@ fn analyze_ed_suffix(surface: &str) -> Option<MorphophonologyResult> {
         return None;
     }
     if surface.eq_ignore_ascii_case("developped") {
+        return None;
+    }
+    if lexicon_pronunciation(surface).is_some() {
         return None;
     }
     let stem_text = &surface[..surface.len().saturating_sub(2)];
@@ -1228,6 +1234,29 @@ fn lexical_override(surface: &str) -> Option<WordPronunciation> {
                 ("T", None),
             ],
         ),
+        (
+            "embody",
+            &[
+                ("IH0", Some(PhonologicalStress::Unstressed)),
+                ("M", None),
+                ("B", None),
+                ("AA1", Some(PhonologicalStress::Primary)),
+                ("D", None),
+                ("IY0", Some(PhonologicalStress::Unstressed)),
+            ],
+        ),
+        (
+            "embodied",
+            &[
+                ("IH0", Some(PhonologicalStress::Unstressed)),
+                ("M", None),
+                ("B", None),
+                ("AA1", Some(PhonologicalStress::Primary)),
+                ("D", None),
+                ("IY0", Some(PhonologicalStress::Unstressed)),
+                ("D", None),
+            ],
+        ),
     ];
 
     let lower = surface.to_ascii_lowercase();
@@ -1585,10 +1614,35 @@ mod tests {
 
     #[test]
     fn realizes_ed_allomorphy() {
-        assert_eq!(symbols_of("walked"), vec!["W", "AO", "K", "T"]);
-        assert_eq!(symbols_of("played"), vec!["P", "L", "EY", "D"]);
-        assert_eq!(symbols_of("wanted"), vec!["W", "AA", "N", "T", "IH0", "D"]);
-        assert_eq!(symbols_of("needed"), vec!["N", "IY", "D", "IH0", "D"]);
+        let walked_stem = lexicon_pronunciation("walk").expect("walk stem");
+        let played_stem = lexicon_pronunciation("play").expect("play stem");
+        let wanted_stem = lexicon_pronunciation("want").expect("want stem");
+        let needed_stem = lexicon_pronunciation("need").expect("need stem");
+
+        assert_eq!(
+            ed_suffix_from_stem(&walked_stem.symbols)
+                .expect("walk + ed")
+                .realized,
+            vec!["T"]
+        );
+        assert_eq!(
+            ed_suffix_from_stem(&played_stem.symbols)
+                .expect("play + ed")
+                .realized,
+            vec!["D"]
+        );
+        assert_eq!(
+            ed_suffix_from_stem(&wanted_stem.symbols)
+                .expect("want + ed")
+                .realized,
+            vec!["IH0", "D"]
+        );
+        assert_eq!(
+            ed_suffix_from_stem(&needed_stem.symbols)
+                .expect("need + ed")
+                .realized,
+            vec!["IH0", "D"]
+        );
     }
 
     #[test]
@@ -1605,6 +1659,35 @@ mod tests {
         assert_eq!(
             symbols_of("punctuate"),
             vec!["P", "AH1", "NG", "K", "CH", "UW", "EY2", "T"]
+        );
+        assert_eq!(
+            symbols_of("embodied"),
+            vec!["IH0", "M", "B", "AA1", "D", "IY0", "D"]
+        );
+    }
+
+    #[test]
+    fn keeps_embodied_as_exact_lexical_ir() {
+        let result = analyze_word("embodied");
+        assert_eq!(result.analysis.source, AnalysisSource::ExactLexicalEntry);
+        assert_eq!(
+            result
+                .analysis
+                .morphemes
+                .iter()
+                .map(|m| m.surface.as_str())
+                .collect::<Vec<_>>(),
+            vec!["embodied"]
+        );
+        assert_eq!(
+            result
+                .analysis
+                .phonology
+                .as_ref()
+                .expect("phonology")
+                .underlying
+                .symbols,
+            vec!["IH0", "M", "B", "AA1", "D", "IY0", "D"]
         );
     }
 

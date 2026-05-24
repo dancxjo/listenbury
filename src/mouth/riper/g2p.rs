@@ -1926,6 +1926,18 @@ mod tests {
     }
 
     #[test]
+    fn phonemizes_embodied_with_stressed_body_vowel() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("The embodied model responded.")
+            .expect("phonemize");
+        assert_eq!(
+            symbols_for_word(&unit, "embodied"),
+            vec!["IH0", "M", "B", "AA1", "D", "IY0", "D"]
+        );
+    }
+
+    #[test]
     fn applies_intervocalic_flap_for_riper() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("bottle").expect("phonemize");
