@@ -315,6 +315,9 @@ fn productive_morphology(surface: &str) -> Option<MorphophonologyResult> {
     if let Some(ly_word) = analyze_ly_suffix(surface) {
         return Some(ly_word);
     }
+    if let Some(possessive_word) = analyze_possessive_suffix(surface) {
+        return Some(possessive_word);
+    }
     if let Some(s_word) = analyze_s_suffix(surface) {
         return Some(s_word);
     }
@@ -993,6 +996,162 @@ fn analyze_s_suffix(surface: &str) -> Option<MorphophonologyResult> {
     })
 }
 
+fn analyze_possessive_suffix(surface: &str) -> Option<MorphophonologyResult> {
+    if lexicon_pronunciation(surface).is_some() {
+        return None;
+    }
+
+    if let Some(stem_text) = possessive_apostrophe_s_stem(surface) {
+        return analyze_apostrophe_s_possessive(surface, stem_text);
+    }
+
+    if let Some(stem_text) = possessive_s_apostrophe_stem(surface) {
+        return analyze_s_apostrophe_possessive(surface, stem_text);
+    }
+
+    None
+}
+
+fn possessive_apostrophe_s_stem(surface: &str) -> Option<String> {
+    let lower = surface.to_ascii_lowercase();
+    lower
+        .strip_suffix("'s")
+        .or_else(|| lower.strip_suffix("’s"))
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_string)
+}
+
+fn possessive_s_apostrophe_stem(surface: &str) -> Option<String> {
+    let lower = surface.to_ascii_lowercase();
+    lower
+        .strip_suffix('\'')
+        .or_else(|| lower.strip_suffix('’'))
+        .filter(|stem| stem.len() > 1 && stem.ends_with('s'))
+        .map(str::to_string)
+}
+
+fn analyze_apostrophe_s_possessive(
+    surface: &str,
+    stem_text: String,
+) -> Option<MorphophonologyResult> {
+    let stem = lexicon_pronunciation(&stem_text)?;
+    let rule = native_morphophonology_rules()
+        .iter()
+        .find(|r| r.id == "suffix_s_attachment")?;
+    let MorphophonologyOutput::AppendArpabet(ref affix_arpabet) = rule.output_policy else {
+        return None;
+    };
+
+    let s_allomorph = s_allomorph_from_stem(&stem.symbols);
+    let affix_phones = arpabet_str_to_phones(s_allomorph);
+
+    let mut realized = stem.symbols.clone();
+    realized.extend(affix_phones.symbols.clone());
+
+    let mut stress = stem.stress_by_phone.clone();
+    stress.extend(affix_phones.stress_by_phone.clone());
+
+    let mut underlying = stem.symbols.clone();
+    let canonical_affix = arpabet_str_to_phones(affix_arpabet);
+    underlying.extend(canonical_affix.symbols);
+
+    let boundaries = vec![MorphemeBoundary {
+        phone_index: stem.symbols.len(),
+        label: "'s".to_string(),
+    }];
+    let phonology = phonology_form(underlying, realized.clone(), stress.clone(), boundaries);
+    let allomorph_rule = format!("s_suffix_realization_{}", s_allomorph.to_ascii_lowercase());
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes: vec![
+                MorphemeAnalysis {
+                    surface: stem_text,
+                    kind: MorphemeKind::Stem,
+                    lemma: None,
+                    features: MorphemeFeatures::default(),
+                    phonology: None,
+                },
+                MorphemeAnalysis {
+                    surface: "'s".to_string(),
+                    kind: MorphemeKind::Clitic,
+                    lemma: Some("possessive_s".to_string()),
+                    features: MorphemeFeatures {
+                        tags: vec!["possessive".to_string(), "clitic_s".to_string()],
+                        meaning: Some("possessive".to_string()),
+                    },
+                    phonology: None,
+                },
+            ],
+            confidence: 0.82,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology: Some(phonology),
+            rules: vec![
+                "possessive_s_attachment".to_string(),
+                rule.id.clone(),
+                allomorph_rule,
+                "stem_lookup_or_fallback".to_string(),
+                "stress_assignment".to_string(),
+            ],
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+            rule_provenance: vec![rule.provenance.clone()],
+        },
+        pronunciation: WordPronunciation {
+            symbols: realized,
+            stress_by_phone: stress,
+        },
+    })
+}
+
+fn analyze_s_apostrophe_possessive(
+    surface: &str,
+    stem_text: String,
+) -> Option<MorphophonologyResult> {
+    let stem_result = exact_lexical(&stem_text).or_else(|| analyze_s_suffix(&stem_text))?;
+    let mut morphemes = stem_result.analysis.morphemes.clone();
+    morphemes.push(MorphemeAnalysis {
+        surface: "'".to_string(),
+        kind: MorphemeKind::Clitic,
+        lemma: Some("possessive_apostrophe".to_string()),
+        features: MorphemeFeatures {
+            tags: vec![
+                "possessive".to_string(),
+                "zero_possessive_after_s".to_string(),
+            ],
+            meaning: Some("possessive".to_string()),
+        },
+        phonology: None,
+    });
+
+    let mut phonology = stem_result.analysis.phonology.clone();
+    if let Some(form) = phonology.as_mut() {
+        form.boundaries.push(MorphemeBoundary {
+            phone_index: stem_result.pronunciation.symbols.len(),
+            label: "s'".to_string(),
+        });
+    }
+
+    let mut rules = stem_result.analysis.rules.clone();
+    rules.insert(0, "possessive_apostrophe_after_s".to_string());
+
+    Some(MorphophonologyResult {
+        analysis: MorphologicalAnalysis {
+            surface: surface.to_string(),
+            morphemes,
+            confidence: 0.80,
+            source: AnalysisSource::ProductiveMorphology,
+            phonology,
+            rules,
+            pipeline: default_pipeline(),
+            parser_spike_path: parser_spike_path(),
+            rule_provenance: stem_result.analysis.rule_provenance,
+        },
+        pronunciation: stem_result.pronunciation,
+    })
+}
+
 /// Select the correct surface allomorph for `-s` based on the stem-final phone.
 /// Returns `"Z"` (voiced), `"S"` (voiceless), or `"IH0 Z"` (after sibilants).
 fn s_allomorph_from_stem(stem_symbols: &[String]) -> &'static str {
@@ -1642,6 +1801,47 @@ mod tests {
                 .expect("need + ed")
                 .realized,
             vec!["IH0", "D"]
+        );
+    }
+
+    #[test]
+    fn analyzes_apostrophe_s_possessive_with_s_allomorphy() {
+        let result = analyze_word("twilight's");
+        assert_eq!(
+            result
+                .analysis
+                .morphemes
+                .iter()
+                .map(|m| m.surface.as_str())
+                .collect::<Vec<_>>(),
+            vec!["twilight", "'s"]
+        );
+        assert_eq!(
+            result.pronunciation.symbols,
+            vec!["T", "W", "AY", "L", "AY", "T", "S"]
+        );
+        assert!(
+            result
+                .analysis
+                .rules
+                .iter()
+                .any(|rule| rule == "possessive_s_attachment")
+        );
+    }
+
+    #[test]
+    fn analyzes_s_apostrophe_possessive_without_extra_phone() {
+        let result = analyze_word("twilights'");
+        assert_eq!(
+            result.pronunciation.symbols,
+            vec!["T", "W", "AY", "L", "AY", "T", "S"]
+        );
+        assert!(
+            result
+                .analysis
+                .rules
+                .iter()
+                .any(|rule| rule == "possessive_apostrophe_after_s")
         );
     }
 

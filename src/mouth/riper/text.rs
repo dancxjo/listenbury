@@ -180,6 +180,8 @@ impl TextNormalizer {
                     if !current.is_empty() && next.is_some_and(|next| next.is_ascii_alphanumeric())
                     {
                         current.push('\'');
+                    } else if is_trailing_s_possessive_marker(&current, next) {
+                        current.push('\'');
                     } else {
                         push_word_token(
                             &mut tokens,
@@ -916,6 +918,32 @@ fn push_phrase_break(
     token_spans.push(start..end);
 }
 
+fn is_trailing_s_possessive_marker(current: &str, next: Option<char>) -> bool {
+    if !current.ends_with(['s', 'S']) {
+        return false;
+    }
+    matches!(
+        next,
+        None | Some(
+            ' ' | '\t'
+                | '\n'
+                | '\r'
+                | '.'
+                | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '-'
+                | '–'
+                | '—'
+                | ')'
+                | ']'
+                | '}'
+        )
+    )
+}
+
 fn expand_known_abbreviation(token: &str) -> Option<&'static str> {
     match token {
         "dr" => Some("doctor"),
@@ -1300,6 +1328,20 @@ mod tests {
 
         let curly = TextNormalizer.normalize("It’s ready").expect("normalize");
         assert_eq!(curly.tokens, normalized.tokens);
+    }
+
+    #[test]
+    fn keeps_trailing_s_apostrophe_possessive_marker() {
+        let normalized = TextNormalizer
+            .normalize("twilights' glow")
+            .expect("normalize");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("twilights'".to_string()),
+                NormalizedToken::Word("glow".to_string())
+            ]
+        );
     }
 
     #[test]

@@ -24,9 +24,30 @@ CanonicalSpeechPlan
 backend lowerings (Piper, MBROLA, Klatt, diphone, debug)
 ```
 
+## Streaming Work Graph
+
+`src/speech/work.rs` defines the runtime-facing stream contract around this IR:
+
+```
+TextStream
+  -> LinguisticPlanStream
+  -> AcousticPlanStream
+  -> SpectralFrameStream
+  -> RenderFrameStream
+  -> WaveformStream
+  -> AudioSink
+```
+
+The graph treats mel as one `SpeechRepresentation` variant, not as the universal
+middle of the pipeline. Renderers can accept `Mel`, `MelF0`, phone-timed
+articulatory targets, source/filter tracks, coarse text, or already-rendered
+wave chunks depending on their declared capabilities.
+
 ## Current vertical proof
 
 - `ProsodyTimingPlan -> CanonicalSpeechPlan` is explicit via `canonical_speech_plan_from_prosody_timing`.
 - MBROLA lowering now flows through the canonical IR in `prosody_timing_plan_to_phone_timed_plan`.
 - Piper timing lowering now flows through the canonical IR in `prosody_plan_to_piper_timing`.
 - `listenbury prosody-plan` builds a canonical plan internally before reporting summary counts.
+- `speech::work::BlockingVocoderRenderer` adapts existing `VocoderBackend`
+  implementations into the representation-to-wave layer.

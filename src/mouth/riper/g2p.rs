@@ -1642,6 +1642,16 @@ mod tests {
     }
 
     #[test]
+    fn phonemizes_possessive_twilight_with_long_i() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p.phonemize_unit("twilight's").expect("phonemize");
+        assert_eq!(
+            symbols_for_word(&unit, "twilight's"),
+            vec!["T", "W", "AY", "L", "AY", "T", "S"]
+        );
+    }
+
+    #[test]
     fn phonemizes_honorific_word() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("Dr. King").expect("phonemize");
