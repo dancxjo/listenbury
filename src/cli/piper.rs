@@ -33,7 +33,7 @@ use listenbury::mouth::riper::{
     SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind, SyntacticLinkParse,
 };
 use listenbury::mouth::tts::TextToSpeech;
-use listenbury::speech::pipeline::{PipelineDescriptor, SpeechPipelineKind};
+use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
 #[cfg(all(feature = "asr-whisper", feature = "tts-riper"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
@@ -70,11 +70,14 @@ const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
-    let pipeline = say_pipeline_descriptor(&piper_args);
+    let loom = say_speech_loom(&piper_args);
+    let backend_graph = say_backend_graph(&piper_args);
     tracing::debug!(
-        pipeline = pipeline.id,
-        fused = pipeline.fused,
-        "listenbury say selected speech pipeline"
+        speech_loom = loom.id,
+        loom_projection = loom.projection,
+        backend_graph = backend_graph.id,
+        fused = backend_graph.fused,
+        "listenbury say selected current backend graph over speech loom"
     );
     if piper_args.stdin_stream {
         return run_say_stdin_stream(piper_args);
@@ -1377,22 +1380,26 @@ fn should_use_mbrola_backend(args: &SayArgs) -> bool {
     args.mbrola
 }
 
-fn say_pipeline_kind(args: &SayArgs) -> SpeechPipelineKind {
+fn say_backend_kind(args: &SayArgs) -> CurrentSayBackendKind {
     if should_use_klatt_backend(args) {
-        SpeechPipelineKind::Klatt
+        CurrentSayBackendKind::Klatt
     } else if should_use_hifigan_backend(args) {
-        SpeechPipelineKind::SourceFilterHifigan
+        CurrentSayBackendKind::SourceFilterHifigan
     } else if should_use_mbrola_backend(args) {
-        SpeechPipelineKind::MbrolaDiphone
+        CurrentSayBackendKind::MbrolaDiphone
     } else if args.piper {
-        SpeechPipelineKind::PiperProcess
+        CurrentSayBackendKind::PiperProcess
     } else {
-        SpeechPipelineKind::PiperCompat
+        CurrentSayBackendKind::PiperCompat
     }
 }
 
-fn say_pipeline_descriptor(args: &SayArgs) -> PipelineDescriptor {
-    say_pipeline_kind(args).descriptor()
+fn say_speech_loom(args: &SayArgs) -> SpeechLoom {
+    say_backend_kind(args).loom()
+}
+
+fn say_backend_graph(args: &SayArgs) -> CurrentBackendGraphView {
+    say_backend_kind(args).current_backend_graph()
 }
 
 #[cfg(feature = "tts-riper")]
