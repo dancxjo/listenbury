@@ -1,4 +1,9 @@
 use anyhow::Result;
+use std::collections::HashMap;
+
+use super::breath_asr::BreathAudioSegment;
+use super::canonical_plan::CanonicalSpeechPlan;
+use crate::word::TranscriptWord;
 
 /// Shared canonical speech fabric for both heard and generated speech material.
 pub const CANONICAL_SPEECH_LOOM_ID: &str = "canonical-speech-loom";
@@ -16,6 +21,17 @@ pub enum SpeechArtifactKind {
     WordHypothesis,
     PhoneHypothesis,
     Alignment,
+    Phones,
+    Syllables,
+    Stress,
+    Prominence,
+    PhraseProsody,
+    SyllableProsody,
+    PhoneTiming,
+    PhoneFeatures,
+    MelTile,
+    FormantTile,
+    DiphoneTile,
     SourceAttribution,
     ObservedProsody,
     LexicalPlan,
@@ -36,15 +52,79 @@ pub enum SpeechArtifactKind {
     AudioFrames,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TimeSpan {
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+impl TimeSpan {
+    pub fn new(start_ms: u64, end_ms: u64) -> Option<Self> {
+        (end_ms >= start_ms).then_some(Self { start_ms, end_ms })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SampleSpan {
+    pub start: u64,
+    pub end: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TokenSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WordSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PhoneSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SyllableSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BreathGroupSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProsodicPhraseSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AcousticFrameSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
 /// Coverage over the canonical speech fabric.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpeechSpan {
     Unknown,
-    Samples { start: u64, end: u64 },
-    Time { start_ms: u64, end_ms: u64 },
-    Tokens { start: usize, end: usize },
-    Phones { start: usize, end: usize },
-    Syllables { start: usize, end: usize },
+    Samples(SampleSpan),
+    Time(TimeSpan),
+    Tokens(TokenSpan),
+    Words(WordSpan),
+    Phones(PhoneSpan),
+    Syllables(SyllableSpan),
+    BreathGroups(BreathGroupSpan),
+    ProsodicPhrases(ProsodicPhraseSpan),
+    AcousticFrames(AcousticFrameSpan),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -61,8 +141,8 @@ pub enum SpeechSourceOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechProvenance {
     pub origin: SpeechSourceOrigin,
-    pub speaker_id: Option<&'static str>,
-    pub source_id: Option<&'static str>,
+    pub speaker_id: Option<String>,
+    pub source_id: Option<String>,
 }
 
 impl SpeechProvenance {
@@ -74,21 +154,24 @@ impl SpeechProvenance {
         }
     }
 
-    pub fn with_speaker(mut self, speaker_id: &'static str) -> Self {
-        self.speaker_id = Some(speaker_id);
+    pub fn with_speaker(mut self, speaker_id: impl Into<String>) -> Self {
+        self.speaker_id = Some(speaker_id.into());
         self
     }
 
-    pub fn with_source(mut self, source_id: &'static str) -> Self {
-        self.source_id = Some(source_id);
+    pub fn with_source(mut self, source_id: impl Into<String>) -> Self {
+        self.source_id = Some(source_id.into());
         self
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SpeechArtifactContent {
     Pending,
     Opaque(&'static str),
+    Text(String),
+    PhoneSymbol(String),
+    Scalar(f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,13 +184,13 @@ pub enum SpeechDependencyKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpeechArtifactDependency {
-    pub artifact_id: &'static str,
+    pub artifact_id: String,
     pub relation: SpeechDependencyKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpeechArtifact {
-    pub id: &'static str,
+    pub id: String,
     pub kind: SpeechArtifactKind,
     pub span: SpeechSpan,
     pub content: SpeechArtifactContent,
@@ -119,14 +202,14 @@ pub struct SpeechArtifact {
 
 impl SpeechArtifact {
     pub fn placeholder(
-        id: &'static str,
+        id: impl Into<String>,
         kind: SpeechArtifactKind,
         span: SpeechSpan,
         provenance: SpeechProvenance,
         content: SpeechArtifactContent,
     ) -> Self {
         Self {
-            id,
+            id: id.into(),
             kind,
             span,
             content,
@@ -136,6 +219,256 @@ impl SpeechArtifact {
             dependencies: Vec::new(),
         }
     }
+
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_revision(mut self, revision: u32) -> Self {
+        self.revision = revision;
+        self
+    }
+
+    pub fn with_dependency(
+        mut self,
+        artifact_id: impl Into<String>,
+        relation: SpeechDependencyKind,
+    ) -> Self {
+        self.dependencies.push(SpeechArtifactDependency {
+            artifact_id: artifact_id.into(),
+            relation,
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpeechDocument {
+    pub id: String,
+    pub artifacts: HashMap<String, SpeechArtifact>,
+    pub commit_frontier_ms: Option<u64>,
+}
+
+impl SpeechDocument {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            artifacts: HashMap::new(),
+            commit_frontier_ms: None,
+        }
+    }
+
+    pub fn upsert(&mut self, artifact: SpeechArtifact) {
+        self.artifacts.insert(artifact.id.clone(), artifact);
+    }
+
+    pub fn mark_commit_frontier_ms(&mut self, frontier_ms: u64) {
+        self.commit_frontier_ms = Some(frontier_ms);
+    }
+
+    pub fn replace_uncommitted(
+        &mut self,
+        old_artifact_id: &str,
+        replacement: SpeechArtifact,
+    ) -> Result<()> {
+        let frontier_ms = self.commit_frontier_ms.unwrap_or_default();
+        let old = self
+            .artifacts
+            .get(old_artifact_id)
+            .ok_or_else(|| anyhow::anyhow!("artifact `{old_artifact_id}` does not exist"))?;
+        if let SpeechSpan::Time(span) = old.span {
+            anyhow::ensure!(
+                span.start_ms >= frontier_ms,
+                "artifact `{old_artifact_id}` is already committed at frontier {frontier_ms}ms"
+            );
+        }
+        self.artifacts.remove(old_artifact_id);
+        self.upsert(replacement);
+        Ok(())
+    }
+}
+
+pub fn asr_word_hypothesis_artifacts(
+    words: &[TranscriptWord],
+    source_id: &str,
+) -> Vec<SpeechArtifact> {
+    words
+        .iter()
+        .enumerate()
+        .map(|(word_index, word)| {
+            let span = match (word.start_ms, word.end_ms) {
+                (Some(start_ms), Some(end_ms)) if end_ms >= start_ms => {
+                    SpeechSpan::Time(TimeSpan { start_ms, end_ms })
+                }
+                _ => SpeechSpan::Words(WordSpan {
+                    start: word_index,
+                    end: word_index + 1,
+                }),
+            };
+            SpeechArtifact::placeholder(
+                format!("asr-word-{word_index}"),
+                SpeechArtifactKind::WordHypothesis,
+                span,
+                SpeechProvenance::new(SpeechSourceOrigin::OtherVoice).with_source(source_id),
+                SpeechArtifactContent::Text(word.text.clone()),
+            )
+            .with_confidence(word.confidence.unwrap_or(0.0))
+        })
+        .collect()
+}
+
+pub fn asr_vad_segment_artifacts(
+    segments: &[BreathAudioSegment],
+    source_id: &str,
+) -> Vec<SpeechArtifact> {
+    segments
+        .iter()
+        .enumerate()
+        .map(|(segment_index, segment)| {
+            SpeechArtifact::placeholder(
+                format!("asr-vad-{segment_index}"),
+                SpeechArtifactKind::VadSegment,
+                SpeechSpan::Time(TimeSpan {
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                }),
+                SpeechProvenance::new(SpeechSourceOrigin::Recording).with_source(source_id),
+                SpeechArtifactContent::Pending,
+            )
+        })
+        .collect()
+}
+
+pub fn tts_intended_phone_artifacts(
+    plan: &CanonicalSpeechPlan,
+    source_id: &str,
+) -> Vec<SpeechArtifact> {
+    let mut phone_index = 0usize;
+    let mut artifacts = Vec::new();
+    for (word_index, segment) in plan.segments.iter().enumerate() {
+        for phone in &segment.phones {
+            let timing = TimeSpan {
+                start_ms: (phone.timing.t0.max(0.0) * 1000.0).round() as u64,
+                end_ms: (phone.timing.t1.max(phone.timing.t0) * 1000.0).round() as u64,
+            };
+            let id = format!("tts-phone-{phone_index}");
+            artifacts.push(
+                SpeechArtifact::placeholder(
+                    id.clone(),
+                    SpeechArtifactKind::PhoneHypothesis,
+                    SpeechSpan::Phones(PhoneSpan {
+                        start: phone_index,
+                        end: phone_index + 1,
+                    }),
+                    SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source(source_id),
+                    SpeechArtifactContent::PhoneSymbol(phone.symbol.clone()),
+                )
+                .with_dependency(
+                    format!("tts-word-{word_index}"),
+                    SpeechDependencyKind::DerivedFrom,
+                ),
+            );
+            artifacts.push(
+                SpeechArtifact::placeholder(
+                    format!("{id}-timing"),
+                    SpeechArtifactKind::PhoneTiming,
+                    SpeechSpan::Time(timing),
+                    SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source(source_id),
+                    SpeechArtifactContent::PhoneSymbol(phone.symbol.clone()),
+                )
+                .with_dependency(id, SpeechDependencyKind::TimingAnchor),
+            );
+            phone_index += 1;
+        }
+    }
+    artifacts
+}
+
+pub fn tts_alignment_from_asr_word_hypotheses(
+    asr_words: &[SpeechArtifact],
+    source_id: &str,
+) -> Option<SpeechArtifact> {
+    let mut min_start = u64::MAX;
+    let mut max_end = 0u64;
+    let mut dependencies = Vec::new();
+    for word in asr_words {
+        if let SpeechSpan::Time(span) = word.span {
+            min_start = min_start.min(span.start_ms);
+            max_end = max_end.max(span.end_ms);
+            dependencies.push(word.id.clone());
+        }
+    }
+    (min_start <= max_end).then(|| {
+        let mut artifact = SpeechArtifact::placeholder(
+            "tts-reused-asr-alignment",
+            SpeechArtifactKind::Alignment,
+            SpeechSpan::Time(TimeSpan {
+                start_ms: min_start,
+                end_ms: max_end,
+            }),
+            SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source(source_id),
+            SpeechArtifactContent::Opaque("reused-asr-word-alignment"),
+        );
+        artifact.dependencies = dependencies
+            .into_iter()
+            .map(|artifact_id| SpeechArtifactDependency {
+                artifact_id,
+                relation: SpeechDependencyKind::Evidence,
+            })
+            .collect();
+        artifact
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhoneComparison {
+    pub phone_index: usize,
+    pub intended: String,
+    pub heard: String,
+}
+
+pub fn compare_intended_vs_heard_phones(document: &SpeechDocument) -> Vec<PhoneComparison> {
+    let mut intended = HashMap::<usize, String>::new();
+    let mut heard = HashMap::<usize, String>::new();
+    for artifact in document.artifacts.values() {
+        if artifact.kind != SpeechArtifactKind::PhoneHypothesis {
+            continue;
+        }
+        let SpeechSpan::Phones(span) = artifact.span else {
+            continue;
+        };
+        let SpeechArtifactContent::PhoneSymbol(symbol) = &artifact.content else {
+            continue;
+        };
+        match artifact.provenance.origin {
+            SpeechSourceOrigin::Synthesized => {
+                intended.insert(span.start, symbol.clone());
+            }
+            SpeechSourceOrigin::OtherVoice | SpeechSourceOrigin::SelfVoice => {
+                heard.insert(span.start, symbol.clone());
+            }
+            SpeechSourceOrigin::Echo
+            | SpeechSourceOrigin::Recording
+            | SpeechSourceOrigin::Overlap
+            | SpeechSourceOrigin::Unknown => {}
+        }
+    }
+
+    let mut mismatches = Vec::new();
+    for (phone_index, intended_phone) in intended {
+        if let Some(heard_phone) = heard.get(&phone_index) {
+            if heard_phone != &intended_phone {
+                mismatches.push(PhoneComparison {
+                    phone_index,
+                    intended: intended_phone,
+                    heard: heard_phone.clone(),
+                });
+            }
+        }
+    }
+    mismatches.sort_by_key(|m| m.phone_index);
+    mismatches
 }
 
 /// Small reusable worker contract for future composable speech work.
@@ -491,24 +824,27 @@ impl CurrentSayBackendKind {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANONICAL_SPEECH_LOOM_ID, CommitState, CurrentSayBackendKind, SpeechArtifact,
-        SpeechArtifactContent, SpeechArtifactKind, SpeechProvenance, SpeechSourceOrigin,
-        SpeechSpan, SpeechWorkKind,
+        CANONICAL_SPEECH_LOOM_ID, CommitState, CurrentSayBackendKind, PhoneComparison, PhoneSpan,
+        SpeechArtifact, SpeechArtifactContent, SpeechArtifactKind, SpeechDocument,
+        SpeechProvenance, SpeechSourceOrigin, SpeechSpan, SpeechWorkKind, TimeSpan,
+        asr_word_hypothesis_artifacts, compare_intended_vs_heard_phones,
+        tts_alignment_from_asr_word_hypotheses,
     };
+    use crate::word::TranscriptWord;
 
     #[test]
     fn phone_hypotheses_keep_attribution_in_metadata() {
         let heard = SpeechArtifact::placeholder(
             "heard-phone",
             SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones { start: 0, end: 2 },
+            SpeechSpan::Phones(PhoneSpan { start: 0, end: 2 }),
             SpeechProvenance::new(SpeechSourceOrigin::OtherVoice).with_speaker("guest-1"),
             SpeechArtifactContent::Opaque("heard"),
         );
         let generated = SpeechArtifact::placeholder(
             "generated-phone",
             SpeechArtifactKind::PhoneHypothesis,
-            SpeechSpan::Phones { start: 0, end: 2 },
+            SpeechSpan::Phones(PhoneSpan { start: 0, end: 2 }),
             SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source("tts-buffer"),
             SpeechArtifactContent::Opaque("generated"),
         );
@@ -662,5 +998,83 @@ mod tests {
         );
         assert_eq!(graph.workers[3].work_kind, SpeechWorkKind::Vocoder);
         assert_eq!(graph.workers[3].commit_state, CommitState::Buffered);
+    }
+
+    #[test]
+    fn asr_timing_artifacts_are_reused_for_tts_alignment() {
+        let asr_words = vec![
+            TranscriptWord {
+                text: "hello".to_string(),
+                start_ms: Some(100),
+                end_ms: Some(300),
+                confidence: Some(0.92),
+            },
+            TranscriptWord {
+                text: "there".to_string(),
+                start_ms: Some(320),
+                end_ms: Some(500),
+                confidence: Some(0.88),
+            },
+        ];
+        let asr_artifacts = asr_word_hypothesis_artifacts(&asr_words, "whisper");
+        let alignment = tts_alignment_from_asr_word_hypotheses(&asr_artifacts, "tts-planner")
+            .expect("tts alignment should be created from ASR timings");
+        assert_eq!(alignment.kind, SpeechArtifactKind::Alignment);
+        assert_eq!(
+            alignment.span,
+            SpeechSpan::Time(TimeSpan {
+                start_ms: 100,
+                end_ms: 500
+            })
+        );
+        assert_eq!(alignment.dependencies.len(), 2);
+        assert!(
+            alignment
+                .dependencies
+                .iter()
+                .all(|dep| dep.artifact_id.starts_with("asr-word-"))
+        );
+    }
+
+    #[test]
+    fn compares_tts_intended_phones_against_self_heard_asr() {
+        let mut doc = SpeechDocument::new("self-monitor");
+        doc.upsert(SpeechArtifact::placeholder(
+            "tts-intended-0",
+            SpeechArtifactKind::PhoneHypothesis,
+            SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+            SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source("tts"),
+            SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+        ));
+        doc.upsert(SpeechArtifact::placeholder(
+            "tts-intended-1",
+            SpeechArtifactKind::PhoneHypothesis,
+            SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
+            SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source("tts"),
+            SpeechArtifactContent::PhoneSymbol("EH".to_string()),
+        ));
+        doc.upsert(SpeechArtifact::placeholder(
+            "asr-heard-0",
+            SpeechArtifactKind::PhoneHypothesis,
+            SpeechSpan::Phones(PhoneSpan { start: 0, end: 1 }),
+            SpeechProvenance::new(SpeechSourceOrigin::SelfVoice).with_source("asr"),
+            SpeechArtifactContent::PhoneSymbol("HH".to_string()),
+        ));
+        doc.upsert(SpeechArtifact::placeholder(
+            "asr-heard-1",
+            SpeechArtifactKind::PhoneHypothesis,
+            SpeechSpan::Phones(PhoneSpan { start: 1, end: 2 }),
+            SpeechProvenance::new(SpeechSourceOrigin::SelfVoice).with_source("asr"),
+            SpeechArtifactContent::PhoneSymbol("IH".to_string()),
+        ));
+
+        assert_eq!(
+            compare_intended_vs_heard_phones(&doc),
+            vec![PhoneComparison {
+                phone_index: 1,
+                intended: "EH".to_string(),
+                heard: "IH".to_string(),
+            }]
+        );
     }
 }
