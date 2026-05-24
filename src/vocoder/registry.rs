@@ -22,6 +22,7 @@ pub enum SingDemoBackendSelector {
     Riper,
     Mbrola,
     Piper,
+    Hifigan,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -30,6 +31,8 @@ pub struct VocoderConfig {
     pub piper_bin: Option<PathBuf>,
     pub piper_voice: Option<PathBuf>,
     pub piper_timeout: Option<Duration>,
+    pub hifigan_model: Option<PathBuf>,
+    pub skip_gan: bool,
 }
 
 pub fn backend_for_option(
@@ -65,6 +68,24 @@ pub fn backend_for_option(
             #[cfg(not(feature = "tts-piper"))]
             let piper = None;
             Ok(Box::new(PiperBackend::new(piper)))
+        }
+        SingDemoBackendSelector::Hifigan => {
+            if config.skip_gan {
+                return Ok(Box::new(HifiganBackend::deterministic()));
+            }
+
+            #[cfg(feature = "tts-riper")]
+            {
+                let model_path = config.hifigan_model.ok_or_else(|| {
+                    anyhow::anyhow!("hifigan backend requires a HiFi-GAN model path")
+                })?;
+                Ok(Box::new(HifiganBackend::load(model_path)?))
+            }
+
+            #[cfg(not(feature = "tts-riper"))]
+            {
+                bail!("hifigan backend requires the `tts-riper` feature unless --skip-gan is used")
+            }
         }
     }
 }

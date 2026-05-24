@@ -293,14 +293,20 @@ pub(crate) struct ProsodyPlanCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct SingDemoCommand {
-    #[arg(long, value_enum, conflicts_with_all = ["piper", "klatt", "diphone"])]
+    #[arg(
+        long,
+        value_enum,
+        conflicts_with_all = ["piper", "klatt", "diphone", "hifigan"]
+    )]
     pub(crate) backend: Option<SingDemoBackendOption>,
-    #[arg(long, conflicts_with_all = ["backend", "klatt", "diphone"])]
+    #[arg(long, conflicts_with_all = ["backend", "klatt", "diphone", "hifigan"])]
     pub(crate) piper: bool,
-    #[arg(long, conflicts_with_all = ["backend", "piper", "diphone"])]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "diphone", "hifigan"])]
     pub(crate) klatt: bool,
-    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt"])]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "hifigan"])]
     pub(crate) diphone: bool,
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "diphone"])]
+    pub(crate) hifigan: bool,
     #[arg(long = "diphone-voice", requires = "diphone")]
     pub(crate) mbrola_voice: Option<PathBuf>,
     #[arg(long)]
@@ -309,6 +315,11 @@ pub(crate) struct SingDemoCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
     pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long = "hifigan-model")]
+    pub(crate) hifigan_model: Option<PathBuf>,
+    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    #[arg(long)]
+    pub(crate) skip_gan: bool,
 }
 
 impl SingDemoCommand {
@@ -319,6 +330,8 @@ impl SingDemoCommand {
             SingDemoBackendOption::Klatt
         } else if self.diphone {
             SingDemoBackendOption::Mbrola
+        } else if self.hifigan {
+            SingDemoBackendOption::Hifigan
         } else {
             self.backend.unwrap_or(SingDemoBackendOption::Riper)
         }
@@ -390,7 +403,7 @@ pub(crate) struct SayCommand {
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path by rendering the acoustic mel track without running HiFi-GAN.
-    #[arg(long)]
+    #[arg(long, requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
     pub(crate) rp: bool,
@@ -680,6 +693,7 @@ pub(crate) enum SingDemoBackendOption {
     Riper,
     Mbrola,
     Piper,
+    Hifigan,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1349,15 +1363,22 @@ mod tests {
 
     #[test]
     fn say_accepts_skip_gan() {
-        let cli = Cli::try_parse_from(["listenbury", "say", "--diphone", "--skip-gan", "hello"])
-            .expect("say should parse skip-gan as a mel debug switch");
+        let cli = Cli::try_parse_from(["listenbury", "say", "--hifigan", "--skip-gan", "hello"])
+            .expect("say should parse skip-gan as a hifigan debug switch");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
         };
-        assert!(command.diphone);
+        assert!(command.hifigan);
         assert!(command.skip_gan);
         assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_rejects_skip_gan_without_hifigan() {
+        let error = Cli::try_parse_from(["listenbury", "say", "--skip-gan", "hello"])
+            .expect_err("--skip-gan should require --hifigan");
+        assert!(error.to_string().contains("--hifigan"));
     }
 
     #[test]
@@ -2304,6 +2325,42 @@ mod tests {
         };
         assert!(command.diphone);
         assert_eq!(command.selected_backend(), SingDemoBackendOption::Mbrola);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_hifigan() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--hifigan"])
+            .expect("top-level sing should parse hifigan as a mel vocoder backend");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert!(command.hifigan);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Hifigan);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_hifigan_backend_option() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--backend", "hifigan"])
+            .expect("top-level sing should parse hifigan backend option");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert_eq!(command.backend, Some(SingDemoBackendOption::Hifigan));
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Hifigan);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_skip_gan_with_hifigan_backend() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--backend", "hifigan", "--skip-gan"])
+            .expect("top-level sing should parse skip-gan as a hifigan modifier");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Hifigan);
+        assert!(command.skip_gan);
     }
 
     #[test]

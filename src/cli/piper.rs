@@ -1333,20 +1333,24 @@ impl SayArgs {
         }
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
-            !(piper && (klatt || hifigan || skip_gan || mbrola)),
-            "listenbury say: --piper cannot be combined with --klatt, --hifigan, --skip-gan, or --diphone"
+            !(piper && (klatt || hifigan || mbrola)),
+            "listenbury say: --piper cannot be combined with --klatt, --hifigan, or --diphone"
+        );
+        anyhow::ensure!(
+            hifigan || !skip_gan,
+            "listenbury say: --skip-gan only applies when --hifigan is selected"
         );
         anyhow::ensure!(
             piper || !explicit_piper_bin,
             "listenbury say: --piper-bin only applies to the external Piper binary; pass --piper"
         );
         anyhow::ensure!(
-            [klatt, hifigan || skip_gan, mbrola && !skip_gan]
+            [klatt, hifigan, mbrola]
                 .into_iter()
                 .filter(|set| *set)
                 .count()
                 <= 1,
-            "listenbury say: choose only one of --klatt, --hifigan/--skip-gan, or the MBROLA/RP voice path"
+            "listenbury say: choose only one of --klatt, --hifigan, or the MBROLA/RP voice path"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
@@ -1381,7 +1385,7 @@ fn should_use_klatt_backend(args: &SayArgs) -> bool {
 }
 
 fn should_use_hifigan_backend(args: &SayArgs) -> bool {
-    args.hifigan || args.skip_gan
+    args.hifigan
 }
 
 fn should_use_mbrola_backend(args: &SayArgs) -> bool {
@@ -2264,14 +2268,14 @@ mod tests {
     }
 
     #[test]
-    fn say_args_accepts_skip_gan_as_mel_debug_route() {
+    fn say_args_accepts_skip_gan_as_hifigan_modifier() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             klatt: false,
-            hifigan: false,
+            hifigan: true,
             hifigan_model: None,
             skip_gan: true,
             rp: false,
@@ -2279,15 +2283,16 @@ mod tests {
             mbrola_voice: None,
             words: vec!["hello".to_string()],
         })
-        .expect("--skip-gan should select the mel debug route");
+        .expect("--hifigan --skip-gan should select the mel debug route");
+        assert!(args.hifigan);
         assert!(args.skip_gan);
         assert!(should_use_hifigan_backend(&args));
         assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
     }
 
     #[test]
-    fn say_args_accepts_diphone_with_trailing_skip_gan_override() {
-        let args = SayArgs::from_command(SayCommand {
+    fn say_args_rejects_skip_gan_without_hifigan() {
+        let error = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
             piper_voice: None,
@@ -2301,12 +2306,8 @@ mod tests {
             mbrola_voice: None,
             words: vec!["And sudd....".to_string(), "--skip-gan".to_string()],
         })
-        .expect("--diphone --skip-gan should be accepted for mel debugging");
-        assert!(args.mbrola);
-        assert!(args.skip_gan);
-        assert!(should_use_hifigan_backend(&args));
-        assert_eq!(args.text, "And sudd....");
-        assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
+        .expect_err("--skip-gan should not select the mel debug route by itself");
+        assert!(error.to_string().contains("--skip-gan only applies"));
     }
 
     #[test]

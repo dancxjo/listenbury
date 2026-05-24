@@ -5,10 +5,13 @@ use anyhow::{Context, Result};
 
 use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 
+#[cfg(feature = "tts-riper")]
+use crate::cli::model_paths::resolve_hifigan_model;
 #[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "tts-piper")]
 use crate::cli::piper::resolve_piper_bin;
+use listenbury::acoustic::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
 use listenbury::prosody::note_target::{
@@ -33,6 +36,40 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let config = vocoder_config_for_command(backend, &command)?;
     let mut renderer = backend_for_option(selector, config)?;
     let descriptor = renderer.descriptor();
+    if backend == SingDemoBackendOption::Hifigan {
+        println!(
+            "sing-demo backend: {} (MelF0 via source-filter acoustic model)",
+            descriptor.id
+        );
+        for note in descriptor.notes {
+            println!("sing-demo note: {note}");
+        }
+        println!(
+            "sing-demo hifigan mode: {}",
+            if command.skip_gan {
+                "skip-gan deterministic mel debug"
+            } else {
+                "ONNX HiFi-GAN"
+            }
+        );
+        let mut acoustic = SourceFilterAcousticModel;
+        let acoustic_track = acoustic
+            .generate(AcousticInput::Singing(&phrase))
+            .context("failed to generate source-filter mel/F0 track for sing-demo --hifigan")?;
+        let frames = renderer
+            .render(VocoderInput::MelF0 {
+                mel: &acoustic_track.mel,
+                f0_hz: &acoustic_track.f0_hz,
+                voiced: &acoustic_track.voiced,
+            })
+            .context("failed to render sing-demo mel/F0 track with HiFi-GAN")?;
+        let output_path = command
+            .output_wav
+            .unwrap_or_else(|| default_output_wav_path(backend));
+        write_demo_wav(&output_path, &frames)?;
+        return Ok(());
+    }
+
     let backend_kind = descriptor.backend_kind.ok_or_else(|| {
         anyhow::anyhow!(
             "backend `{}` has no sing-demo render contract",
@@ -69,6 +106,7 @@ fn selector_for_backend(backend: SingDemoBackendOption) -> SingDemoBackendSelect
         SingDemoBackendOption::Riper => SingDemoBackendSelector::Riper,
         SingDemoBackendOption::Mbrola => SingDemoBackendSelector::Mbrola,
         SingDemoBackendOption::Piper => SingDemoBackendSelector::Piper,
+        SingDemoBackendOption::Hifigan => SingDemoBackendSelector::Hifigan,
     }
 }
 
@@ -77,8 +115,26 @@ fn vocoder_config_for_command(
     command: &SingDemoCommand,
 ) -> Result<VocoderConfig> {
     let mut config = VocoderConfig::default();
+    anyhow::ensure!(
+        backend == SingDemoBackendOption::Hifigan
+            || (!command.skip_gan && command.hifigan_model.is_none()),
+        "listenbury sing: --skip-gan and --hifigan-model only apply when the HiFi-GAN backend is selected"
+    );
     if backend == SingDemoBackendOption::Mbrola {
         config.mbrola_voice = Some(resolve_sing_mbrola_voice(command.mbrola_voice.clone())?);
+    }
+
+    if backend == SingDemoBackendOption::Hifigan {
+        config.skip_gan = command.skip_gan;
+        #[cfg(feature = "tts-riper")]
+        if !command.skip_gan {
+            config.hifigan_model = Some(resolve_hifigan_model(command.hifigan_model.clone())?);
+        }
+        #[cfg(not(feature = "tts-riper"))]
+        anyhow::ensure!(
+            command.skip_gan,
+            "listenbury sing --hifigan requires the `tts-riper` feature unless --skip-gan is used"
+        );
     }
 
     if backend == SingDemoBackendOption::Piper {
@@ -357,6 +413,7 @@ impl SingDemoBackendOption {
             Self::Riper => "riper",
             Self::Mbrola => "mbrola",
             Self::Piper => "piper",
+            Self::Hifigan => "hifigan",
         }
     }
 }
@@ -537,6 +594,40 @@ mod tests {
         assert!(
             sample_count > 0,
             "riper sing-demo should emit non-empty audio"
+        );
+    }
+
+    #[test]
+    fn hifigan_demo_renders_from_source_filter_mel_f0() {
+        let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
+        assert_eq!(
+            selector_for_backend(SingDemoBackendOption::Hifigan),
+            SingDemoBackendSelector::Hifigan
+        );
+        let mut acoustic = SourceFilterAcousticModel;
+        let acoustic_track = acoustic
+            .generate(AcousticInput::Singing(&phrase))
+            .expect("hifigan sing-demo should generate mel/F0");
+        let mut backend = backend_for_option(
+            SingDemoBackendSelector::Hifigan,
+            VocoderConfig {
+                skip_gan: true,
+                ..VocoderConfig::default()
+            },
+        )
+        .expect("hifigan backend");
+        let frames = backend
+            .render(VocoderInput::MelF0 {
+                mel: &acoustic_track.mel,
+                f0_hz: &acoustic_track.f0_hz,
+                voiced: &acoustic_track.voiced,
+            })
+            .expect("hifigan sing-demo should synthesize from mel/F0");
+        let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
+        assert!(!frames.is_empty(), "hifigan sing-demo should emit frames");
+        assert!(
+            sample_count > 0,
+            "hifigan sing-demo should emit non-empty audio"
         );
     }
 
