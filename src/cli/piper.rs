@@ -1266,6 +1266,7 @@ struct SayArgs {
     output_wav: Option<PathBuf>,
     klatt: bool,
     hifigan: bool,
+    skip_gan: bool,
     stdin_stream: bool,
     text: String,
 }
@@ -1275,6 +1276,7 @@ impl SayArgs {
         let mut piper = command.piper;
         let mut klatt = command.klatt;
         let mut hifigan = command.hifigan;
+        let mut skip_gan = command.skip_gan;
         let mut rp = command.rp;
         let mut diphone = command.diphone;
         let mut words = command
@@ -1289,6 +1291,9 @@ impl SayArgs {
                     None
                 } else if word == "--hifigan" {
                     hifigan = true;
+                    None
+                } else if word == "--skip-gan" {
+                    skip_gan = true;
                     None
                 } else if word == "--diphone" {
                     diphone = true;
@@ -1328,20 +1333,20 @@ impl SayArgs {
         }
         anyhow::ensure!(!words.is_empty(), "missing text to speak; try `say hello`");
         anyhow::ensure!(
-            !(piper && (klatt || hifigan || mbrola)),
-            "listenbury say: --piper cannot be combined with --klatt, --hifigan, or --diphone"
+            !(piper && (klatt || hifigan || skip_gan || mbrola)),
+            "listenbury say: --piper cannot be combined with --klatt, --hifigan, --skip-gan, or --diphone"
         );
         anyhow::ensure!(
             piper || !explicit_piper_bin,
             "listenbury say: --piper-bin only applies to the external Piper binary; pass --piper"
         );
         anyhow::ensure!(
-            [klatt, hifigan, mbrola]
+            [klatt, hifigan || skip_gan, mbrola && !skip_gan]
                 .into_iter()
                 .filter(|set| *set)
                 .count()
                 <= 1,
-            "listenbury say: choose only one of --klatt, --hifigan, or the MBROLA/RP voice path"
+            "listenbury say: choose only one of --klatt, --hifigan/--skip-gan, or the MBROLA/RP voice path"
         );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
@@ -1356,6 +1361,7 @@ impl SayArgs {
             piper,
             klatt,
             hifigan,
+            skip_gan,
             stdin_stream,
             text: if stdin_stream {
                 String::new()
@@ -1375,7 +1381,7 @@ fn should_use_klatt_backend(args: &SayArgs) -> bool {
 }
 
 fn should_use_hifigan_backend(args: &SayArgs) -> bool {
-    args.hifigan
+    args.hifigan || args.skip_gan
 }
 
 fn should_use_mbrola_backend(args: &SayArgs) -> bool {
@@ -1432,7 +1438,6 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
                 vibrato: target.vibrato,
             })
             .collect::<Vec<_>>();
-    let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
     let mut acoustic = SourceFilterAcousticModel;
     let acoustic_track = acoustic
         .generate(AcousticInput::PhoneTimed(&phone_targets))
@@ -1445,6 +1450,12 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     )?;
     let source_filter_frames = maybe_render_source_filter_reference(&acoustic_track)?;
     let mut backend = HifiganBackend::load(model_path)?;
+    let mut backend = if args.skip_gan {
+        HifiganBackend::deterministic()
+    } else {
+        let model_path = resolve_hifigan_model(args.hifigan_model.clone())?;
+        HifiganBackend::load(model_path)?
+    };
     let frames = backend
         .render(VocoderInput::MelF0 {
             mel: &acoustic_track.mel,
@@ -2061,6 +2072,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2083,6 +2095,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2111,6 +2124,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2140,6 +2154,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2166,6 +2181,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2186,6 +2202,7 @@ mod tests {
             klatt: true,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2208,6 +2225,7 @@ mod tests {
             klatt: false,
             hifigan: true,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2234,6 +2252,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2242,6 +2261,52 @@ mod tests {
         .expect("trailing HiFi-GAN flag should be accepted");
         assert!(args.hifigan);
         assert_eq!(args.text, "hello");
+    }
+
+    #[test]
+    fn say_args_accepts_skip_gan_as_mel_debug_route() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            skip_gan: true,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("--skip-gan should select the mel debug route");
+        assert!(args.skip_gan);
+        assert!(should_use_hifigan_backend(&args));
+        assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
+    }
+
+    #[test]
+    fn say_args_accepts_diphone_with_trailing_skip_gan_override() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: true,
+            mbrola_voice: None,
+            words: vec!["And sudd....".to_string(), "--skip-gan".to_string()],
+        })
+        .expect("--diphone --skip-gan should be accepted for mel debugging");
+        assert!(args.mbrola);
+        assert!(args.skip_gan);
+        assert!(should_use_hifigan_backend(&args));
+        assert_eq!(args.text, "And sudd....");
+        assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
     }
 
     #[test]
@@ -2254,6 +2319,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: true,
             mbrola_voice: Some(PathBuf::from("voices/us1")),
@@ -2276,6 +2342,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: true,
             mbrola_voice: None,
@@ -2296,6 +2363,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2321,6 +2389,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2344,6 +2413,7 @@ mod tests {
             klatt: true,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2367,6 +2437,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: true,
             mbrola_voice: None,
@@ -2391,6 +2462,7 @@ mod tests {
             klatt: false,
             hifigan: true,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2428,6 +2500,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: true,
             diphone: false,
             mbrola_voice: None,
@@ -2451,6 +2524,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
@@ -2475,6 +2549,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: true,
             diphone: false,
             mbrola_voice: None,
@@ -2497,6 +2572,7 @@ mod tests {
             klatt: false,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: true,
             mbrola_voice: None,
@@ -2516,6 +2592,7 @@ mod tests {
             klatt: true,
             hifigan: false,
             hifigan_model: None,
+            skip_gan: false,
             rp: false,
             diphone: false,
             mbrola_voice: None,
