@@ -15,7 +15,7 @@ use crate::voice::tract::SourceFilterTrack;
 pub type ChunkId = u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SpeechWorkStageKind {
+pub enum SyntheticWorkStageKind {
     TextStream,
     LinguisticPlanStream,
     AcousticPlanStream,
@@ -25,14 +25,14 @@ pub enum SpeechWorkStageKind {
     AudioSink,
 }
 
-pub const CANONICAL_SPEECH_WORK_FLOW: &[SpeechWorkStageKind] = &[
-    SpeechWorkStageKind::TextStream,
-    SpeechWorkStageKind::LinguisticPlanStream,
-    SpeechWorkStageKind::AcousticPlanStream,
-    SpeechWorkStageKind::SpectralFrameStream,
-    SpeechWorkStageKind::RenderFrameStream,
-    SpeechWorkStageKind::WaveformStream,
-    SpeechWorkStageKind::AudioSink,
+pub const CANONICAL_SYNTHETIC_WORK_FLOW: &[SyntheticWorkStageKind] = &[
+    SyntheticWorkStageKind::TextStream,
+    SyntheticWorkStageKind::LinguisticPlanStream,
+    SyntheticWorkStageKind::AcousticPlanStream,
+    SyntheticWorkStageKind::SpectralFrameStream,
+    SyntheticWorkStageKind::RenderFrameStream,
+    SyntheticWorkStageKind::WaveformStream,
+    SyntheticWorkStageKind::AudioSink,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -100,6 +100,108 @@ impl WorkBudget {
             max_items: 1,
             max_work: Duration::ZERO,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SyntheticClockKind {
+    Audio,
+    Frame,
+    Linguistic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SyntheticClock {
+    Audio {
+        sample_rate_hz: u32,
+    },
+    Frame {
+        sample_rate_hz: u32,
+        hop_samples: usize,
+    },
+    Linguistic,
+}
+
+impl SyntheticClock {
+    pub const fn kind(self) -> SyntheticClockKind {
+        match self {
+            Self::Audio { .. } => SyntheticClockKind::Audio,
+            Self::Frame { .. } => SyntheticClockKind::Frame,
+            Self::Linguistic => SyntheticClockKind::Linguistic,
+        }
+    }
+
+    pub fn nominal_period(self) -> Option<Duration> {
+        match self {
+            Self::Audio { sample_rate_hz } if sample_rate_hz > 0 => {
+                Some(Duration::from_secs_f64(1.0 / f64::from(sample_rate_hz)))
+            }
+            Self::Frame {
+                sample_rate_hz,
+                hop_samples,
+            } if sample_rate_hz > 0 => Some(Duration::from_secs_f64(
+                hop_samples as f64 / f64::from(sample_rate_hz),
+            )),
+            Self::Audio { .. } | Self::Frame { .. } | Self::Linguistic => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SyntheticStageRuntimePolicy {
+    pub clock: SyntheticClock,
+    pub lookahead_target: Option<Duration>,
+    pub minimum_commit: Boundary,
+    pub maximum_latency: Duration,
+}
+
+impl SyntheticStageRuntimePolicy {
+    pub const fn new(
+        clock: SyntheticClock,
+        lookahead_target: Option<Duration>,
+        minimum_commit: Boundary,
+        maximum_latency: Duration,
+    ) -> Self {
+        Self {
+            clock,
+            lookahead_target,
+            minimum_commit,
+            maximum_latency,
+        }
+    }
+
+    pub fn audio_sink(sample_rate_hz: u32, watermarks: &SyntheticPipelineWatermarks) -> Self {
+        Self::new(
+            SyntheticClock::Audio { sample_rate_hz },
+            Some(watermarks.audio_sink.target),
+            Boundary::None,
+            watermarks.audio_sink.high,
+        )
+    }
+
+    pub fn representation_frames(
+        sample_rate_hz: u32,
+        hop_samples: usize,
+        watermarks: &SyntheticPipelineWatermarks,
+    ) -> Self {
+        Self::new(
+            SyntheticClock::Frame {
+                sample_rate_hz,
+                hop_samples,
+            },
+            Some(watermarks.representation.target),
+            Boundary::Phone,
+            watermarks.representation.high,
+        )
+    }
+
+    pub fn linguistic_phrase(watermarks: &SyntheticPipelineWatermarks) -> Self {
+        Self::new(
+            SyntheticClock::Linguistic,
+            None,
+            Boundary::Phrase,
+            watermarks.acoustic.high,
+        )
     }
 }
 
@@ -347,7 +449,7 @@ pub enum RepresentationKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SpeechRepresentation {
+pub enum SyntheticRepresentation {
     Mel(MelChunk),
     MelF0(MelF0Chunk),
     World(WorldChunk),
@@ -360,7 +462,7 @@ pub enum SpeechRepresentation {
     Wave(WaveChunk),
 }
 
-impl SpeechRepresentation {
+impl SyntheticRepresentation {
     pub fn kind(&self) -> RepresentationKind {
         match self {
             Self::Mel(_) => RepresentationKind::Mel,
@@ -448,7 +550,7 @@ impl From<AudioFrame> for WaveChunk {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum SpeechEvent {
+pub enum SyntheticEvent {
     Say(WaveChunk),
     Pause(Duration),
     FadeOut(Duration),
@@ -491,7 +593,7 @@ impl BufferWatermarks {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SpeechPipelineWatermarks {
+pub struct SyntheticPipelineWatermarks {
     pub text_lookahead_words: std::ops::RangeInclusive<usize>,
     pub acoustic: BufferWatermarks,
     pub representation: BufferWatermarks,
@@ -499,7 +601,7 @@ pub struct SpeechPipelineWatermarks {
     pub audio_sink: BufferWatermarks,
 }
 
-impl Default for SpeechPipelineWatermarks {
+impl Default for SyntheticPipelineWatermarks {
     fn default() -> Self {
         Self {
             text_lookahead_words: 3..=12,
@@ -527,7 +629,7 @@ impl Default for SpeechPipelineWatermarks {
     }
 }
 
-impl SpeechPipelineWatermarks {
+impl SyntheticPipelineWatermarks {
     pub fn low_latency() -> Self {
         Self {
             text_lookahead_words: 1..=6,
@@ -615,14 +717,14 @@ pub enum RenderStatus {
 
 pub trait Renderer: TickStage {
     fn accepts(&self, kind: RepresentationKind) -> bool;
-    fn push(&mut self, input: SpeechRepresentation) -> RenderStatus;
+    fn push(&mut self, input: SyntheticRepresentation) -> RenderStatus;
     fn drain(&mut self) -> Vec<WaveChunk>;
 }
 
 pub struct BlockingVocoderRenderer<B> {
     id: &'static str,
     backend: B,
-    pending: VecDeque<SpeechRepresentation>,
+    pending: VecDeque<SyntheticRepresentation>,
     rendered: VecDeque<WaveChunk>,
     last_status: StageStatus,
 }
@@ -641,41 +743,44 @@ where
         }
     }
 
-    fn render_representation(&mut self, input: &SpeechRepresentation) -> Result<Vec<AudioFrame>> {
+    fn render_representation(
+        &mut self,
+        input: &SyntheticRepresentation,
+    ) -> Result<Vec<AudioFrame>> {
         match input {
-            SpeechRepresentation::Mel(chunk) => {
+            SyntheticRepresentation::Mel(chunk) => {
                 self.backend.render(VocoderInput::Mel(&chunk.frames))
             }
-            SpeechRepresentation::MelF0(chunk) => self.backend.render(VocoderInput::MelF0 {
+            SyntheticRepresentation::MelF0(chunk) => self.backend.render(VocoderInput::MelF0 {
                 mel: &chunk.mel,
                 f0_hz: &chunk.f0_hz,
                 voiced: &chunk.voiced,
             }),
-            SpeechRepresentation::Articulatory(chunk) => self
+            SyntheticRepresentation::Articulatory(chunk) => self
                 .backend
                 .render(VocoderInput::PhoneTimed(&chunk.targets)),
-            SpeechRepresentation::PhoneTimed(targets) => {
+            SyntheticRepresentation::PhoneTimed(targets) => {
                 self.backend.render(VocoderInput::PhoneTimed(targets))
             }
-            SpeechRepresentation::PartialProsody(chunk) => {
+            SyntheticRepresentation::PartialProsody(chunk) => {
                 self.backend.render(VocoderInput::PartialProsody {
                     text: &chunk.text,
                     phones: &chunk.phones,
                     pitch_hints: &chunk.pitch_hints,
                 })
             }
-            SpeechRepresentation::CoarseText(chunk) => {
+            SyntheticRepresentation::CoarseText(chunk) => {
                 self.backend.render(VocoderInput::CoarseText {
                     text: &chunk.text,
                     ssml_hint: chunk.ssml_hint.as_deref(),
                 })
             }
-            SpeechRepresentation::SourceFilterTrack(track) => {
+            SyntheticRepresentation::SourceFilterTrack(track) => {
                 self.backend.render(VocoderInput::SourceFilterTrack(track))
             }
-            SpeechRepresentation::World(_)
-            | SpeechRepresentation::LpcNet(_)
-            | SpeechRepresentation::Wave(_) => Ok(Vec::new()),
+            SyntheticRepresentation::World(_)
+            | SyntheticRepresentation::LpcNet(_)
+            | SyntheticRepresentation::Wave(_) => Ok(Vec::new()),
         }
     }
 }
@@ -694,7 +799,7 @@ where
             let Some(input) = self.pending.pop_front() else {
                 break;
             };
-            if let SpeechRepresentation::Wave(chunk) = input {
+            if let SyntheticRepresentation::Wave(chunk) = input {
                 self.rendered.push_back(chunk);
                 processed += 1;
                 continue;
@@ -767,7 +872,7 @@ where
         }
     }
 
-    fn push(&mut self, input: SpeechRepresentation) -> RenderStatus {
+    fn push(&mut self, input: SyntheticRepresentation) -> RenderStatus {
         let kind = input.kind();
         if !self.accepts(kind) {
             return RenderStatus::Unsupported {
@@ -843,9 +948,9 @@ impl Renderer for WavePassthroughRenderer {
         kind == RepresentationKind::Wave
     }
 
-    fn push(&mut self, input: SpeechRepresentation) -> RenderStatus {
+    fn push(&mut self, input: SyntheticRepresentation) -> RenderStatus {
         match input {
-            SpeechRepresentation::Wave(chunk) => {
+            SyntheticRepresentation::Wave(chunk) => {
                 self.pending.push_back(chunk);
                 RenderStatus::Accepted {
                     queued: self.pending.len(),
@@ -863,13 +968,13 @@ impl Renderer for WavePassthroughRenderer {
     }
 }
 
-pub struct SpeechWorkGraph {
+pub struct SyntheticWorkGraph {
     stages: Vec<Box<dyn TickStage>>,
-    watermarks: SpeechPipelineWatermarks,
+    watermarks: SyntheticPipelineWatermarks,
 }
 
-impl SpeechWorkGraph {
-    pub fn new(watermarks: SpeechPipelineWatermarks) -> Self {
+impl SyntheticWorkGraph {
+    pub fn new(watermarks: SyntheticPipelineWatermarks) -> Self {
         Self {
             stages: Vec::new(),
             watermarks,
@@ -877,7 +982,7 @@ impl SpeechWorkGraph {
     }
 
     pub fn with_default_watermarks() -> Self {
-        Self::new(SpeechPipelineWatermarks::default())
+        Self::new(SyntheticPipelineWatermarks::default())
     }
 
     pub fn add_stage(&mut self, stage: Box<dyn TickStage>) {
@@ -895,7 +1000,7 @@ impl SpeechWorkGraph {
         self.stages.iter().map(|stage| stage.status()).collect()
     }
 
-    pub fn watermarks(&self) -> SpeechPipelineWatermarks {
+    pub fn watermarks(&self) -> SyntheticPipelineWatermarks {
         self.watermarks.clone()
     }
 }
@@ -904,18 +1009,20 @@ pub fn render_plan_to_representation(
     plan: RenderPlan,
     time_start: AudioTime,
     commitment: Commitment,
-) -> SpeechRepresentation {
+) -> SyntheticRepresentation {
     match plan {
-        RenderPlan::PhoneTimed(targets) => SpeechRepresentation::Articulatory(ArticulatoryChunk {
-            targets,
-            time_start,
-            commitment,
-        }),
+        RenderPlan::PhoneTimed(targets) => {
+            SyntheticRepresentation::Articulatory(ArticulatoryChunk {
+                targets,
+                time_start,
+                commitment,
+            })
+        }
         RenderPlan::PartialProsody {
             text,
             phones,
             pitch_hints,
-        } => SpeechRepresentation::PartialProsody(PartialProsodyChunk {
+        } => SyntheticRepresentation::PartialProsody(PartialProsodyChunk {
             text,
             phones,
             pitch_hints,
@@ -923,7 +1030,7 @@ pub fn render_plan_to_representation(
             commitment,
         }),
         RenderPlan::CoarseText { text, ssml_hint } => {
-            SpeechRepresentation::CoarseText(CoarseTextChunk {
+            SyntheticRepresentation::CoarseText(CoarseTextChunk {
                 text,
                 ssml_hint,
                 commitment,
@@ -974,7 +1081,7 @@ mod tests {
 
     #[test]
     fn mel_is_one_representation_not_the_graph_contract() {
-        let mel = SpeechRepresentation::Mel(MelChunk {
+        let mel = SyntheticRepresentation::Mel(MelChunk {
             config: "debug-mel".to_string(),
             frames: vec![MelFrame {
                 bins: vec![0.0, 1.0],
@@ -984,7 +1091,7 @@ mod tests {
             time_start: AudioTime::zero(24_000),
             commitment: Commitment::Planned,
         });
-        let wave = SpeechRepresentation::Wave(WaveChunk::new(
+        let wave = SyntheticRepresentation::Wave(WaveChunk::new(
             vec![0.0; 240],
             24_000,
             1,
@@ -1001,24 +1108,64 @@ mod tests {
     #[test]
     fn canonical_flow_names_the_stream_boundaries() {
         assert_eq!(
-            CANONICAL_SPEECH_WORK_FLOW,
+            CANONICAL_SYNTHETIC_WORK_FLOW,
             &[
-                SpeechWorkStageKind::TextStream,
-                SpeechWorkStageKind::LinguisticPlanStream,
-                SpeechWorkStageKind::AcousticPlanStream,
-                SpeechWorkStageKind::SpectralFrameStream,
-                SpeechWorkStageKind::RenderFrameStream,
-                SpeechWorkStageKind::WaveformStream,
-                SpeechWorkStageKind::AudioSink,
+                SyntheticWorkStageKind::TextStream,
+                SyntheticWorkStageKind::LinguisticPlanStream,
+                SyntheticWorkStageKind::AcousticPlanStream,
+                SyntheticWorkStageKind::SpectralFrameStream,
+                SyntheticWorkStageKind::RenderFrameStream,
+                SyntheticWorkStageKind::WaveformStream,
+                SyntheticWorkStageKind::AudioSink,
             ]
         );
+    }
+
+    #[test]
+    fn stage_clocks_make_audio_frame_and_linguistic_ticks_explicit() {
+        let audio = SyntheticClock::Audio {
+            sample_rate_hz: 48_000,
+        };
+        let frame = SyntheticClock::Frame {
+            sample_rate_hz: 24_000,
+            hop_samples: 256,
+        };
+        let linguistic = SyntheticClock::Linguistic;
+
+        assert_eq!(audio.kind(), SyntheticClockKind::Audio);
+        assert_eq!(frame.kind(), SyntheticClockKind::Frame);
+        assert_eq!(linguistic.kind(), SyntheticClockKind::Linguistic);
+        assert_eq!(audio.nominal_period().unwrap().as_nanos(), 20_833);
+        assert_eq!(frame.nominal_period().unwrap().as_micros(), 10_666);
+        assert_eq!(linguistic.nominal_period(), None);
+    }
+
+    #[test]
+    fn stage_runtime_policies_bind_clocks_to_watermarks() {
+        let watermarks = SyntheticPipelineWatermarks::low_latency();
+        let sink = SyntheticStageRuntimePolicy::audio_sink(48_000, &watermarks);
+        let representation =
+            SyntheticStageRuntimePolicy::representation_frames(24_000, 256, &watermarks);
+        let ling = SyntheticStageRuntimePolicy::linguistic_phrase(&watermarks);
+
+        assert_eq!(sink.clock.kind(), SyntheticClockKind::Audio);
+        assert_eq!(sink.lookahead_target, Some(Duration::from_millis(45)));
+        assert_eq!(sink.maximum_latency, Duration::from_millis(60));
+        assert_eq!(representation.clock.kind(), SyntheticClockKind::Frame);
+        assert_eq!(representation.minimum_commit, Boundary::Phone);
+        assert_eq!(
+            representation.lookahead_target,
+            Some(Duration::from_millis(180))
+        );
+        assert_eq!(ling.clock.kind(), SyntheticClockKind::Linguistic);
+        assert_eq!(ling.minimum_commit, Boundary::Phrase);
     }
 
     #[test]
     fn wave_passthrough_renderer_obeys_tick_budget() {
         let mut renderer = WavePassthroughRenderer::new();
         for _ in 0..2 {
-            let status = renderer.push(SpeechRepresentation::Wave(WaveChunk::new(
+            let status = renderer.push(SyntheticRepresentation::Wave(WaveChunk::new(
                 vec![0.0; 10],
                 10,
                 1,
@@ -1042,7 +1189,7 @@ mod tests {
     #[test]
     fn blocking_vocoder_renderer_adapts_mel_representation() {
         let mut renderer = BlockingVocoderRenderer::new("test-hifigan-slot", SilentMelBackend);
-        let status = renderer.push(SpeechRepresentation::Mel(MelChunk {
+        let status = renderer.push(SyntheticRepresentation::Mel(MelChunk {
             config: "test".to_string(),
             frames: vec![MelFrame { bins: vec![0.0] }, MelFrame { bins: vec![1.0] }],
             frame_hop_samples: 240,
@@ -1067,7 +1214,7 @@ mod tests {
 
     #[test]
     fn graph_ticks_registered_stages() {
-        let mut graph = SpeechWorkGraph::with_default_watermarks();
+        let mut graph = SyntheticWorkGraph::with_default_watermarks();
         graph.add_stage(Box::new(WavePassthroughRenderer::new()));
 
         let statuses = graph.tick(

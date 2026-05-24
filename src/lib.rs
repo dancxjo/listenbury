@@ -123,14 +123,15 @@ pub use speech::synthetic_plan::{
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech::work::{
     AcousticChunk, AcousticPhoneTiming, ArticulatoryChunk, AudioTime, BlockingVocoderRenderer,
-    Boundary, BoundaryHint, BreathPlan, BufferWatermarks, CANONICAL_SPEECH_WORK_FLOW, Cadence,
+    Boundary, BoundaryHint, BreathPlan, BufferWatermarks, CANONICAL_SYNTHETIC_WORK_FLOW, Cadence,
     ChunkId, CoarseTextChunk, CommitHorizons, Commitment, Curve, CurvePoint, LingChunk,
     LpcNetChunk, MelChunk, MelF0Chunk, PartialProsodyChunk, PhonePlan, PhraseShape, PipelineTime,
     RenderStatus, Renderer, RepairPlan, RepairStrategy, RepresentationKind, RepresentationStream,
-    SpeechEvent, SpeechPipelineWatermarks, SpeechRepresentation, SpeechWorkGraph,
-    SpeechWorkStageKind, StageReadiness, StageStatus, StreamChunk, StreamStage, TextChunk,
-    TextSource, TickStage, TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan,
-    WorkBudget, WorldChunk, render_plan_to_representation,
+    StageReadiness, StageStatus, StreamChunk, StreamStage, SyntheticClock, SyntheticClockKind,
+    SyntheticEvent, SyntheticPipelineWatermarks, SyntheticRepresentation,
+    SyntheticStageRuntimePolicy, SyntheticWorkGraph, SyntheticWorkStageKind, TextChunk, TextSource,
+    TickStage, TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan, WorkBudget,
+    WorldChunk, render_plan_to_representation,
 };
 pub use speech_timeline::{AudioClipId, SessionId, SyntheticUnitId, TranscriptRevisionId, TurnId};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};
