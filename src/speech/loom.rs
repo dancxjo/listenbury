@@ -26,7 +26,13 @@ pub enum SpeechArtifactKind {
     PhoneIds,
     DiphonePlan,
     AcousticTrack,
+    AcousticFeatureTile,
+    TemporalSmoothedFeatureTile,
+    MelSpectrogramTile,
+    F0Track,
+    /// Temporary compatibility artifact for legacy combined mel/F0 vocoder inputs.
     MelF0Track,
+    WaveformTile,
     AudioFrames,
 }
 
@@ -146,6 +152,8 @@ pub enum SpeechWorkKind {
     Planner,
     DiphoneSelector,
     AcousticModel,
+    FeatureTransform,
+    CompatibilityBridge,
     Vocoder,
     Renderer,
     Attribution,
@@ -423,7 +431,10 @@ impl CurrentSayBackendKind {
                 SpeechWorkerDescriptor::new(
                     "source-filter-acoustic-generator",
                     vec![SpeechArtifactKind::PhoneTimedPlan],
-                    vec![SpeechArtifactKind::MelF0Track],
+                    vec![
+                        SpeechArtifactKind::AcousticFeatureTile,
+                        SpeechArtifactKind::F0Track,
+                    ],
                     SpeechWorkKind::AcousticModel,
                 )
                 .with_span_behavior(SpeechSpanBehavior::PhoneAligned)
@@ -432,9 +443,38 @@ impl CurrentSayBackendKind {
                 ))
                 .with_commit_state(CommitState::AcousticReady),
                 SpeechWorkerDescriptor::new(
+                    "source-filter-temporal-smoother",
+                    vec![SpeechArtifactKind::AcousticFeatureTile],
+                    vec![SpeechArtifactKind::TemporalSmoothedFeatureTile],
+                    SpeechWorkKind::FeatureTransform,
+                )
+                .with_span_behavior(SpeechSpanBehavior::PhoneAligned)
+                .with_commit_state(CommitState::AcousticReady),
+                SpeechWorkerDescriptor::new(
+                    "source-filter-mel-compat-bridge",
+                    vec![
+                        SpeechArtifactKind::TemporalSmoothedFeatureTile,
+                        SpeechArtifactKind::F0Track,
+                    ],
+                    vec![
+                        SpeechArtifactKind::MelSpectrogramTile,
+                        SpeechArtifactKind::MelF0Track,
+                    ],
+                    SpeechWorkKind::CompatibilityBridge,
+                )
+                .with_span_behavior(SpeechSpanBehavior::StreamingTimeAligned)
+                .with_commit_state(CommitState::AcousticReady),
+                SpeechWorkerDescriptor::new(
                     "hifigan-vocoder",
-                    vec![SpeechArtifactKind::MelF0Track],
-                    vec![SpeechArtifactKind::AudioFrames],
+                    vec![
+                        SpeechArtifactKind::MelSpectrogramTile,
+                        SpeechArtifactKind::F0Track,
+                        SpeechArtifactKind::MelF0Track,
+                    ],
+                    vec![
+                        SpeechArtifactKind::WaveformTile,
+                        SpeechArtifactKind::AudioFrames,
+                    ],
                     SpeechWorkKind::Vocoder,
                 )
                 .with_span_behavior(SpeechSpanBehavior::StreamingTimeAligned)
@@ -558,7 +598,7 @@ mod tests {
         assert_eq!(loom.projection, "current-backend/source-filter-hifigan");
         assert_eq!(graph.id, "source-filter-hifigan");
         assert!(!graph.fused);
-        assert_eq!(graph.workers.len(), 2);
+        assert_eq!(graph.workers.len(), 4);
         assert_eq!(graph.workers[0].id, "source-filter-acoustic-generator");
         assert_eq!(
             graph.workers[0].consumes,
@@ -566,20 +606,61 @@ mod tests {
         );
         assert_eq!(
             graph.workers[0].produces,
-            vec![SpeechArtifactKind::MelF0Track]
+            vec![
+                SpeechArtifactKind::AcousticFeatureTile,
+                SpeechArtifactKind::F0Track
+            ]
         );
         assert_eq!(graph.workers[0].work_kind, SpeechWorkKind::AcousticModel);
         assert_eq!(graph.workers[0].commit_state, CommitState::AcousticReady);
-        assert_eq!(graph.workers[1].id, "hifigan-vocoder");
+        assert_eq!(graph.workers[1].id, "source-filter-temporal-smoother");
         assert_eq!(
             graph.workers[1].consumes,
-            vec![SpeechArtifactKind::MelF0Track]
+            vec![SpeechArtifactKind::AcousticFeatureTile]
         );
         assert_eq!(
             graph.workers[1].produces,
-            vec![SpeechArtifactKind::AudioFrames]
+            vec![SpeechArtifactKind::TemporalSmoothedFeatureTile]
         );
-        assert_eq!(graph.workers[1].work_kind, SpeechWorkKind::Vocoder);
-        assert_eq!(graph.workers[1].commit_state, CommitState::Buffered);
+        assert_eq!(graph.workers[1].work_kind, SpeechWorkKind::FeatureTransform);
+        assert_eq!(graph.workers[1].commit_state, CommitState::AcousticReady);
+        assert_eq!(graph.workers[2].id, "source-filter-mel-compat-bridge");
+        assert_eq!(
+            graph.workers[2].consumes,
+            vec![
+                SpeechArtifactKind::TemporalSmoothedFeatureTile,
+                SpeechArtifactKind::F0Track
+            ]
+        );
+        assert_eq!(
+            graph.workers[2].produces,
+            vec![
+                SpeechArtifactKind::MelSpectrogramTile,
+                SpeechArtifactKind::MelF0Track
+            ]
+        );
+        assert_eq!(
+            graph.workers[2].work_kind,
+            SpeechWorkKind::CompatibilityBridge
+        );
+        assert_eq!(graph.workers[2].commit_state, CommitState::AcousticReady);
+        assert_eq!(graph.workers[3].id, "hifigan-vocoder");
+        assert_eq!(
+            graph.workers[3].consumes,
+            vec![
+                SpeechArtifactKind::MelSpectrogramTile,
+                SpeechArtifactKind::F0Track,
+                SpeechArtifactKind::MelF0Track
+            ]
+        );
+        assert_eq!(
+            graph.workers[3].produces,
+            vec![
+                SpeechArtifactKind::WaveformTile,
+                SpeechArtifactKind::AudioFrames
+            ]
+        );
+        assert_eq!(graph.workers[3].work_kind, SpeechWorkKind::Vocoder);
+        assert_eq!(graph.workers[3].commit_state, CommitState::Buffered);
     }
 }

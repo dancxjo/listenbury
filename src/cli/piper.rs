@@ -2085,7 +2085,8 @@ mod tests {
         .expect("klatt should parse as a Riper backend alternative");
         assert!(args.klatt);
         assert!(should_use_klatt_backend(&args));
-        assert_eq!(say_pipeline_descriptor(&args).id, "klatt");
+        assert_eq!(say_backend_graph(&args).id, "klatt");
+        assert_eq!(say_speech_loom(&args).projection, "current-backend/klatt");
     }
 
     #[test]
@@ -2107,7 +2108,11 @@ mod tests {
         assert!(!args.klatt);
         assert!(args.hifigan);
         assert!(should_use_hifigan_backend(&args));
-        assert_eq!(say_pipeline_descriptor(&args).id, "source-filter-hifigan");
+        assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
+        assert_eq!(
+            say_speech_loom(&args).projection,
+            "current-backend/source-filter-hifigan"
+        );
     }
 
     #[test]
@@ -2149,7 +2154,7 @@ mod tests {
         assert!(!args.klatt);
         assert!(should_use_mbrola_backend(&args));
         assert_eq!(args.mbrola_voice, Some(PathBuf::from("voices/us1")));
-        assert_eq!(say_pipeline_descriptor(&args).id, "mbrola-diphone");
+        assert_eq!(say_backend_graph(&args).id, "mbrola-diphone");
     }
 
     #[test]
@@ -2169,11 +2174,11 @@ mod tests {
         })
         .expect("diphone should select the diphone voice backend");
         assert!(args.mbrola);
-        assert_eq!(say_pipeline_descriptor(&args).id, "mbrola-diphone");
+        assert_eq!(say_backend_graph(&args).id, "mbrola-diphone");
     }
 
     #[test]
-    fn say_pipeline_descriptor_defaults_to_piper_compat() {
+    fn say_backend_graph_defaults_to_piper_compat() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
@@ -2188,15 +2193,17 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("default say route should parse");
-        let descriptor = say_pipeline_descriptor(&args);
-        assert_eq!(descriptor.id, "piper-compat");
-        assert!(descriptor.fused);
-        assert_eq!(descriptor.stages.len(), 1);
-        assert_eq!(descriptor.stages[0].id, "piper-compatible-onnx");
+        let backend_graph = say_backend_graph(&args);
+        let loom = say_speech_loom(&args);
+        assert_eq!(backend_graph.id, "piper-compat");
+        assert!(backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 1);
+        assert_eq!(backend_graph.workers[0].id, "piper-compatible-onnx");
+        assert_eq!(loom.projection, "current-backend/piper-compat");
     }
 
     #[test]
-    fn say_pipeline_descriptor_reports_external_piper_process() {
+    fn say_backend_graph_reports_external_piper_process() {
         let args = SayArgs::from_command(SayCommand {
             piper: true,
             piper_bin: None,
@@ -2211,15 +2218,15 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("external piper route should parse");
-        let descriptor = say_pipeline_descriptor(&args);
-        assert_eq!(descriptor.id, "piper-process");
-        assert!(descriptor.fused);
-        assert_eq!(descriptor.stages.len(), 1);
-        assert_eq!(descriptor.stages[0].id, "piper-process-backend");
+        let backend_graph = say_backend_graph(&args);
+        assert_eq!(backend_graph.id, "piper-process");
+        assert!(backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 1);
+        assert_eq!(backend_graph.workers[0].id, "piper-process-backend");
     }
 
     #[test]
-    fn say_pipeline_descriptor_reports_klatt_stage_contract() {
+    fn say_backend_graph_reports_klatt_worker_contract() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
@@ -2234,15 +2241,15 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("klatt route should parse");
-        let descriptor = say_pipeline_descriptor(&args);
-        assert_eq!(descriptor.id, "klatt");
-        assert!(!descriptor.fused);
-        assert_eq!(descriptor.stages.len(), 1);
-        assert_eq!(descriptor.stages[0].id, "klatt-formant-renderer");
+        let backend_graph = say_backend_graph(&args);
+        assert_eq!(backend_graph.id, "klatt");
+        assert!(!backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 1);
+        assert_eq!(backend_graph.workers[0].id, "klatt-formant-renderer");
     }
 
     #[test]
-    fn say_pipeline_descriptor_reports_mbrola_internal_stages() {
+    fn say_backend_graph_reports_mbrola_internal_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
@@ -2257,16 +2264,16 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("diphone route should parse");
-        let descriptor = say_pipeline_descriptor(&args);
-        assert_eq!(descriptor.id, "mbrola-diphone");
-        assert!(!descriptor.fused);
-        assert_eq!(descriptor.stages.len(), 2);
-        assert_eq!(descriptor.stages[0].id, "mbrola-diphone-selection");
-        assert_eq!(descriptor.stages[1].id, "mbrola-diphone-renderer");
+        let backend_graph = say_backend_graph(&args);
+        assert_eq!(backend_graph.id, "mbrola-diphone");
+        assert!(!backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 2);
+        assert_eq!(backend_graph.workers[0].id, "mbrola-diphone-selection");
+        assert_eq!(backend_graph.workers[1].id, "mbrola-diphone-renderer");
     }
 
     #[test]
-    fn say_pipeline_descriptor_reports_hifigan_internal_stages() {
+    fn say_backend_graph_reports_hifigan_feature_bridge_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
             piper_bin: None,
@@ -2281,12 +2288,25 @@ mod tests {
             words: vec!["hello".to_string()],
         })
         .expect("hifigan route should parse");
-        let descriptor = say_pipeline_descriptor(&args);
-        assert_eq!(descriptor.id, "source-filter-hifigan");
-        assert!(!descriptor.fused);
-        assert_eq!(descriptor.stages.len(), 2);
-        assert_eq!(descriptor.stages[0].id, "source-filter-acoustic-generator");
-        assert_eq!(descriptor.stages[1].id, "hifigan-vocoder");
+        let backend_graph = say_backend_graph(&args);
+        let loom = say_speech_loom(&args);
+        assert_eq!(backend_graph.id, "source-filter-hifigan");
+        assert!(!backend_graph.fused);
+        assert_eq!(backend_graph.workers.len(), 4);
+        assert_eq!(
+            backend_graph.workers[0].id,
+            "source-filter-acoustic-generator"
+        );
+        assert_eq!(
+            backend_graph.workers[1].id,
+            "source-filter-temporal-smoother"
+        );
+        assert_eq!(
+            backend_graph.workers[2].id,
+            "source-filter-mel-compat-bridge"
+        );
+        assert_eq!(backend_graph.workers[3].id, "hifigan-vocoder");
+        assert_eq!(loom.projection, "current-backend/source-filter-hifigan");
     }
 
     #[test]
