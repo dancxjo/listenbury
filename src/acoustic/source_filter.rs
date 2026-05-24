@@ -21,6 +21,7 @@ const MEL_MAX_HZ: f32 = 8_000.0;
 const MEL_SPECTRAL_FLOOR: f32 = 0.006;
 const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
 const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
+const TEMPORAL_TRANSITION_GUARD_DELTA: f32 = 0.65;
 const LOG_MEL_MIN: f32 = -8.0;
 const LOG_MEL_MAX: f32 = 2.0;
 
@@ -31,6 +32,14 @@ pub struct MelF0Track {
     pub mel: Vec<MelFrame>,
     pub f0_hz: Vec<f32>,
     pub voiced: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MelTemporalDiscontinuityStats {
+    pub frame_pairs: usize,
+    pub mean_abs_delta: f32,
+    pub p95_abs_delta: f32,
+    pub max_abs_delta: f32,
 }
 
 impl SourceFilterAcousticModel {
@@ -132,6 +141,84 @@ pub fn source_filter_track_to_mel_f0(track: &SourceFilterTrack) -> Result<MelF0T
     );
 
     Ok(MelF0Track { mel, f0_hz, voiced })
+}
+
+pub fn mel_frame_delta_energy(mel: &[MelFrame]) -> Vec<f32> {
+    if mel.len() < 2 {
+        return Vec::new();
+    }
+    mel.windows(2)
+        .map(|window| {
+            let left = &window[0];
+            let right = &window[1];
+            let bins = left.bins.len().min(right.bins.len());
+            if bins == 0 {
+                return 0.0;
+            }
+            let delta_sum = (0..bins)
+                .map(|index| (left.bins[index] - right.bins[index]).abs())
+                .sum::<f32>();
+            delta_sum / bins as f32
+        })
+        .collect()
+}
+
+pub fn summarize_mel_temporal_discontinuity(mel: &[MelFrame]) -> MelTemporalDiscontinuityStats {
+    let deltas = mel_frame_delta_energy(mel);
+    if deltas.is_empty() {
+        return MelTemporalDiscontinuityStats {
+            frame_pairs: 0,
+            mean_abs_delta: 0.0,
+            p95_abs_delta: 0.0,
+            max_abs_delta: 0.0,
+        };
+    }
+    let frame_pairs = deltas.len();
+    let mean_abs_delta = deltas.iter().sum::<f32>() / frame_pairs as f32;
+    let max_abs_delta = deltas.iter().copied().fold(0.0_f32, f32::max);
+    let mut sorted = deltas;
+    sorted.sort_by(|left, right| left.total_cmp(right));
+    let p95_index = (((frame_pairs - 1) as f32) * 0.95).round() as usize;
+    let p95_abs_delta = sorted[p95_index];
+    MelTemporalDiscontinuityStats {
+        frame_pairs,
+        mean_abs_delta,
+        p95_abs_delta,
+        max_abs_delta,
+    }
+}
+
+pub fn temporal_smooth_mel_frames(mel: &[MelFrame], amount: f32) -> Vec<MelFrame> {
+    let amount = amount.clamp(0.0, 1.0);
+    if amount <= f32::EPSILON || mel.len() < 3 {
+        return mel.to_vec();
+    }
+    let deltas = mel_frame_delta_energy(mel);
+    let mut smoothed = mel.to_vec();
+    for frame_index in 1..mel.len() - 1 {
+        let bins = mel[frame_index]
+            .bins
+            .len()
+            .min(mel[frame_index - 1].bins.len())
+            .min(mel[frame_index + 1].bins.len());
+        if bins == 0 {
+            continue;
+        }
+        let local_discontinuity = deltas[frame_index - 1].max(deltas[frame_index]);
+        let transition_guard =
+            (1.0 - (local_discontinuity / TEMPORAL_TRANSITION_GUARD_DELTA)).clamp(0.0, 1.0);
+        let blend = amount * transition_guard;
+        if blend <= f32::EPSILON {
+            continue;
+        }
+        for bin in 0..bins {
+            let neighbor_mean =
+                (mel[frame_index - 1].bins[bin] + mel[frame_index + 1].bins[bin]) * 0.5;
+            smoothed[frame_index].bins[bin] =
+                lerp(mel[frame_index].bins[bin], neighbor_mean, blend);
+        }
+    }
+    smoothed
 }
 
 fn acoustic_frame_track_from_source_filter(
@@ -661,6 +748,58 @@ mod tests {
                 .iter()
                 .flat_map(|frame| frame.bins.iter())
                 .all(|bin| bin.is_finite() && (LOG_MEL_MIN..=LOG_MEL_MAX).contains(bin))
+        );
+    }
+
+    #[test]
+    fn mel_discontinuity_summary_reports_frame_deltas() {
+        let mel = vec![
+            MelFrame {
+                bins: vec![0.0, 0.0],
+            },
+            MelFrame {
+                bins: vec![0.4, 0.2],
+            },
+            MelFrame {
+                bins: vec![1.0, 0.8],
+            },
+        ];
+        let deltas = mel_frame_delta_energy(&mel);
+        assert_eq!(deltas.len(), 2);
+        assert!(deltas[1] > deltas[0]);
+
+        let summary = summarize_mel_temporal_discontinuity(&mel);
+        assert_eq!(summary.frame_pairs, 2);
+        assert!(summary.mean_abs_delta > 0.0);
+        assert!(summary.p95_abs_delta >= summary.mean_abs_delta);
+        assert!(summary.max_abs_delta >= summary.p95_abs_delta);
+    }
+
+    #[test]
+    fn temporal_smoothing_reduces_small_framewise_jumps() {
+        let mel = vec![
+            MelFrame {
+                bins: vec![0.0, 0.0],
+            },
+            MelFrame {
+                bins: vec![0.6, 0.6],
+            },
+            MelFrame {
+                bins: vec![0.0, 0.0],
+            },
+            MelFrame {
+                bins: vec![0.1, 0.1],
+            },
+        ];
+        let baseline = summarize_mel_temporal_discontinuity(&mel);
+        let smoothed = temporal_smooth_mel_frames(&mel, 0.9);
+        let after = summarize_mel_temporal_discontinuity(&smoothed);
+        assert!(after.mean_abs_delta < baseline.mean_abs_delta);
+        let original_jump = (mel[1].bins[0] - mel[2].bins[0]).abs();
+        let smoothed_jump = (smoothed[1].bins[0] - smoothed[2].bins[0]).abs();
+        assert!(
+            smoothed_jump <= original_jump,
+            "smoothing should not create larger jumps"
         );
     }
 }

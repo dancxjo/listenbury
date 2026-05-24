@@ -53,7 +53,9 @@ use listenbury::voice::tract::targets::{
 };
 #[cfg(feature = "tts-riper")]
 use listenbury::{
-    AcousticFrameTrack, AcousticInput, AcousticModelBackend, SourceFilterAcousticModel,
+    AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
+    MelTemporalDiscontinuityStats, SourceFilterAcousticModel, summarize_mel_temporal_discontinuity,
+    temporal_smooth_mel_frames,
 };
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "audio-cpal")]
@@ -69,6 +71,12 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(feature = "tts-riper"))]
 const KLATT_SUPPORTED_WORDS: [&str; 6] = ["baby", "darling", "gal", "hello", "my", "ragtime"];
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_TEMPORAL_BANDING_MEAN_DELTA_THRESHOLD: f32 = 0.20;
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_TEMPORAL_BANDING_P95_DELTA_THRESHOLD: f32 = 0.30;
+#[cfg(feature = "tts-riper")]
+const HIFIGAN_SMOOTHING_EFFECT_RATIO: f32 = 0.85;
 
 pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     let piper_args = SayArgs::from_command(command)?;
@@ -1452,7 +1460,21 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         acoustic_track.sample_rate_hz,
         acoustic_track.hop_samples,
     )?;
-    let source_filter_frames = maybe_render_source_filter_reference(&acoustic_track)?;
+    let temporal_smoothing = hifigan_temporal_smoothing_amount()?;
+    let raw_mel = &acoustic_track.mel;
+    let raw_discontinuity = summarize_mel_temporal_discontinuity(raw_mel);
+    let smoothed_mel = if temporal_smoothing > 0.0 {
+        Some(temporal_smooth_mel_frames(raw_mel, temporal_smoothing))
+    } else {
+        None
+    };
+    let hifigan_input_mel = smoothed_mel.as_deref().unwrap_or(raw_mel);
+    let hifigan_input_discontinuity = summarize_mel_temporal_discontinuity(hifigan_input_mel);
+    let source_filter_frames = maybe_render_source_filter_reference(
+        hifigan_input_mel,
+        &acoustic_track.f0_hz,
+        &acoustic_track.voiced,
+    )?;
     let mut backend = if args.skip_gan {
         HifiganBackend::deterministic()
     } else {
@@ -1461,7 +1483,7 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
     };
     let frames = backend
         .render(VocoderInput::MelF0 {
-            mel: &acoustic_track.mel,
+            mel: hifigan_input_mel,
             f0_hz: &acoustic_track.f0_hz,
             voiced: &acoustic_track.voiced,
         })
@@ -1470,7 +1492,17 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         !frames.is_empty(),
         "listenbury say --hifigan produced no audio for `{text}`"
     );
-    maybe_write_hifigan_debug_artifacts(text, &acoustic_track, &source_filter_frames, &frames)?;
+    maybe_write_hifigan_debug_artifacts(
+        text,
+        &acoustic_track,
+        raw_mel,
+        hifigan_input_mel,
+        temporal_smoothing,
+        raw_discontinuity,
+        hifigan_input_discontinuity,
+        &source_filter_frames,
+        &frames,
+    )?;
     Ok(frames)
 }
 
@@ -1481,18 +1513,16 @@ fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
 
 #[cfg(feature = "tts-riper")]
 fn maybe_render_source_filter_reference(
-    acoustic_track: &AcousticFrameTrack,
+    mel: &[MelFrame],
+    f0_hz: &[f32],
+    voiced: &[bool],
 ) -> Result<Vec<AudioFrame>> {
     if std::env::var_os("LISTENBURY_HIFIGAN_DEBUG_DIR").is_none() {
         return Ok(Vec::new());
     }
     let mut deterministic = HifiganBackend::deterministic();
     deterministic
-        .render(VocoderInput::MelF0 {
-            mel: &acoustic_track.mel,
-            f0_hz: &acoustic_track.f0_hz,
-            voiced: &acoustic_track.voiced,
-        })
+        .render(VocoderInput::MelF0 { mel, f0_hz, voiced })
         .context("failed to render deterministic source-filter A/B reference")
 }
 
@@ -1500,6 +1530,11 @@ fn maybe_render_source_filter_reference(
 fn maybe_write_hifigan_debug_artifacts(
     text: &str,
     acoustic_track: &AcousticFrameTrack,
+    raw_mel: &[MelFrame],
+    hifigan_input_mel: &[MelFrame],
+    smoothing_amount: f32,
+    raw_discontinuity: MelTemporalDiscontinuityStats,
+    hifigan_input_discontinuity: MelTemporalDiscontinuityStats,
     source_filter_frames: &[AudioFrame],
     hifigan_frames: &[AudioFrame],
 ) -> Result<()> {
@@ -1522,36 +1557,71 @@ fn maybe_write_hifigan_debug_artifacts(
         std::process::id()
     );
 
-    let mel_path = debug_dir.join(format!("{stem}-pre-vocoder-mel.txt"));
-    let mut mel_dump = String::new();
-    mel_dump.push_str(&format!("text={text}\n"));
-    mel_dump.push_str(&format!(
-        "sample_rate_hz={} hop_samples={} frame_count={} mel_bins={}\n",
-        acoustic_track.sample_rate_hz,
-        acoustic_track.hop_samples,
-        acoustic_track.mel.len(),
-        acoustic_track
-            .mel
-            .first()
-            .map(|frame| frame.bins.len())
-            .unwrap_or(0)
-    ));
-    for frame in &acoustic_track.mel {
-        let row = frame
-            .bins
-            .iter()
-            .map(|value| format!("{value:.6}"))
-            .collect::<Vec<_>>()
-            .join(",");
-        mel_dump.push_str(&row);
-        mel_dump.push('\n');
-    }
-    std::fs::write(&mel_path, mel_dump).with_context(|| {
+    let raw_mel_path = debug_dir.join(format!("{stem}-source-filter-mel-raw.txt"));
+    write_hifigan_mel_dump(&raw_mel_path, text, acoustic_track, raw_mel).with_context(|| {
         format!(
-            "failed to write HiFi-GAN mel debug dump {}",
-            mel_path.display()
+            "failed to write HiFi-GAN raw source-filter mel debug dump {}",
+            raw_mel_path.display()
         )
     })?;
+
+    let mel_path = debug_dir.join(format!("{stem}-pre-vocoder-mel.txt"));
+    write_hifigan_mel_dump(&mel_path, text, acoustic_track, hifigan_input_mel).with_context(
+        || {
+            format!(
+                "failed to write HiFi-GAN vocoder-input mel debug dump {}",
+                mel_path.display()
+            )
+        },
+    )?;
+
+    let diagnostics_path = debug_dir.join(format!("{stem}-temporal-diagnostics.txt"));
+    let mut diagnostics = String::new();
+    diagnostics.push_str(&format!("text={text}\n"));
+    diagnostics.push_str("mel_contract=SpeechT5-HiFi-GAN-compatible (validated)\n");
+    diagnostics.push_str(&format!(
+        "temporal_smoothing_amount={smoothing_amount:.3}\n"
+    ));
+    diagnostics.push_str(&format!(
+        "raw_frame_pairs={} raw_mean_abs_delta={:.6} raw_p95_abs_delta={:.6} raw_max_abs_delta={:.6}\n",
+        raw_discontinuity.frame_pairs,
+        raw_discontinuity.mean_abs_delta,
+        raw_discontinuity.p95_abs_delta,
+        raw_discontinuity.max_abs_delta
+    ));
+    diagnostics.push_str(&format!(
+        "input_frame_pairs={} input_mean_abs_delta={:.6} input_p95_abs_delta={:.6} input_max_abs_delta={:.6}\n",
+        hifigan_input_discontinuity.frame_pairs,
+        hifigan_input_discontinuity.mean_abs_delta,
+        hifigan_input_discontinuity.p95_abs_delta,
+        hifigan_input_discontinuity.max_abs_delta
+    ));
+    diagnostics.push_str(&format!(
+        "artifact_attribution={}\n",
+        hifigan_artifact_attribution(
+            raw_discontinuity,
+            hifigan_input_discontinuity,
+            smoothing_amount,
+        )
+    ));
+    std::fs::write(&diagnostics_path, diagnostics).with_context(|| {
+        format!(
+            "failed to write HiFi-GAN temporal diagnostics {}",
+            diagnostics_path.display()
+        )
+    })?;
+
+    tracing::debug!(
+        raw_mean_abs_delta = raw_discontinuity.mean_abs_delta,
+        input_mean_abs_delta = hifigan_input_discontinuity.mean_abs_delta,
+        smoothing_amount,
+        attribution = %hifigan_artifact_attribution(
+            raw_discontinuity,
+            hifigan_input_discontinuity,
+            smoothing_amount,
+        ),
+        "hifigan temporal modulation diagnostics"
+    );
 
     if !source_filter_frames.is_empty() {
         let source_filter_path = debug_dir.join(format!("{stem}-source-filter-reference.wav"));
@@ -1572,12 +1642,84 @@ fn maybe_write_hifigan_debug_artifacts(
 
     tracing::debug!(
         debug_dir = %debug_dir.display(),
+        raw_mel_dump = %raw_mel_path.display(),
         mel_dump = %mel_path.display(),
+        diagnostics = %diagnostics_path.display(),
         source_filter_frames = source_filter_frames.len(),
         hifigan_frames = hifigan_frames.len(),
         "wrote HiFi-GAN debug artifacts"
     );
     Ok(())
+}
+
+#[cfg(feature = "tts-riper")]
+fn write_hifigan_mel_dump(
+    path: &Path,
+    text: &str,
+    acoustic_track: &AcousticFrameTrack,
+    mel: &[MelFrame],
+) -> Result<()> {
+    let mut mel_dump = String::new();
+    mel_dump.push_str(&format!("text={text}\n"));
+    mel_dump.push_str(&format!(
+        "sample_rate_hz={} hop_samples={} frame_count={} mel_bins={}\n",
+        acoustic_track.sample_rate_hz,
+        acoustic_track.hop_samples,
+        mel.len(),
+        mel.first().map(|frame| frame.bins.len()).unwrap_or(0)
+    ));
+    for frame in mel {
+        let row = frame
+            .bins
+            .iter()
+            .map(|value| format!("{value:.6}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        mel_dump.push_str(&row);
+        mel_dump.push('\n');
+    }
+    std::fs::write(path, mel_dump)?;
+    Ok(())
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_temporal_smoothing_amount() -> Result<f32> {
+    let Some(value) = std::env::var_os("LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING")
+        .map(|value| value.to_string_lossy().trim().to_string())
+    else {
+        return Ok(0.0);
+    };
+    if value.is_empty() {
+        return Ok(0.0);
+    }
+    let amount = value.parse::<f32>().with_context(|| {
+        format!("invalid LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING value `{value}`")
+    })?;
+    anyhow::ensure!(
+        (0.0..=1.0).contains(&amount),
+        "LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING must be in [0.0, 1.0], got {amount}"
+    );
+    Ok(amount)
+}
+
+#[cfg(feature = "tts-riper")]
+fn hifigan_artifact_attribution(
+    raw: MelTemporalDiscontinuityStats,
+    input: MelTemporalDiscontinuityStats,
+    smoothing_amount: f32,
+) -> &'static str {
+    let temporal_banding_detected = raw.mean_abs_delta
+        >= HIFIGAN_TEMPORAL_BANDING_MEAN_DELTA_THRESHOLD
+        || raw.p95_abs_delta >= HIFIGAN_TEMPORAL_BANDING_P95_DELTA_THRESHOLD;
+    let smoothing_reduced_modulation = smoothing_amount > 0.0
+        && input.mean_abs_delta <= raw.mean_abs_delta * HIFIGAN_SMOOTHING_EFFECT_RATIO;
+    if temporal_banding_detected && smoothing_reduced_modulation {
+        "temporal_banding_primary"
+    } else if temporal_banding_detected {
+        "temporal_banding_present_contract_or_model_mismatch_also_possible"
+    } else {
+        "contract_or_representation_mismatch_more_likely_than_temporal_banding"
+    }
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {

@@ -31,8 +31,10 @@ pub mod web;
 pub mod word;
 
 pub use acoustic::{
-    AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame, SingingPlan,
-    SourceFilterAcousticModel, acoustic_model_by_id, list_acoustic_models,
+    AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame,
+    MelTemporalDiscontinuityStats, SingingPlan, SourceFilterAcousticModel, acoustic_model_by_id,
+    list_acoustic_models, mel_frame_delta_energy, summarize_mel_temporal_discontinuity,
+    temporal_smooth_mel_frames,
 };
 pub use audio::frame::AudioFrame;
 pub use audio::{

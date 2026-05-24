@@ -399,6 +399,9 @@ pub(crate) struct SayCommand {
     #[arg(long, conflicts_with_all = ["piper", "hifigan", "diphone"])]
     pub(crate) klatt: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "diphone", "rp"])]
+    /// HiFi-GAN mel-vocoder route. Optional debug env vars:
+    /// LISTENBURY_HIFIGAN_DEBUG_DIR dumps raw/input mel + temporal diagnostics + wav outputs.
+    /// LISTENBURY_HIFIGAN_TEMPORAL_SMOOTHING (0.0-1.0) applies pre-vocoder temporal smoothing.
     pub(crate) hifigan: bool,
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
