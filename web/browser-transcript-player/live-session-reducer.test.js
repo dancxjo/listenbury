@@ -60,16 +60,16 @@ function sessionGetOrCreateTurn(session, turnId) {
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(),
       generatedText: null,
-      generatedSpeechFragments: [],
-      speechUnitsById: new Map(),
-      generatedSpeechUnitOrder: [],
+      generatedSyntheticFragments: [],
+      syntheticUnitsById: new Map(),
+      generatedSyntheticUnitOrder: [],
     });
   }
   return session.turns.get(turnId);
 }
 
-function openSpanRecord(startMs, label = null, speechUnitId = null) {
-  return { start_ms: startMs, label, speech_unit_id: speechUnitId };
+function openSpanRecord(startMs, label = null, syntheticUnitId = null) {
+  return { start_ms: startMs, label, synthetic_unit_id: syntheticUnitId };
 }
 
 function openSpanStartMs(record) {
@@ -80,8 +80,8 @@ function openSpanLabel(record) {
   return typeof record === "number" ? null : record?.label ?? null;
 }
 
-function openSpanSpeechUnitId(record) {
-  return typeof record === "number" ? null : record?.speech_unit_id ?? null;
+function openSpanSyntheticUnitId(record) {
+  return typeof record === "number" ? null : record?.synthetic_unit_id ?? null;
 }
 
 function stableWordKey(word, index) {
@@ -120,8 +120,8 @@ function normalizedId(value) {
   return JSON.stringify(value);
 }
 
-function speechUnitIdFromEvent(event) {
-  return normalizedId(event?.speech_unit_id ?? event?.artifact?.speech_unit_id);
+function syntheticUnitIdFromEvent(event) {
+  return normalizedId(event?.synthetic_unit_id ?? event?.artifact?.synthetic_unit_id);
 }
 
 function measuredWordTimingBounds(words) {
@@ -207,38 +207,38 @@ function scrollLeftForTimingFocus(bounds, viewportStartPx, viewportWidthPx, cont
   return Math.max(0, Math.min(maxScrollLeft, centerPx - viewportWidthPx / 2));
 }
 
-function isGeneratedSpeechEventKind(kind) {
+function isGeneratedSyntheticEventKind(kind) {
   return [
-    "first_safe_speech_unit_emitted",
-    "speech_unit_committed",
-    "speech_unit_cancelled",
-    "speculative_speech_updated",
+    "first_safe_synthetic_unit_emitted",
+    "synthetic_unit_committed",
+    "synthetic_unit_cancelled",
+    "speculative_synthetic_unit_updated",
     "tts_enqueue_started",
   ].includes(kind);
 }
 
-function updateGeneratedSpeechText(liveTurn, event) {
-  if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
+function updateGeneratedSyntheticText(liveTurn, event) {
+  if (!event.text || !isGeneratedSyntheticEventKind(event.kind)) {
     return;
   }
-  const speechUnitId = speechUnitIdFromEvent(event);
-  if (speechUnitId) {
-    liveTurn.speechUnitsById.set(speechUnitId, event.text);
+  const syntheticUnitId = syntheticUnitIdFromEvent(event);
+  if (syntheticUnitId) {
+    liveTurn.syntheticUnitsById.set(syntheticUnitId, event.text);
   }
 
-  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
-    if (speechUnitId) {
-      if (!liveTurn.generatedSpeechUnitOrder.includes(speechUnitId)) {
-        liveTurn.generatedSpeechUnitOrder.push(speechUnitId);
+  if (event.kind === "tts_enqueue_started" || event.kind === "synthetic_unit_committed") {
+    if (syntheticUnitId) {
+      if (!liveTurn.generatedSyntheticUnitOrder.includes(syntheticUnitId)) {
+        liveTurn.generatedSyntheticUnitOrder.push(syntheticUnitId);
       }
-      const fragments = liveTurn.generatedSpeechUnitOrder
-        .map((id) => liveTurn.speechUnitsById.get(id))
+      const fragments = liveTurn.generatedSyntheticUnitOrder
+        .map((id) => liveTurn.syntheticUnitsById.get(id))
         .filter((text) => typeof text === "string" && text.trim());
-      liveTurn.generatedSpeechFragments = fragments;
+      liveTurn.generatedSyntheticFragments = fragments;
       liveTurn.generatedText = fragments.join(" ");
       return;
     }
-    const fragments = liveTurn.generatedSpeechFragments;
+    const fragments = liveTurn.generatedSyntheticFragments;
     const last = fragments[fragments.length - 1];
     if (last !== event.text) {
       fragments.push(event.text);
@@ -247,7 +247,7 @@ function updateGeneratedSpeechText(liveTurn, event) {
     return;
   }
 
-  if (liveTurn.generatedSpeechFragments.length === 0) {
+  if (liveTurn.generatedSyntheticFragments.length === 0) {
     liveTurn.generatedText = event.text;
   }
 }
@@ -263,9 +263,9 @@ function semanticSpanLabel(session, kind, turnId, fallback, sourceEvent = null, 
     case "llm_generation_started":
       return liveTurn?.generatedText ?? fallback;
     case "playback_started": {
-      const speechUnitId = openSpanSpeechUnitId(openSpan) ?? speechUnitIdFromEvent(sourceEvent);
-      const speechUnitText = speechUnitId ? liveTurn?.speechUnitsById?.get(speechUnitId) : null;
-      return speechUnitText ?? liveTurn?.generatedText ?? fallback;
+      const syntheticUnitId = openSpanSyntheticUnitId(openSpan) ?? syntheticUnitIdFromEvent(sourceEvent);
+      const syntheticUnitText = syntheticUnitId ? liveTurn?.syntheticUnitsById?.get(syntheticUnitId) : null;
+      return syntheticUnitText ?? liveTurn?.generatedText ?? fallback;
     }
     case "self_hearing_suppression_started":
       return liveTurn?.generatedText ?? "self-hearing suppression";
@@ -392,9 +392,9 @@ function reduceLiveEvent(session, event) {
     liveTurn.finalTranscript = event.text;
   }
 
-  if (event.text && isGeneratedSpeechEventKind(event.kind)) {
+  if (event.text && isGeneratedSyntheticEventKind(event.kind)) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
-    updateGeneratedSpeechText(liveTurn, event);
+    updateGeneratedSyntheticText(liveTurn, event);
   }
 
   if (event.kind === "breath_group_opened") {
@@ -429,11 +429,11 @@ function reduceLiveEvent(session, event) {
     return;
   }
 
-  if (event.kind === "speech_unit_committed" && event.text) {
-    log("commit", `Speech unit committed: "${event.text.slice(0, 60)}"`);
+  if (event.kind === "synthetic_unit_committed" && event.text) {
+    log("commit", `Synthetic unit committed: "${event.text.slice(0, 60)}"`);
   }
-  if (event.kind === "speech_unit_cancelled" && event.text) {
-    log("cancel", `Speech unit cancelled: "${event.text.slice(0, 60)}"`);
+  if (event.kind === "synthetic_unit_cancelled" && event.text) {
+    log("cancel", `Synthetic unit cancelled: "${event.text.slice(0, 60)}"`);
   }
 
   const startInfo = END_TO_START[event.kind];
@@ -470,7 +470,7 @@ function reduceLiveEvent(session, event) {
       openSpanRecord(
         event.elapsed_ms,
         semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind), event),
-        event.kind === "playback_started" ? speechUnitIdFromEvent(event) : null,
+        event.kind === "playback_started" ? syntheticUnitIdFromEvent(event) : null,
       ),
     );
     if (event.kind === "asr_started") {
@@ -500,7 +500,7 @@ function liveSessionToViewerPayload(session) {
       metadata: {
         in_progress: true,
         turn: spanTurn,
-        ...(openSpanSpeechUnitId(openSpan) ? { speech_unit_id: openSpanSpeechUnitId(openSpan) } : {}),
+        ...(openSpanSyntheticUnitId(openSpan) ? { synthetic_unit_id: openSpanSyntheticUnitId(openSpan) } : {}),
       },
     });
   }
@@ -846,7 +846,7 @@ console.log("\n── Scenario 8b: span labels prefer semantic content over even
   reduceLiveEvent(s, mkEvent("speech_stopped", 1, 320));
   reduceLiveEvent(s, mkEvent("transcript", 1, 340, { text: "hello can you hear me" }));
   reduceLiveEvent(s, mkEvent("llm_generation_started", 1, 360));
-  reduceLiveEvent(s, mkEvent("first_safe_speech_unit_emitted", 1, 420, { text: "Yes, I can hear you." }));
+  reduceLiveEvent(s, mkEvent("first_safe_synthetic_unit_emitted", 1, 420, { text: "Yes, I can hear you." }));
   reduceLiveEvent(s, mkEvent("playback_started", 1, 500));
   reduceLiveEvent(s, mkEvent("playback_finished", 1, 900));
 
@@ -865,7 +865,7 @@ console.log("\n── Scenario 8b: span labels prefer semantic content over even
   );
   assert(
     payload.events.some((event) => event.kind === "playback_started" && event.label === "Yes, I can hear you."),
-    "Speaker playback span label is emitted speech text",
+    "Speaker playback span label is emitted synthetic text",
   );
 }
 
@@ -894,7 +894,7 @@ console.log("\n── Scenario 8c: Mic speech chips show stop time after listeni
   );
 }
 
-console.log("\n── Scenario 8d: playback labels preserve queued speech units ──");
+console.log("\n── Scenario 8d: playback labels preserve queued synthetic units ──");
 {
   const s = createLiveSession();
   reduceLiveEvent(s, mkEvent("tts_enqueue_started", 1, 100, { text: "My name is Pete." }));
@@ -907,32 +907,32 @@ console.log("\n── Scenario 8d: playback labels preserve queued speech units 
   assertEqual(
     playback?.label,
     "My name is Pete. Nice to meet you.",
-    "closed playback span uses accumulated queued speech fragments",
+    "closed playback span uses accumulated queued synthetic fragments",
   );
   assertEqual(
     s.turns.get(1).generatedText,
     "My name is Pete. Nice to meet you.",
-    "turn generated text accumulates queued speech fragments",
+    "turn generated text accumulates queued synthetic fragments",
   );
 }
 
-console.log("\n── Scenario 8e: playback labels can resolve by speech_unit_id ──");
+console.log("\n── Scenario 8e: playback labels can resolve by synthetic_unit_id ──");
 {
   const s = createLiveSession();
-  reduceLiveEvent(s, mkEvent("speech_unit_committed", 1, 100, {
-    speech_unit_id: 1001,
+  reduceLiveEvent(s, mkEvent("synthetic_unit_committed", 1, 100, {
+    synthetic_unit_id: 1001,
     text: "First unit text.",
   }));
-  reduceLiveEvent(s, mkEvent("speech_unit_committed", 1, 180, {
-    speech_unit_id: 1002,
+  reduceLiveEvent(s, mkEvent("synthetic_unit_committed", 1, 180, {
+    synthetic_unit_id: 1002,
     text: "Second unit text.",
   }));
-  reduceLiveEvent(s, mkEvent("playback_started", 1, 220, { speech_unit_id: 1001 }));
-  reduceLiveEvent(s, mkEvent("playback_finished", 1, 400, { speech_unit_id: 1001 }));
+  reduceLiveEvent(s, mkEvent("playback_started", 1, 220, { synthetic_unit_id: 1001 }));
+  reduceLiveEvent(s, mkEvent("playback_finished", 1, 400, { synthetic_unit_id: 1001 }));
 
   const payload = liveSessionToViewerPayload(s);
   const playback = payload.events.find((event) => event.kind === "playback_started");
-  assertEqual(playback?.label, "First unit text.", "playback span resolves text using speech_unit_id");
+  assertEqual(playback?.label, "First unit text.", "playback span resolves text using synthetic_unit_id");
 }
 
 console.log("\n── Scenario 9: liveSessionToViewerPayload is pure ──");

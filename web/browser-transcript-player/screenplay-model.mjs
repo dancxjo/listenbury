@@ -6,7 +6,7 @@ import {
   normalizedId,
   joinWords,
   joinSemanticText,
-  speechUnitIdFromEvent,
+  syntheticUnitIdFromEvent,
   transcriptCandidateText,
   wordStreamText,
   tokenize,
@@ -171,7 +171,7 @@ export function reduceNarrativeEvent(session, event) {
 
   if (
     isLlmTextEvent(sourceEvent.kind) &&
-    (textContent(sourceEvent.text) || speechUnitIdFromEvent(sourceEvent))
+    (textContent(sourceEvent.text) || syntheticUnitIdFromEvent(sourceEvent))
   ) {
     applyLlmTextEvent(turn, sourceEvent);
     return;
@@ -343,7 +343,7 @@ function getTurn(session, turnKey, turnNumber) {
         revised: false,
         prospective: false,
       },
-      speechUnitsById: new Map(),
+      syntheticUnitsById: new Map(),
     });
   }
   return session.turns.get(turnKey);
@@ -365,18 +365,18 @@ function normalizeSourceEvent(event, sequence) {
 function registerEventSignals(turn, event) {
   const text = joinSemanticText(event.text, transcriptCandidateText(event.artifact), wordStreamText(event.artifact?.words));
   if (text) {
-    turn.flags.prospective ||= event.kind === "transcript_candidate" || event.kind === "speculative_speech_updated";
+    turn.flags.prospective ||= event.kind === "transcript_candidate" || event.kind === "speculative_synthetic_unit_updated";
   }
 
   if (["interruption_detected", "overlap_started", "yield_started", "yield_ended"].includes(event.kind)) {
     turn.flags.interruption = true;
   }
 
-  if (["speech_unit_cancelled", "tts_timed_word_stream_revision"].includes(event.kind)) {
+  if (["synthetic_unit_cancelled", "tts_timed_word_stream_revision"].includes(event.kind)) {
     const cancelledWords = Array.isArray(event.artifact?.words)
       ? event.artifact.words.every((word) => String(word?.commitment ?? "") === "Cancelled")
       : false;
-    if (event.kind === "speech_unit_cancelled" || cancelledWords || String(event.reason ?? "").toLowerCase().includes("cancel")) {
+    if (event.kind === "synthetic_unit_cancelled" || cancelledWords || String(event.reason ?? "").toLowerCase().includes("cancel")) {
       turn.flags.cancelled = true;
     }
   }

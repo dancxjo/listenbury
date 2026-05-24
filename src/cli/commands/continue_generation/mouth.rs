@@ -59,11 +59,11 @@ pub(super) fn mouth_command_for_runtime_event(
                 true,
             ))
         }
-        ContinueRuntimeEvent::SpeechControl { command } => {
+        ContinueRuntimeEvent::SyntheticControl { command } => {
             let command = match command {
-                SpeechControlCommand::Shutup => ContinueMouthCommand::Shutup,
-                SpeechControlCommand::Pause => ContinueMouthCommand::Pause,
-                SpeechControlCommand::Resume => ContinueMouthCommand::Resume,
+                SyntheticControlCommand::Shutup => ContinueMouthCommand::Shutup,
+                SyntheticControlCommand::Pause => ContinueMouthCommand::Pause,
+                SyntheticControlCommand::Resume => ContinueMouthCommand::Resume,
             };
             Some((command, false))
         }

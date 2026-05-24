@@ -12,7 +12,8 @@ use crate::runtime_event::{RuntimeEvent, RuntimeEventKind};
 use crate::soundscape::{SoundscapeId, VoiceAttribution, VoiceId, VoiceLabel};
 pub use crate::speech_timeline::SessionId;
 use crate::speech_timeline::{
-    AudioClipId, SpanId as TimelineSpanId, SpeechUnitId, TranscriptRevisionId, TurnId, UtteranceId,
+    AudioClipId, SpanId as TimelineSpanId, SyntheticUnitId, TranscriptRevisionId, TurnId,
+    UtteranceId,
 };
 use crate::time::{ExactTimestamp, SessionClock};
 
@@ -60,7 +61,7 @@ pub struct LiveTraceEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub utterance_id: Option<UtteranceId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub speech_unit_id: Option<SpeechUnitId>,
+    pub synthetic_unit_id: Option<SyntheticUnitId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript_revision_id: Option<TranscriptRevisionId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -132,7 +133,7 @@ impl LiveTraceEvent {
             session_id: Some(session_id),
             turn_id: Some(TurnId(turn)),
             utterance_id: None,
-            speech_unit_id: None,
+            synthetic_unit_id: None,
             transcript_revision_id: None,
             span_id: None,
             audio_clip_id: None,
@@ -992,10 +993,10 @@ mod tests {
             .emit_now(1, "llm_generation_started", ts(1_500))
             .unwrap();
         trace.emit_now(1, "first_llm_token", ts(1_560)).unwrap();
-        let mut speech_unit = trace.event(1, "first_safe_speech_unit_emitted", ts(1_610));
-        speech_unit.text = Some("Hi.".to_string());
-        speech_unit.unit_kind = Some("complete_sentence".to_string());
-        trace.emit(speech_unit).unwrap();
+        let mut synthetic_unit = trace.event(1, "first_safe_synthetic_unit_emitted", ts(1_610));
+        synthetic_unit.text = Some("Hi.".to_string());
+        synthetic_unit.unit_kind = Some("complete_sentence".to_string());
+        trace.emit(synthetic_unit).unwrap();
         trace
             .emit_now(1, "first_tts_audio_frame_available", ts(1_690))
             .unwrap();
@@ -1026,7 +1027,7 @@ mod tests {
                 "transcript",
                 "llm_generation_started",
                 "first_llm_token",
-                "first_safe_speech_unit_emitted",
+                "first_safe_synthetic_unit_emitted",
                 "first_tts_audio_frame_available",
                 "playback_started",
                 "self_hearing_suppression_started",

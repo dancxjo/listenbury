@@ -33,14 +33,14 @@ function buildWaveDeckFixtureSession() {
       artifact: { stable_text: "Can you explain what overlap routing means", unstable_text: "?" },
     }),
     mkEvent("transcript", 1, 210, { text: "Can you explain what overlap routing means?" }),
-    mkEvent("first_safe_speech_unit_emitted", 1, 260, {
+    mkEvent("first_safe_synthetic_unit_emitted", 1, 260, {
       text: "Sure. Overlap routing decides whether Pete yields.",
     }),
-    mkEvent("speculative_speech_updated", 1, 300, {
+    mkEvent("speculative_synthetic_unit_updated", 1, 300, {
       text: "Sure. Overlap routing decides whether Pete yields when interruption arrives.",
     }),
     mkEvent("interruption_detected", 1, 320),
-    mkEvent("speech_unit_cancelled", 1, 330, {
+    mkEvent("synthetic_unit_cancelled", 1, 330, {
       text: "Sure. Overlap routing decides whether Pete yields when interruption arrives.",
     }),
     mkEvent("tts_timed_word_stream_revision", 1, 331, {
@@ -53,7 +53,7 @@ function buildWaveDeckFixtureSession() {
       },
     }),
     mkEvent("transcript", 2, 500, { text: "I miss how he used to sound." }),
-    mkEvent("speech_unit_committed", 2, 560, { text: "I do too. We can stay with that for a minute." }),
+    mkEvent("synthetic_unit_committed", 2, 560, { text: "I do too. We can stay with that for a minute." }),
   ];
 
   for (const event of events) {
@@ -96,13 +96,13 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
 test("scene boundaries revise retroactively as more context arrives", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you explain overlap routing?" }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 160, { text: "Yes. It decides when Pete yields." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 160, { text: "Yes. It decides when Pete yields." }));
 
   const earlyEpisode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   assert.equal(earlyEpisode.scenes.length, 1, "single topic should remain one scene");
 
   reduceNarrativeEvent(session, mkEvent("transcript", 2, 300, { text: "I miss how he used to sound." }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 2, 340, { text: "I do too." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 2, 340, { text: "I do too." }));
 
   const revisedEpisode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   assert.equal(revisedEpisode.scenes.length, 2, "later topic shift should retroactively split the episode");
@@ -127,7 +127,7 @@ test("consecutive utterances by the same speaker are consolidated", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "First user thought." }));
   reduceNarrativeEvent(session, mkEvent("transcript", 2, 140, { text: "Second user thought." }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 220, { text: "Pete answers after both." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 3, 220, { text: "Pete answers after both." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   const dialogueBeats = episode.scenes[0].beats.filter((beat) => beat.role);
@@ -153,7 +153,7 @@ test("episodes assemble into chapters and manuscript structure", () => {
   assert.equal(manuscript.children[0].type, "chapter");
 });
 
-test("turn and speech-unit IDs are used when present", () => {
+test("turn and synthetic-unit IDs are used when present", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, {
     kind: "transcript",
@@ -163,18 +163,18 @@ test("turn and speech-unit IDs are used when present", () => {
     text: "Can you hear me?",
   });
   reduceNarrativeEvent(session, {
-    kind: "speech_unit_committed",
+    kind: "synthetic_unit_committed",
     turn: 1,
     turn_id: 55,
-    speech_unit_id: 4001,
+    synthetic_unit_id: 4001,
     elapsed_ms: 140,
     text: "Yes, clearly.",
   });
   reduceNarrativeEvent(session, {
-    kind: "speech_unit_cancelled",
+    kind: "synthetic_unit_cancelled",
     turn: 1,
     turn_id: 55,
-    speech_unit_id: 4001,
+    synthetic_unit_id: 4001,
     elapsed_ms: 150,
   });
 
@@ -182,10 +182,10 @@ test("turn and speech-unit IDs are used when present", () => {
   const beatKinds = episode.scenes.flatMap((scene) => scene.beats.map((beat) => beat.kind));
   assert.ok(
     beatKinds.includes("cancellation"),
-    "speech-unit cancellation still keys into turn when text is omitted",
+    "synthetic-unit cancellation still keys into turn when text is omitted",
   );
   assert.ok(
-    episode.sourceEventIds.some((id) => id.startsWith("turn-tid:55:speech_unit_committed")),
+    episode.sourceEventIds.some((id) => id.startsWith("turn-tid:55:synthetic_unit_committed")),
     "source ids are keyed by turn_id when available",
   );
 });
@@ -250,7 +250,7 @@ test("topic label is preserved as scene metadata, not used as location", () => {
 test("emotional/mood label is not used as slugline location", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "I miss how he used to sound." }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "I do too. We can stay with that." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "I do too. We can stay with that." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   const [scene] = episode.scenes;
@@ -266,7 +266,7 @@ test("emotional/mood label is not used as slugline location", () => {
 test("unknown room fallback is used when no location context is available", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "Yes, clearly." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   assert.equal(episode.scenes[0].heading, "INT. UNKNOWN ROOM - DAY");
@@ -275,7 +275,7 @@ test("unknown room fallback is used when no location context is available", () =
 test("scene heading uses explicit place when locationContext is provided", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "Yes, clearly." }));
 
   const episode = buildNarrativeEpisode(session, {
     episodeNumber: 1,
@@ -287,7 +287,7 @@ test("scene heading uses explicit place when locationContext is provided", () =>
 test("scene heading uses vision-derived location when provided", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 140, { text: "Yes, clearly." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "Yes, clearly." }));
 
   const episodeOutdoor = buildNarrativeEpisode(session, {
     episodeNumber: 1,
@@ -329,7 +329,7 @@ test("unknown voice ordinals are stable and speaker cues stay voice-oriented", (
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "first", voice_id: "speaker-a", voice_label: "unknown" }));
   reduceNarrativeEvent(session, mkEvent("transcript", 2, 200, { text: "second", voice_id: "speaker-b", voice_label: "unknown" }));
   reduceNarrativeEvent(session, mkEvent("transcript", 3, 300, { text: "third", voice_id: "speaker-a", voice_label: "unknown" }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 340, { text: "acknowledged" }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 3, 340, { text: "acknowledged" }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   const cues = episode.scenes.flatMap((scene) => scene.beats.map((beat) => beat.role).filter(Boolean));
@@ -353,7 +353,7 @@ test("source_attributed_transcript: known Pete voice renders PETE VOICE cue with
     attribution_confidence: 0.95,
     overlap: null,
   }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 1, 200, { text: "Understood." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 200, { text: "Understood." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   const voiceBeat = episode.scenes[0].beats.find((beat) => beat.kind === "voice_dialogue");
@@ -442,7 +442,7 @@ test("source_attributed_transcript: multiple sources in same session produce dis
     attribution_confidence: 0.50,
     overlap: null,
   }));
-  reduceNarrativeEvent(session, mkEvent("speech_unit_committed", 3, 400, { text: "Noted." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 3, 400, { text: "Noted." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
   const voiceBeats = episode.scenes.flatMap((s) => s.beats).filter((b) => b.kind === "voice_dialogue");

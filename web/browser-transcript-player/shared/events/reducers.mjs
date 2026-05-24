@@ -22,7 +22,7 @@
  *     llmFragments:    string[]
  *     llmWords:        Word[]
  *     llmDeleted:      DeletedEntry[]
- *     speechUnitsById: Map<id, string>
+ *     syntheticUnitsById: Map<id, string>
  *   }
  */
 
@@ -93,9 +93,9 @@ export function normalizedId(value) {
   return JSON.stringify(value);
 }
 
-/** Extract the speech-unit ID from an event (direct field or inside artifact). */
-export function speechUnitIdFromEvent(event) {
-  return normalizedId(event?.speech_unit_id ?? event?.artifact?.speech_unit_id);
+/** Extract the synthetic-unit ID from an event (direct field or inside artifact). */
+export function syntheticUnitIdFromEvent(event) {
+  return normalizedId(event?.synthetic_unit_id ?? event?.artifact?.synthetic_unit_id);
 }
 
 /**
@@ -173,19 +173,19 @@ export function recordDeletedText(target, snippets, elapsedMs) {
 // same functions rather than maintaining separate implementations.
 
 /**
- * Resolve the text for a speech unit: use direct event text if present,
- * otherwise look up the speech-unit ID in turn.speechUnitsById.
+ * Resolve the text for a synthetic unit: use direct event text if present,
+ * otherwise look up the synthetic-unit ID in turn.syntheticUnitsById.
  */
-export function speechUnitText(turn, event) {
+export function syntheticUnitText(turn, event) {
   const direct = textContent(event?.text);
   if (direct) {
     return direct;
   }
-  const speechUnitId = speechUnitIdFromEvent(event);
-  if (!speechUnitId) {
+  const syntheticUnitId = syntheticUnitIdFromEvent(event);
+  if (!syntheticUnitId) {
     return "";
   }
-  return textContent(turn.speechUnitsById.get(speechUnitId));
+  return textContent(turn.syntheticUnitsById.get(syntheticUnitId));
 }
 
 /**
@@ -305,36 +305,36 @@ export function applyTtsWordStreamRevision(turn, event) {
 }
 
 /**
- * Apply an LLM text event (speech_unit_committed, speech_unit_cancelled,
- * speculative_speech_updated, tts_enqueue_started, etc.) to the turn.
+ * Apply an LLM text event (synthetic_unit_committed, synthetic_unit_cancelled,
+ * speculative_synthetic_unit_updated, tts_enqueue_started, etc.) to the turn.
  */
 export function applyLlmTextEvent(turn, event) {
-  const speechUnitId = speechUnitIdFromEvent(event);
-  const text = speechUnitText(turn, event);
+  const syntheticUnitId = syntheticUnitIdFromEvent(event);
+  const text = syntheticUnitText(turn, event);
   if (!text) {
     return;
   }
-  if (speechUnitId) {
-    turn.speechUnitsById.set(speechUnitId, text);
+  if (syntheticUnitId) {
+    turn.syntheticUnitsById.set(syntheticUnitId, text);
   }
 
-  if (event.kind === "speech_unit_cancelled") {
+  if (event.kind === "synthetic_unit_cancelled") {
     turn.flags.cancelled = true;
     recordDeletedText(turn.llmDeleted, [text], event.elapsed_ms);
     _removeLlmFragment(turn, text);
-    if (speechUnitId) {
-      turn.speechUnitsById.delete(speechUnitId);
+    if (syntheticUnitId) {
+      turn.syntheticUnitsById.delete(syntheticUnitId);
     }
     return;
   }
 
-  if (event.kind === "speculative_speech_updated") {
+  if (event.kind === "speculative_synthetic_unit_updated") {
     turn.flags.prospective = true;
     setLlmProspective(turn, text);
     return;
   }
 
-  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
+  if (event.kind === "tts_enqueue_started" || event.kind === "synthetic_unit_committed") {
     commitLlmText(turn, text);
     return;
   }

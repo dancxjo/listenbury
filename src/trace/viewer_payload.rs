@@ -22,7 +22,7 @@ const DEFAULT_WORD_SLOT_MS: u64 = 240;
 const DEFAULT_LANE_TAIL_BUFFER_MS: u64 = 200;
 const RUNTIME_TRACE_TEXT_ID: TextId = TextId(1);
 const USER_TRANSCRIPT_LANE: &str = "User transcript";
-const PETE_INTENDED_SPEECH_LANE: &str = "Pete intended speech";
+const PETE_SYNTHETIC_INTENT_LANE: &str = "Pete synthetic intent";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewerPayload {
@@ -249,7 +249,7 @@ fn build_runtime_span_graph(payload: &ViewerPayload) -> Option<ViewerSpanGraph> 
     let mut graph = AlignmentGraph::new();
     for (playback_span_id, playback_start_ms, playback_end_ms) in playback_spans {
         for (word_span_id, lane_label, word_start_ms, word_end_ms) in &timed_word_spans {
-            if lane_label != PETE_INTENDED_SPEECH_LANE {
+            if lane_label != PETE_SYNTHETIC_INTENT_LANE {
                 continue;
             }
             if !ranges_overlap(
@@ -367,7 +367,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
 
         let key = match kind {
             TextLaneKind::UnknownVoice => USER_TRANSCRIPT_LANE,
-            TextLaneKind::PeteVoice => PETE_INTENDED_SPEECH_LANE,
+            TextLaneKind::PeteVoice => PETE_SYNTHETIC_INTENT_LANE,
         };
         lane_events
             .entry(key)
@@ -378,7 +378,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
         lane_events.entry(USER_TRANSCRIPT_LANE).or_default();
     }
     if !live_tts_revision_streams.is_empty() {
-        lane_events.entry(PETE_INTENDED_SPEECH_LANE).or_default();
+        lane_events.entry(PETE_SYNTHETIC_INTENT_LANE).or_default();
     }
 
     lane_events
@@ -406,7 +406,7 @@ fn collect_text_lanes(events: &[LiveTraceEvent]) -> Vec<ViewerWordLane> {
                     },
                 };
             }
-            if label == PETE_INTENDED_SPEECH_LANE && !live_tts_revision_streams.is_empty() {
+            if label == PETE_SYNTHETIC_INTENT_LANE && !live_tts_revision_streams.is_empty() {
                 let mut streams = live_tts_revision_streams.iter().collect::<Vec<_>>();
                 streams.sort_by_key(|(elapsed_ms, _)| *elapsed_ms);
                 let mut words = Vec::new();
@@ -826,7 +826,7 @@ fn end_kind_to_base_kind(kind: &str) -> Option<&str> {
 fn text_lane_kind_for_event(kind: &str) -> Option<TextLaneKind> {
     match kind {
         "transcript" => Some(TextLaneKind::UnknownVoice),
-        "first_safe_speech_unit_emitted" => Some(TextLaneKind::PeteVoice),
+        "first_safe_synthetic_unit_emitted" => Some(TextLaneKind::PeteVoice),
         _ => None,
     }
 }
@@ -935,8 +935,11 @@ fn metadata_from_event(event: &LiveTraceEvent) -> Value {
             Value::from(utterance_id.0.to_string()),
         );
     }
-    if let Some(speech_unit_id) = event.speech_unit_id {
-        metadata.insert("speech_unit_id".to_string(), Value::from(speech_unit_id.0));
+    if let Some(synthetic_unit_id) = event.synthetic_unit_id {
+        metadata.insert(
+            "synthetic_unit_id".to_string(),
+            Value::from(synthetic_unit_id.0),
+        );
     }
     if let Some(transcript_revision_id) = event.transcript_revision_id {
         metadata.insert(
@@ -1063,7 +1066,7 @@ mod tests {
             session_id: None,
             turn_id: None,
             utterance_id: None,
-            speech_unit_id: None,
+            synthetic_unit_id: None,
             transcript_revision_id: None,
             span_id: None,
             audio_clip_id: None,
@@ -1097,9 +1100,9 @@ mod tests {
     fn converts_live_trace_into_word_and_event_lanes() {
         let mut transcript = event(1, "transcript", 420);
         transcript.text = Some("hello there".to_string());
-        let mut speech = event(1, "first_safe_speech_unit_emitted", 690);
-        speech.text = Some("hi back".to_string());
-        speech.unit_kind = Some("complete_sentence".to_string());
+        let mut synthetic_unit = event(1, "first_safe_synthetic_unit_emitted", 690);
+        synthetic_unit.text = Some("hi back".to_string());
+        synthetic_unit.unit_kind = Some("complete_sentence".to_string());
 
         let overlap_started = event(1, "overlap_started", 730);
         let overlap_ended = event(1, "overlap_ended", 890);
@@ -1109,7 +1112,7 @@ mod tests {
 
         let payload = live_trace_events_to_viewer_payload(&[
             transcript,
-            speech,
+            synthetic_unit,
             overlap_started,
             overlap_ended,
             llm_marker,
@@ -1129,7 +1132,7 @@ mod tests {
             payload
                 .streams
                 .iter()
-                .any(|lane| lane.label == PETE_INTENDED_SPEECH_LANE),
+                .any(|lane| lane.label == PETE_SYNTHETIC_INTENT_LANE),
             "pete lane should be present"
         );
         assert!(
@@ -1281,7 +1284,7 @@ mod tests {
         let lane = payload
             .streams
             .iter()
-            .find(|lane| lane.label == PETE_INTENDED_SPEECH_LANE)
+            .find(|lane| lane.label == PETE_SYNTHETIC_INTENT_LANE)
             .expect("pete lane should be present");
         assert_eq!(lane.stream.source, WordStreamSource::SyntheticSpeech);
         assert!(

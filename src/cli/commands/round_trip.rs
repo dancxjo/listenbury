@@ -38,7 +38,9 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::{ExpressiveUnit, SpeechPlan, SpeechPlanner, SpeechUnit};
+use listenbury::mouth::planner::{
+    ExpressiveUnit, MouthSyntheticPlan, SyntheticPlanner, SyntheticUnit,
+};
 #[cfg(all(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -93,7 +95,7 @@ pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     let transcript = transcribe_frames(&paths, &frames)?;
     println!("Heard: {transcript}");
 
-    let plan = generate_speech_plan(&paths, &transcript)?;
+    let plan = generate_synthetic_plan(&paths, &transcript)?;
     let mut tts =
         PiperTextToSpeech::new(piper_config_for_voice(paths.piper_bin, paths.piper_voice)?);
     tts.enqueue(plan)?;
@@ -191,7 +193,10 @@ fn transcribe_frames(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result<SpeechPlan> {
+fn generate_synthetic_plan(
+    paths: &RoundTripModelPaths,
+    transcript: &str,
+) -> Result<MouthSyntheticPlan> {
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path: paths.llm_model.clone(),
         gpu_layers: paths.llm_gpu_layers,
@@ -213,7 +218,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
         })
         .context("failed to start llama.cpp generation")?;
 
-    let mut planner = SpeechPlanner::default();
+    let mut planner = SyntheticPlanner::default();
     let mut spoken_parts = Vec::new();
     loop {
         let events = llm.poll(generation_id)?;
@@ -225,7 +230,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
         print_llm_events(&events)?;
 
         for unit in planner.ingest(&events) {
-            let ExpressiveUnit::Speech(plan) = unit else {
+            let ExpressiveUnit::Synthetic(plan) = unit else {
                 continue;
             };
             spoken_parts.push(plan.text().to_string());
@@ -244,7 +249,7 @@ fn generate_speech_plan(paths: &RoundTripModelPaths, transcript: &str) -> Result
     } else {
         text.to_string()
     };
-    Ok(SpeechPlan::from(SpeechUnit::FullTurn(response)))
+    Ok(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(response)))
 }
 
 #[cfg(all(

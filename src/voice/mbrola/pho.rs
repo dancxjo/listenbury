@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::symbols::MbrolaSymbolMap;
-use crate::speech::canonical_plan::{
-    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_phone_timed_plan,
-};
 use crate::speech::prosody_timing::ProsodyTimingPlan;
+use crate::speech::synthetic_plan::{
+    synthetic_plan_from_prosody_timing, synthetic_plan_to_phone_timed_plan,
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,8 +105,8 @@ pub fn prosody_timing_plan_to_phone_timed_plan(
     plan: &ProsodyTimingPlan,
     symbol_map: &MbrolaSymbolMap,
 ) -> Result<PhoneTimedPlan> {
-    let canonical = canonical_speech_plan_from_prosody_timing(plan);
-    canonical_speech_plan_to_phone_timed_plan(&canonical, symbol_map)
+    let synthetic_plan = synthetic_plan_from_prosody_timing(plan);
+    synthetic_plan_to_phone_timed_plan(&synthetic_plan, symbol_map)
 }
 
 pub fn parse_pho(text: &str) -> std::result::Result<PhoneTimedPlan, MbrolaPhoParseError> {

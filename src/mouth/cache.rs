@@ -8,31 +8,31 @@ use crate::audio::frame::AudioFrame;
 use crate::audio::write_wav;
 #[cfg(feature = "tts-piper")]
 use crate::mouth::piper::PiperConfig;
-use crate::mouth::planner::{SpeechPlan, SpeechUnit};
+use crate::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 use crate::mouth::tts::TextToSpeech;
 
-pub trait SpeechCache {
-    fn get(&mut self, unit: &SpeechUnit) -> Result<Option<Vec<AudioFrame>>>;
-    fn put(&mut self, unit: &SpeechUnit, frames: &[AudioFrame]) -> Result<()>;
+pub trait SyntheticCache {
+    fn get(&mut self, unit: &SyntheticUnit) -> Result<Option<Vec<AudioFrame>>>;
+    fn put(&mut self, unit: &SyntheticUnit, frames: &[AudioFrame]) -> Result<()>;
 }
 
 #[derive(Debug, Default)]
-pub struct MemorySpeechCache {
+pub struct MemorySyntheticCache {
     map: HashMap<String, Vec<AudioFrame>>,
 }
 
-impl MemorySpeechCache {
-    fn key(unit: &SpeechUnit) -> String {
+impl MemorySyntheticCache {
+    fn key(unit: &SyntheticUnit) -> String {
         format!("{}:{}", unit_kind(unit), normalize_text(unit_text(unit)))
     }
 }
 
-impl SpeechCache for MemorySpeechCache {
-    fn get(&mut self, unit: &SpeechUnit) -> Result<Option<Vec<AudioFrame>>> {
+impl SyntheticCache for MemorySyntheticCache {
+    fn get(&mut self, unit: &SyntheticUnit) -> Result<Option<Vec<AudioFrame>>> {
         Ok(self.map.get(&Self::key(unit)).cloned())
     }
 
-    fn put(&mut self, unit: &SpeechUnit, frames: &[AudioFrame]) -> Result<()> {
+    fn put(&mut self, unit: &SyntheticUnit, frames: &[AudioFrame]) -> Result<()> {
         self.map.insert(Self::key(unit), frames.to_vec());
         Ok(())
     }
@@ -42,7 +42,7 @@ pub struct CachedTextToSpeech<T, C> {
     inner: T,
     cache: C,
     pending_cached_audio: VecDeque<AudioFrame>,
-    pending_cache_unit: Option<SpeechUnit>,
+    pending_cache_unit: Option<SyntheticUnit>,
     pending_cache_frames: Vec<AudioFrame>,
 }
 
@@ -61,9 +61,9 @@ impl<T, C> CachedTextToSpeech<T, C> {
 impl<T, C> TextToSpeech for CachedTextToSpeech<T, C>
 where
     T: TextToSpeech,
-    C: SpeechCache,
+    C: SyntheticCache,
 {
-    fn enqueue(&mut self, plan: SpeechPlan) -> Result<()> {
+    fn enqueue(&mut self, plan: MouthSyntheticPlan) -> Result<()> {
         if should_cache_unit(plan.unit()) {
             if let Some(cached) = self.cache.get(plan.unit())? {
                 self.pending_cached_audio.extend(cached);
@@ -110,20 +110,20 @@ where
     }
 }
 
-fn should_cache_unit(unit: &SpeechUnit) -> bool {
+fn should_cache_unit(unit: &SyntheticUnit) -> bool {
     matches!(
         unit,
-        SpeechUnit::Backchannel(_) | SpeechUnit::DiscourseMarker(_)
+        SyntheticUnit::Backchannel(_) | SyntheticUnit::DiscourseMarker(_)
     )
 }
 
-pub struct FileSpeechCache {
+pub struct FileSyntheticCache {
     root: PathBuf,
     voice_id: String,
     config_identity: Option<String>,
 }
 
-impl FileSpeechCache {
+impl FileSyntheticCache {
     pub fn new(
         root: impl Into<PathBuf>,
         voice_id: impl Into<String>,
@@ -156,7 +156,7 @@ impl FileSpeechCache {
         Self::new(root, voice_id, config_identity)
     }
 
-    fn unit_path(&self, unit: &SpeechUnit) -> Option<PathBuf> {
+    fn unit_path(&self, unit: &SyntheticUnit) -> Option<PathBuf> {
         if !should_cache_unit(unit) {
             return None;
         }
@@ -173,8 +173,8 @@ impl FileSpeechCache {
     }
 }
 
-impl SpeechCache for FileSpeechCache {
-    fn get(&mut self, unit: &SpeechUnit) -> Result<Option<Vec<AudioFrame>>> {
+impl SyntheticCache for FileSyntheticCache {
+    fn get(&mut self, unit: &SyntheticUnit) -> Result<Option<Vec<AudioFrame>>> {
         let Some(path) = self.unit_path(unit) else {
             return Ok(None);
         };
@@ -185,7 +185,7 @@ impl SpeechCache for FileSpeechCache {
         Ok(Some(frames))
     }
 
-    fn put(&mut self, unit: &SpeechUnit, frames: &[AudioFrame]) -> Result<()> {
+    fn put(&mut self, unit: &SyntheticUnit, frames: &[AudioFrame]) -> Result<()> {
         let Some(path) = self.unit_path(unit) else {
             return Ok(());
         };
@@ -223,7 +223,7 @@ fn slugify(text: &str) -> String {
             .trim_matches('-'),
     );
     if slug.is_empty() {
-        "speech-unit".to_string()
+        "synthetic-unit".to_string()
     } else {
         slug
     }
@@ -253,23 +253,23 @@ fn normalize_text(text: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn unit_text(unit: &SpeechUnit) -> &str {
+fn unit_text(unit: &SyntheticUnit) -> &str {
     match unit {
-        SpeechUnit::Backchannel(text)
-        | SpeechUnit::DiscourseMarker(text)
-        | SpeechUnit::CompleteClause(text)
-        | SpeechUnit::CompleteSentence(text)
-        | SpeechUnit::FullTurn(text) => text,
+        SyntheticUnit::Backchannel(text)
+        | SyntheticUnit::DiscourseMarker(text)
+        | SyntheticUnit::CompleteClause(text)
+        | SyntheticUnit::CompleteSentence(text)
+        | SyntheticUnit::FullTurn(text) => text,
     }
 }
 
-fn unit_kind(unit: &SpeechUnit) -> &'static str {
+fn unit_kind(unit: &SyntheticUnit) -> &'static str {
     match unit {
-        SpeechUnit::Backchannel(_) => "backchannel",
-        SpeechUnit::DiscourseMarker(_) => "discourse-marker",
-        SpeechUnit::CompleteClause(_) => "complete-clause",
-        SpeechUnit::CompleteSentence(_) => "complete-sentence",
-        SpeechUnit::FullTurn(_) => "full-turn",
+        SyntheticUnit::Backchannel(_) => "backchannel",
+        SyntheticUnit::DiscourseMarker(_) => "discourse-marker",
+        SyntheticUnit::CompleteClause(_) => "complete-clause",
+        SyntheticUnit::CompleteSentence(_) => "complete-sentence",
+        SyntheticUnit::FullTurn(_) => "full-turn",
     }
 }
 
@@ -312,7 +312,7 @@ mod tests {
     }
 
     impl TextToSpeech for FakeTts {
-        fn enqueue(&mut self, _plan: SpeechPlan) -> Result<()> {
+        fn enqueue(&mut self, _plan: MouthSyntheticPlan) -> Result<()> {
             self.enqueues += 1;
             self.queued_audio.push_back(vec![AudioFrame {
                 captured_at: crate::time::ExactTimestamp::now(),
@@ -336,8 +336,8 @@ mod tests {
 
     #[test]
     fn cached_backchannel_hit_skips_tts_enqueue() {
-        let mut cache = MemorySpeechCache::default();
-        let unit = SpeechUnit::Backchannel("Okay.".to_string());
+        let mut cache = MemorySyntheticCache::default();
+        let unit = SyntheticUnit::Backchannel("Okay.".to_string());
         let warmed_frame = AudioFrame {
             captured_at: crate::time::ExactTimestamp::now(),
             sample_rate_hz: 22_050,
@@ -351,7 +351,8 @@ mod tests {
 
         let inner = FakeTts::default();
         let mut tts = CachedTextToSpeech::new(inner, cache);
-        tts.enqueue(SpeechPlan::from(unit)).expect("enqueue");
+        tts.enqueue(MouthSyntheticPlan::from(unit))
+            .expect("enqueue");
 
         let frames = tts.poll_audio().expect("poll");
         assert_eq!(frames.len(), 1);
@@ -361,12 +362,12 @@ mod tests {
 
     #[test]
     fn backchannel_cache_miss_uses_tts_then_warms_cache() {
-        let cache = MemorySpeechCache::default();
+        let cache = MemorySyntheticCache::default();
         let inner = FakeTts::default();
         let mut tts = CachedTextToSpeech::new(inner, cache);
-        let unit = SpeechUnit::Backchannel("Okay.".to_string());
+        let unit = SyntheticUnit::Backchannel("Okay.".to_string());
 
-        tts.enqueue(SpeechPlan::from(unit.clone()))
+        tts.enqueue(MouthSyntheticPlan::from(unit.clone()))
             .expect("enqueue");
         assert_eq!(tts.inner.enqueues, 1);
 
@@ -383,12 +384,13 @@ mod tests {
 
     #[test]
     fn complete_sentence_uses_tts_path() {
-        let cache = MemorySpeechCache::default();
+        let cache = MemorySyntheticCache::default();
         let inner = FakeTts::default();
         let mut tts = CachedTextToSpeech::new(inner, cache);
-        let unit = SpeechUnit::CompleteSentence("I think that works.".to_string());
+        let unit = SyntheticUnit::CompleteSentence("I think that works.".to_string());
 
-        tts.enqueue(SpeechPlan::from(unit)).expect("enqueue");
+        tts.enqueue(MouthSyntheticPlan::from(unit))
+            .expect("enqueue");
         assert_eq!(tts.inner.enqueues, 1);
     }
 
@@ -399,8 +401,8 @@ mod tests {
             .expect("clock")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("listenbury-cache-test-{ts}"));
-        let mut cache = FileSpeechCache::new(&root, "voice.onnx", Some("cfg".to_string()));
-        let unit = SpeechUnit::Backchannel("Okay.".to_string());
+        let mut cache = FileSyntheticCache::new(&root, "voice.onnx", Some("cfg".to_string()));
+        let unit = SyntheticUnit::Backchannel("Okay.".to_string());
         let frame = AudioFrame {
             captured_at: crate::time::ExactTimestamp::now(),
             sample_rate_hz: 22_050,

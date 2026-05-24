@@ -1141,7 +1141,7 @@ fn broadcast_visual_speech_frame(state: &Arc<ServerState>, frame: &VisualSpeechF
         session_id: None,
         turn_id: None,
         utterance_id: None,
-        speech_unit_id: None,
+        synthetic_unit_id: None,
         transcript_revision_id: None,
         span_id: None,
         audio_clip_id: None,

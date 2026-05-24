@@ -1,6 +1,6 @@
-# Canonical speech IR spine
+# Synthetic IR spine
 
-Listenbury now treats `CanonicalSpeechPlan` (`src/speech/canonical_plan.rs`) as the canonical speech IR between linguistic/prosodic analysis and backend-specific synthesis payloads.
+Listenbury now treats `SyntheticPlan` (`src/speech/synthetic_plan.rs`) as the central synthesis IR between linguistic/prosodic analysis and backend-specific synthesis payloads.
 
 ## Layering
 
@@ -8,7 +8,7 @@ Listenbury now treats `CanonicalSpeechPlan` (`src/speech/canonical_plan.rs`) as 
 | --- | --- |
 | `ForcedAlignment`, `PraatProsodyAnalysis` | Source input |
 | `ProsodyTimingPlan` | Source analysis output |
-| `CanonicalSpeechPlan` / `CanonicalSpeechPhone` | Canonical speech IR spine |
+| `SyntheticPlan` / `SyntheticPhone` | Central synthesis IR spine |
 | `PiperPhonemeSequence`, `PiperIdSequence`, `PiperTimingPlan` | Piper lowerings |
 | `PhoneTimedPlan`, `MbrolaPhone`, `.pho` text | MBROLA lowerings |
 | `PhoneAcousticTarget`, Klatt trajectory/params | Acoustic rendering target |
@@ -19,7 +19,7 @@ Listenbury now treats `CanonicalSpeechPlan` (`src/speech/canonical_plan.rs`) as 
 ```
 text/alignment/g2p/singing intent
         ↓
-CanonicalSpeechPlan
+SyntheticPlan
         ↓
 backend lowerings (Piper, MBROLA, Klatt, diphone, debug)
 ```
@@ -45,9 +45,9 @@ wave chunks depending on their declared capabilities.
 
 ## Current vertical proof
 
-- `ProsodyTimingPlan -> CanonicalSpeechPlan` is explicit via `canonical_speech_plan_from_prosody_timing`.
-- MBROLA lowering now flows through the canonical IR in `prosody_timing_plan_to_phone_timed_plan`.
-- Piper timing lowering now flows through the canonical IR in `prosody_plan_to_piper_timing`.
-- `listenbury prosody-plan` builds a canonical plan internally before reporting summary counts.
+- `ProsodyTimingPlan -> SyntheticPlan` is explicit via `synthetic_plan_from_prosody_timing`.
+- MBROLA lowering now flows through `SyntheticPlan` in `prosody_timing_plan_to_phone_timed_plan`.
+- Piper timing lowering now flows through `SyntheticPlan` in `prosody_plan_to_piper_timing`.
+- `listenbury prosody-plan` builds a `SyntheticPlan` internally before reporting summary counts.
 - `speech::work::BlockingVocoderRenderer` adapts existing `VocoderBackend`
   implementations into the representation-to-wave layer.

@@ -6,7 +6,7 @@
 {"turn":1,"kind":"transcript","t_unix_ns":1700000000840000000,"elapsed_ms":840,"text":"Tell me a joke"}
 {"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000000940000000,"elapsed_ms":940}
 {"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001100000000,"elapsed_ms":1100}
-{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001270000000,"elapsed_ms":1270,"text":"Why did the scarecrow win an award? Because he was outstanding in his field!","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_safe_synthetic_unit_emitted","t_unix_ns":1700000001270000000,"elapsed_ms":1270,"text":"Why did the scarecrow win an award? Because he was outstanding in his field!","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001350000000,"elapsed_ms":1350,"text":"Why did the scarecrow win an award? Because he was outstanding in his field!","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001490000000,"elapsed_ms":1490}
 {"turn":1,"kind":"playback_started","t_unix_ns":1700000001550000000,"elapsed_ms":1550}

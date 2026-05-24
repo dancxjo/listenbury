@@ -44,7 +44,7 @@ pub use g2p::{
     G2pError, GraphemeToPhoneme, LexicalStressLevel, LexicalStressSource, LexicalStressTarget,
     PhoneLengthClass, PhoneLengthHint, PhoneTimingHint, PhonemeProsodyCandidate,
     PhonemeProsodyCandidateEvent, PhonemeProsodyCandidateTracker, PhonemeProsodyPhonemizer,
-    PhonemizedUnit, SimpleEnglishG2p, SpeechCandidateId, TimingHintSource, WordProsodyTarget,
+    PhonemizedUnit, SimpleEnglishG2p, SyntheticCandidateId, TimingHintSource, WordProsodyTarget,
     WordTimingHint,
 };
 pub use morphophonology::{
@@ -58,7 +58,7 @@ pub use phoneme::{
 };
 pub use prosody_audit::{
     PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind, ProminenceClass,
-    ProsodyRealizationStatus, RiperStyleProfile, SpeechToken, Stress, WordProsodyInfo,
+    ProsodyRealizationStatus, RiperStyleProfile, Stress, SyntheticToken, WordProsodyInfo,
 };
 pub use prosody_controls::{
     ControlStatusEntry, PiperBoundaryOverride, PiperPauseOverride, PiperPhonemeDurationOverride,
@@ -70,7 +70,7 @@ pub use prosody_planner::{
     ProsodyAccentKind, ProsodyBoundaryHintOp, ProsodyContour, ProsodyEnergy, ProsodyEnergyClass,
     ProsodyList, ProsodyOp, ProsodyOperation, ProsodyOverlay, ProsodyOverlaySource,
     ProsodyPitchShape, ProsodyRateClass, ProsodyTarget, RepairCue, RepairPlan, RepairStrategy,
-    RestartScope, RiperProsodyRealization, SpeechCommitState, SpeechCursor,
+    RestartScope, RiperProsodyRealization, SyntheticCommitState, SyntheticCursor,
 };
 pub use sentence_analysis::{
     ContextPredicate, EnvironmentPattern, HeuristicSentenceAnalyzer, OrthographicEmphasisKind,

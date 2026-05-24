@@ -22,7 +22,7 @@ use listenbury::linguistic::phonology::{Phone, PhoneString};
 use listenbury::mouth::backend::TtsBackend;
 #[cfg(feature = "piper-compat")]
 use listenbury::mouth::piper::{PiperBackendPreference, ProcessPiperBackend};
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 #[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
@@ -118,7 +118,9 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
 
     if should_use_mbrola_backend(&piper_args) {
         let mut tts = say_mbrola_tts_for_args(&piper_args)?;
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            piper_args.text,
+        )))?;
         let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
         if let Some(output_path) = piper_args.output_wav {
@@ -131,7 +133,9 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
 
     let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
     let mut tts = say_tts_for_args(&piper_args, piper_voice)?;
-    tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(piper_args.text)))?;
+    tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+        piper_args.text,
+    )))?;
     let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
 
     if let Some(output_path) = piper_args.output_wav {
@@ -236,7 +240,9 @@ fn stream_piper_stdin_to_frames(
         if text.is_empty() {
             continue;
         }
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text.to_string())))?;
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            text.to_string(),
+        )))?;
         let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
         frame_tx
             .send(frames)
@@ -258,7 +264,9 @@ fn stream_mbrola_stdin_to_frames(
         if text.is_empty() {
             continue;
         }
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text.to_string())))?;
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            text.to_string(),
+        )))?;
         let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
         frame_tx
             .send(frames)

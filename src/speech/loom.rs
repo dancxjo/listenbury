@@ -2,10 +2,10 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use super::breath_asr::BreathAudioSegment;
-use super::canonical_plan::CanonicalSpeechPlan;
+use super::synthetic_plan::SyntheticPlan;
 use crate::word::TranscriptWord;
 
-/// Shared canonical speech fabric for both heard and generated speech material.
+/// Shared canonical speech fabric for both heard and generated synthesis material.
 pub const CANONICAL_SPEECH_LOOM_ID: &str = "canonical-speech-loom";
 
 /// Canonical speech artifacts that workers can observe, revise, or emit.
@@ -493,10 +493,7 @@ pub fn asr_vad_segment_artifacts(
         .collect()
 }
 
-pub fn tts_intended_phone_artifacts(
-    plan: &CanonicalSpeechPlan,
-    source_id: &str,
-) -> Vec<SpeechArtifact> {
+pub fn tts_intended_phone_artifacts(plan: &SyntheticPlan, source_id: &str) -> Vec<SpeechArtifact> {
     let mut phone_index = 0usize;
     let mut artifacts = Vec::new();
     for (word_index, segment) in plan.segments.iter().enumerate() {

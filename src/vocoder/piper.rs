@@ -13,7 +13,7 @@ use crate::voice::articulator::{RenderPlan, SungBackendDetail, SungBackendKind};
 use crate::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "tts-piper")]
 use crate::{
-    mouth::planner::{SpeechPlan, SpeechUnit},
+    mouth::planner::{MouthSyntheticPlan, SyntheticUnit},
     mouth::tts::TextToSpeech,
 };
 #[cfg(feature = "tts-piper")]
@@ -137,7 +137,7 @@ impl VocoderBackend for PiperBackend {
                 piper_config.config_path = Some(inferred_config_path);
             }
             let mut tts = PiperTextToSpeech::new(piper_config);
-            tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(text)))?;
+            tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(text)))?;
             Self::collect_tts_audio(&mut tts, config.timeout)
         }
     }

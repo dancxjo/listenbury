@@ -83,7 +83,7 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 #[cfg(all(
     feature = "asr-whisper",
     feature = "llm-llama-cpp",
@@ -257,7 +257,7 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
 
         println!("\n=== Turn {turn_num} / {turns}  {speaker} → {listener} ===");
 
-        // Step 1 – Determine speech text
+        // Step 1 – Determine synthetic text
         //   Turn 1: A speaks the seed directly (no LLM generation).
         //   All other turns: current speaker generates a response via LLM.
         let (speech_text, generated_text, llm_ms) = if turn_num == 1 {
@@ -279,7 +279,9 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
             piper_config_b.clone()
         };
         let mut tts = PiperTextToSpeech::new(piper_config);
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(speech_text.clone())))?;
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            speech_text.clone(),
+        )))?;
 
         let tts_t = Instant::now();
         let audio = collect_tts_audio(&mut tts, Duration::from_secs(MAX_TTS_TIMEOUT_SECS))

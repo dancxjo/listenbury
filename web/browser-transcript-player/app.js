@@ -25,12 +25,12 @@ import {
   LIVE_EVENT_LANE,
   SPAN_PAIRS,
   END_TO_START,
-  isLlmTextEvent as isGeneratedSpeechEventKind,
+  isLlmTextEvent as isGeneratedSyntheticEventKind,
 } from "/assets/shared/events/schema.mjs";
 import {
   normalizeSemanticText,
   normalizedId,
-  speechUnitIdFromEvent,
+  syntheticUnitIdFromEvent,
   transcriptCandidateText as _transcriptCandidateText,
   wordStreamText as _wordStreamText,
   textContent,
@@ -1270,16 +1270,16 @@ function sessionGetOrCreateTurn(session, turnId) {
       wordStreamTimeOffsetMs: null,
       wordRevisions: new Map(), // stableWordKey → [{fromText, at_ms, provenance, approximate}]
       generatedText: null,
-      generatedSpeechFragments: [],
-      speechUnitsById: new Map(),
-      generatedSpeechUnitOrder: [],
+      generatedSyntheticFragments: [],
+      syntheticUnitsById: new Map(),
+      generatedSyntheticUnitOrder: [],
     });
   }
   return session.turns.get(turnId);
 }
 
-function openSpanRecord(startMs, label = null, speechUnitId = null) {
-  return { start_ms: startMs, label, speech_unit_id: speechUnitId };
+function openSpanRecord(startMs, label = null, syntheticUnitId = null) {
+  return { start_ms: startMs, label, synthetic_unit_id: syntheticUnitId };
 }
 
 function openSpanStartMs(record) {
@@ -1290,8 +1290,8 @@ function openSpanLabel(record) {
   return typeof record === "number" ? null : record?.label ?? null;
 }
 
-function openSpanSpeechUnitId(record) {
-  return typeof record === "number" ? null : record?.speech_unit_id ?? null;
+function openSpanSyntheticUnitId(record) {
+  return typeof record === "number" ? null : record?.synthetic_unit_id ?? null;
 }
 
 // Returns a stable string key for a word, preferring:
@@ -1521,7 +1521,7 @@ function reduceLiveEvent(session, event) {
     return;
   }
 
-  // ── tts_timed_word_stream_revision: update latest generated speech word stream
+  // ── tts_timed_word_stream_revision: update latest generated synthesis word stream
   if (event.kind === "tts_timed_word_stream_revision" && event.artifact?.words) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
     liveTurn.latestTtsWordStream = event.artifact;
@@ -1556,9 +1556,9 @@ function reduceLiveEvent(session, event) {
     // Fall through to emit as a lane marker below.
   }
 
-  if (event.text && isGeneratedSpeechEventKind(event.kind)) {
+  if (event.text && isGeneratedSyntheticEventKind(event.kind)) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
-    updateGeneratedSpeechText(liveTurn, event);
+    updateGeneratedSyntheticText(liveTurn, event);
   }
 
   // ── breath_group_opened → open span
@@ -1601,12 +1601,12 @@ function reduceLiveEvent(session, event) {
     return;
   }
 
-  // ── speech_unit lifecycle
-  if (event.kind === "speech_unit_committed" && event.text) {
-    log("commit", `Speech unit committed: "${event.text.slice(0, 60)}"`);
+  // ── synthetic_unit lifecycle
+  if (event.kind === "synthetic_unit_committed" && event.text) {
+    log("commit", `Synthetic unit committed: "${event.text.slice(0, 60)}"`);
   }
-  if (event.kind === "speech_unit_cancelled" && event.text) {
-    log("cancel", `Speech unit cancelled: "${event.text.slice(0, 60)}"`);
+  if (event.kind === "synthetic_unit_cancelled" && event.text) {
+    log("cancel", `Synthetic unit cancelled: "${event.text.slice(0, 60)}"`);
   }
 
   // ── Span end event → close the matching open span
@@ -1643,7 +1643,7 @@ function reduceLiveEvent(session, event) {
       openSpanRecord(
         event.elapsed_ms,
         semanticSpanLabel(session, event.kind, turn, labelForKind(event.kind), event),
-        event.kind === "playback_started" ? speechUnitIdFromEvent(event) : null,
+        event.kind === "playback_started" ? syntheticUnitIdFromEvent(event) : null,
       ),
     );
     if (event.kind === "asr_started") {
@@ -1692,7 +1692,7 @@ function liveSessionToViewerPayload(session) {
       metadata: {
         in_progress: true,
         turn: spanTurn,
-        ...(openSpanSpeechUnitId(openSpan) ? { speech_unit_id: openSpanSpeechUnitId(openSpan) } : {}),
+        ...(openSpanSyntheticUnitId(openSpan) ? { synthetic_unit_id: openSpanSyntheticUnitId(openSpan) } : {}),
       },
     });
   }
@@ -1798,7 +1798,7 @@ function liveSessionToViewerPayload(session) {
           lane: event.lane,
           kind: event.kind,
           turn: event.metadata?.turn ?? null,
-          speech_unit_id: event.metadata?.event?.speech_unit_id ?? event.metadata?.speech_unit_id ?? null,
+          synthetic_unit_id: event.metadata?.event?.synthetic_unit_id ?? event.metadata?.synthetic_unit_id ?? null,
           text: event.label ?? null,
           source: "playback_started",
         },
@@ -2183,28 +2183,28 @@ function labelForKind(kind) {
   return kind.replace(/_/g, " ");
 }
 
-function updateGeneratedSpeechText(liveTurn, event) {
-  if (!event.text || !isGeneratedSpeechEventKind(event.kind)) {
+function updateGeneratedSyntheticText(liveTurn, event) {
+  if (!event.text || !isGeneratedSyntheticEventKind(event.kind)) {
     return;
   }
-  const speechUnitId = speechUnitIdFromEvent(event);
-  if (speechUnitId) {
-    liveTurn.speechUnitsById.set(speechUnitId, event.text);
+  const syntheticUnitId = syntheticUnitIdFromEvent(event);
+  if (syntheticUnitId) {
+    liveTurn.syntheticUnitsById.set(syntheticUnitId, event.text);
   }
 
-  if (event.kind === "tts_enqueue_started" || event.kind === "speech_unit_committed") {
-    if (speechUnitId) {
-      if (!liveTurn.generatedSpeechUnitOrder.includes(speechUnitId)) {
-        liveTurn.generatedSpeechUnitOrder.push(speechUnitId);
+  if (event.kind === "tts_enqueue_started" || event.kind === "synthetic_unit_committed") {
+    if (syntheticUnitId) {
+      if (!liveTurn.generatedSyntheticUnitOrder.includes(syntheticUnitId)) {
+        liveTurn.generatedSyntheticUnitOrder.push(syntheticUnitId);
       }
-      const fragments = liveTurn.generatedSpeechUnitOrder
-        .map((id) => liveTurn.speechUnitsById.get(id))
+      const fragments = liveTurn.generatedSyntheticUnitOrder
+        .map((id) => liveTurn.syntheticUnitsById.get(id))
         .filter((text) => typeof text === "string" && text.trim());
-      liveTurn.generatedSpeechFragments = fragments;
+      liveTurn.generatedSyntheticFragments = fragments;
       liveTurn.generatedText = fragments.join(" ");
       return;
     }
-    const fragments = liveTurn.generatedSpeechFragments;
+    const fragments = liveTurn.generatedSyntheticFragments;
     const last = fragments[fragments.length - 1];
     if (last !== event.text) {
       fragments.push(event.text);
@@ -2213,7 +2213,7 @@ function updateGeneratedSpeechText(liveTurn, event) {
     return;
   }
 
-  if (liveTurn.generatedSpeechFragments.length === 0) {
+  if (liveTurn.generatedSyntheticFragments.length === 0) {
     liveTurn.generatedText = event.text;
   }
 }
@@ -2229,12 +2229,12 @@ function semanticSpanLabel(session, kind, turnId, fallback, sourceEvent = null, 
     case "llm_generation_started":
       return liveTurn?.generatedText ?? fallback;
     case "playback_started": {
-      const speechUnitId =
-        openSpanSpeechUnitId(openSpan) ?? speechUnitIdFromEvent(sourceEvent);
-      if (speechUnitId) {
-        const speechUnitText = liveTurn?.speechUnitsById?.get(speechUnitId);
-        if (speechUnitText) {
-          return speechUnitText;
+      const syntheticUnitId =
+        openSpanSyntheticUnitId(openSpan) ?? syntheticUnitIdFromEvent(sourceEvent);
+      if (syntheticUnitId) {
+        const syntheticUnitText = liveTurn?.syntheticUnitsById?.get(syntheticUnitId);
+        if (syntheticUnitText) {
+          return syntheticUnitText;
         }
       }
       return liveTurn?.generatedText ?? fallback;

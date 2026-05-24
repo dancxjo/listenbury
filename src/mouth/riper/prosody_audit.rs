@@ -54,7 +54,7 @@ pub enum PauseReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SpeechToken {
+pub enum SyntheticToken {
     TextWord(String),
     Boundary(PhraseBoundaryKind),
     PhoneticOverride {

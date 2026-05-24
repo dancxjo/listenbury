@@ -6,7 +6,7 @@
 {"turn":1,"kind":"transcript","t_unix_ns":1700000000950000000,"elapsed_ms":950,"text":"Can you keep talking"}
 {"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000001050000000,"elapsed_ms":1050}
 {"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001210000000,"elapsed_ms":1210}
-{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001380000000,"elapsed_ms":1380,"text":"Sure I can keep speaking for a while if you would like me to.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_safe_synthetic_unit_emitted","t_unix_ns":1700000001380000000,"elapsed_ms":1380,"text":"Sure I can keep speaking for a while if you would like me to.","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001460000000,"elapsed_ms":1460,"text":"Sure I can keep speaking for a while if you would like me to.","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001590000000,"elapsed_ms":1590}
 {"turn":1,"kind":"playback_started","t_unix_ns":1700000001650000000,"elapsed_ms":1650,"artifact":{"url":"clips/turn-001.wav","start_ms":1650,"end_ms":3200}}

@@ -10,7 +10,7 @@ use tracing::debug;
 
 use crate::audio::frame::AudioFrame;
 use crate::mouth::backend::TtsBackend;
-use crate::mouth::planner::{SpeechPlan, strip_emoji};
+use crate::mouth::planner::{MouthSyntheticPlan, strip_emoji};
 #[cfg(feature = "piper-compat")]
 use crate::mouth::riper::{
     PiperIdSequence, PiperPhonemeSequence, PiperVoiceConfig, RiperBackend, SimpleEnglishG2p,
@@ -499,7 +499,7 @@ fn piper_backend_with_preference(
 }
 
 impl TextToSpeech for PiperTextToSpeech {
-    fn enqueue(&mut self, plan: SpeechPlan) -> Result<()> {
+    fn enqueue(&mut self, plan: MouthSyntheticPlan) -> Result<()> {
         let text = plan_text(plan);
         if text.trim().is_empty() {
             return Ok(());
@@ -582,7 +582,7 @@ fn should_shutdown_after_drain(rx: &Receiver<PiperCommand>) -> bool {
     }
 }
 
-fn plan_text(plan: SpeechPlan) -> String {
+fn plan_text(plan: MouthSyntheticPlan) -> String {
     strip_emoji(plan.text())
 }
 
@@ -655,7 +655,7 @@ mod tests {
 
     use super::*;
     use crate::mouth::backend::tests::MockTtsBackend;
-    use crate::mouth::planner::SpeechUnit;
+    use crate::mouth::planner::SyntheticUnit;
 
     fn collect_audio(tts: &mut PiperTextToSpeech, timeout: Duration) -> Vec<AudioFrame> {
         let deadline = std::time::Instant::now() + timeout;
@@ -676,8 +676,10 @@ mod tests {
         let backend = MockTtsBackend::new();
         let mut tts = PiperTextToSpeech::with_backend(backend);
 
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn("Hello.".to_string())))
-            .expect("enqueue");
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            "Hello.".to_string(),
+        )))
+        .expect("enqueue");
 
         let frames = collect_audio(&mut tts, Duration::from_secs(2));
         assert!(
@@ -693,7 +695,7 @@ mod tests {
 
         // A plan whose text reduces to empty after emoji stripping should not
         // reach the backend at all.
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             "\u{1F600}\u{1F601}".to_string(),
         )))
         .expect("enqueue emoji-only plan");
@@ -714,7 +716,7 @@ mod tests {
         let backend = MockTtsBackend::new();
         let mut tts = PiperTextToSpeech::with_backend(backend);
 
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn(
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             "Hello \u{1F600} world.".to_string(),
         )))
         .expect("enqueue");
@@ -736,8 +738,10 @@ mod tests {
         // Give the worker a moment to process the stop command so that a
         // subsequent enqueue is not consumed by `should_shutdown_after_drain`.
         std::thread::sleep(Duration::from_millis(50));
-        tts.enqueue(SpeechPlan::from(SpeechUnit::FullTurn("Hi.".to_string())))
-            .expect("enqueue after stop should not error");
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+            "Hi.".to_string(),
+        )))
+        .expect("enqueue after stop should not error");
 
         let frames = collect_audio(&mut tts, Duration::from_secs(2));
         assert!(!frames.is_empty(), "expected audio after stop+enqueue");

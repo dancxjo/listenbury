@@ -100,9 +100,9 @@ enum DevCommand {
         about = "Print a JSON debug snapshot of the soundscape: sources, hypotheses, voice counts, and overlaps"
     )]
     SoundscapeDebug(SoundscapeDebugCommand),
-    SpeechCache {
+    SyntheticCache {
         #[command(subcommand)]
-        command: SpeechCacheCommand,
+        command: SyntheticCacheCommand,
     },
     #[command(about = "Build or inspect the neural diphone cache (requires piper-compat)")]
     DiphoneCache {
@@ -719,12 +719,12 @@ pub(crate) enum SingDemoBackendOption {
 }
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum SpeechCacheCommand {
-    Prewarm(SpeechCachePrewarmCommand),
+pub(crate) enum SyntheticCacheCommand {
+    Prewarm(SyntheticCachePrewarmCommand),
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct SpeechCachePrewarmCommand {
+pub(crate) struct SyntheticCachePrewarmCommand {
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
@@ -1014,7 +1014,7 @@ fn run_dev(command: DevCommand) -> Result<()> {
         }
         DevCommand::DogfoodTwo(cmd) => commands::run_dogfood_two(cmd),
         DevCommand::SoundscapeDebug(cmd) => commands::run_soundscape_debug(cmd),
-        DevCommand::SpeechCache { command } => commands::run_speech_cache(command),
+        DevCommand::SyntheticCache { command } => commands::run_synthetic_cache(command),
         DevCommand::DiphoneCache { command } => commands::run_diphone_cache(command),
         DevCommand::MbrolaInventory(cmd) => commands::run_mbrola_inventory(cmd),
         DevCommand::MbrolaAudit(cmd) => commands::run_mbrola_audit(cmd),

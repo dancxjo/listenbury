@@ -6,8 +6,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::linguistic::english_us_variety;
-use crate::speech::canonical_plan::{
-    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_piper_timing,
+use crate::speech::synthetic_plan::{
+    synthetic_plan_from_prosody_timing, synthetic_plan_to_piper_timing,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -277,8 +277,8 @@ pub struct PiperTimingBreak {
 }
 
 pub fn prosody_plan_to_piper_timing(plan: &ProsodyTimingPlan) -> PiperTimingPlan {
-    let canonical = canonical_speech_plan_from_prosody_timing(plan);
-    canonical_speech_plan_to_piper_timing(&canonical)
+    let synthetic_plan = synthetic_plan_from_prosody_timing(plan);
+    synthetic_plan_to_piper_timing(&synthetic_plan)
 }
 
 fn segment_from_alignment(

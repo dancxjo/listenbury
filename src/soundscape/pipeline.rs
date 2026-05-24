@@ -15,7 +15,7 @@ const DEFAULT_PLAYBACK_LABEL: &str = "Playback";
 ///
 /// Current event seams wired here:
 /// - audio input: [`AudioFrame`]
-/// - playback output: [`PlaybackEvent::SpeechStarted`]
+/// - playback output: [`PlaybackEvent::SyntheticStarted`]
 /// - VAD: [`VadResult`]
 /// - ASR: [`TranscriptChunk`]
 #[derive(Debug, Clone)]
@@ -70,7 +70,7 @@ impl SoundscapePipelineAdapter {
         rendered_frame: Option<&AudioFrame>,
     ) -> Option<ExpectedSound> {
         let (text, at) = match event {
-            PlaybackEvent::SpeechStarted { text, at, .. } => (text, *at),
+            PlaybackEvent::SyntheticStarted { text, at, .. } => (text, *at),
             _ => return None,
         };
         let start_ms = nanos_to_millis(at.unix_nanos);
@@ -249,7 +249,7 @@ mod tests {
             text: "hello from microphone".to_string(),
             is_final: true,
         };
-        let playback = PlaybackEvent::SpeechStarted {
+        let playback = PlaybackEvent::SyntheticStarted {
             id: PlaybackUnitId(7),
             text: "hello from speaker".to_string(),
             at: ExactTimestamp::from_unix_nanos(1_005_000_000),

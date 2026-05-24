@@ -22,7 +22,7 @@ import {
   joinWords,
   joinSemanticText,
   normalizedId,
-  speechUnitIdFromEvent,
+  syntheticUnitIdFromEvent,
   transcriptCandidateText,
   wordStreamText,
   tokenize,
@@ -36,12 +36,12 @@ import {
   commitLlmText,
   setLlmProspective,
   finalizeLlmText,
-  speechUnitText,
+  syntheticUnitText,
 } from "./reducers.mjs";
 
 import {
   isLlmTextEvent,
-  isGeneratedSpeechEventKind,
+  isGeneratedSyntheticEventKind,
   isProspectiveCommitment,
   isPlayedCommitment,
   LIVE_EVENT_LANE,
@@ -72,7 +72,7 @@ function mkTurn(overrides = {}) {
     llmFragments: [],
     llmWords: [],
     llmDeleted: [],
-    speechUnitsById: new Map(),
+    syntheticUnitsById: new Map(),
     ...overrides,
   };
 }
@@ -125,10 +125,10 @@ test("normalizedId handles various id types", () => {
   assert.deepEqual(normalizedId({ 0: "first" }), "first");
 });
 
-test("speechUnitIdFromEvent extracts id from direct field or artifact", () => {
-  assert.equal(speechUnitIdFromEvent({ speech_unit_id: "u1" }), "u1");
-  assert.equal(speechUnitIdFromEvent({ artifact: { speech_unit_id: "u2" } }), "u2");
-  assert.equal(speechUnitIdFromEvent({}), null);
+test("syntheticUnitIdFromEvent extracts id from direct field or artifact", () => {
+  assert.equal(syntheticUnitIdFromEvent({ synthetic_unit_id: "u1" }), "u1");
+  assert.equal(syntheticUnitIdFromEvent({ artifact: { synthetic_unit_id: "u2" } }), "u2");
+  assert.equal(syntheticUnitIdFromEvent({}), null);
 });
 
 test("transcriptCandidateText joins stable and unstable text", () => {
@@ -180,15 +180,15 @@ test("recordDeletedText appends unique snippets up to MAX_DELETED_SNIPPETS", () 
 // ── Schema classifiers ────────────────────────────────────────────────────
 
 test("isLlmTextEvent classifies LLM text event kinds", () => {
-  assert.equal(isLlmTextEvent("speech_unit_committed"), true);
-  assert.equal(isLlmTextEvent("speech_unit_cancelled"), true);
-  assert.equal(isLlmTextEvent("speculative_speech_updated"), true);
+  assert.equal(isLlmTextEvent("synthetic_unit_committed"), true);
+  assert.equal(isLlmTextEvent("synthetic_unit_cancelled"), true);
+  assert.equal(isLlmTextEvent("speculative_synthetic_unit_updated"), true);
   assert.equal(isLlmTextEvent("tts_enqueue_started"), true);
   assert.equal(isLlmTextEvent("asr_started"), false);
 });
 
-test("isGeneratedSpeechEventKind is an alias for isLlmTextEvent", () => {
-  assert.equal(isGeneratedSpeechEventKind, isLlmTextEvent);
+test("isGeneratedSyntheticEventKind is an alias for isLlmTextEvent", () => {
+  assert.equal(isGeneratedSyntheticEventKind, isLlmTextEvent);
 });
 
 test("isProspectiveCommitment returns true for non-final states", () => {
@@ -343,29 +343,29 @@ test("ASR word stream updates userWords and marks revised", () => {
 
 // ── LLM speculative → committed transitions ───────────────────────────────
 
-test("speculative speech updates llmProspective and marks prospective", () => {
+test("speculative synthetic updates llmProspective and marks prospective", () => {
   const turn = mkTurn();
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speculative_speech_updated", 100, { text: "I think so." }),
+    mkEvent("speculative_synthetic_unit_updated", 100, { text: "I think so." }),
   );
   assert.equal(turn.llmProspective, "I think so.");
   assert.equal(turn.llmFinal, "");
   assert.equal(turn.flags.prospective, true);
 });
 
-test("speech_unit_committed transitions speculative → committed", () => {
+test("synthetic_unit_committed transitions speculative → committed", () => {
   const turn = mkTurn();
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speculative_speech_updated", 100, { text: "Maybe later." }),
+    mkEvent("speculative_synthetic_unit_updated", 100, { text: "Maybe later." }),
   );
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_committed", 200, { text: "Maybe later." }),
+    mkEvent("synthetic_unit_committed", 200, { text: "Maybe later." }),
   );
 
   assert.equal(turn.llmFinal, "Maybe later.");
@@ -416,17 +416,17 @@ test("finalizeLlmText commits and clears llmWords", () => {
 
 // ── Cancellation handling ─────────────────────────────────────────────────
 
-test("speech_unit_cancelled marks turn cancelled and records deleted text", () => {
+test("synthetic_unit_cancelled marks turn cancelled and records deleted text", () => {
   const turn = mkTurn();
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_committed", 100, { text: "This will be cancelled." }),
+    mkEvent("synthetic_unit_committed", 100, { text: "This will be cancelled." }),
   );
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_cancelled", 150, { text: "This will be cancelled." }),
+    mkEvent("synthetic_unit_cancelled", 150, { text: "This will be cancelled." }),
   );
 
   assert.equal(turn.flags.cancelled, true);
@@ -436,20 +436,20 @@ test("speech_unit_cancelled marks turn cancelled and records deleted text", () =
   );
 });
 
-test("speech_unit_cancelled removes speech unit from registry", () => {
+test("synthetic_unit_cancelled removes synthetic unit from registry", () => {
   const turn = mkTurn();
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_committed", 100, { speech_unit_id: "u1", text: "Unit one." }),
+    mkEvent("synthetic_unit_committed", 100, { synthetic_unit_id: "u1", text: "Unit one." }),
   );
-  assert.equal(turn.speechUnitsById.get("u1"), "Unit one.");
+  assert.equal(turn.syntheticUnitsById.get("u1"), "Unit one.");
 
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_cancelled", 120, { speech_unit_id: "u1", text: "Unit one." }),
+    mkEvent("synthetic_unit_cancelled", 120, { synthetic_unit_id: "u1", text: "Unit one." }),
   );
-  assert.equal(turn.speechUnitsById.has("u1"), false);
+  assert.equal(turn.syntheticUnitsById.has("u1"), false);
 });
 
 test("TTS word stream revision with all-cancelled words marks turn cancelled", () => {
@@ -471,32 +471,32 @@ test("TTS word stream revision with all-cancelled words marks turn cancelled", (
 
 // ── Playback lifecycle transitions ────────────────────────────────────────
 
-test("playback lifecycle: speech committed before playback resolves label", () => {
+test("playback lifecycle: synthetic committed before playback resolves label", () => {
   const turn = mkTurn();
 
-  // Speech unit committed first.
+  // Synthetic unit committed first.
   applyLlmTextEvent(
     turn,
-    mkEvent("speech_unit_committed", 100, { speech_unit_id: "su1", text: "My name is Pete." }),
+    mkEvent("synthetic_unit_committed", 100, { synthetic_unit_id: "su1", text: "My name is Pete." }),
   );
-  assert.equal(turn.speechUnitsById.get("su1"), "My name is Pete.");
+  assert.equal(turn.syntheticUnitsById.get("su1"), "My name is Pete.");
   assert.equal(turn.llmFinal, "My name is Pete.");
 });
 
-test("speechUnitText resolves text from turn registry when event has no direct text", () => {
+test("syntheticUnitText resolves text from turn registry when event has no direct text", () => {
   const turn = mkTurn();
-  turn.speechUnitsById.set("su2", "Indirect text.");
+  turn.syntheticUnitsById.set("su2", "Indirect text.");
 
-  const text = speechUnitText(turn, mkEvent("playback_started", 120, { speech_unit_id: "su2" }));
+  const text = syntheticUnitText(turn, mkEvent("playback_started", 120, { synthetic_unit_id: "su2" }));
   assert.equal(text, "Indirect text.");
 });
 
-test("speechUnitText prefers direct event text over registry lookup", () => {
+test("syntheticUnitText prefers direct event text over registry lookup", () => {
   const turn = mkTurn();
-  turn.speechUnitsById.set("su3", "Registry text.");
+  turn.syntheticUnitsById.set("su3", "Registry text.");
 
-  const text = speechUnitText(turn, mkEvent("playback_started", 130, {
-    speech_unit_id: "su3",
+  const text = syntheticUnitText(turn, mkEvent("playback_started", 130, {
+    synthetic_unit_id: "su3",
     text: "Direct text.",
   }));
   assert.equal(text, "Direct text.");

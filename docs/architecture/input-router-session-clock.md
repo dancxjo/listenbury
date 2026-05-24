@@ -61,7 +61,7 @@ Event ordering semantics:
 Causality semantics:
 
 - `causality` entries point to upstream IDs or correlation anchors
-  (`turn:*`, `utterance:*`, `speech_unit:*`, etc.).
+  (`turn:*`, `utterance:*`, `synthetic_unit:*`, etc.).
 - `correlation` is a looser grouping key for cross-subsystem joins and replay
   slices.
 - Consumers should treat missing `causality` as unknown ancestry (not an error).

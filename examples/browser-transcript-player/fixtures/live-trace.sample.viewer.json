@@ -82,7 +82,7 @@
       }
     },
     {
-      "label": "Pete intended speech",
+      "label": "Pete synthetic intent",
       "stream": {
         "id": 1,
         "source": "GeneratedText",
@@ -496,9 +496,9 @@
     },
     {
       "lane": "Runtime",
-      "kind": "first_safe_speech_unit_emitted",
+      "kind": "first_safe_synthetic_unit_emitted",
       "at_ms": 2050,
-      "label": "First Safe Speech Unit Emitted",
+      "label": "First Safe Synthetic Unit Emitted",
       "metadata": {
         "t_unix_ns": 1715000002050000000,
         "text": "Sure. Overlap routing decides whether to yield or keep speaking.",

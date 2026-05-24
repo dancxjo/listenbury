@@ -35,7 +35,7 @@ impl Default for UtteranceId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SpeechUnitId(pub u64);
+pub struct SyntheticUnitId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TranscriptRevisionId(pub u64);
@@ -79,7 +79,7 @@ mod tests {
         let session = SessionId::new();
         let turn = TurnId(7);
         let utterance = UtteranceId::new();
-        let speech_unit = SpeechUnitId(42);
+        let synthetic_unit = SyntheticUnitId(42);
         let revision = TranscriptRevisionId(9);
         let span = SpanId::new();
         let clip = AudioClipId::new();
@@ -87,7 +87,8 @@ mod tests {
         let session_json = serde_json::to_string(&session).expect("serialize SessionId");
         let turn_json = serde_json::to_string(&turn).expect("serialize TurnId");
         let utterance_json = serde_json::to_string(&utterance).expect("serialize UtteranceId");
-        let speech_json = serde_json::to_string(&speech_unit).expect("serialize SpeechUnitId");
+        let synthetic_json =
+            serde_json::to_string(&synthetic_unit).expect("serialize SyntheticUnitId");
         let revision_json =
             serde_json::to_string(&revision).expect("serialize TranscriptRevisionId");
         let span_json = serde_json::to_string(&span).expect("serialize SpanId");
@@ -106,8 +107,9 @@ mod tests {
             utterance
         );
         assert_eq!(
-            serde_json::from_str::<SpeechUnitId>(&speech_json).expect("deserialize SpeechUnitId"),
-            speech_unit
+            serde_json::from_str::<SyntheticUnitId>(&synthetic_json)
+                .expect("deserialize SyntheticUnitId"),
+            synthetic_unit
         );
         assert_eq!(
             serde_json::from_str::<TranscriptRevisionId>(&revision_json)

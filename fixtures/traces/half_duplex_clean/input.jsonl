@@ -6,7 +6,7 @@
 {"turn":1,"kind":"transcript","t_unix_ns":1700000001050000000,"elapsed_ms":1050,"text":"Hello how are you today"}
 {"turn":1,"kind":"llm_generation_started","t_unix_ns":1700000001150000000,"elapsed_ms":1150}
 {"turn":1,"kind":"first_llm_token","t_unix_ns":1700000001310000000,"elapsed_ms":1310}
-{"turn":1,"kind":"first_safe_speech_unit_emitted","t_unix_ns":1700000001480000000,"elapsed_ms":1480,"text":"I am doing well thank you for asking.","unit_kind":"complete_sentence"}
+{"turn":1,"kind":"first_safe_synthetic_unit_emitted","t_unix_ns":1700000001480000000,"elapsed_ms":1480,"text":"I am doing well thank you for asking.","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"tts_enqueue_started","t_unix_ns":1700000001560000000,"elapsed_ms":1560,"text":"I am doing well thank you for asking.","unit_kind":"complete_sentence"}
 {"turn":1,"kind":"first_tts_audio_frame_available","t_unix_ns":1700000001700000000,"elapsed_ms":1700}
 {"turn":1,"kind":"playback_started","t_unix_ns":1700000001760000000,"elapsed_ms":1760}

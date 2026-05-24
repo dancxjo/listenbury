@@ -37,10 +37,10 @@ export const LIVE_EVENT_LANE = Object.freeze({
   llm_token: "LLM",
   llm_token_delta: "LLM",
   token_emitted: "LLM",
-  first_safe_speech_unit_emitted: "LLM",
-  speech_unit_committed: "LLM",
-  speech_unit_cancelled: "LLM",
-  speculative_speech_updated: "LLM",
+  first_safe_synthetic_unit_emitted: "LLM",
+  synthetic_unit_committed: "LLM",
+  synthetic_unit_cancelled: "LLM",
+  speculative_synthetic_unit_updated: "LLM",
   first_tts_audio_frame_available: "Speaker",
   playback_started: "Speaker",
   playback_finished: "Speaker",
@@ -75,21 +75,21 @@ export const END_TO_START = Object.freeze(
 );
 
 /**
- * Returns true for event kinds that carry LLM-generated speech text.
- * (Also known as `isGeneratedSpeechEventKind` in WaveDeck.)
+ * Returns true for event kinds that carry LLM-generated synthesis text.
+ * (Also known as `isGeneratedSyntheticEventKind` in WaveDeck.)
  */
 export function isLlmTextEvent(kind) {
   return [
-    "first_safe_speech_unit_emitted",
-    "speech_unit_committed",
-    "speech_unit_cancelled",
-    "speculative_speech_updated",
+    "first_safe_synthetic_unit_emitted",
+    "synthetic_unit_committed",
+    "synthetic_unit_cancelled",
+    "speculative_synthetic_unit_updated",
     "tts_enqueue_started",
   ].includes(kind);
 }
 
 /** Alias kept for backward compatibility with WaveDeck usage. */
-export const isGeneratedSpeechEventKind = isLlmTextEvent;
+export const isGeneratedSyntheticEventKind = isLlmTextEvent;
 
 /**
  * Returns true when a word commitment level is not yet finalised

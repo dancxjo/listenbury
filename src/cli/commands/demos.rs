@@ -7,7 +7,7 @@ use listenbury::hearing::vad::{EnergyVad, VoiceActivityDetector};
 #[cfg(feature = "tts-piper")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 #[cfg(feature = "tts-piper")]
-use listenbury::mouth::planner::SpeechPlanner;
+use listenbury::mouth::planner::SyntheticPlanner;
 use listenbury::time::ExactTimestamp;
 
 #[cfg(feature = "tts-piper")]
@@ -20,7 +20,7 @@ pub(crate) fn run_fake_turn(user_text: String) -> Result<()> {
     };
 
     let id = llm.start(request).context("failed to start generation")?;
-    let mut planner = SpeechPlanner::default();
+    let mut planner = SyntheticPlanner::default();
 
     loop {
         let events = llm.poll(id)?;

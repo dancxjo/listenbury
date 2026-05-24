@@ -1,10 +1,10 @@
 use crate::text_stability::stable_prefix_len;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SpeechCandidateId(pub u64);
+pub struct SyntheticCandidateId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpeechCandidateCommitment {
+pub enum SyntheticCandidateCommitment {
     Speculative,
     Prepared,
     Playable,
@@ -14,35 +14,35 @@ pub enum SpeechCandidateCommitment {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadAloudCandidate {
-    pub id: SpeechCandidateId,
+    pub id: SyntheticCandidateId,
     pub text: String,
     pub stable_prefix_len: usize,
-    pub commitment: SpeechCandidateCommitment,
+    pub commitment: SyntheticCandidateCommitment,
     pub safe_to_prepare_len: usize,
     pub safe_to_play_len: usize,
 }
 
 impl ReadAloudCandidate {
     pub fn mark_prepared(&mut self) {
-        if !matches!(self.commitment, SpeechCandidateCommitment::Cancelled) {
-            self.commitment = SpeechCandidateCommitment::Prepared;
+        if !matches!(self.commitment, SyntheticCandidateCommitment::Cancelled) {
+            self.commitment = SyntheticCandidateCommitment::Prepared;
         }
     }
 
     pub fn mark_playable(&mut self) {
-        if !matches!(self.commitment, SpeechCandidateCommitment::Cancelled) {
-            self.commitment = SpeechCandidateCommitment::Playable;
+        if !matches!(self.commitment, SyntheticCandidateCommitment::Cancelled) {
+            self.commitment = SyntheticCandidateCommitment::Playable;
         }
     }
 
     pub fn mark_committed(&mut self) {
-        if !matches!(self.commitment, SpeechCandidateCommitment::Cancelled) {
-            self.commitment = SpeechCandidateCommitment::Committed;
+        if !matches!(self.commitment, SyntheticCandidateCommitment::Cancelled) {
+            self.commitment = SyntheticCandidateCommitment::Committed;
         }
     }
 
     pub fn cancel(&mut self) {
-        self.commitment = SpeechCandidateCommitment::Cancelled;
+        self.commitment = SyntheticCandidateCommitment::Cancelled;
     }
 }
 
@@ -55,18 +55,18 @@ pub trait ReadAloudAudioPreparer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadAloudCandidateEvent {
     CandidateStarted {
-        id: SpeechCandidateId,
+        id: SyntheticCandidateId,
     },
     CandidateUpdated {
         candidate: ReadAloudCandidate,
     },
     CandidateReplaced {
-        old: SpeechCandidateId,
-        new: SpeechCandidateId,
+        old: SyntheticCandidateId,
+        new: SyntheticCandidateId,
         stable_prefix_len: usize,
     },
     CandidateCancelled {
-        id: SpeechCandidateId,
+        id: SyntheticCandidateId,
     },
 }
 
@@ -119,7 +119,7 @@ impl ReadAloudCandidateTracker {
             safe_to_play_len: safe_to_play_len(&text),
             text,
             stable_prefix_len: stable_prefix,
-            commitment: SpeechCandidateCommitment::Speculative,
+            commitment: SyntheticCandidateCommitment::Speculative,
         };
 
         self.active = Some(candidate.clone());
@@ -127,12 +127,12 @@ impl ReadAloudCandidateTracker {
         events
     }
 
-    fn next_id(&mut self) -> SpeechCandidateId {
+    fn next_id(&mut self) -> SyntheticCandidateId {
         self.next_id = self
             .next_id
             .checked_add(1)
-            .expect("speech candidate id space exhausted");
-        SpeechCandidateId(self.next_id)
+            .expect("synthetic candidate id space exhausted");
+        SyntheticCandidateId(self.next_id)
     }
 }
 
@@ -238,7 +238,10 @@ mod tests {
             }
             last_id = Some(candidate.id);
             last_stable = candidate.stable_prefix_len;
-            assert_eq!(candidate.commitment, SpeechCandidateCommitment::Speculative);
+            assert_eq!(
+                candidate.commitment,
+                SyntheticCandidateCommitment::Speculative
+            );
             assert_eq!(candidate.safe_to_prepare_len, snapshot.len());
         }
     }
@@ -272,7 +275,7 @@ mod tests {
 
         let first = latest(&tracker.ingest_text("I read a book by F."));
         assert_eq!(first.safe_to_play_len, "I read a book by".len());
-        assert_eq!(first.commitment, SpeechCandidateCommitment::Speculative);
+        assert_eq!(first.commitment, SyntheticCandidateCommitment::Speculative);
 
         let second = latest(&tracker.ingest_text("I read a book by F. Scott Fitzgerald."));
         assert_eq!(second.id, first.id);
@@ -298,12 +301,18 @@ mod tests {
     fn commitment_states_progress_and_cancel() {
         let mut candidate = latest(&ReadAloudCandidateTracker::new().ingest_text("Hello world."));
         candidate.mark_prepared();
-        assert_eq!(candidate.commitment, SpeechCandidateCommitment::Prepared);
+        assert_eq!(candidate.commitment, SyntheticCandidateCommitment::Prepared);
         candidate.mark_playable();
-        assert_eq!(candidate.commitment, SpeechCandidateCommitment::Playable);
+        assert_eq!(candidate.commitment, SyntheticCandidateCommitment::Playable);
         candidate.mark_committed();
-        assert_eq!(candidate.commitment, SpeechCandidateCommitment::Committed);
+        assert_eq!(
+            candidate.commitment,
+            SyntheticCandidateCommitment::Committed
+        );
         candidate.cancel();
-        assert_eq!(candidate.commitment, SpeechCandidateCommitment::Cancelled);
+        assert_eq!(
+            candidate.commitment,
+            SyntheticCandidateCommitment::Cancelled
+        );
     }
 }

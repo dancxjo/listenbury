@@ -36,7 +36,7 @@ cargo run --no-default-features --features "audio-cpal asr-whisper llm-llama-cpp
 - Brief overlap should usually be treated as transient overlap (continue speaking).
 - Sustained overlap should trigger floor yielding:
   - playback pause first,
-  - then queued speech clear if overlap persists through listen window.
+  - then queued synthetic audio clear if overlap persists through listen window.
 - ASR transcripts should continue appearing for externally-routed speech.
 
 Useful stderr indicators in `dev continue`:

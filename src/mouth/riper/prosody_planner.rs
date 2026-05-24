@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::mouth::riper::evidence::{AnalysisClaim, AnalysisTarget, ClaimKind};
-use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SpeechCandidateId};
+use crate::mouth::riper::g2p::{LexicalStressLevel, PhonemeProsodyCandidate, SyntheticCandidateId};
 use crate::mouth::riper::prosody_audit::{
     PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind,
     ProsodyRealizationStatus, Stress,
@@ -72,7 +72,7 @@ pub struct ProsodyContour {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BreathGroupCandidate {
     pub id: BreathGroupId,
-    pub source_candidate_id: SpeechCandidateId,
+    pub source_candidate_id: SyntheticCandidateId,
     pub text: String,
     pub contour: ProsodyContour,
     pub boundary_state: BoundaryState,
@@ -219,8 +219,8 @@ pub struct ProsodyList {
 /// granularity so correction planning can decide whether to retarget in place
 /// or explicitly restart from an earlier unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechCursor {
-    pub candidate_id: SpeechCandidateId,
+pub struct SyntheticCursor {
+    pub candidate_id: SyntheticCandidateId,
     pub char_offset: usize,
     pub syllable_index: Option<usize>,
     pub word_index: Option<usize>,
@@ -260,24 +260,24 @@ pub enum RepairStrategy {
 /// - `cancellable_until`: generated/buffered speech that can still be replaced.
 /// - Remaining speech is speculative.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechCommitState {
-    pub committed_until: SpeechCursor,
-    pub cancellable_until: SpeechCursor,
+pub struct SyntheticCommitState {
+    pub committed_until: SyntheticCursor,
+    pub cancellable_until: SyntheticCursor,
     pub current_breath_group: Option<BreathGroupId>,
-    pub current_phrase_anchor: Option<SpeechCursor>,
+    pub current_phrase_anchor: Option<SyntheticCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RepairPlan {
     pub strategy: RepairStrategy,
-    pub anchor: SpeechCursor,
+    pub anchor: SyntheticCursor,
     pub replacement_text: String,
     pub replacement_prosody: ProsodyList,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RiperProsodyRealization {
-    pub candidate_id: SpeechCandidateId,
+    pub candidate_id: SyntheticCandidateId,
     pub phone_duration_overrides_ms: Vec<Option<u64>>,
     pub word_duration_overrides_ms: Vec<Option<u64>>,
     pub pauses: Vec<PauseOp>,
@@ -318,7 +318,7 @@ pub struct FocusAccentDiagnostic {
     pub reason: FocusAccentReason,
     pub strength: u8,
     pub evidence: Vec<String>,
-    pub candidate_id: SpeechCandidateId,
+    pub candidate_id: SyntheticCandidateId,
     pub status: FocusAccentStatus,
 }
 
@@ -595,7 +595,7 @@ impl BreathGroupProsodyPlanner {
 
     pub fn cancel_candidate(
         &mut self,
-        source_candidate_id: SpeechCandidateId,
+        source_candidate_id: SyntheticCandidateId,
     ) -> Option<ProsodyList> {
         let mut active = self.active.take()?;
         if active.base.source_candidate_id == source_candidate_id {
@@ -702,7 +702,7 @@ impl BreathGroupProsodyPlanner {
         &mut self,
         previous: &PhonemeProsodyCandidate,
         revised: &PhonemeProsodyCandidate,
-        commit_state: &SpeechCommitState,
+        commit_state: &SyntheticCommitState,
         cue: RepairCue,
     ) -> RepairPlan {
         let replacement_prosody = self.plan_candidate(revised);
@@ -731,7 +731,7 @@ impl BreathGroupProsodyPlanner {
 fn choose_repair_strategy(
     previous: &PhonemeProsodyCandidate,
     revised: &PhonemeProsodyCandidate,
-    commit_state: &SpeechCommitState,
+    commit_state: &SyntheticCommitState,
     divergence: usize,
     cue: RepairCue,
 ) -> RepairStrategy {
@@ -776,10 +776,10 @@ fn choose_repair_strategy(
 
 fn select_repair_anchor(
     candidate: &PhonemeProsodyCandidate,
-    commit_state: &SpeechCommitState,
+    commit_state: &SyntheticCommitState,
     strategy: RepairStrategy,
     divergence: usize,
-) -> SpeechCursor {
+) -> SyntheticCursor {
     match strategy {
         RepairStrategy::ContinueWithProsodicRetarget => {
             cursor_from_char_offset(candidate, divergence.min(candidate.text.len()))
@@ -808,7 +808,10 @@ fn select_repair_anchor(
     }
 }
 
-fn cursor_for_word_index(candidate: &PhonemeProsodyCandidate, word_index: usize) -> SpeechCursor {
+fn cursor_for_word_index(
+    candidate: &PhonemeProsodyCandidate,
+    word_index: usize,
+) -> SyntheticCursor {
     let char_offset = candidate
         .word_targets
         .iter()
@@ -821,7 +824,7 @@ fn cursor_for_word_index(candidate: &PhonemeProsodyCandidate, word_index: usize)
 fn cursor_from_char_offset(
     candidate: &PhonemeProsodyCandidate,
     char_offset: usize,
-) -> SpeechCursor {
+) -> SyntheticCursor {
     let bounded_offset = char_offset.min(candidate.text.len());
     let word_index = candidate
         .word_targets
@@ -869,7 +872,7 @@ fn cursor_from_char_offset(
         .unwrap_or(0)
     });
 
-    SpeechCursor {
+    SyntheticCursor {
         candidate_id: candidate.id,
         char_offset: bounded_offset,
         syllable_index,
@@ -1574,8 +1577,8 @@ mod tests {
         committed_char_offset: usize,
         cancellable_char_offset: usize,
         phrase_anchor_char_offset: Option<usize>,
-    ) -> SpeechCommitState {
-        SpeechCommitState {
+    ) -> SyntheticCommitState {
+        SyntheticCommitState {
             committed_until: cursor_from_char_offset(candidate, committed_char_offset),
             cancellable_until: cursor_from_char_offset(candidate, cancellable_char_offset),
             current_breath_group: Some(BreathGroupId(candidate.id.0)),

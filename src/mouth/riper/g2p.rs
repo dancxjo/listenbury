@@ -72,7 +72,7 @@ pub struct PhoneLengthHint {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SpeechCandidateId(pub u64);
+pub struct SyntheticCandidateId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimingHintSource {
@@ -138,7 +138,7 @@ pub enum BreathBreakDecision {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhonemeProsodyCandidate {
-    pub id: SpeechCandidateId,
+    pub id: SyntheticCandidateId,
     pub text: String,
     pub phonemes: PiperPhonemeSequence,
     pub phone_hints: Vec<PhoneTimingHint>,
@@ -243,18 +243,18 @@ impl PhonemeProsodyCandidate {
 #[allow(clippy::large_enum_variant)]
 pub enum PhonemeProsodyCandidateEvent {
     CandidateStarted {
-        id: SpeechCandidateId,
+        id: SyntheticCandidateId,
     },
     CandidateUpdated {
         candidate: PhonemeProsodyCandidate,
     },
     CandidateReplaced {
-        old: SpeechCandidateId,
-        new: SpeechCandidateId,
+        old: SyntheticCandidateId,
+        new: SyntheticCandidateId,
         stable_prefix_len: usize,
     },
     CandidateCancelled {
-        id: SpeechCandidateId,
+        id: SyntheticCandidateId,
     },
 }
 
@@ -587,18 +587,18 @@ impl<P: PhonemeProsodyPhonemizer> PhonemeProsodyCandidateTracker<P> {
 }
 
 impl<P> PhonemeProsodyCandidateTracker<P> {
-    fn next_id(&mut self) -> SpeechCandidateId {
+    fn next_id(&mut self) -> SyntheticCandidateId {
         // IDs intentionally start at 1 to align with existing candidate trackers.
         self.next_id = self
             .next_id
             .checked_add(1)
-            .expect("speech candidate id space exhausted");
-        SpeechCandidateId(self.next_id)
+            .expect("synthetic candidate id space exhausted");
+        SyntheticCandidateId(self.next_id)
     }
 }
 
 fn build_candidate(
-    id: SpeechCandidateId,
+    id: SyntheticCandidateId,
     text: String,
     stable_prefix_len: usize,
     phonemized: PhonemizedUnit,

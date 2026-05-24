@@ -2,7 +2,9 @@ use crate::event::HearingEvent;
 use crate::hearing::breath::DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS;
 use crate::mind::llm::LlmEvent;
 use crate::mind::turn::{TurnState, TurnTracker};
-use crate::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechPlanner, SpeechUnit};
+use crate::mouth::planner::{
+    ExpressiveUnit, MouthCommand, MouthSyntheticPlan, SyntheticPlanner, SyntheticUnit,
+};
 use std::collections::VecDeque;
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
@@ -166,7 +168,7 @@ pub struct FillerContext {
     pub silence_duration_ms: u64,
     pub main_llm_started_at_ms: Option<u64>,
     pub main_llm_has_emitted_token: bool,
-    pub main_llm_has_safe_speech_unit: bool,
+    pub main_llm_has_safe_synthetic_unit: bool,
     pub user_interrupted_recently: bool,
     pub now_ms: u64,
     pub user_turn_id: Option<u64>,
@@ -181,7 +183,7 @@ impl Default for FillerContext {
             silence_duration_ms: 0,
             main_llm_started_at_ms: None,
             main_llm_has_emitted_token: false,
-            main_llm_has_safe_speech_unit: false,
+            main_llm_has_safe_synthetic_unit: false,
             user_interrupted_recently: false,
             now_ms: 0,
             user_turn_id: None,
@@ -227,7 +229,7 @@ impl FillerPlanner {
         if !self.config.enabled
             || ctx.turn_state != TurnState::PeteThinking
             || ctx.user_interrupted_recently
-            || ctx.main_llm_has_safe_speech_unit
+            || ctx.main_llm_has_safe_synthetic_unit
             || ctx.silence_duration_ms < self.config.min_silence_for_filler_ms
             || ctx.vad_confidence >= 0.5
             || ctx.main_llm_started_at_ms.is_none()
@@ -288,7 +290,7 @@ pub enum RuntimePacket {
     UserStoppedSpeaking,
     TranscriptUpdated { text: String, confidence: f32 },
     BackchannelPlayed { id: BackchannelId },
-    SpeechUnitCommitted { text: String },
+    SyntheticUnitCommitted { text: String },
     TtsQueueChanged { queued_ms: u64 },
     FaceChanged { emoji: String },
     InterruptionDetected,
@@ -324,7 +326,7 @@ pub struct InterruptionDecision {
 pub struct ConversationController {
     pub turn_tracker: TurnTracker,
     pub filler_planner: FillerPlanner,
-    pub speech_planner: SpeechPlanner,
+    pub synthetic_planner: SyntheticPlanner,
     pub interruption_policy: InterruptionPolicy,
     conversation_history: VecDeque<ConversationMessage>,
     pending_runtime_packets: Vec<RuntimePacket>,
@@ -465,18 +467,18 @@ impl ConversationController {
             FillerDecision::Silence => None,
             FillerDecision::PlayCachedBackchannel { id } => {
                 self.record_runtime_packet(RuntimePacket::BackchannelPlayed { id });
-                Some(MouthCommand::Speak(SpeechPlan::from(
-                    SpeechUnit::Backchannel(id.text().to_string()),
+                Some(MouthCommand::Speak(MouthSyntheticPlan::from(
+                    SyntheticUnit::Backchannel(id.text().to_string()),
                 )))
             }
             FillerDecision::SynthesizeBackchannel { text } => Some(MouthCommand::Speak(
-                SpeechPlan::from(SpeechUnit::Backchannel(text)),
+                MouthSyntheticPlan::from(SyntheticUnit::Backchannel(text)),
             )),
         }
     }
 
     pub fn ingest_llm_events(&mut self, events: &[LlmEvent]) -> Vec<ExpressiveUnit> {
-        self.speech_planner.ingest(events)
+        self.synthetic_planner.ingest(events)
     }
 }
 
@@ -494,7 +496,7 @@ mod tests {
             silence_duration_ms: 1_200,
             main_llm_started_at_ms: Some(now_ms.saturating_sub(300)),
             main_llm_has_emitted_token: false,
-            main_llm_has_safe_speech_unit: false,
+            main_llm_has_safe_synthetic_unit: false,
             user_interrupted_recently: false,
             now_ms,
             user_turn_id: Some(turn_id),
@@ -554,7 +556,7 @@ mod tests {
     fn planner_prefers_silence_when_safe_speech_is_ready() {
         let mut planner = enabled_filler_planner();
         let mut ctx = thinking_context(10_000, 1);
-        ctx.main_llm_has_safe_speech_unit = true;
+        ctx.main_llm_has_safe_synthetic_unit = true;
         assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
     }
 
@@ -593,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_paths_cached_backchannel_to_speech_unit() {
+    fn controller_paths_cached_backchannel_to_synthetic_unit() {
         let mut controller = controller_with_fillers_enabled();
         let ctx = thinking_context(10_000, 1);
         let command = controller.decide_filler_command(&ctx);
@@ -601,7 +603,7 @@ mod tests {
             command,
             Some(MouthCommand::Speak(plan))
                 if match plan.unit() {
-                    SpeechUnit::Backchannel(text) => THINKING_FILLERS
+                    SyntheticUnit::Backchannel(text) => THINKING_FILLERS
                         .iter()
                         .any(|id| text == id.text()),
                     _ => false,

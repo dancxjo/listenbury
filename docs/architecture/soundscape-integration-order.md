@@ -5,7 +5,7 @@ This adapter-first path wires current pipeline events into soundscape types with
 ## Current event seams wired by `SoundscapePipelineAdapter`
 
 - Audio input: `audio::AudioFrame`
-- Playback output: `mouth::player::PlaybackEvent::SpeechStarted`
+- Playback output: `mouth::player::PlaybackEvent::SyntheticStarted`
 - VAD decision: `hearing::VadResult`
 - ASR hypothesis: `speech::transcript::TranscriptChunk`
 

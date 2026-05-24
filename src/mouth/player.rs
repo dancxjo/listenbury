@@ -8,7 +8,7 @@ use crate::mouth::planner::{ExpressiveUnit, FaceCommand, MouthCommand};
 use crate::mouth::tts::TextToSpeech;
 use crate::time::{Clock, ExactTimestamp, SystemClock};
 
-/// A unique identifier for a speech playback unit.
+/// A unique identifier for a synthetic playback unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PlaybackUnitId(pub u64);
 
@@ -19,16 +19,16 @@ pub struct PlaybackUnitId(pub u64);
 /// to own the TTS or audio device.
 #[derive(Debug, Clone)]
 pub enum PlaybackEvent {
-    /// A speech unit has been accepted into the synthesis queue.
-    SpeechQueued { id: PlaybackUnitId, text: String },
-    /// Audio for the speech unit has begun playback.
-    SpeechStarted {
+    /// A synthetic unit has been accepted into the synthesis queue.
+    SyntheticQueued { id: PlaybackUnitId, text: String },
+    /// Audio for the synthetic unit has begun playback.
+    SyntheticStarted {
         id: PlaybackUnitId,
         text: String,
         at: ExactTimestamp,
     },
-    /// Audio for the speech unit has finished playback.
-    SpeechFinished {
+    /// Audio for the synthetic unit has finished playback.
+    SyntheticFinished {
         id: PlaybackUnitId,
         at: ExactTimestamp,
     },
@@ -45,14 +45,14 @@ pub enum PlaybackEvent {
 
 /// Abstraction for an ordered executor of [`ExpressiveUnit`]s.
 ///
-/// The player consumes ordered units from a [`SpeechPlanner`] and turns them
+/// The player consumes ordered units from a [`SyntheticPlanner`] and turns them
 /// into synthesized audio (via [`TextToSpeech`]) plus timed [`PlaybackEvent`]s.
-/// Face commands are held back until just before the next speech unit starts,
+/// Face commands are held back until just before the next synthetic unit starts,
 /// keeping them aligned with actual playback rather than planning time.
 ///
-/// [`SpeechPlanner`]: crate::mouth::planner::SpeechPlanner
+/// [`SyntheticPlanner`]: crate::mouth::planner::SyntheticPlanner
 pub trait Player {
-    /// Accept a new expressive unit (speech or face) into the player's queue.
+    /// Accept a new expressive unit (synthetic audio or face) into the player's queue.
     fn enqueue(&mut self, unit: ExpressiveUnit) -> Result<()>;
 
     /// Apply a mouth command, potentially interrupting or modifying playback.
@@ -70,7 +70,7 @@ pub trait Player {
     fn poll_audio(&mut self) -> Result<Vec<AudioFrame>>;
 }
 
-/// Internal state for a speech unit that is currently being synthesized.
+/// Internal state for a synthetic unit that is currently being synthesized.
 struct PendingSynthesis {
     id: PlaybackUnitId,
     text: String,
@@ -80,17 +80,17 @@ struct PendingSynthesis {
 ///
 /// `SequentialPlayer` processes [`ExpressiveUnit`]s one at a time:
 ///
-/// - Speech units are submitted to the wrapped [`TextToSpeech`] implementation.
-///   `SpeechStarted` and `SpeechFinished` events are emitted when audio frames
+/// - Synthetic units are submitted to the wrapped [`TextToSpeech`] implementation.
+///   `SyntheticStarted` and `SyntheticFinished` events are emitted when audio frames
 ///   become available (i.e. when synthesis completes), which is the earliest
 ///   we can establish a playback-time anchor without sample-accurate hooks.
 ///
-/// - Face commands are buffered and emitted just before the next speech unit
+/// - Face commands are buffered and emitted just before the next synthetic unit
 ///   starts, so that the face change is aligned with the audio rather than the
-///   planning stage.  If there is no pending speech when a face command is
+///   planning stage.  If there is no pending synthetic unit when a face command is
 ///   processed, it is emitted immediately.
 ///
-/// - `MouthCommand::StopNow` clears all queued speech and face commands and
+/// - `MouthCommand::StopNow` clears all queued synthetic units and face commands and
 ///   stops the TTS backend.
 ///
 /// - `MouthCommand::FadeOut` is treated as `StopNow` for now (the CPAL backend
@@ -156,7 +156,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
     fn handle_command(&mut self, command: MouthCommand) -> Result<()> {
         match command {
             MouthCommand::Speak(plan) => {
-                self.enqueue(ExpressiveUnit::Speech(plan))?;
+                self.enqueue(ExpressiveUnit::Synthetic(plan))?;
             }
             MouthCommand::StopNow => {
                 self.queue.clear();
@@ -199,13 +199,13 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
                 // All frames for this unit arrived; synthesis is complete.
                 let synth = self.synthesis.take().unwrap();
                 let at = self.now();
-                events.push(PlaybackEvent::SpeechStarted {
+                events.push(PlaybackEvent::SyntheticStarted {
                     id: synth.id,
                     text: synth.text,
                     at,
                 });
                 self.audio_buffer.extend(new_frames);
-                events.push(PlaybackEvent::SpeechFinished { id: synth.id, at });
+                events.push(PlaybackEvent::SyntheticFinished { id: synth.id, at });
             }
             // If synthesis is still in flight (frames not yet ready), return
             // what we have so far and wait for the next poll.
@@ -215,15 +215,15 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
         }
 
         // Advance the queue: drain leading face commands, then start the next
-        // speech unit.
+        // synthetic unit.
         while let Some(unit) = self.queue.pop_front() {
             match unit {
                 ExpressiveUnit::Face(cmd) => {
                     // Accumulate face commands; flush them just before the next
-                    // speech unit starts.
+                    // synthetic unit starts.
                     self.pending_faces.push(cmd);
                 }
-                ExpressiveUnit::Speech(plan) => {
+                ExpressiveUnit::Synthetic(plan) => {
                     // Emit all buffered face commands right before this speech
                     // unit starts, aligning them with actual playback time.
                     let at = self.now();
@@ -233,13 +233,13 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
 
                     let id = self.alloc_id();
                     let text = plan.text().to_string();
-                    events.push(PlaybackEvent::SpeechQueued {
+                    events.push(PlaybackEvent::SyntheticQueued {
                         id,
                         text: text.clone(),
                     });
                     self.tts.enqueue(plan)?;
                     self.synthesis = Some(PendingSynthesis { id, text });
-                    // Only process one speech unit per poll pass so that the
+                    // Only process one synthetic unit per poll pass so that the
                     // caller has a chance to drain audio frames between units.
                     break;
                 }
@@ -247,7 +247,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
         }
 
         // If the queue is empty and there are still pending face commands with
-        // no speech to follow, emit them immediately.
+        // no synthetic unit to follow, emit them immediately.
         if self.synthesis.is_none() && self.queue.is_empty() && !self.pending_faces.is_empty() {
             let at = self.now();
             for face_cmd in self.pending_faces.drain(..) {
@@ -266,7 +266,7 @@ impl<T: TextToSpeech> Player for SequentialPlayer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mouth::planner::{SpeechPlan, SpeechUnit};
+    use crate::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
     use crate::time::FakeClock;
     use std::time::Duration;
 
@@ -293,7 +293,7 @@ mod tests {
     }
 
     impl TextToSpeech for MockTts {
-        fn enqueue(&mut self, plan: SpeechPlan) -> Result<()> {
+        fn enqueue(&mut self, plan: MouthSyntheticPlan) -> Result<()> {
             self.enqueued_texts.push(plan.text().to_string());
             // Pre-load a frame so the next poll_audio call "completes" synthesis.
             self.frames_ready.push(AudioFrame {
@@ -319,7 +319,7 @@ mod tests {
     }
 
     fn sentence(text: &str) -> ExpressiveUnit {
-        ExpressiveUnit::Speech(SpeechPlan::new(SpeechUnit::CompleteSentence(
+        ExpressiveUnit::Synthetic(MouthSyntheticPlan::new(SyntheticUnit::CompleteSentence(
             text.to_string(),
         )))
     }
@@ -328,16 +328,16 @@ mod tests {
         ExpressiveUnit::Face(FaceCommand::SetEmoji(emoji.to_string()))
     }
 
-    fn is_speech_queued(ev: &PlaybackEvent, expected_text: &str) -> bool {
-        matches!(ev, PlaybackEvent::SpeechQueued { text, .. } if text == expected_text)
+    fn is_synthetic_queued(ev: &PlaybackEvent, expected_text: &str) -> bool {
+        matches!(ev, PlaybackEvent::SyntheticQueued { text, .. } if text == expected_text)
     }
 
-    fn is_speech_started(ev: &PlaybackEvent, expected_text: &str) -> bool {
-        matches!(ev, PlaybackEvent::SpeechStarted { text, .. } if text == expected_text)
+    fn is_synthetic_started(ev: &PlaybackEvent, expected_text: &str) -> bool {
+        matches!(ev, PlaybackEvent::SyntheticStarted { text, .. } if text == expected_text)
     }
 
-    fn is_speech_finished(ev: &PlaybackEvent) -> bool {
-        matches!(ev, PlaybackEvent::SpeechFinished { .. })
+    fn is_synthetic_finished(ev: &PlaybackEvent) -> bool {
+        matches!(ev, PlaybackEvent::SyntheticFinished { .. })
     }
 
     fn is_face_changed(ev: &PlaybackEvent, expected_emoji: &str) -> bool {
@@ -348,33 +348,33 @@ mod tests {
     // Tests
     // ---------------------------------------------------------------------------
 
-    /// Enqueueing a speech unit should produce SpeechQueued, then on the next
-    /// poll SpeechStarted and SpeechFinished.
+    /// Enqueueing a synthetic unit should produce SyntheticQueued, then on the next
+    /// poll SyntheticStarted and SyntheticFinished.
     #[test]
-    fn speech_unit_produces_started_and_finished_events() {
+    fn synthetic_unit_produces_started_and_finished_events() {
         let mut player = SequentialPlayer::new(MockTts::new());
         player.enqueue(sentence("Hello.")).unwrap();
 
-        // First poll: unit is dequeued, enqueued to TTS, SpeechQueued emitted.
+        // First poll: unit is dequeued, enqueued to TTS, SyntheticQueued emitted.
         let ev1 = player.poll().unwrap();
         assert!(
-            ev1.iter().any(|e| is_speech_queued(e, "Hello.")),
-            "expected SpeechQueued; got {ev1:?}"
+            ev1.iter().any(|e| is_synthetic_queued(e, "Hello.")),
+            "expected SyntheticQueued; got {ev1:?}"
         );
         assert!(
-            !ev1.iter().any(is_speech_finished),
-            "SpeechFinished must not appear on first poll"
+            !ev1.iter().any(is_synthetic_finished),
+            "SyntheticFinished must not appear on first poll"
         );
 
-        // Second poll: frames are available -> SpeechStarted + SpeechFinished.
+        // Second poll: frames are available -> SyntheticStarted + SyntheticFinished.
         let ev2 = player.poll().unwrap();
         assert!(
-            ev2.iter().any(|e| is_speech_started(e, "Hello.")),
-            "expected SpeechStarted; got {ev2:?}"
+            ev2.iter().any(|e| is_synthetic_started(e, "Hello.")),
+            "expected SyntheticStarted; got {ev2:?}"
         );
         assert!(
-            ev2.iter().any(is_speech_finished),
-            "expected SpeechFinished; got {ev2:?}"
+            ev2.iter().any(is_synthetic_finished),
+            "expected SyntheticFinished; got {ev2:?}"
         );
     }
 
@@ -385,7 +385,7 @@ mod tests {
         player.enqueue(sentence("Hello.")).unwrap();
 
         let ev1 = player.poll().unwrap();
-        assert!(ev1.iter().any(|e| is_speech_queued(e, "Hello.")));
+        assert!(ev1.iter().any(|e| is_synthetic_queued(e, "Hello.")));
 
         clock.advance(Duration::from_millis(75));
         let ev2 = player.poll().unwrap();
@@ -393,14 +393,14 @@ mod tests {
         assert!(ev2.iter().any(|e| {
             matches!(
                 e,
-                PlaybackEvent::SpeechStarted { at, .. }
+                PlaybackEvent::SyntheticStarted { at, .. }
                     if *at == ExactTimestamp::from_unix_nanos(175_000_000)
             )
         }));
         assert!(ev2.iter().any(|e| {
             matches!(
                 e,
-                PlaybackEvent::SpeechFinished { at, .. }
+                PlaybackEvent::SyntheticFinished { at, .. }
                     if *at == ExactTimestamp::from_unix_nanos(175_000_000)
             )
         }));
@@ -419,10 +419,10 @@ mod tests {
         assert!(!frames.is_empty(), "expected audio frames after synthesis");
     }
 
-    /// A face command emitted when no speech is pending should be emitted
+    /// A face command emitted when no synthetic unit is pending should be emitted
     /// immediately on the next poll.
     #[test]
-    fn face_command_emitted_immediately_when_no_speech_pending() {
+    fn face_command_emitted_immediately_when_no_synthetic_unit_pending() {
         let mut player = SequentialPlayer::new(MockTts::new());
         player.enqueue(face("🙂")).unwrap();
 
@@ -433,10 +433,10 @@ mod tests {
         );
     }
 
-    /// A face command that appears between two speech units must be emitted
-    /// *after* the first speech unit finishes and *before* the second starts.
+    /// A face command that appears between two synthetic units must be emitted
+    /// *after* the first synthetic unit finishes and *before* the second starts.
     #[test]
-    fn face_command_between_speech_units_emitted_at_playback_time() {
+    fn face_command_between_synthetic_units_emitted_at_playback_time() {
         let mut player = SequentialPlayer::new(MockTts::new());
         player.enqueue(sentence("Okay.")).unwrap();
         player.enqueue(face("🙂")).unwrap();
@@ -444,49 +444,49 @@ mod tests {
 
         // Poll 1: "Okay." queued to TTS.
         let ev1 = player.poll().unwrap();
-        assert!(ev1.iter().any(|e| is_speech_queued(e, "Okay.")));
+        assert!(ev1.iter().any(|e| is_synthetic_queued(e, "Okay.")));
         assert!(
             !ev1.iter().any(|e| is_face_changed(e, "🙂")),
-            "face must not appear before first speech starts"
+            "face must not appear before first synthetic unit starts"
         );
 
         // Poll 2: "Okay." synthesis done; face change and "I see." queued.
         let ev2 = player.poll().unwrap();
-        assert!(ev2.iter().any(|e| is_speech_started(e, "Okay.")));
-        assert!(ev2.iter().any(is_speech_finished));
+        assert!(ev2.iter().any(|e| is_synthetic_started(e, "Okay.")));
+        assert!(ev2.iter().any(is_synthetic_finished));
         assert!(
             ev2.iter().any(|e| is_face_changed(e, "🙂")),
-            "face must appear after first speech finishes; got {ev2:?}"
+            "face must appear after first synthetic unit finishes; got {ev2:?}"
         );
-        assert!(ev2.iter().any(|e| is_speech_queued(e, "I see.")));
+        assert!(ev2.iter().any(|e| is_synthetic_queued(e, "I see.")));
 
         // Ordering within poll 2: Finished → FaceChanged → Queued
         let finished_pos = ev2
             .iter()
-            .position(is_speech_finished)
-            .expect("SpeechFinished");
+            .position(is_synthetic_finished)
+            .expect("SyntheticFinished");
         let face_pos = ev2
             .iter()
             .position(|e| is_face_changed(e, "🙂"))
             .expect("FaceChanged");
         let queued_pos = ev2
             .iter()
-            .position(|e| is_speech_queued(e, "I see."))
-            .expect("SpeechQueued");
+            .position(|e| is_synthetic_queued(e, "I see."))
+            .expect("SyntheticQueued");
         assert!(
             finished_pos < face_pos,
-            "FaceChanged must come after SpeechFinished"
+            "FaceChanged must come after SyntheticFinished"
         );
         assert!(
             face_pos < queued_pos,
-            "FaceChanged must come before SpeechQueued for next unit"
+            "FaceChanged must come before SyntheticQueued for next unit"
         );
     }
 
-    /// StopNow clears queued speech and face commands; subsequent polls return
-    /// no speech or face events.
+    /// StopNow clears queued synthetic units and face commands; subsequent polls return
+    /// no synthetic or face events.
     #[test]
-    fn stop_clears_queued_speech_and_faces() {
+    fn stop_clears_queued_synthetic_units_and_faces() {
         let mut player = SequentialPlayer::new(MockTts::new());
         player.enqueue(sentence("Okay.")).unwrap();
         player.enqueue(face("🙂")).unwrap();
@@ -504,11 +504,11 @@ mod tests {
         assert!(
             !ev.iter().any(|e| matches!(
                 e,
-                PlaybackEvent::SpeechQueued { .. }
-                    | PlaybackEvent::SpeechStarted { .. }
+                PlaybackEvent::SyntheticQueued { .. }
+                    | PlaybackEvent::SyntheticStarted { .. }
                     | PlaybackEvent::FaceChanged { .. }
             )),
-            "no speech or face events expected after stop; got {ev:?}"
+            "no synthetic or face events expected after stop; got {ev:?}"
         );
 
         // Subsequent poll returns nothing.
@@ -541,11 +541,11 @@ mod tests {
         assert!(
             !ev.iter().any(|e| matches!(
                 e,
-                PlaybackEvent::SpeechQueued { .. }
-                    | PlaybackEvent::SpeechStarted { .. }
+                PlaybackEvent::SyntheticQueued { .. }
+                    | PlaybackEvent::SyntheticStarted { .. }
                     | PlaybackEvent::FaceChanged { .. }
             )),
-            "no stale speech/face events after fade; got {ev:?}"
+            "no stale synthetic/face events after fade; got {ev:?}"
         );
 
         // No more events.
@@ -553,17 +553,18 @@ mod tests {
         assert!(ev2.is_empty(), "expected empty after fade; got {ev2:?}");
     }
 
-    /// MouthCommand::Speak enqueues a speech plan directly.
+    /// MouthCommand::Speak enqueues a synthetic plan directly.
     #[test]
-    fn speak_command_enqueues_speech() {
+    fn speak_command_enqueues_synthetic_unit() {
         let mut player = SequentialPlayer::new(MockTts::new());
-        let plan = SpeechPlan::new(SpeechUnit::CompleteSentence("Via command.".to_string()));
+        let plan =
+            MouthSyntheticPlan::new(SyntheticUnit::CompleteSentence("Via command.".to_string()));
         player.handle_command(MouthCommand::Speak(plan)).unwrap();
 
         let ev = player.poll().unwrap();
         assert!(
-            ev.iter().any(|e| is_speech_queued(e, "Via command.")),
-            "expected SpeechQueued via Speak command; got {ev:?}"
+            ev.iter().any(|e| is_synthetic_queued(e, "Via command.")),
+            "expected SyntheticQueued via Speak command; got {ev:?}"
         );
     }
 

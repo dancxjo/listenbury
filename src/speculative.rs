@@ -3,7 +3,7 @@
 //! This module provides a stage-agnostic candidate shape that can represent:
 //! - ASR transcript candidates,
 //! - prompt/LLM text candidates,
-//! - speech-unit candidates,
+//! - synthetic-unit candidates,
 //! - speculative TTS audio,
 //! - playback candidates.
 //!
@@ -43,7 +43,7 @@ pub enum CandidateStage {
     Transcript,
     Prompt,
     LlmText,
-    SpeechUnit,
+    SyntheticUnit,
     TtsAudio,
     Playback,
 }

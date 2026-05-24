@@ -113,12 +113,12 @@ pub enum FaceCommand {
 
 /// A single unit in the expressive output stream.
 ///
-/// The planner emits an ordered sequence of `ExpressiveUnit`s. Speech units are
+/// The planner emits an ordered sequence of `ExpressiveUnit`s. Synthetic units are
 /// sent to TTS; face units update Pete's displayed countenance inline with
 /// speech.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpressiveUnit {
-    Speech(SpeechPlan),
+    Synthetic(MouthSyntheticPlan),
     Face(FaceCommand),
 }
 
@@ -175,13 +175,13 @@ const COMMON_ABBREVIATIONS: &[&str] = &[
     "u.k.",
 ];
 
-/// Persona- and language-specific heuristics used by [`SpeechPlanner`].
+/// Persona- and language-specific heuristics used by [`SyntheticPlanner`].
 ///
 /// The defaults preserve the original English conversational behavior. Callers
 /// can provide a custom config to swap in a different persona or language
 /// without changing the planner's boundary detection machinery.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpeechPlannerConfig {
+pub struct SyntheticPlannerConfig {
     pub min_non_backchannel_chars: usize,
     pub safe_backchannels: Vec<String>,
     pub safe_discourse_markers: Vec<String>,
@@ -189,7 +189,7 @@ pub struct SpeechPlannerConfig {
     pub common_abbreviations: Vec<String>,
 }
 
-impl Default for SpeechPlannerConfig {
+impl Default for SyntheticPlannerConfig {
     fn default() -> Self {
         Self {
             min_non_backchannel_chars: MIN_NON_BACKCHANNEL_CHARS,
@@ -206,7 +206,7 @@ fn strings_from(entries: &[&str]) -> Vec<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SpeechUnit {
+pub enum SyntheticUnit {
     Backchannel(String),
     DiscourseMarker(String),
     CompleteClause(String),
@@ -215,58 +215,58 @@ pub enum SpeechUnit {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpeechPlan {
-    unit: SpeechUnit,
+pub struct MouthSyntheticPlan {
+    unit: SyntheticUnit,
 }
 
-impl SpeechPlan {
-    pub fn new(unit: SpeechUnit) -> Self {
+impl MouthSyntheticPlan {
+    pub fn new(unit: SyntheticUnit) -> Self {
         Self { unit }
     }
 
-    pub fn unit(&self) -> &SpeechUnit {
+    pub fn unit(&self) -> &SyntheticUnit {
         &self.unit
     }
 
     pub fn text(&self) -> &str {
         match &self.unit {
-            SpeechUnit::Backchannel(text)
-            | SpeechUnit::DiscourseMarker(text)
-            | SpeechUnit::CompleteClause(text)
-            | SpeechUnit::CompleteSentence(text)
-            | SpeechUnit::FullTurn(text) => text,
+            SyntheticUnit::Backchannel(text)
+            | SyntheticUnit::DiscourseMarker(text)
+            | SyntheticUnit::CompleteClause(text)
+            | SyntheticUnit::CompleteSentence(text)
+            | SyntheticUnit::FullTurn(text) => text,
         }
     }
 }
 
-impl From<SpeechUnit> for SpeechPlan {
-    fn from(unit: SpeechUnit) -> Self {
+impl From<SyntheticUnit> for MouthSyntheticPlan {
+    fn from(unit: SyntheticUnit) -> Self {
         Self::new(unit)
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum MouthCommand {
-    Speak(SpeechPlan),
+    Speak(MouthSyntheticPlan),
     FadeOut { millis: u64 },
     StopNow,
 }
 
 #[derive(Debug)]
-pub struct SpeechPlanner {
+pub struct SyntheticPlanner {
     buffer: String,
-    config: SpeechPlannerConfig,
+    config: SyntheticPlannerConfig,
     thought_filter: ThoughtMarkupFilter,
 }
 
-impl Default for SpeechPlanner {
+impl Default for SyntheticPlanner {
     fn default() -> Self {
-        Self::new(SpeechPlannerConfig::default())
+        Self::new(SyntheticPlannerConfig::default())
     }
 }
 
-impl SpeechPlanner {
-    pub fn new(config: SpeechPlannerConfig) -> Self {
+impl SyntheticPlanner {
+    pub fn new(config: SyntheticPlannerConfig) -> Self {
         Self {
             buffer: String::new(),
             config,
@@ -274,7 +274,7 @@ impl SpeechPlanner {
         }
     }
 
-    pub fn config(&self) -> &SpeechPlannerConfig {
+    pub fn config(&self) -> &SyntheticPlannerConfig {
         &self.config
     }
 
@@ -310,7 +310,7 @@ impl SpeechPlanner {
                         continue;
                     }
                     if let Some(unit) = classify_boundary_unit(&candidate, &self.config) {
-                        units.push(ExpressiveUnit::Speech(unit.into()));
+                        units.push(ExpressiveUnit::Synthetic(unit.into()));
                         self.buffer.drain(..end);
                     } else if self.buffer[end..].chars().any(is_emoji_char) {
                         // Emoji follows in the remaining buffer (linear scan over
@@ -319,7 +319,7 @@ impl SpeechPlanner {
                         // appropriate classification rather than waiting for more
                         // tokens, so face and speech events stay in order.
                         let unit = classify_text_before_emoji(&candidate, &self.config);
-                        units.push(ExpressiveUnit::Speech(unit.into()));
+                        units.push(ExpressiveUnit::Synthetic(unit.into()));
                         self.buffer.drain(..end);
                     } else if let Some(next_rel) =
                         find_sentence_end(&self.buffer[end..], &self.config)
@@ -330,7 +330,7 @@ impl SpeechPlanner {
                         let merged_end = end + next_rel;
                         let merged = self.buffer[..merged_end].trim().to_string();
                         if let Some(unit) = classify_boundary_unit(&merged, &self.config) {
-                            units.push(ExpressiveUnit::Speech(unit.into()));
+                            units.push(ExpressiveUnit::Synthetic(unit.into()));
                             self.buffer.drain(..merged_end);
                         } else {
                             break;
@@ -343,7 +343,7 @@ impl SpeechPlanner {
                     let before = self.buffer[..start].trim().to_string();
                     if !before.is_empty() {
                         let unit = classify_text_before_emoji(&before, &self.config);
-                        units.push(ExpressiveUnit::Speech(unit.into()));
+                        units.push(ExpressiveUnit::Synthetic(unit.into()));
                     }
                     let emoji = self.buffer[start..end].to_string();
                     units.push(ExpressiveUnit::Face(FaceCommand::SetEmoji(emoji)));
@@ -355,7 +355,7 @@ impl SpeechPlanner {
         if completed {
             let trailing = self.buffer.trim().to_string();
             if let Some(unit) = classify_completed_unit(&trailing, &self.config) {
-                units.push(ExpressiveUnit::Speech(unit.into()));
+                units.push(ExpressiveUnit::Synthetic(unit.into()));
             }
             self.buffer.clear();
         }
@@ -484,7 +484,7 @@ fn sentence_detector() -> Option<&'static SentenceDetectorDialog> {
         .as_ref()
 }
 
-impl SpeechPlanner {
+impl SyntheticPlanner {
     fn next_text_boundary(&self, completed: bool) -> Option<usize> {
         let sentence = self.next_sentence_boundary();
         let clause = self.next_clause_boundary();
@@ -540,15 +540,15 @@ impl SpeechPlanner {
     }
 }
 
-fn classify_boundary_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
+fn classify_boundary_unit(text: &str, config: &SyntheticPlannerConfig) -> Option<SyntheticUnit> {
     if text.is_empty() {
         return None;
     }
     if is_safe_backchannel(text, config) || is_safe_short_sentence(text, config) {
-        return Some(SpeechUnit::Backchannel(text.to_string()));
+        return Some(SyntheticUnit::Backchannel(text.to_string()));
     }
     if is_safe_discourse_marker(text, config) {
-        return Some(SpeechUnit::DiscourseMarker(text.to_string()));
+        return Some(SyntheticUnit::DiscourseMarker(text.to_string()));
     }
     if ends_with_sentence_punctuation(text) {
         if text.len() < config.min_non_backchannel_chars
@@ -556,13 +556,13 @@ fn classify_boundary_unit(text: &str, config: &SpeechPlannerConfig) -> Option<Sp
         {
             return None;
         }
-        return Some(SpeechUnit::CompleteSentence(text.to_string()));
+        return Some(SyntheticUnit::CompleteSentence(text.to_string()));
     }
     if text.len() < config.min_non_backchannel_chars {
         return None;
     }
     if text.ends_with([';', ':']) {
-        return Some(SpeechUnit::CompleteClause(text.to_string()));
+        return Some(SyntheticUnit::CompleteClause(text.to_string()));
     }
     None
 }
@@ -578,7 +578,7 @@ fn ends_with_sentence_punctuation(text: &str) -> bool {
         .ends_with(['.', '?', '!'])
 }
 
-fn classify_completed_unit(text: &str, config: &SpeechPlannerConfig) -> Option<SpeechUnit> {
+fn classify_completed_unit(text: &str, config: &SyntheticPlannerConfig) -> Option<SyntheticUnit> {
     classify_boundary_unit(text, config)
 }
 
@@ -587,44 +587,44 @@ fn classify_completed_unit(text: &str, config: &SpeechPlannerConfig) -> Option<S
 /// Unlike [`classify_boundary_unit`], this bypasses the minimum-length guard so
 /// that short but grammatically complete phrases (e.g. "That works.") are
 /// emitted with the right type rather than falling back to `FullTurn`.
-fn classify_text_before_emoji(text: &str, config: &SpeechPlannerConfig) -> SpeechUnit {
+fn classify_text_before_emoji(text: &str, config: &SyntheticPlannerConfig) -> SyntheticUnit {
     if text.is_empty() {
-        return SpeechUnit::FullTurn(text.to_string());
+        return SyntheticUnit::FullTurn(text.to_string());
     }
     if is_safe_backchannel(text, config) {
-        return SpeechUnit::Backchannel(text.to_string());
+        return SyntheticUnit::Backchannel(text.to_string());
     }
     if is_safe_discourse_marker(text, config) {
-        return SpeechUnit::DiscourseMarker(text.to_string());
+        return SyntheticUnit::DiscourseMarker(text.to_string());
     }
     if ends_with_sentence_punctuation(text) {
-        return SpeechUnit::CompleteSentence(text.to_string());
+        return SyntheticUnit::CompleteSentence(text.to_string());
     }
     if text.ends_with([';', ':']) {
-        return SpeechUnit::CompleteClause(text.to_string());
+        return SyntheticUnit::CompleteClause(text.to_string());
     }
-    SpeechUnit::FullTurn(text.to_string())
+    SyntheticUnit::FullTurn(text.to_string())
 }
 
-fn is_safe_backchannel(text: &str, config: &SpeechPlannerConfig) -> bool {
+fn is_safe_backchannel(text: &str, config: &SyntheticPlannerConfig) -> bool {
     config.safe_backchannels.iter().any(|entry| entry == text)
 }
 
-fn is_safe_short_sentence(text: &str, config: &SpeechPlannerConfig) -> bool {
+fn is_safe_short_sentence(text: &str, config: &SyntheticPlannerConfig) -> bool {
     config
         .safe_short_sentences
         .iter()
         .any(|entry| entry == text)
 }
 
-fn is_safe_discourse_marker(text: &str, config: &SpeechPlannerConfig) -> bool {
+fn is_safe_discourse_marker(text: &str, config: &SyntheticPlannerConfig) -> bool {
     config
         .safe_discourse_markers
         .iter()
         .any(|entry| entry == text)
 }
 
-fn is_common_abbreviation(text: &str, config: &SpeechPlannerConfig) -> bool {
+fn is_common_abbreviation(text: &str, config: &SyntheticPlannerConfig) -> bool {
     let trimmed = text.trim();
     let lowercase = trimmed.to_ascii_lowercase();
     if looks_like_provisional_period_token(trimmed) {
@@ -660,7 +660,7 @@ fn looks_like_provisional_period_token(text: &str) -> bool {
 ///
 /// Uses a simple punctuation scan first for the streaming hot path, then falls
 /// back to the seams dialog detector for cases the deterministic scan misses.
-fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
+fn find_sentence_end(text: &str, config: &SyntheticPlannerConfig) -> Option<usize> {
     if let Some(end) = punctuation_sentence_end(text, config) {
         return Some(end);
     }
@@ -688,7 +688,7 @@ fn find_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> 
 /// Deterministic punctuation-based sentence boundary scan used as a fallback
 /// when the seams detector is unavailable.  Uses the abbreviation guard to
 /// avoid splitting on `Dr.`, `Mr.`, etc.
-fn punctuation_sentence_end(text: &str, config: &SpeechPlannerConfig) -> Option<usize> {
+fn punctuation_sentence_end(text: &str, config: &SyntheticPlannerConfig) -> Option<usize> {
     for (index, ch) in text.char_indices() {
         let punctuation_end = index + ch.len_utf8();
         let end = closing_quote_end(text, punctuation_end);
@@ -730,8 +730,8 @@ mod tests {
         }
     }
 
-    fn speech(unit: SpeechUnit) -> ExpressiveUnit {
-        ExpressiveUnit::Speech(SpeechPlan::from(unit))
+    fn speech(unit: SyntheticUnit) -> ExpressiveUnit {
+        ExpressiveUnit::Synthetic(MouthSyntheticPlan::from(unit))
     }
 
     fn face(emoji: &str) -> ExpressiveUnit {
@@ -740,18 +740,18 @@ mod tests {
 
     #[test]
     fn partial_fragment_emits_nothing() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("I think that")]);
         assert!(units.is_empty());
     }
 
     #[test]
     fn complete_sentence_emits_unit() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("I think that works.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
         );
@@ -759,28 +759,28 @@ mod tests {
 
     #[test]
     fn quoted_sentence_emits_at_closing_quote() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("\"This is spoken.\" Yes, it is.")]);
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::CompleteSentence(
+                speech(SyntheticUnit::CompleteSentence(
                     "\"This is spoken.\"".to_string()
                 )),
-                speech(SpeechUnit::CompleteSentence("Yes, it is.".to_string()))
+                speech(SyntheticUnit::CompleteSentence("Yes, it is.".to_string()))
             ]
         );
     }
 
     #[test]
     fn thought_tags_are_not_spoken() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token(
             "<thought>this should be a thought</thought> <thinking>Or is it thinking</thinking> Yes, I can hear you.",
         )]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Yes, I can hear you.".to_string()
             ))]
         );
@@ -788,65 +788,65 @@ mod tests {
 
     #[test]
     fn split_thought_tags_are_not_spoken() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert!(planner.ingest(&[token("<th")]).is_empty());
         assert!(planner.ingest(&[token("inking>hidden")]).is_empty());
         let units = planner.ingest(&[token("</thinking> Good.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::Backchannel("Good.".to_string()))]
+            vec![speech(SyntheticUnit::Backchannel("Good.".to_string()))]
         );
     }
 
     #[test]
     fn safe_backchannel_emits_early() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Okay.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::Backchannel("Okay.".to_string()))]
+            vec![speech(SyntheticUnit::Backchannel("Okay.".to_string()))]
         );
     }
 
     #[test]
     fn short_complete_name_answer_emits_early() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Pete. I can")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence("Pete.".to_string()))]
+            vec![speech(SyntheticUnit::CompleteSentence("Pete.".to_string()))]
         );
     }
 
     #[test]
     fn custom_config_controls_safe_backchannels() {
-        let config = SpeechPlannerConfig {
+        let config = SyntheticPlannerConfig {
             safe_backchannels: vec!["Indeed.".to_string()],
             safe_short_sentences: Vec::new(),
-            ..SpeechPlannerConfig::default()
+            ..SyntheticPlannerConfig::default()
         };
-        let mut planner = SpeechPlanner::new(config);
+        let mut planner = SyntheticPlanner::new(config);
 
         let units = planner.ingest(&[token("Indeed.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::Backchannel("Indeed.".to_string()))]
+            vec![speech(SyntheticUnit::Backchannel("Indeed.".to_string()))]
         );
     }
 
     #[test]
     fn custom_config_can_make_default_short_sentence_wait() {
-        let config = SpeechPlannerConfig {
+        let config = SyntheticPlannerConfig {
             safe_backchannels: Vec::new(),
             safe_short_sentences: Vec::new(),
-            ..SpeechPlannerConfig::default()
+            ..SyntheticPlannerConfig::default()
         };
-        let mut planner = SpeechPlanner::new(config);
+        let mut planner = SyntheticPlanner::new(config);
 
         let units = planner.ingest(&[token("Yep. I think that works.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Yep. I think that works.".to_string()
             ))]
         );
@@ -854,18 +854,18 @@ mod tests {
 
     #[test]
     fn comma_fragment_without_allowlist_emits_nothing() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Not exactly,")]);
         assert!(units.is_empty());
     }
 
     #[test]
     fn comma_clause_emits_when_sentence_completes() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Not exactly, there is a catch.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Not exactly, there is a catch.".to_string()
             ))]
         );
@@ -873,29 +873,29 @@ mod tests {
 
     #[test]
     fn custom_config_controls_discourse_markers() {
-        let config = SpeechPlannerConfig {
+        let config = SyntheticPlannerConfig {
             safe_discourse_markers: vec!["Pues,".to_string()],
-            ..SpeechPlannerConfig::default()
+            ..SyntheticPlannerConfig::default()
         };
-        let mut planner = SpeechPlanner::new(config);
+        let mut planner = SyntheticPlanner::new(config);
 
         let units = planner.ingest(&[token("Pues, seguimos.")]);
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::DiscourseMarker("Pues,".to_string())),
-                speech(SpeechUnit::CompleteSentence("seguimos.".to_string())),
+                speech(SyntheticUnit::DiscourseMarker("Pues,".to_string())),
+                speech(SyntheticUnit::CompleteSentence("seguimos.".to_string())),
             ]
         );
     }
 
     #[test]
     fn planner_does_not_split_common_abbreviation() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Dr. Smith arrived.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Dr. Smith arrived.".to_string()
             ))]
         );
@@ -903,11 +903,11 @@ mod tests {
 
     #[test]
     fn planner_delays_single_initial_until_name_extends() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert!(planner.ingest(&[token("I read a book by F.")]).is_empty());
         assert_eq!(
             planner.ingest(&[token(" Scott Fitzgerald.")]),
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "I read a book by F. Scott Fitzgerald.".to_string()
             ))]
         );
@@ -915,11 +915,11 @@ mod tests {
 
     #[test]
     fn planner_delays_multi_initial_name_until_sentence_end() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert!(planner.ingest(&[token("I read J. R. R.")]).is_empty());
         assert_eq!(
             planner.ingest(&[token(" Tolkien.")]),
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "I read J. R. R. Tolkien.".to_string()
             ))]
         );
@@ -927,23 +927,23 @@ mod tests {
 
     #[test]
     fn planner_handles_honorifics_and_ordinary_sentence_endings() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert!(planner.ingest(&[token("Mr.")]).is_empty());
         assert_eq!(
             planner.ingest(&[token(" Rogers arrived.")]),
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Mr. Rogers arrived.".to_string()
             ))]
         );
         assert_eq!(
             planner.ingest(&[token("This is fine.")]),
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "This is fine.".to_string()
             ))]
         );
         assert_eq!(
             planner.ingest(&[token("Dr. King spoke.")]),
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Dr. King spoke.".to_string()
             ))]
         );
@@ -951,9 +951,9 @@ mod tests {
 
     #[test]
     fn custom_config_controls_punctuation_abbreviations() {
-        let config = SpeechPlannerConfig {
+        let config = SyntheticPlannerConfig {
             common_abbreviations: vec!["sra.".to_string()],
-            ..SpeechPlannerConfig::default()
+            ..SyntheticPlannerConfig::default()
         };
 
         assert_eq!(
@@ -966,38 +966,38 @@ mod tests {
 
     #[test]
     fn emoji_at_start_emits_face_then_speech() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("🙂 Okay.")]);
         assert_eq!(
             units,
             vec![
                 face("🙂"),
-                speech(SpeechUnit::Backchannel("Okay.".to_string())),
+                speech(SyntheticUnit::Backchannel("Okay.".to_string())),
             ]
         );
     }
 
     #[test]
     fn emoji_in_middle_splits_speech() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Okay 🙂 I see.")]);
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::FullTurn("Okay".to_string())),
+                speech(SyntheticUnit::FullTurn("Okay".to_string())),
                 face("🙂"),
-                speech(SpeechUnit::Backchannel("I see.".to_string())),
+                speech(SyntheticUnit::Backchannel("I see.".to_string())),
             ]
         );
     }
 
     #[test]
     fn emoji_at_end_follows_speech() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("That works. 😄")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "That works.".to_string()
             ))]
         );
@@ -1008,11 +1008,11 @@ mod tests {
 
     #[test]
     fn text_without_emoji_unaffected() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("I think that works.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
         );
@@ -1027,14 +1027,14 @@ mod tests {
 
     #[test]
     fn emits_complete_sentence_before_completed_event() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let first = planner.ingest(&[token("I think that")]);
         assert!(first.is_empty());
 
         let second = planner.ingest(&[token(" works. The next")]);
         assert_eq!(
             second,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "I think that works.".to_string()
             ))]
         );
@@ -1042,7 +1042,7 @@ mod tests {
         let third = planner.ingest(&[token(" thing is timing.")]);
         assert_eq!(
             third,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "The next thing is timing.".to_string()
             ))]
         );
@@ -1050,27 +1050,31 @@ mod tests {
 
     #[test]
     fn emits_multiple_complete_units_from_one_batch() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("First sentence. Second sentence.")]);
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::CompleteSentence("First sentence.".to_string())),
-                speech(SpeechUnit::CompleteSentence("Second sentence.".to_string()))
+                speech(SyntheticUnit::CompleteSentence(
+                    "First sentence.".to_string()
+                )),
+                speech(SyntheticUnit::CompleteSentence(
+                    "Second sentence.".to_string()
+                ))
             ]
         );
     }
 
     #[test]
     fn cancelled_event_clears_buffered_fragment() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert!(planner.ingest(&[token("I think this")]).is_empty());
         assert!(planner.ingest(&[LlmEvent::Cancelled]).is_empty());
         assert!(planner.buffer.is_empty());
         let units = planner.ingest(&[token(" this definitely works now.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "this definitely works now.".to_string()
             ))]
         );
@@ -1078,22 +1082,22 @@ mod tests {
 
     #[test]
     fn short_allowlisted_sentence_emits_without_completed() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         assert_eq!(
             planner.ingest(&[token("Yes. I think")]),
-            vec![speech(SpeechUnit::Backchannel("Yes.".to_string()))]
+            vec![speech(SyntheticUnit::Backchannel("Yes.".to_string()))]
         );
     }
 
     #[test]
     fn short_sentence_does_not_block_later_sentence() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Yes. I think that works.")]);
         assert_eq!(
             units,
             vec![
-                speech(SpeechUnit::Backchannel("Yes.".to_string())),
-                speech(SpeechUnit::CompleteSentence(
+                speech(SyntheticUnit::Backchannel("Yes.".to_string())),
+                speech(SyntheticUnit::CompleteSentence(
                     "I think that works.".to_string()
                 )),
             ]
@@ -1102,11 +1106,11 @@ mod tests {
 
     #[test]
     fn unknown_short_prefix_merges_with_next_safe_sentence() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         let units = planner.ingest(&[token("Hm. I think that works.")]);
         assert_eq!(
             units,
-            vec![speech(SpeechUnit::CompleteSentence(
+            vec![speech(SyntheticUnit::CompleteSentence(
                 "Hm. I think that works.".to_string()
             ))]
         );
@@ -1114,7 +1118,7 @@ mod tests {
 
     #[test]
     fn compound_emoji_not_split() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         // 👨‍👩‍👧‍👦 Family
         let units = planner.ingest(&[
             token("👨"),
@@ -1126,21 +1130,21 @@ mod tests {
             units,
             vec![
                 face("👨‍👩‍👧‍👦"),
-                speech(SpeechUnit::Backchannel("Okay.".to_string())),
+                speech(SyntheticUnit::Backchannel("Okay.".to_string())),
             ]
         );
     }
 
     #[test]
     fn emoji_with_skin_tone_not_split() {
-        let mut planner = SpeechPlanner::default();
+        let mut planner = SyntheticPlanner::default();
         // 👋🏽 Waving hand + medium skin tone
         let units = planner.ingest(&[token("👋"), token("🏽"), token(" Hi!")]);
         assert_eq!(
             units,
             vec![
                 face("👋🏽"),
-                speech(SpeechUnit::Backchannel("Hi!".to_string())),
+                speech(SyntheticUnit::Backchannel("Hi!".to_string())),
             ]
         );
     }

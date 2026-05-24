@@ -2059,7 +2059,7 @@ body.live-mode .timeline-audio-slot {
 
 .kind-llm_generation_started .chip-body,
 .kind-first_llm_token .chip-body,
-.kind-first_safe_speech_unit_emitted .chip-body {
+.kind-first_safe_synthetic_unit_emitted .chip-body {
   background: color-mix(in srgb, #744210 60%, transparent);
 }
 

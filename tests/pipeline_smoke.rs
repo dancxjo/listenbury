@@ -27,7 +27,7 @@ fn playback_check_orders_stubbed_asr_planner_tts_and_device_events() {
     let asr_started = index_of(&events, PlaybackCheckEventKind::AsrStarted);
     let asr_finished = index_of(&events, PlaybackCheckEventKind::AsrFinished);
     let llm_token = index_of(&events, PlaybackCheckEventKind::LlmToken);
-    let planner_ready = index_of(&events, PlaybackCheckEventKind::PlannerSpeechReady);
+    let planner_ready = index_of(&events, PlaybackCheckEventKind::PlannerSyntheticReady);
     let tts_queued = index_of(&events, PlaybackCheckEventKind::TtsQueued);
     let playback_started = index_of(&events, PlaybackCheckEventKind::PlaybackStarted);
     let playback_finished = index_of(&events, PlaybackCheckEventKind::PlaybackFinished);
@@ -106,7 +106,7 @@ fn soundscape_adapter_converts_playback_and_microphone_events() {
             .expect("ASR finished event should carry transcript text"),
         is_final: true,
     };
-    let playback_event = PlaybackEvent::SpeechStarted {
+    let playback_event = PlaybackEvent::SyntheticStarted {
         id: PlaybackUnitId(0),
         text: playback_started_text,
         at: playback_started.at,

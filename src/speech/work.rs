@@ -222,7 +222,7 @@ pub struct LingChunk {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PhoneTiming {
+pub struct AcousticPhoneTiming {
     pub phone: String,
     pub start: AudioTime,
     pub end: AudioTime,
@@ -259,7 +259,7 @@ pub struct VoiceProfile {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AcousticChunk {
     pub id: ChunkId,
-    pub phone_timing: Vec<PhoneTiming>,
+    pub phone_timing: Vec<AcousticPhoneTiming>,
     pub f0: Curve<f32>,
     pub energy: Curve<f32>,
     pub voicing: Curve<f32>,

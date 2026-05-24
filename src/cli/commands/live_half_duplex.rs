@@ -171,7 +171,7 @@ use listenbury::mouth::planner::FaceCommand;
         feature = "tts-piper"
     )
 ))]
-use listenbury::mouth::planner::{ExpressiveUnit, MouthCommand, SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{ExpressiveUnit, MouthCommand, MouthSyntheticPlan, SyntheticUnit};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -438,7 +438,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
 struct LiveTurnTraceState {
     turn: u64,
     first_llm_token_emitted: bool,
-    first_safe_speech_unit_emitted: bool,
+    first_safe_synthetic_unit_emitted: bool,
     first_tts_audio_frame_emitted: bool,
     playback_started: bool,
 }
@@ -454,7 +454,7 @@ impl LiveTurnTraceState {
         Self {
             turn,
             first_llm_token_emitted: false,
-            first_safe_speech_unit_emitted: false,
+            first_safe_synthetic_unit_emitted: false,
             first_tts_audio_frame_emitted: false,
             playback_started: false,
         }
@@ -1227,7 +1227,7 @@ fn stream_speech_to_tts(
     let mut current_spoken_text = String::new();
     let mut response_fragments = Vec::new();
     let mut main_llm_has_emitted_token = false;
-    let mut main_llm_has_safe_speech_unit = false;
+    let mut main_llm_has_safe_synthetic_unit = false;
     let mut filler_attempted = false;
     let mut played_any_audio = false;
     let mut playback_allowed = false;
@@ -1271,7 +1271,7 @@ fn stream_speech_to_tts(
         let events = llm.poll(generation_id)?;
         if events.is_empty() {
             if !filler_attempted
-                && !main_llm_has_safe_speech_unit
+                && !main_llm_has_safe_synthetic_unit
                 && llm_started_at.elapsed() >= Duration::from_millis(FILLER_SILENCE_DURATION_MS)
             {
                 let now_ms = unix_nanos_to_millis(ExactTimestamp::now().unix_nanos);
@@ -1284,7 +1284,7 @@ fn stream_speech_to_tts(
                     llm_started_at_ms,
                     now_ms,
                     main_llm_has_emitted_token,
-                    main_llm_has_safe_speech_unit,
+                    main_llm_has_safe_synthetic_unit,
                 ) {
                     eprintln!(
                         "[live-half-duplex] controller filler decision: speaking backchannel {:?}",
@@ -1296,7 +1296,7 @@ fn stream_speech_to_tts(
                     state
                         .self_hearing
                         .mark_output_intent(current_spoken_text.clone());
-                    emit_speech_plan_trace(
+                    emit_synthetic_plan_trace(
                         &mut state.trace,
                         user_turn_id,
                         &filler_plan,
@@ -1311,7 +1311,7 @@ fn stream_speech_to_tts(
                     )?;
                     state
                         .controller
-                        .record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
+                        .record_runtime_packet(RuntimePacket::SyntheticUnitCommitted {
                             text: filler_text,
                         });
                     state.controller.apply_safe_boundary_updates();
@@ -1365,26 +1365,26 @@ fn stream_speech_to_tts(
             planner_units_from_events(&mut state.controller, &speech_events, no_backchannels)
         {
             match unit {
-                ExpressiveUnit::Speech(plan) => {
+                ExpressiveUnit::Synthetic(plan) => {
                     let text = plan.text().to_string();
                     response_fragments.push(text.clone());
                     current_spoken_text = join_spoken_fragments(&response_fragments);
                     state
                         .self_hearing
                         .mark_output_intent(current_spoken_text.clone());
-                    main_llm_has_safe_speech_unit = true;
-                    if !trace_state.first_safe_speech_unit_emitted {
+                    main_llm_has_safe_synthetic_unit = true;
+                    if !trace_state.first_safe_synthetic_unit_emitted {
                         let mut event = state.trace.event(
                             user_turn_id,
-                            "first_safe_speech_unit_emitted",
+                            "first_safe_synthetic_unit_emitted",
                             ExactTimestamp::now(),
                         );
                         event.text = Some(text.clone());
-                        event.unit_kind = Some(speech_unit_kind(plan.unit()).to_string());
+                        event.unit_kind = Some(synthetic_unit_kind(plan.unit()).to_string());
                         state.trace.emit(event)?;
-                        trace_state.first_safe_speech_unit_emitted = true;
+                        trace_state.first_safe_synthetic_unit_emitted = true;
                     }
-                    emit_speech_plan_trace(
+                    emit_synthetic_plan_trace(
                         &mut state.trace,
                         user_turn_id,
                         &plan,
@@ -1399,7 +1399,7 @@ fn stream_speech_to_tts(
                     )?;
                     state
                         .controller
-                        .record_runtime_packet(RuntimePacket::SpeechUnitCommitted { text });
+                        .record_runtime_packet(RuntimePacket::SyntheticUnitCommitted { text });
                     state.controller.apply_safe_boundary_updates();
                 }
                 ExpressiveUnit::Face(command) => {
@@ -1497,8 +1497,9 @@ fn stream_speech_to_tts(
     if !played_any_audio {
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         response_fragments.push(current_spoken_text.clone());
-        let fallback_plan = SpeechPlan::from(SpeechUnit::FullTurn(current_spoken_text.clone()));
-        emit_speech_plan_trace(
+        let fallback_plan =
+            MouthSyntheticPlan::from(SyntheticUnit::FullTurn(current_spoken_text.clone()));
+        emit_synthetic_plan_trace(
             &mut state.trace,
             user_turn_id,
             &fallback_plan,
@@ -1665,12 +1666,12 @@ fn planner_units_from_events(
         .ingest_llm_events(events)
         .into_iter()
         .filter_map(|unit| match unit {
-            ExpressiveUnit::Speech(plan)
-                if no_backchannels && matches!(plan.unit(), SpeechUnit::Backchannel(_)) =>
+            ExpressiveUnit::Synthetic(plan)
+                if no_backchannels && matches!(plan.unit(), SyntheticUnit::Backchannel(_)) =>
             {
                 None
             }
-            ExpressiveUnit::Speech(plan) if is_thinking_leak(plan.text()) => None,
+            ExpressiveUnit::Synthetic(plan) if is_thinking_leak(plan.text()) => None,
             _ => Some(unit),
         })
         .collect()
@@ -1910,8 +1911,8 @@ fn maybe_plan_cached_backchannel(
     llm_started_at_ms: u64,
     now_ms: u64,
     main_llm_has_emitted_token: bool,
-    main_llm_has_safe_speech_unit: bool,
-) -> Option<SpeechPlan> {
+    main_llm_has_safe_synthetic_unit: bool,
+) -> Option<MouthSyntheticPlan> {
     if no_backchannels {
         return None;
     }
@@ -1922,7 +1923,7 @@ fn maybe_plan_cached_backchannel(
         silence_duration_ms: now_ms.saturating_sub(llm_started_at_ms),
         main_llm_started_at_ms: Some(llm_started_at_ms),
         main_llm_has_emitted_token,
-        main_llm_has_safe_speech_unit,
+        main_llm_has_safe_synthetic_unit,
         user_interrupted_recently: false,
         now_ms,
         user_turn_id: Some(user_turn_id),
@@ -2045,10 +2046,10 @@ fn emit_echo_planning_trace(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn emit_speech_plan_trace(
+fn emit_synthetic_plan_trace(
     trace: &mut LiveTrace,
     turn_id: u64,
-    plan: &SpeechPlan,
+    plan: &MouthSyntheticPlan,
     at: ExactTimestamp,
     stable_evidence_at: Option<ExactTimestamp>,
 ) -> Result<()> {
@@ -2070,7 +2071,7 @@ fn emit_speech_plan_trace(
     )?;
     let mut enqueue_started = trace.event(turn_id, "tts_enqueue_started", at);
     enqueue_started.text = Some(plan.text().to_string());
-    enqueue_started.unit_kind = Some(speech_unit_kind(plan.unit()).to_string());
+    enqueue_started.unit_kind = Some(synthetic_unit_kind(plan.unit()).to_string());
     trace.emit(enqueue_started)?;
     emit_read_aloud_timed_word_stream_revision(
         trace,
@@ -2133,13 +2134,13 @@ fn read_aloud_timed_word_stream(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-fn speech_unit_kind(unit: &SpeechUnit) -> &'static str {
+fn synthetic_unit_kind(unit: &SyntheticUnit) -> &'static str {
     match unit {
-        SpeechUnit::Backchannel(_) => "backchannel",
-        SpeechUnit::DiscourseMarker(_) => "discourse_marker",
-        SpeechUnit::CompleteClause(_) => "complete_clause",
-        SpeechUnit::CompleteSentence(_) => "complete_sentence",
-        SpeechUnit::FullTurn(_) => "full_turn",
+        SyntheticUnit::Backchannel(_) => "backchannel",
+        SyntheticUnit::DiscourseMarker(_) => "discourse_marker",
+        SyntheticUnit::CompleteClause(_) => "complete_clause",
+        SyntheticUnit::CompleteSentence(_) => "complete_sentence",
+        SyntheticUnit::FullTurn(_) => "full_turn",
     }
 }
 
@@ -2703,11 +2704,11 @@ mod tests {
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
-    use listenbury::mouth::planner::{ExpressiveUnit, SpeechUnit};
+    use listenbury::mouth::planner::{ExpressiveUnit, SyntheticUnit};
     use listenbury::word::WordCommitment;
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, FillerPlanner,
-        FillerPlannerConfig, RuntimePacket, SpeechPlannerConfig,
+        FillerPlannerConfig, RuntimePacket, SyntheticPlannerConfig,
     };
 
     fn token(text: &str) -> LlmEvent {
@@ -2732,7 +2733,7 @@ mod tests {
             planner_units_from_events(&mut controller, &[token("I think that works.")], false);
         assert!(matches!(
             emitted_before_completed.first(),
-            Some(ExpressiveUnit::Speech(_))
+            Some(ExpressiveUnit::Synthetic(_))
         ));
 
         let emitted_on_completed =
@@ -2750,7 +2751,7 @@ mod tests {
         );
         assert!(without_filter.iter().any(|unit| matches!(
             unit,
-            ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
+            ExpressiveUnit::Synthetic(plan) if matches!(plan.unit(), SyntheticUnit::Backchannel(_))
         )));
 
         let mut controller = ConversationController::default();
@@ -2761,7 +2762,7 @@ mod tests {
         );
         assert!(with_filter.iter().all(|unit| !matches!(
             unit,
-            ExpressiveUnit::Speech(plan) if matches!(plan.unit(), SpeechUnit::Backchannel(_))
+            ExpressiveUnit::Synthetic(plan) if matches!(plan.unit(), SyntheticUnit::Backchannel(_))
         )));
     }
 
@@ -2781,7 +2782,7 @@ mod tests {
         assert_eq!(units.len(), 1);
         assert!(matches!(
             units.first(),
-            Some(ExpressiveUnit::Speech(plan)) if plan.text() == "Yes, I can hear you."
+            Some(ExpressiveUnit::Synthetic(plan)) if plan.text() == "Yes, I can hear you."
         ));
     }
 
@@ -2805,7 +2806,7 @@ mod tests {
         assert_eq!(units.len(), 1);
         assert!(matches!(
             units.first(),
-            Some(ExpressiveUnit::Speech(plan)) if plan.text() == "Yes, I can hear you."
+            Some(ExpressiveUnit::Synthetic(plan)) if plan.text() == "Yes, I can hear you."
         ));
     }
 
@@ -2852,9 +2853,9 @@ mod tests {
     fn planner_units_preserve_face_event_order() {
         let mut controller = ConversationController::default();
         let units = planner_units_from_events(&mut controller, &[token("Okay 🙂 I see.")], false);
-        assert!(matches!(units.first(), Some(ExpressiveUnit::Speech(_))));
+        assert!(matches!(units.first(), Some(ExpressiveUnit::Synthetic(_))));
         assert!(matches!(units.get(1), Some(ExpressiveUnit::Face(_))));
-        assert!(matches!(units.get(2), Some(ExpressiveUnit::Speech(_))));
+        assert!(matches!(units.get(2), Some(ExpressiveUnit::Synthetic(_))));
     }
 
     #[test]
@@ -2955,14 +2956,14 @@ mod tests {
             false,
             false,
         );
-        let safe_backchannels = SpeechPlannerConfig::default().safe_backchannels;
+        let safe_backchannels = SyntheticPlannerConfig::default().safe_backchannels;
         assert!(matches!(
             first.as_ref().map(|plan| plan.unit()),
-            Some(SpeechUnit::Backchannel(text)) if safe_backchannels.contains(text)
+            Some(SyntheticUnit::Backchannel(text)) if safe_backchannels.contains(text)
         ));
 
         if let Some(plan) = first {
-            controller.record_runtime_packet(RuntimePacket::SpeechUnitCommitted {
+            controller.record_runtime_packet(RuntimePacket::SyntheticUnitCommitted {
                 text: plan.text().to_string(),
             });
             controller.apply_safe_boundary_updates();

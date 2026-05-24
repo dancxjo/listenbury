@@ -88,16 +88,6 @@ use cpal::{FromSample, Sample, SizedSample};
         feature = "tts-piper"
     )
 ))]
-use listenbury::{AudioFrame, ExactTimestamp};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
 use listenbury::VadBackendKind;
 #[cfg(all(
     feature = "audio-cpal",
@@ -212,7 +202,7 @@ use listenbury::mouth::planner::strip_emoji;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::mouth::planner::{SpeechPlan, SpeechUnit};
+use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -239,6 +229,16 @@ use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
 use listenbury::word::{
     TranscriptWord, transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
 };
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::{AudioFrame, ExactTimestamp};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -2051,32 +2051,32 @@ fn execute_typescript_command_results(
                 (
                     "say",
                     format!(
-                        "Speech queued{}: {}",
+                        "Synthetic queued{}: {}",
                         if *interrupt { " (interrupt)" } else { "" },
                         text.trim()
                     ),
                 )
             }
             TypeScriptCommand::Shutup => {
-                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Shutup,
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Shutup,
                 });
                 (
                     "shutup",
-                    "Speech playback stopped and queue cleared.".to_string(),
+                    "Synthetic playback stopped and queue cleared.".to_string(),
                 )
             }
             TypeScriptCommand::Pause => {
-                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Pause,
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Pause,
                 });
-                ("pause", "Speech playback paused.".to_string())
+                ("pause", "Synthetic playback paused.".to_string())
             }
             TypeScriptCommand::Resume => {
-                runtime_events.push(ContinueRuntimeEvent::SpeechControl {
-                    command: SpeechControlCommand::Resume,
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Resume,
                 });
-                ("resume", "Speech playback resumed.".to_string())
+                ("resume", "Synthetic playback resumed.".to_string())
             }
             TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
             TypeScriptCommand::ReadSourceFile { file, page } => {
@@ -3161,7 +3161,7 @@ impl DuplexTurnController {
                 Some(DuplexTurnAction::Pause)
             }
             ContinueRuntimeEvent::UtteranceCompleted { .. }
-            | ContinueRuntimeEvent::SpeechControl { .. }
+            | ContinueRuntimeEvent::SyntheticControl { .. }
             | ContinueRuntimeEvent::SourceCommand { .. } => None,
         }
     }
@@ -3298,7 +3298,7 @@ impl DuplexTurnController {
             llm_session,
             defer_live_events,
             deferred_live_events,
-            SpeechControlCommand::Pause,
+            SyntheticControlCommand::Pause,
             message,
         )
     }
@@ -3320,7 +3320,7 @@ impl DuplexTurnController {
             llm_session,
             defer_live_events,
             deferred_live_events,
-            SpeechControlCommand::Resume,
+            SyntheticControlCommand::Resume,
             message,
         )
     }
@@ -3342,7 +3342,7 @@ impl DuplexTurnController {
             llm_session,
             defer_live_events,
             deferred_live_events,
-            SpeechControlCommand::Shutup,
+            SyntheticControlCommand::Shutup,
             message,
         )?;
         append_or_defer_live_event(
@@ -3395,10 +3395,10 @@ fn send_duplex_turn_control(
     llm_session: &mut ContinueLlmSession,
     defer_live_events: bool,
     deferred_live_events: &mut VecDeque<PromptPacket>,
-    command: SpeechControlCommand,
+    command: SyntheticControlCommand,
     message: &'static str,
 ) -> Result<()> {
-    mouth.enqueue_runtime_event(&ContinueRuntimeEvent::SpeechControl { command })?;
+    mouth.enqueue_runtime_event(&ContinueRuntimeEvent::SyntheticControl { command })?;
     append_or_defer_live_event(
         llm_session,
         PromptPacket::source(message.to_string()),
@@ -3447,63 +3447,65 @@ fn drain_mouth_events_into_llm(
         match mouth_rx.try_recv() {
             Ok(mouth_event) => {
                 *pending_mouth_utterances = pending_mouth_utterances
-                    .saturating_sub(mouth_event.completed_pending_speech_count());
+                    .saturating_sub(mouth_event.completed_pending_synthetic_count());
                 mouth_event.apply_playback_state(mouth_playback_paused);
                 match mouth_event {
                     ContinueMouthEvent::WorkerStarted => {}
-                    ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
+                    ContinueMouthEvent::SyntheticPlaybackStarted { text, .. } => {
                         eprintln!("[dev continue] speaking: {text}");
                     }
-                    ContinueMouthEvent::SpeechInterrupted { id, text } => {
+                    ContinueMouthEvent::SyntheticInterrupted { id, text } => {
                         append_mouth_runtime_trace(
                             llm_session,
                             defer_live_events,
                             deferred_live_events,
                             format!(
-                                "Duplex runtime: speech interrupted while speaking (id={id}, text={:?}).",
+                                "Duplex runtime: synthetic interrupted while speaking (id={id}, text={:?}).",
                                 compact_prompt_line(&text, MAX_VERBATIM_TURN_CHARS)
                             ),
                         )?;
                     }
-                    ContinueMouthEvent::SpeechQueueCleared { count } => {
+                    ContinueMouthEvent::SyntheticQueueCleared { count } => {
                         append_mouth_runtime_trace(
                             llm_session,
                             defer_live_events,
                             deferred_live_events,
                             format!(
-                                "Duplex runtime: cleared {count} queued speech unit(s) after sustained overlap."
+                                "Duplex runtime: cleared {count} queued synthetic unit(s) after sustained overlap."
                             ),
                         )?;
                     }
-                    ContinueMouthEvent::SpeechPaused => {
+                    ContinueMouthEvent::SyntheticPaused => {
                         append_mouth_runtime_trace(
                             llm_session,
                             defer_live_events,
                             deferred_live_events,
-                            "Duplex runtime: speech playback paused to yield the floor."
+                            "Duplex runtime: synthetic playback paused to yield the floor."
                                 .to_string(),
                         )?;
                     }
-                    ContinueMouthEvent::SpeechResumed => {
+                    ContinueMouthEvent::SyntheticResumed => {
                         append_mouth_runtime_trace(
                             llm_session,
                             defer_live_events,
                             deferred_live_events,
-                            "Duplex runtime: speech playback resumed.".to_string(),
+                            "Duplex runtime: synthetic playback resumed.".to_string(),
                         )?;
                     }
-                    ContinueMouthEvent::SpeechError { message, .. } => {
+                    ContinueMouthEvent::SyntheticError { message, .. } => {
                         anyhow::bail!("dev continue mouth failed: {message}");
                     }
-                    ContinueMouthEvent::SpeechQueued { .. }
-                    | ContinueMouthEvent::SpeechSynthesisStarted { .. }
-                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. } => {}
+                    ContinueMouthEvent::SyntheticQueued { .. }
+                    | ContinueMouthEvent::SyntheticSynthesisStarted { .. }
+                    | ContinueMouthEvent::SyntheticPlaybackCompleted { .. } => {}
                 }
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 if *pending_mouth_utterances > 0 {
-                    anyhow::bail!("dev continue mouth worker disconnected with pending speech");
+                    anyhow::bail!(
+                        "dev continue mouth worker disconnected with pending synthetic unit"
+                    );
                 }
                 return Ok(());
             }
@@ -3525,28 +3527,30 @@ fn drain_mouth_events_without_llm(
         match mouth_rx.try_recv() {
             Ok(mouth_event) => {
                 *pending_mouth_utterances = pending_mouth_utterances
-                    .saturating_sub(mouth_event.completed_pending_speech_count());
+                    .saturating_sub(mouth_event.completed_pending_synthetic_count());
                 match mouth_event {
                     ContinueMouthEvent::WorkerStarted => {}
-                    ContinueMouthEvent::SpeechPlaybackStarted { text, .. } => {
+                    ContinueMouthEvent::SyntheticPlaybackStarted { text, .. } => {
                         eprintln!("[dev continue] speaking: {text}");
                     }
-                    ContinueMouthEvent::SpeechError { message, .. } => {
+                    ContinueMouthEvent::SyntheticError { message, .. } => {
                         anyhow::bail!("dev continue mouth failed: {message}");
                     }
-                    ContinueMouthEvent::SpeechQueued { .. }
-                    | ContinueMouthEvent::SpeechSynthesisStarted { .. }
-                    | ContinueMouthEvent::SpeechPlaybackCompleted { .. }
-                    | ContinueMouthEvent::SpeechInterrupted { .. }
-                    | ContinueMouthEvent::SpeechQueueCleared { .. }
-                    | ContinueMouthEvent::SpeechPaused
-                    | ContinueMouthEvent::SpeechResumed => {}
+                    ContinueMouthEvent::SyntheticQueued { .. }
+                    | ContinueMouthEvent::SyntheticSynthesisStarted { .. }
+                    | ContinueMouthEvent::SyntheticPlaybackCompleted { .. }
+                    | ContinueMouthEvent::SyntheticInterrupted { .. }
+                    | ContinueMouthEvent::SyntheticQueueCleared { .. }
+                    | ContinueMouthEvent::SyntheticPaused
+                    | ContinueMouthEvent::SyntheticResumed => {}
                 }
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return Ok(()),
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 if *pending_mouth_utterances > 0 {
-                    anyhow::bail!("dev continue mouth worker disconnected with pending speech");
+                    anyhow::bail!(
+                        "dev continue mouth worker disconnected with pending synthetic unit"
+                    );
                 }
                 return Ok(());
             }
@@ -4770,15 +4774,15 @@ impl Drop for ContinueMouth {
 #[allow(dead_code)]
 enum ContinueMouthEvent {
     WorkerStarted,
-    SpeechQueued { id: u64, text: String },
-    SpeechSynthesisStarted { id: u64, text: String },
-    SpeechPlaybackStarted { id: u64, text: String },
-    SpeechPlaybackCompleted { id: u64, text: String },
-    SpeechInterrupted { id: u64, text: String },
-    SpeechQueueCleared { count: usize },
-    SpeechPaused,
-    SpeechResumed,
-    SpeechError { id: u64, message: String },
+    SyntheticQueued { id: u64, text: String },
+    SyntheticSynthesisStarted { id: u64, text: String },
+    SyntheticPlaybackStarted { id: u64, text: String },
+    SyntheticPlaybackCompleted { id: u64, text: String },
+    SyntheticInterrupted { id: u64, text: String },
+    SyntheticQueueCleared { count: usize },
+    SyntheticPaused,
+    SyntheticResumed,
+    SyntheticError { id: u64, message: String },
 }
 
 #[cfg(all(
@@ -4792,77 +4796,77 @@ impl ContinueMouthEvent {
     fn to_message(&self) -> String {
         match self {
             Self::WorkerStarted => "worker_started".to_string(),
-            Self::SpeechQueued { id, text } => {
+            Self::SyntheticQueued { id, text } => {
                 format!(
-                    "speech_queued: id={id}\ncontent:\n{}",
+                    "synthetic_queued: id={id}\ncontent:\n{}",
                     sanitize_runtime_event_content(text)
                 )
             }
-            Self::SpeechSynthesisStarted { id, text } => {
+            Self::SyntheticSynthesisStarted { id, text } => {
                 format!(
-                    "speech_synthesis_started: id={id}\ncontent:\n{}",
+                    "synthetic_synthesis_started: id={id}\ncontent:\n{}",
                     sanitize_runtime_event_content(text)
                 )
             }
-            Self::SpeechPlaybackStarted { id, text } => {
+            Self::SyntheticPlaybackStarted { id, text } => {
                 format!(
-                    "speech_playback_started: id={id}\ncontent:\n{}",
+                    "synthetic_playback_started: id={id}\ncontent:\n{}",
                     sanitize_runtime_event_content(text)
                 )
             }
-            Self::SpeechPlaybackCompleted { id, text } => {
+            Self::SyntheticPlaybackCompleted { id, text } => {
                 format!(
-                    "speech_playback_completed: id={id}\ncontent:\n{}",
+                    "synthetic_playback_completed: id={id}\ncontent:\n{}",
                     sanitize_runtime_event_content(text)
                 )
             }
-            Self::SpeechInterrupted { id, text } => {
+            Self::SyntheticInterrupted { id, text } => {
                 format!(
-                    "speech_interrupted: id={id}\ncontent:\n{}",
+                    "synthetic_interrupted: id={id}\ncontent:\n{}",
                     sanitize_runtime_event_content(text)
                 )
             }
-            Self::SpeechQueueCleared { count } => {
-                format!("speech_queue_cleared: count={count}")
+            Self::SyntheticQueueCleared { count } => {
+                format!("synthetic_queue_cleared: count={count}")
             }
-            Self::SpeechPaused => "speech_paused".to_string(),
-            Self::SpeechResumed => "speech_resumed".to_string(),
-            Self::SpeechError { id, message } => {
+            Self::SyntheticPaused => "synthetic_paused".to_string(),
+            Self::SyntheticResumed => "synthetic_resumed".to_string(),
+            Self::SyntheticError { id, message } => {
                 format!(
-                    "speech_error: id={id}\nmessage:\n{}",
+                    "synthetic_error: id={id}\nmessage:\n{}",
                     sanitize_runtime_event_content(message)
                 )
             }
         }
     }
 
-    fn completed_pending_speech_count(&self) -> usize {
+    fn completed_pending_synthetic_count(&self) -> usize {
         match self {
-            Self::SpeechPlaybackCompleted { .. }
-            | Self::SpeechInterrupted { .. }
-            | Self::SpeechError { .. } => 1,
-            Self::SpeechQueueCleared { count } => *count,
+            Self::SyntheticPlaybackCompleted { .. }
+            | Self::SyntheticInterrupted { .. }
+            | Self::SyntheticError { .. } => 1,
+            Self::SyntheticQueueCleared { count } => *count,
             Self::WorkerStarted
-            | Self::SpeechQueued { .. }
-            | Self::SpeechSynthesisStarted { .. }
-            | Self::SpeechPlaybackStarted { .. }
-            | Self::SpeechPaused
-            | Self::SpeechResumed => 0,
+            | Self::SyntheticQueued { .. }
+            | Self::SyntheticSynthesisStarted { .. }
+            | Self::SyntheticPlaybackStarted { .. }
+            | Self::SyntheticPaused
+            | Self::SyntheticResumed => 0,
         }
     }
 
     fn apply_playback_state(&self, paused: &mut bool) {
         match self {
-            Self::SpeechPaused => *paused = true,
-            Self::SpeechResumed
-            | Self::SpeechPlaybackCompleted { .. }
-            | Self::SpeechInterrupted { .. }
-            | Self::SpeechQueueCleared { .. }
-            | Self::SpeechError { .. } => *paused = false,
+            Self::SyntheticPaused => *paused = true,
+            Self::SyntheticResumed
+            | Self::SyntheticPlaybackCompleted { .. }
+            | Self::SyntheticInterrupted { .. }
+            | Self::SyntheticQueueCleared { .. }
+            | Self::SyntheticError { .. } => *paused = false,
             Self::WorkerStarted
-            | Self::SpeechQueued { .. }
-            | Self::SpeechSynthesisStarted { .. }
-            | Self::SpeechPlaybackStarted { .. } => {}
+            | Self::SyntheticQueued { .. }
+            | Self::SyntheticSynthesisStarted { .. }
+            | Self::SyntheticPlaybackStarted { .. } => {}
         }
     }
 }
@@ -4881,7 +4885,7 @@ fn run_continue_mouth_worker(
     speaker_reference: Arc<Mutex<SpeakerReferenceMask>>,
 ) {
     let _ = event_tx.send(ContinueMouthEvent::WorkerStarted);
-    let mut pending = VecDeque::<PendingMouthSpeech>::new();
+    let mut pending = VecDeque::<PendingMouthSynthetic>::new();
     let mut paused = false;
     loop {
         let command = if let Some(speech) = pending.pop_front() {
@@ -4902,7 +4906,7 @@ fn run_continue_mouth_worker(
                 text,
                 interrupt,
             } => {
-                match run_continue_mouth_speech(
+                match run_continue_mouth_synthetic(
                     id,
                     text,
                     interrupt,
@@ -4990,7 +4994,7 @@ enum MouthPlaybackOutcome {
     feature = "tts-piper"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PendingMouthSpeech {
+struct PendingMouthSynthetic {
     id: u64,
     text: String,
     interrupt: bool,
@@ -5008,7 +5012,7 @@ fn pause_mouth_playback(
 ) {
     if !*paused {
         *paused = true;
-        let _ = event_tx.send(ContinueMouthEvent::SpeechPaused);
+        let _ = event_tx.send(ContinueMouthEvent::SyntheticPaused);
     }
 }
 
@@ -5024,7 +5028,7 @@ fn resume_mouth_playback(
 ) {
     if *paused {
         *paused = false;
-        let _ = event_tx.send(ContinueMouthEvent::SpeechResumed);
+        let _ = event_tx.send(ContinueMouthEvent::SyntheticResumed);
     }
 }
 
@@ -5036,7 +5040,7 @@ fn resume_mouth_playback(
 ))]
 fn drain_mouth_control_commands(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<PendingMouthSpeech>,
+    pending: &mut VecDeque<PendingMouthSynthetic>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     tts: &mut PiperTextToSpeech,
     paused: &mut bool,
@@ -5047,7 +5051,7 @@ fn drain_mouth_control_commands(
                 id,
                 text,
                 interrupt,
-            }) => pending.push_back(PendingMouthSpeech {
+            }) => pending.push_back(PendingMouthSynthetic {
                 id,
                 text,
                 interrupt,
@@ -5083,7 +5087,7 @@ fn drain_mouth_control_commands(
 ))]
 fn send_cleared_mouth_queue_event(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<PendingMouthSpeech>,
+    pending: &mut VecDeque<PendingMouthSynthetic>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
 ) -> bool {
     let mut cleared = pending.len();
@@ -5100,7 +5104,7 @@ fn send_cleared_mouth_queue_event(
             | Err(crossbeam_channel::TryRecvError::Disconnected) => break,
         }
     }
-    let _ = event_tx.send(ContinueMouthEvent::SpeechQueueCleared { count: cleared });
+    let _ = event_tx.send(ContinueMouthEvent::SyntheticQueueCleared { count: cleared });
     shutdown
 }
 
@@ -5111,33 +5115,35 @@ fn send_cleared_mouth_queue_event(
     feature = "tts-piper"
 ))]
 #[allow(clippy::too_many_arguments)]
-fn run_continue_mouth_speech(
+fn run_continue_mouth_synthetic(
     id: u64,
     text: String,
     _interrupt: bool,
     tts: &mut PiperTextToSpeech,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<PendingMouthSpeech>,
+    pending: &mut VecDeque<PendingMouthSynthetic>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     _capture_enabled: &AtomicBool,
     speaker_reference: &Arc<Mutex<SpeakerReferenceMask>>,
     paused: &mut bool,
 ) -> Result<MouthWorkerFlow> {
     event_tx
-        .send(ContinueMouthEvent::SpeechQueued {
+        .send(ContinueMouthEvent::SyntheticQueued {
             id,
             text: text.clone(),
         })
         .ok();
     event_tx
-        .send(ContinueMouthEvent::SpeechSynthesisStarted {
+        .send(ContinueMouthEvent::SyntheticSynthesisStarted {
             id,
             text: text.clone(),
         })
         .ok();
 
-    if let Err(error) = tts.enqueue(SpeechPlan::from(SpeechUnit::CompleteSentence(text.clone()))) {
-        let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+    if let Err(error) = tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::CompleteSentence(
+        text.clone(),
+    ))) {
+        let _ = event_tx.send(ContinueMouthEvent::SyntheticError {
             id,
             message: error.to_string(),
         });
@@ -5154,12 +5160,12 @@ fn run_continue_mouth_speech(
     ) {
         Ok(MouthAudioOutcome::Frames(frames)) => frames,
         Ok(MouthAudioOutcome::Interrupted) => {
-            let _ = event_tx.send(ContinueMouthEvent::SpeechInterrupted { id, text });
+            let _ = event_tx.send(ContinueMouthEvent::SyntheticInterrupted { id, text });
             return Ok(MouthWorkerFlow::Continue);
         }
         Ok(MouthAudioOutcome::Shutdown) => return Ok(MouthWorkerFlow::Shutdown),
         Err(error) => {
-            let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+            let _ = event_tx.send(ContinueMouthEvent::SyntheticError {
                 id,
                 message: error.to_string(),
             });
@@ -5168,7 +5174,7 @@ fn run_continue_mouth_speech(
     };
 
     event_tx
-        .send(ContinueMouthEvent::SpeechPlaybackStarted {
+        .send(ContinueMouthEvent::SyntheticPlaybackStarted {
             id,
             text: text.clone(),
         })
@@ -5186,12 +5192,12 @@ fn run_continue_mouth_speech(
     match playback {
         Ok(MouthPlaybackOutcome::Completed) => {}
         Ok(MouthPlaybackOutcome::Interrupted) => {
-            let _ = event_tx.send(ContinueMouthEvent::SpeechInterrupted { id, text });
+            let _ = event_tx.send(ContinueMouthEvent::SyntheticInterrupted { id, text });
             return Ok(MouthWorkerFlow::Continue);
         }
         Ok(MouthPlaybackOutcome::Shutdown) => return Ok(MouthWorkerFlow::Shutdown),
         Err(error) => {
-            let _ = event_tx.send(ContinueMouthEvent::SpeechError {
+            let _ = event_tx.send(ContinueMouthEvent::SyntheticError {
                 id,
                 message: error.to_string(),
             });
@@ -5199,7 +5205,7 @@ fn run_continue_mouth_speech(
         }
     }
     event_tx
-        .send(ContinueMouthEvent::SpeechPlaybackCompleted { id, text })
+        .send(ContinueMouthEvent::SyntheticPlaybackCompleted { id, text })
         .ok();
     Ok(MouthWorkerFlow::Continue)
 }
@@ -5214,7 +5220,7 @@ fn collect_continue_mouth_audio(
     tts: &mut PiperTextToSpeech,
     timeout: Duration,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<PendingMouthSpeech>,
+    pending: &mut VecDeque<PendingMouthSynthetic>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     paused: &mut bool,
 ) -> Result<MouthAudioOutcome> {
@@ -5246,7 +5252,7 @@ fn play_continue_audio_frames_interruptible(
     frames: &[AudioFrame],
     source: &str,
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
-    pending: &mut VecDeque<PendingMouthSpeech>,
+    pending: &mut VecDeque<PendingMouthSynthetic>,
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     tts: &mut PiperTextToSpeech,
     speaker_reference: &Arc<Mutex<SpeakerReferenceMask>>,
@@ -5358,8 +5364,8 @@ enum ContinueRuntimeEvent {
         content: String,
         interrupt: bool,
     },
-    SpeechControl {
-        command: SpeechControlCommand,
+    SyntheticControl {
+        command: SyntheticControlCommand,
     },
     SourceCommand {
         command: SourceCommand,
@@ -5376,7 +5382,7 @@ enum ContinueRuntimeEvent {
     )
 ))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SpeechControlCommand {
+enum SyntheticControlCommand {
     Shutup,
     Pause,
     Resume,
@@ -5396,7 +5402,9 @@ impl ContinueRuntimeEvent {
                     sanitize_runtime_event_content(content)
                 )
             }
-            Self::SpeechControl { command } => format!("speech_control: {}", command.as_str()),
+            Self::SyntheticControl { command } => {
+                format!("synthetic_control: {}", command.as_str())
+            }
             Self::SourceCommand { command } => match command {
                 SourceCommand::RunTypeScript { source } => {
                     format!(
@@ -5410,7 +5418,7 @@ impl ContinueRuntimeEvent {
 }
 
 #[cfg(test)]
-impl SpeechControlCommand {
+impl SyntheticControlCommand {
     fn as_str(self) -> &'static str {
         match self {
             Self::Shutup => "shutup",
@@ -5800,7 +5808,7 @@ mod tests {
     use super::{
         ContinueEarEvent, ContinueMouthCommand, ContinuePromptFormat, ContinuePromptGate,
         ContinuePromptGateConfig, ContinueRuntimeEvent, HarmonyFinalFilter, PromptPacket,
-        RollingContextManager, SourceCommand, SpeechControlCommand, SpeechEventDetector,
+        RollingContextManager, SourceCommand, SpeechEventDetector, SyntheticControlCommand,
         TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TranscriptSpeculativePlanner,
         TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
         continue_prompt_format_for_model, current_time_message, execute_list_source_files,
@@ -6086,8 +6094,8 @@ mod tests {
     #[test]
     fn mouth_event_is_wrapped_as_live_input() {
         assert_eq!(
-            wrap_mouth_event("speech_playback_completed: id=3"),
-            "\n\n--- LIVE EVENT: mouth ---\nspeech_playback_completed: id=3\n--- END LIVE EVENT ---\n\n"
+            wrap_mouth_event("synthetic_playback_completed: id=3"),
+            "\n\n--- LIVE EVENT: mouth ---\nsynthetic_playback_completed: id=3\n--- END LIVE EVENT ---\n\n"
         );
     }
 
@@ -6098,11 +6106,11 @@ mod tests {
             "\n\n--- LIVE EVENT: runtime ---\nutterance_started: id=0\n--- END LIVE EVENT ---\n\n"
         );
         assert_eq!(
-            ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Pause
+            ContinueRuntimeEvent::SyntheticControl {
+                command: SyntheticControlCommand::Pause
             }
             .to_message(),
-            "speech_control: pause"
+            "synthetic_control: pause"
         );
     }
 
@@ -6418,20 +6426,20 @@ grepSource("build_initial_prompt", 1)"#,
         ));
         assert_eq!(
             output.runtime_events[1],
-            ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Pause
+            ContinueRuntimeEvent::SyntheticControl {
+                command: SyntheticControlCommand::Pause
             }
         );
         assert_eq!(
             output.runtime_events[2],
-            ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Resume
+            ContinueRuntimeEvent::SyntheticControl {
+                command: SyntheticControlCommand::Resume
             }
         );
         assert_eq!(
             output.runtime_events[3],
-            ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Shutup
+            ContinueRuntimeEvent::SyntheticControl {
+                command: SyntheticControlCommand::Shutup
             }
         );
     }
@@ -6476,8 +6484,8 @@ grepSource("build_initial_prompt", 1)"#,
         );
 
         assert_eq!(
-            mouth_command_for_runtime_event(&ContinueRuntimeEvent::SpeechControl {
-                command: SpeechControlCommand::Pause
+            mouth_command_for_runtime_event(&ContinueRuntimeEvent::SyntheticControl {
+                command: SyntheticControlCommand::Pause
             }),
             Some((ContinueMouthCommand::Pause, false))
         );

@@ -2,7 +2,7 @@
   "description": "User interrupts Pete mid-speech: overlap, yield, and interruption events must be present and correctly ordered.",
   "assertions": [
     { "kind": "has_lane", "label": "User transcript" },
-    { "kind": "has_lane", "label": "Pete intended speech" },
+    { "kind": "has_lane", "label": "Pete synthetic intent" },
     { "kind": "has_event", "lane": "Overlap", "event_kind": "overlap" },
     { "kind": "has_event", "lane": "Interruption", "event_kind": "yield" },
     { "kind": "has_marker", "lane": "Interruption", "marker_kind": "interruption_detected" },

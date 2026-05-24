@@ -2,7 +2,7 @@
   "title": "Listenbury Live Trace",
   "streams": [
     {
-      "label": "Pete intended speech",
+      "label": "Pete synthetic intent",
       "stream": {
         "id": 1,
         "source": "GeneratedText",
@@ -1066,9 +1066,9 @@
     },
     {
       "lane": "Runtime",
-      "kind": "first_safe_speech_unit_emitted",
+      "kind": "first_safe_synthetic_unit_emitted",
       "at_ms": 1380,
-      "label": "First Safe Speech Unit Emitted",
+      "label": "First Safe Synthetic Unit Emitted",
       "metadata": {
         "elapsed_ms": 1380,
         "t_unix_ns": 1700000001380000000,

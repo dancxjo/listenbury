@@ -10,7 +10,7 @@ fn sample_live_trace_jsonl_converts_to_mixed_word_and_event_lanes() {
 
     assert!(
         payload.streams.len() >= 2,
-        "expected transcript + intended speech lanes"
+        "expected transcript + intended synthesis lanes"
     );
     assert!(
         payload
@@ -23,8 +23,8 @@ fn sample_live_trace_jsonl_converts_to_mixed_word_and_event_lanes() {
         payload
             .streams
             .iter()
-            .any(|lane| lane.label == "Pete intended speech" && !lane.stream.words.is_empty()),
-        "expected intended speech words"
+            .any(|lane| lane.label == "Pete synthetic intent" && !lane.stream.words.is_empty()),
+        "expected intended synthesis words"
     );
 
     assert!(

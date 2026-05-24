@@ -147,8 +147,8 @@ impl RuntimeEvent {
         if let Some(utterance_id) = event.utterance_id {
             causality.push(format!("utterance:{}", utterance_id.0));
         }
-        if let Some(speech_unit_id) = event.speech_unit_id {
-            causality.push(format!("speech_unit:{}", speech_unit_id.0));
+        if let Some(synthetic_unit_id) = event.synthetic_unit_id {
+            causality.push(format!("synthetic_unit:{}", synthetic_unit_id.0));
         }
         if let Some(transcript_revision_id) = event.transcript_revision_id {
             causality.push(format!("transcript_revision:{}", transcript_revision_id.0));
@@ -288,9 +288,9 @@ fn legacy_classify_runtime_kind_from_string(
     } else if kind.starts_with("llm_")
         || kind.starts_with("first_llm_")
         || kind == "token_emitted"
-        || kind.starts_with("speech_unit_")
-        || kind == "speculative_speech_updated"
-        || kind == "first_safe_speech_unit_emitted"
+        || kind.starts_with("synthetic_unit_")
+        || kind == "speculative_synthetic_unit_updated"
+        || kind == "first_safe_synthetic_unit_emitted"
     {
         RuntimeEventKind::Llm(subtype)
     } else if kind.starts_with("self_hearing_suppression_") || kind.starts_with("yield_") {

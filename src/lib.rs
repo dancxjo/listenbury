@@ -66,13 +66,13 @@ pub use mind::turn::{TurnState, TurnTracker};
 #[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
 pub use mouth::planner::{
-    ExpressiveUnit, FaceCommand, MouthCommand, SpeechPlan, SpeechPlanner, SpeechPlannerConfig,
-    SpeechUnit, strip_emoji,
+    ExpressiveUnit, FaceCommand, MouthCommand, MouthSyntheticPlan, SyntheticPlanner,
+    SyntheticPlannerConfig, SyntheticUnit, strip_emoji,
 };
 pub use mouth::player::{PlaybackEvent, PlaybackUnitId, Player, SequentialPlayer};
 pub use mouth::read_aloud::{
     ReadAloudAudioPreparer, ReadAloudCandidate, ReadAloudCandidateEvent, ReadAloudCandidateTracker,
-    SpeechCandidateCommitment, SpeechCandidateId,
+    SyntheticCandidateCommitment, SyntheticCandidateId,
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use segmentation::{
@@ -101,14 +101,6 @@ pub use span::{
     SpanRevision, SpanState, Text, TextId,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
-pub use speech::canonical_plan::{
-    CanonicalArticulationHints, CanonicalEnergyPlan, CanonicalPhoneProvenance,
-    CanonicalPhoneTiming, CanonicalPitchPlan, CanonicalPitchTarget, CanonicalSpeechBreak,
-    CanonicalSpeechPhone, CanonicalSpeechPlan, CanonicalSpeechPlanMetadata,
-    CanonicalSpeechPlanSource, CanonicalSpeechSegment, CanonicalStress, CanonicalSyllableRole,
-    canonical_speech_plan_from_prosody_timing, canonical_speech_plan_to_phone_timed_plan,
-    canonical_speech_plan_to_piper_phoneme_sequence, canonical_speech_plan_to_piper_timing,
-};
 pub use speech::prosody_timing::{
     AlignedPhone, AlignedWord, BreakReason, BreathGroup, ExternalAlignmentCommand, ForcedAlignment,
     PiperTimingBreak, PiperTimingPhone, PiperTimingPlan, PraatCommandConfig, PraatNucleus,
@@ -120,20 +112,27 @@ pub use speech::recognizer::{
     SpeechRecognizer, StreamingPartialKind, StreamingRecognition, StreamingRecognizerBackend,
     StreamingSpeechRecognizer,
 };
+pub use speech::synthetic_plan::{
+    ArticulationHints, EnergyPlan, PhoneProvenance, PhoneTiming, PitchPlan, PitchTarget, Stress,
+    SyllableRole, SyntheticBreak, SyntheticPhone, SyntheticPlan, SyntheticPlanMetadata,
+    SyntheticPlanSource, SyntheticSegment, synthetic_plan_from_prosody_timing,
+    synthetic_plan_to_phone_timed_plan, synthetic_plan_to_piper_phoneme_sequence,
+    synthetic_plan_to_piper_timing,
+};
 #[cfg(feature = "asr-whisper")]
 pub use speech::whisper::WhisperSpeechRecognizer;
 pub use speech::work::{
-    AcousticChunk, ArticulatoryChunk, AudioTime, BlockingVocoderRenderer, Boundary, BoundaryHint,
-    BreathPlan, BufferWatermarks, CANONICAL_SPEECH_WORK_FLOW, Cadence, ChunkId, CoarseTextChunk,
-    CommitHorizons, Commitment, Curve, CurvePoint, LingChunk, LpcNetChunk, MelChunk, MelF0Chunk,
-    PartialProsodyChunk, PhonePlan, PhoneTiming, PhraseShape, PipelineTime, RenderStatus, Renderer,
-    RepairPlan, RepairStrategy, RepresentationKind, RepresentationStream, SpeechEvent,
-    SpeechPipelineWatermarks, SpeechRepresentation, SpeechWorkGraph, SpeechWorkStageKind,
-    StageReadiness, StageStatus, StreamChunk, StreamStage, TextChunk, TextSource, TickStage,
-    TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan, WorkBudget, WorldChunk,
-    render_plan_to_representation,
+    AcousticChunk, AcousticPhoneTiming, ArticulatoryChunk, AudioTime, BlockingVocoderRenderer,
+    Boundary, BoundaryHint, BreathPlan, BufferWatermarks, CANONICAL_SPEECH_WORK_FLOW, Cadence,
+    ChunkId, CoarseTextChunk, CommitHorizons, Commitment, Curve, CurvePoint, LingChunk,
+    LpcNetChunk, MelChunk, MelF0Chunk, PartialProsodyChunk, PhonePlan, PhraseShape, PipelineTime,
+    RenderStatus, Renderer, RepairPlan, RepairStrategy, RepresentationKind, RepresentationStream,
+    SpeechEvent, SpeechPipelineWatermarks, SpeechRepresentation, SpeechWorkGraph,
+    SpeechWorkStageKind, StageReadiness, StageStatus, StreamChunk, StreamStage, TextChunk,
+    TextSource, TickStage, TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan,
+    WorkBudget, WorldChunk, render_plan_to_representation,
 };
-pub use speech_timeline::{AudioClipId, SessionId, SpeechUnitId, TranscriptRevisionId, TurnId};
+pub use speech_timeline::{AudioClipId, SessionId, SyntheticUnitId, TranscriptRevisionId, TurnId};
 pub use text_stability::{shared_prefix_len, stable_prefix_len};
 pub use time::{
     Clock, ExactTimestamp, FakeClock, NormalizedTimestamp, SessionClock, SystemClock, Timed,

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::audio::{AudioFrame, AudioOutput};
 use crate::mind::llm::{GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
-use crate::mouth::planner::{ExpressiveUnit, SpeechPlan, SpeechPlanner};
+use crate::mouth::planner::{ExpressiveUnit, MouthSyntheticPlan, SyntheticPlanner};
 use crate::mouth::player::{PlaybackEvent, Player, SequentialPlayer};
 use crate::mouth::tts::TextToSpeech;
 use crate::speech::recognizer::SpeechRecognizer;
@@ -17,7 +17,7 @@ pub enum PlaybackCheckEventKind {
     AsrStarted,
     AsrFinished,
     LlmToken,
-    PlannerSpeechReady,
+    PlannerSyntheticReady,
     TtsQueued,
     PlaybackStarted,
     PlaybackFinished,
@@ -77,7 +77,7 @@ pub fn run_playback_check(
         max_tokens: Some(16),
         stop: Vec::new(),
     })?;
-    let mut planner = SpeechPlanner::default();
+    let mut planner = SyntheticPlanner::default();
     let mut planned_units = Vec::new();
 
     loop {
@@ -102,9 +102,9 @@ pub fn run_playback_check(
     }
 
     for unit in &planned_units {
-        if let ExpressiveUnit::Speech(plan) = unit {
+        if let ExpressiveUnit::Synthetic(plan) = unit {
             events.push(PlaybackCheckEvent::new(
-                PlaybackCheckEventKind::PlannerSpeechReady,
+                PlaybackCheckEventKind::PlannerSyntheticReady,
                 clock.now(),
                 Some(plan.text().to_string()),
             ));
@@ -120,7 +120,7 @@ pub fn run_playback_check(
     }
 
     for event in player.poll()? {
-        if let PlaybackEvent::SpeechQueued { text, .. } = event {
+        if let PlaybackEvent::SyntheticQueued { text, .. } = event {
             events.push(PlaybackCheckEvent::new(
                 PlaybackCheckEventKind::TtsQueued,
                 clock.now(),
@@ -132,14 +132,14 @@ pub fn run_playback_check(
 
     for event in player.poll()? {
         match event {
-            PlaybackEvent::SpeechStarted { text, at, .. } => {
+            PlaybackEvent::SyntheticStarted { text, at, .. } => {
                 events.push(PlaybackCheckEvent::new(
                     PlaybackCheckEventKind::PlaybackStarted,
                     at,
                     Some(text),
                 ));
             }
-            PlaybackEvent::SpeechFinished { at, .. } => {
+            PlaybackEvent::SyntheticFinished { at, .. } => {
                 events.push(PlaybackCheckEvent::new(
                     PlaybackCheckEventKind::PlaybackFinished,
                     at,
@@ -207,7 +207,7 @@ impl StubTextToSpeech {
 }
 
 impl TextToSpeech for StubTextToSpeech {
-    fn enqueue(&mut self, _plan: SpeechPlan) -> Result<()> {
+    fn enqueue(&mut self, _plan: MouthSyntheticPlan) -> Result<()> {
         self.ready_frames.push(AudioFrame {
             captured_at: self.clock.now(),
             sample_rate_hz: 22_050,
