@@ -88,7 +88,7 @@ use cpal::{FromSample, Sample, SizedSample};
         feature = "tts-piper"
     )
 ))]
-use listenbury::ExactTimestamp;
+use listenbury::{AudioFrame, ExactTimestamp};
 #[cfg(any(
     test,
     all(
@@ -245,7 +245,7 @@ use listenbury::word::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::{AudioFrame, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 #[cfg(any(
     test,
     all(

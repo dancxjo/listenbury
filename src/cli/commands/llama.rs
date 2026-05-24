@@ -1,5 +1,5 @@
 use crate::cli::LlamaTurnCommand;
-#[cfg(feature = "llm-llama-cpp")]
+#[cfg(any(test, feature = "llm-llama-cpp"))]
 use crate::cli::PromptMode;
 #[cfg(feature = "llm-llama-cpp")]
 use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
@@ -115,7 +115,7 @@ impl LlamaTurnArgs {
     }
 }
 
-#[cfg(feature = "llm-llama-cpp")]
+#[cfg(any(test, feature = "llm-llama-cpp"))]
 pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<String>) {
     match mode {
         PromptMode::Raw => (user_prompt.to_string(), Vec::new()),
@@ -157,7 +157,7 @@ pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<
     }
 }
 
-#[cfg(feature = "llm-llama-cpp")]
+#[cfg(any(test, feature = "llm-llama-cpp"))]
 fn role_stops() -> Vec<String> {
     vec![
         "\nUser:".into(),
@@ -168,7 +168,7 @@ fn role_stops() -> Vec<String> {
     ]
 }
 
-#[cfg(feature = "llm-llama-cpp")]
+#[cfg(any(test, feature = "llm-llama-cpp"))]
 fn spoken_stops() -> Vec<String> {
     role_stops()
 }
