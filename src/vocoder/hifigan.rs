@@ -411,7 +411,7 @@ fn normalize_mel_for_onnx(mel: &[MelFrame], target_bins: usize) -> Vec<f32> {
         let frame_peak = (0..target_bins)
             .map(|index| resample_bin(&frame.bins, index, target_bins))
             .fold(0.0_f32, f32::max);
-        let adaptive_floor = (frame_peak * 0.012).max(1.0e-5);
+        let adaptive_floor = (frame_peak * 0.006).max(1.0e-5);
         for index in 0..target_bins {
             let source = resample_bin(&frame.bins, index, target_bins);
             values.push(source.max(adaptive_floor).ln().clamp(-8.0, 2.0));

@@ -14,7 +14,7 @@ const MEL_BINS: usize = 80;
 const MEL_MIN_HZ: f32 = 0.0;
 const SPECTRAL_REFERENCE_HZ: f32 = 80.0;
 const MEL_MAX_HZ: f32 = 8_000.0;
-const MEL_SPECTRAL_FLOOR: f32 = 0.010;
+const MEL_SPECTRAL_FLOOR: f32 = 0.006;
 const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
 const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
 
@@ -143,8 +143,8 @@ fn source_filter_frame(
         .map(|target| target.aspiration_level)
         .unwrap_or(0.0);
     if target.phone.ipa.as_str() == "h" {
-        frication *= 0.16;
-        aspiration = aspiration.max(0.82);
+        frication *= 0.07;
+        aspiration = aspiration.max(0.9);
     }
     let is_stop = acoustic.map(|target| target.is_stop).unwrap_or(false);
     let burst = if is_stop && envelope > 0.55 {
@@ -193,8 +193,8 @@ fn source_filter_frame_to_mel(frame: &SourceFilterFrame) -> MelFrame {
                 let hz = mel_bin_center_hz(bin, MEL_BINS);
                 let source = source_spectrum(hz, tilt, voiced, noise);
                 let filter = filter_spectrum(hz, &frame.filter);
-                let frication = high_band_noise_profile(hz) * frame.noise.frication_energy * 0.32;
-                let aspiration = aspiration_noise_profile(hz) * frame.source.breathiness * 0.18;
+                let frication = high_band_noise_profile(hz) * frame.noise.frication_energy * 0.24;
+                let aspiration = aspiration_noise_profile(hz) * frame.source.breathiness * 0.11;
                 let broad_speech_bed = speech_band_profile(hz) * MEL_SPECTRAL_FLOOR;
                 (energy * (source * filter + frication + aspiration + broad_speech_bed)).max(0.0)
             })
@@ -244,9 +244,9 @@ fn compress_mel_contrast(bins: &mut [f32]) {
     if peak <= f32::EPSILON {
         return;
     }
-    let floor = peak * 0.035;
+    let floor = peak * 0.018;
     for bin in bins {
-        *bin = (*bin + floor).powf(0.72);
+        *bin = (*bin + floor).powf(0.84);
     }
 }
 
@@ -312,7 +312,7 @@ fn formant_estimate(
 }
 
 fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
-    let mut energy = 0.18;
+    let mut energy = 0.12;
     for formant in [&filter.f1, &filter.f2, &filter.f3, &filter.f4]
         .into_iter()
         .flatten()
@@ -320,7 +320,7 @@ fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
         energy += gaussian_hz(
             hz,
             formant.frequency_hz,
-            formant.bandwidth_hz.unwrap_or(180.0).max(110.0) * 4.2,
+            formant.bandwidth_hz.unwrap_or(180.0).max(110.0) * 3.4,
         ) * db_to_linear(formant.amplitude_db);
     }
     energy
@@ -331,7 +331,7 @@ fn source_spectrum(hz: f32, tilt_db_per_octave: f32, voiced: f32, noise: f32) ->
     let tilted = db_to_linear(tilt_db_per_octave * 0.55 * octaves).clamp(0.08, 2.2);
     let broadband = high_band_noise_profile(hz).max(0.08);
     let low_periodic_tamer = (hz / (hz + 180.0)).clamp(0.18, 1.0);
-    voiced * tilted * low_periodic_tamer * 0.72 + noise.max(1.0 - voiced) * broadband * 0.25
+    voiced * tilted * low_periodic_tamer * 0.78 + noise.max(1.0 - voiced) * broadband * 0.16
 }
 
 fn speech_band_profile(hz: f32) -> f32 {
@@ -341,9 +341,9 @@ fn speech_band_profile(hz: f32) -> f32 {
 }
 
 fn aspiration_noise_profile(hz: f32) -> f32 {
-    gaussian_hz(hz, 900.0, 1_200.0) * 0.55
-        + gaussian_hz(hz, 2_200.0, 1_700.0) * 0.35
-        + high_band_noise_profile(hz) * 0.10
+    gaussian_hz(hz, 700.0, 1_050.0) * 0.58
+        + gaussian_hz(hz, 1_850.0, 1_450.0) * 0.34
+        + high_band_noise_profile(hz) * 0.08
 }
 
 fn phone_envelope(local_t: f32, frame_count: usize) -> f32 {
