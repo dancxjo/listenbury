@@ -216,7 +216,7 @@ impl HifiganBackend {
         }
 
         ensure!(!samples.is_empty(), "hifigan backend produced no audio");
-        normalize_loudness(&mut samples, 0.09, 0.92);
+        normalize_loudness(&mut samples, 0.075, 0.92);
 
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
@@ -285,7 +285,7 @@ impl HifiganBackend {
         );
 
         let mut samples = samples.to_vec();
-        normalize_loudness(&mut samples, 0.09, 0.92);
+        normalize_loudness(&mut samples, 0.075, 0.92);
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ,
@@ -521,7 +521,7 @@ fn normalize_loudness(samples: &mut [f32], target_rms: f32, ceiling: f32) {
     }
 
     let limit = ceiling.abs().max(MIN_NORMALIZABLE_PEAK);
-    let knee = limit * 0.72;
+    let knee = limit * 0.86;
     for sample in samples.iter_mut() {
         *sample = soft_limit(*sample, knee, limit);
     }

@@ -145,6 +145,10 @@ fn source_filter_frame(
     if target.phone.ipa.as_str() == "h" {
         frication *= 0.07;
         aspiration = aspiration.max(0.9);
+    } else if is_sibilant(target.phone.ipa.as_str()) {
+        frication *= 0.48;
+    } else if frication > 0.0 {
+        frication *= 0.72;
     }
     let is_stop = acoustic.map(|target| target.is_stop).unwrap_or(false);
     let burst = if is_stop && envelope > 0.55 {
@@ -312,7 +316,7 @@ fn formant_estimate(
 }
 
 fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
-    let mut energy = 0.12;
+    let mut energy = 0.16;
     for formant in [&filter.f1, &filter.f2, &filter.f3, &filter.f4]
         .into_iter()
         .flatten()
@@ -320,7 +324,7 @@ fn filter_spectrum(hz: f32, filter: &VocalTractFilterEstimate) -> f32 {
         energy += gaussian_hz(
             hz,
             formant.frequency_hz,
-            formant.bandwidth_hz.unwrap_or(180.0).max(110.0) * 3.4,
+            formant.bandwidth_hz.unwrap_or(180.0).max(110.0) * 3.8,
         ) * db_to_linear(formant.amplitude_db);
     }
     energy
@@ -331,7 +335,7 @@ fn source_spectrum(hz: f32, tilt_db_per_octave: f32, voiced: f32, noise: f32) ->
     let tilted = db_to_linear(tilt_db_per_octave * 0.55 * octaves).clamp(0.08, 2.2);
     let broadband = high_band_noise_profile(hz).max(0.08);
     let low_periodic_tamer = (hz / (hz + 180.0)).clamp(0.18, 1.0);
-    voiced * tilted * low_periodic_tamer * 0.78 + noise.max(1.0 - voiced) * broadband * 0.16
+    voiced * tilted * low_periodic_tamer * 0.70 + noise.max(1.0 - voiced) * broadband * 0.12
 }
 
 fn speech_band_profile(hz: f32) -> f32 {
@@ -427,9 +431,13 @@ fn high_band_noise_profile(hz: f32) -> f32 {
 }
 
 fn consonant_noise_profile(hz: f32) -> f32 {
-    high_band_noise_profile(hz) * 0.55
-        + gaussian_hz(hz, 2_600.0, 1_700.0) * 0.30
-        + gaussian_hz(hz, 4_200.0, 2_000.0) * 0.15
+    high_band_noise_profile(hz) * 0.35
+        + gaussian_hz(hz, 2_400.0, 1_800.0) * 0.48
+        + gaussian_hz(hz, 4_000.0, 2_200.0) * 0.17
+}
+
+fn is_sibilant(ipa: &str) -> bool {
+    matches!(ipa, "s" | "z" | "ʃ" | "ʒ" | "tʃ" | "dʒ")
 }
 
 fn gaussian_hz(hz: f32, center_hz: f32, width_hz: f32) -> f32 {
