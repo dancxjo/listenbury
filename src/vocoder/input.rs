@@ -1,6 +1,7 @@
 use crate::voice::articulator::{
     PartialProsodyPhone, PhoneTimedRenderTarget, PitchHint, RenderPlan,
 };
+use crate::voice::tract::SourceFilterTrack;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MelFrame {
@@ -25,6 +26,7 @@ pub enum VocoderInput<'a> {
         f0_hz: &'a [f32],
         voiced: &'a [bool],
     },
+    SourceFilterTrack(&'a SourceFilterTrack),
     SourceFilter {
         f0_hz: &'a [f32],
         voiced: &'a [bool],

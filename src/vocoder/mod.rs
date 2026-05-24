@@ -15,6 +15,7 @@ mod piper;
 mod registry;
 mod riper;
 mod source_filter;
+mod source_filter_mel;
 
 use anyhow::Result;
 
