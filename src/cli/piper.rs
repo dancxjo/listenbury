@@ -1453,7 +1453,6 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         acoustic_track.hop_samples,
     )?;
     let source_filter_frames = maybe_render_source_filter_reference(&acoustic_track)?;
-    let mut backend = HifiganBackend::load(model_path)?;
     let mut backend = if args.skip_gan {
         HifiganBackend::deterministic()
     } else {
