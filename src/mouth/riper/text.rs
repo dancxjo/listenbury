@@ -238,6 +238,24 @@ impl TextNormalizer {
                     );
                     saw_phrase_break = true;
                 }
+                '-' | '–' | '—' => {
+                    push_word_token(
+                        &mut tokens,
+                        &mut token_spans,
+                        &mut current,
+                        &mut current_start,
+                        trim_offset + byte_offset,
+                    );
+                    if !is_infix_word_dash(&chars, index) {
+                        push_phrase_break(
+                            &mut tokens,
+                            &mut token_spans,
+                            trim_offset + byte_offset,
+                            trim_offset + byte_offset + ch.len_utf8(),
+                        );
+                        saw_phrase_break = true;
+                    }
+                }
                 ',' | ';' => {
                     push_word_token(
                         &mut tokens,
@@ -943,6 +961,17 @@ fn should_treat_as_internal_dot(current: &str, next: char) -> bool {
         || (next.is_ascii_alphanumeric() && looks_like_url_or_email(current))
 }
 
+fn is_infix_word_dash(chars: &[(usize, char)], index: usize) -> bool {
+    let previous = index
+        .checked_sub(1)
+        .and_then(|previous| chars.get(previous))
+        .is_some_and(|(_, ch)| ch.is_ascii_alphanumeric());
+    let next = chars
+        .get(index + 1)
+        .is_some_and(|(_, ch)| ch.is_ascii_alphanumeric());
+    previous && next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1001,6 +1030,39 @@ mod tests {
             normalized.punctuation_commitment,
             PunctuationCommitmentState::SafeToPrepare
         );
+    }
+
+    #[test]
+    fn splits_hyphenated_compounds_into_pronounceable_words() {
+        let normalized = TextNormalizer
+            .normalize("low-latency speech")
+            .expect("normalize hyphenated compound");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("low".to_string()),
+                NormalizedToken::Word("latency".to_string()),
+                NormalizedToken::Word("speech".to_string()),
+            ]
+        );
+        assert_eq!(normalized.boundary, ProsodyBoundaryHint::None);
+        assert_eq!(normalized.boundary_kind, PhraseBoundaryKind::None);
+    }
+
+    #[test]
+    fn treats_standalone_dashes_as_phrase_breaks() {
+        let normalized = TextNormalizer
+            .normalize("ready - maybe")
+            .expect("normalize dashed phrase");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("ready".to_string()),
+                NormalizedToken::PhraseBreak,
+                NormalizedToken::Word("maybe".to_string()),
+            ]
+        );
+        assert_eq!(normalized.boundary, ProsodyBoundaryHint::PhraseBreak);
     }
 
     #[test]

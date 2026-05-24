@@ -559,6 +559,7 @@ Here, "MBROLA" means compatibility with MBROLA file/data conventions (`.pho` + v
 
 ```bash
 listenbury say "Testing one two three."
+listenbury say --rp "Testing one two three."
 listenbury say --riper --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
 listenbury say --riper --mbrola "Hello, my baby."
 listenbury sing --riper --mbrola

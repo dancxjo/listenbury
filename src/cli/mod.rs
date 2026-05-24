@@ -385,6 +385,8 @@ pub(crate) struct SayCommand {
     pub(crate) riper: bool,
     #[arg(long, requires = "riper")]
     pub(crate) klatt: bool,
+    #[arg(long, conflicts_with_all = ["klatt", "mbrola_voice"])]
+    pub(crate) rp: bool,
     #[arg(long, conflicts_with = "klatt")]
     pub(crate) mbrola: bool,
     #[arg(long, requires = "mbrola")]
@@ -1370,6 +1372,50 @@ mod tests {
         assert!(!command.riper);
         assert!(command.mbrola);
         assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_rp_shorthand() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--rp", "hello"])
+            .expect("say should parse RP shorthand");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.rp);
+        assert!(!command.riper);
+        assert!(!command.klatt);
+        assert!(!command.mbrola);
+        assert!(command.mbrola_voice.is_none());
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_rejects_rp_with_klatt() {
+        let error = Cli::try_parse_from(["listenbury", "say", "--rp", "--klatt", "hello"])
+            .expect_err("say should reject RP and Klatt together");
+        assert!(
+            error.to_string().contains("--rp"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn say_rejects_rp_with_explicit_mbrola_voice() {
+        let error = Cli::try_parse_from([
+            "listenbury",
+            "say",
+            "--rp",
+            "--mbrola",
+            "--mbrola-voice",
+            "data/mbrola/us3/us3",
+            "hello",
+        ])
+        .expect_err("say should reject RP with a different explicit MBROLA voice");
+        assert!(
+            error.to_string().contains("--rp"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

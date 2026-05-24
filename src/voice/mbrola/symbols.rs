@@ -97,6 +97,7 @@ mod tests {
     fn us1_maps_representative_phones_from_datapack() {
         let map = MbrolaSymbolMap::us1_starter();
         assert_eq!(map.map_phone("OW1").unwrap(), "oU");
+        assert_eq!(map.map_phone("DX").unwrap(), "d");
         assert_eq!(map.map_phone("tʃ").unwrap(), "tS");
     }
 
@@ -105,6 +106,7 @@ mod tests {
         let map = MbrolaSymbolMap::en1_starter();
         assert_eq!(map.map_phone("OW1").unwrap(), "@U");
         assert_eq!(map.map_phone("ER1").unwrap(), "3:");
+        assert_eq!(map.map_phone("DX").unwrap(), "d");
         assert_eq!(map.map_phone("tʃ").unwrap(), "tS");
     }
 }

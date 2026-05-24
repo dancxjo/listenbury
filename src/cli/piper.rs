@@ -232,6 +232,12 @@ fn say_tts_for_args(args: &SayArgs, piper_voice: PathBuf) -> Result<PiperTextToS
 #[cfg(feature = "tts-riper")]
 fn say_mbrola_tts_for_args(args: &SayArgs) -> Result<PiperTextToSpeech> {
     let voice = resolve_mbrola_voice(args.mbrola_voice.clone())?;
+    if voice == received_pronunciation_mbrola_voice() && !voice.is_file() {
+        anyhow::bail!(
+            "failed to find RP MBROLA voice {}; run `just fetch` first",
+            voice.display()
+        );
+    }
     Ok(PiperTextToSpeech::with_backend(MbrolaTextBackend::load(
         voice,
     )?))
@@ -1224,6 +1230,7 @@ impl SayArgs {
     fn from_command(command: SayCommand) -> Result<Self> {
         let mut riper = command.riper;
         let mut klatt = command.klatt;
+        let mut rp = command.rp;
         let mut words = command
             .words
             .into_iter()
@@ -1233,6 +1240,9 @@ impl SayArgs {
                     None
                 } else if word == "--klatt" {
                     klatt = true;
+                    None
+                } else if word == "--rp" {
+                    rp = true;
                     None
                 } else {
                     Some(word)
@@ -1250,7 +1260,12 @@ impl SayArgs {
             piper_voice = Some(PathBuf::from(words.remove(0)));
         }
 
-        let mbrola = command.mbrola || command.mbrola_voice.is_some();
+        let mut mbrola_voice = command.mbrola_voice;
+        if rp && mbrola_voice.is_none() {
+            mbrola_voice = Some(received_pronunciation_mbrola_voice());
+        }
+
+        let mbrola = command.mbrola || mbrola_voice.is_some() || rp;
         if mbrola {
             riper = true;
         }
@@ -1262,13 +1277,17 @@ impl SayArgs {
             !klatt || riper,
             "listenbury say: --klatt is only supported as a Riper backend alternative; pass --riper --klatt"
         );
+        anyhow::ensure!(
+            !klatt || !mbrola,
+            "listenbury say: choose either --klatt or the MBROLA/RP voice path"
+        );
         let stdin_stream = words.len() == 1 && words[0] == "-";
 
         Ok(Self {
             piper_bin,
             piper_voice,
             mbrola,
-            mbrola_voice: command.mbrola_voice,
+            mbrola_voice,
             output_wav: command.output_wav,
             riper,
             klatt,
@@ -1280,6 +1299,10 @@ impl SayArgs {
             },
         })
     }
+}
+
+fn received_pronunciation_mbrola_voice() -> PathBuf {
+    PathBuf::from("data/mbrola/en1/en1")
 }
 
 fn should_use_klatt_backend(args: &SayArgs) -> bool {
@@ -1773,6 +1796,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
@@ -1792,6 +1816,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec![
@@ -1817,6 +1842,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec![
@@ -1843,6 +1869,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec![
@@ -1866,6 +1893,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec!["hello".to_string(), "my".to_string(), "--klatt".to_string()],
@@ -1885,6 +1913,7 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: true,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
@@ -1903,6 +1932,7 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: false,
+            rp: false,
             mbrola: true,
             mbrola_voice: Some(PathBuf::from("voices/us1")),
             words: vec!["hello".to_string()],
@@ -1922,6 +1952,7 @@ mod tests {
             output_wav: None,
             riper: false,
             klatt: false,
+            rp: false,
             mbrola: true,
             mbrola_voice: None,
             words: vec!["hello".to_string()],
@@ -1932,6 +1963,71 @@ mod tests {
     }
 
     #[test]
+    fn say_args_rp_selects_en1_mbrola_voice() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            klatt: false,
+            rp: true,
+            mbrola: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string()],
+        })
+        .expect("RP shorthand should select the en1 MBROLA voice");
+        assert!(args.riper);
+        assert!(args.mbrola);
+        assert_eq!(
+            args.mbrola_voice,
+            Some(received_pronunciation_mbrola_voice())
+        );
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_rp_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            klatt: false,
+            rp: false,
+            mbrola: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "--rp".to_string()],
+        })
+        .expect("trailing RP shorthand should be accepted");
+        assert!(args.riper);
+        assert!(args.mbrola);
+        assert_eq!(args.text, "hello");
+        assert_eq!(
+            args.mbrola_voice,
+            Some(received_pronunciation_mbrola_voice())
+        );
+    }
+
+    #[test]
+    fn say_args_rejects_rp_with_klatt() {
+        let error = SayArgs::from_command(SayCommand {
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            riper: false,
+            klatt: false,
+            rp: true,
+            mbrola: false,
+            mbrola_voice: None,
+            words: vec!["hello".to_string(), "--klatt".to_string()],
+        })
+        .expect_err("RP shorthand should conflict with Klatt");
+        assert!(
+            error.to_string().contains("MBROLA/RP voice path"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn say_args_uses_default_mbrola_demo_text() {
         let args = SayArgs::from_command(SayCommand {
             piper_bin: None,
@@ -1939,6 +2035,7 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: false,
+            rp: false,
             mbrola: true,
             mbrola_voice: None,
             words: Vec::new(),
@@ -1955,6 +2052,7 @@ mod tests {
             output_wav: None,
             riper: true,
             klatt: true,
+            rp: false,
             mbrola: false,
             mbrola_voice: None,
             words: vec!["-".to_string()],

@@ -26,6 +26,10 @@ say *args:
 say-mbrola text:
     cargo run -- say --riper --mbrola "{{text}}"
 
+# Speak through the Received Pronunciation MBROLA shortcut. Run `just fetch` first.
+say-rp text:
+    cargo run -- say --rp "{{text}}"
+
 # Render the ragtime singing demo through the Riper MBROLA probe backend.
 sing-mbrola:
     cargo run -- sing --riper --mbrola
