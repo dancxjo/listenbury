@@ -320,17 +320,19 @@ pub(crate) struct SingDemoCommand {
     #[arg(
         long,
         value_enum,
-        conflicts_with_all = ["piper", "klatt", "diphone", "hifigan"]
+        conflicts_with_all = ["piper", "klatt", "diphone", "hifigan", "speecht5"]
     )]
     pub(crate) backend: Option<SingDemoBackendOption>,
-    #[arg(long, conflicts_with_all = ["backend", "klatt", "diphone", "hifigan"])]
+    #[arg(long, conflicts_with_all = ["backend", "klatt", "diphone", "hifigan", "speecht5"])]
     pub(crate) piper: bool,
-    #[arg(long, conflicts_with_all = ["backend", "piper", "diphone", "hifigan"])]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "diphone", "hifigan", "speecht5"])]
     pub(crate) klatt: bool,
-    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "hifigan"])]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "hifigan", "speecht5"])]
     pub(crate) diphone: bool,
-    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "diphone"])]
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "diphone", "speecht5"])]
     pub(crate) hifigan: bool,
+    #[arg(long, conflicts_with_all = ["backend", "piper", "klatt", "diphone", "hifigan"])]
+    pub(crate) speecht5: bool,
     #[arg(long = "diphone-voice", requires = "diphone")]
     pub(crate) mbrola_voice: Option<PathBuf>,
     #[arg(long)]
@@ -354,8 +356,8 @@ impl SingDemoCommand {
             SingDemoBackendOption::Klatt
         } else if self.diphone {
             SingDemoBackendOption::Mbrola
-        } else if self.hifigan {
-            SingDemoBackendOption::Hifigan
+        } else if self.hifigan || self.speecht5 {
+            SingDemoBackendOption::Speecht5
         } else {
             self.backend.unwrap_or(SingDemoBackendOption::Riper)
         }
@@ -737,6 +739,7 @@ pub(crate) enum SingDemoBackendOption {
     Mbrola,
     Piper,
     Hifigan,
+    Speecht5,
 }
 
 #[derive(Debug, Subcommand)]
@@ -2439,13 +2442,25 @@ mod tests {
     #[test]
     fn top_level_sing_accepts_hifigan() {
         let cli = Cli::try_parse_from(["listenbury", "sing", "--hifigan"])
-            .expect("top-level sing should parse hifigan as a mel vocoder backend");
+            .expect("top-level sing should parse hifigan as SpeechT5 acoustic plus HiFi-GAN");
 
         let Some(Command::Sing(command)) = cli.command else {
             panic!("expected top-level sing command");
         };
         assert!(command.hifigan);
-        assert_eq!(command.selected_backend(), SingDemoBackendOption::Hifigan);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Speecht5);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_speecht5() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--speecht5"])
+            .expect("top-level sing should parse speecht5 as a native acoustic backend");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert!(command.speecht5);
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Speecht5);
     }
 
     #[test]
@@ -2458,6 +2473,18 @@ mod tests {
         };
         assert_eq!(command.backend, Some(SingDemoBackendOption::Hifigan));
         assert_eq!(command.selected_backend(), SingDemoBackendOption::Hifigan);
+    }
+
+    #[test]
+    fn top_level_sing_accepts_speecht5_backend_option() {
+        let cli = Cli::try_parse_from(["listenbury", "sing", "--backend", "speecht5"])
+            .expect("top-level sing should parse speecht5 backend option");
+
+        let Some(Command::Sing(command)) = cli.command else {
+            panic!("expected top-level sing command");
+        };
+        assert_eq!(command.backend, Some(SingDemoBackendOption::Speecht5));
+        assert_eq!(command.selected_backend(), SingDemoBackendOption::Speecht5);
     }
 
     #[test]

@@ -572,6 +572,8 @@ listenbury say --dump-phonemes "Testing one two three."
 listenbury say --rp "Testing one two three."
 listenbury say --klatt "Hello, my baby. Hello, my darling. Hello, my ragtime gal."
 listenbury say --diphone "Hello, my baby."
+listenbury sing --hifigan
+listenbury sing --speecht5
 listenbury sing --diphone
 printf "Hello, my baby.\nHello, my darling.\n" | listenbury say --klatt -
 ```

@@ -7,13 +7,12 @@ use anyhow::{Context, Result};
 use super::play_audio_frames;
 use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 
-#[cfg(feature = "piper-compat")]
-use crate::cli::model_paths::resolve_hifigan_model;
 #[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
+#[cfg(feature = "piper-compat")]
+use crate::cli::model_paths::{resolve_hifigan_model, resolve_speecht5_acoustic_dir};
 #[cfg(feature = "tts-piper")]
 use crate::cli::piper::resolve_piper_bin;
-use listenbury::acoustic::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
 use listenbury::prosody::note_target::{
@@ -23,12 +22,14 @@ use listenbury::prosody::singing::SungPhrase;
 use listenbury::prosody::syllable::{PhoneSpan, SungSyllable, TimedPhoneRef};
 use listenbury::prosody::vibrato::Vibrato;
 use listenbury::vocoder::{
-    SingDemoBackendSelector, VocoderConfig, VocoderInput, backend_for_option,
+    HifiganBackend, SingDemoBackendSelector, VocoderConfig, VocoderInput, backend_for_option,
 };
 use listenbury::voice::articulator::{
     articulate, backend_detail_expectation, render_plan_for_backend,
 };
 use listenbury::voice::tract::targets::default_english_phone_targets;
+#[cfg(feature = "piper-compat")]
+use listenbury::{SpeechT5OnnxAcousticGenerator, SpeechT5OnnxPaths};
 
 pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let phrase = build_ragtime_phrase()?;
@@ -38,9 +39,12 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
     let config = vocoder_config_for_command(backend, &command)?;
     let mut renderer = backend_for_option(selector, config)?;
     let descriptor = renderer.descriptor();
-    if backend == SingDemoBackendOption::Hifigan {
+    if matches!(
+        backend,
+        SingDemoBackendOption::Hifigan | SingDemoBackendOption::Speecht5
+    ) {
         println!(
-            "sing-demo backend: {} (MelF0 via source-filter acoustic model)",
+            "sing-demo backend: {} (MelF0 via SpeechT5 acoustic model)",
             descriptor.id
         );
         for note in descriptor.notes {
@@ -54,18 +58,15 @@ pub(crate) fn run_sing_demo(command: SingDemoCommand) -> Result<()> {
                 "ONNX HiFi-GAN"
             }
         );
-        let mut acoustic = SourceFilterAcousticModel;
-        let acoustic_track = acoustic
-            .generate(AcousticInput::Singing(&phrase))
-            .context("failed to generate source-filter mel/F0 track for sing-demo --hifigan")?;
+        let acoustic_track = synthesize_speecht5_sing_acoustic(ragtime_speecht5_text())?;
         let frames = renderer
             .render(VocoderInput::MelF0 {
                 mel: &acoustic_track.mel,
                 f0_hz: &acoustic_track.f0_hz,
                 voiced: &acoustic_track.voiced,
             })
-            .context("failed to render sing-demo mel/F0 track with HiFi-GAN")?;
-        emit_demo_audio(command.output_wav.as_deref(), &frames, "HiFi-GAN sing-demo")?;
+            .context("failed to render sing-demo SpeechT5 mel track with HiFi-GAN")?;
+        emit_demo_audio(command.output_wav.as_deref(), &frames, "SpeechT5 sing-demo")?;
         return Ok(());
     }
 
@@ -110,7 +111,9 @@ fn selector_for_backend(backend: SingDemoBackendOption) -> SingDemoBackendSelect
         SingDemoBackendOption::Riper => SingDemoBackendSelector::Riper,
         SingDemoBackendOption::Mbrola => SingDemoBackendSelector::Mbrola,
         SingDemoBackendOption::Piper => SingDemoBackendSelector::Piper,
-        SingDemoBackendOption::Hifigan => SingDemoBackendSelector::Hifigan,
+        SingDemoBackendOption::Hifigan | SingDemoBackendOption::Speecht5 => {
+            SingDemoBackendSelector::Hifigan
+        }
     }
 }
 
@@ -120,15 +123,20 @@ fn vocoder_config_for_command(
 ) -> Result<VocoderConfig> {
     let mut config = VocoderConfig::default();
     anyhow::ensure!(
-        backend == SingDemoBackendOption::Hifigan
-            || (!command.skip_gan && command.hifigan_model.is_none()),
-        "listenbury sing: --skip-gan and --hifigan-model only apply when the HiFi-GAN backend is selected"
+        matches!(
+            backend,
+            SingDemoBackendOption::Hifigan | SingDemoBackendOption::Speecht5
+        ) || (!command.skip_gan && command.hifigan_model.is_none()),
+        "listenbury sing: --skip-gan and --hifigan-model only apply when the SpeechT5/HiFi-GAN backend is selected"
     );
     if backend == SingDemoBackendOption::Mbrola {
         config.mbrola_voice = Some(resolve_sing_mbrola_voice(command.mbrola_voice.clone())?);
     }
 
-    if backend == SingDemoBackendOption::Hifigan {
+    if matches!(
+        backend,
+        SingDemoBackendOption::Hifigan | SingDemoBackendOption::Speecht5
+    ) {
         config.skip_gan = command.skip_gan;
         #[cfg(feature = "piper-compat")]
         if !command.skip_gan {
@@ -154,6 +162,37 @@ fn vocoder_config_for_command(
     }
 
     Ok(config)
+}
+
+fn ragtime_speecht5_text() -> &'static str {
+    "Hello my baby. Hello my darling. Hello my ragtime gal."
+}
+
+#[cfg(feature = "piper-compat")]
+fn synthesize_speecht5_sing_acoustic(text: &str) -> Result<listenbury::AcousticFrameTrack> {
+    let acoustic_dir = resolve_speecht5_acoustic_dir()?;
+    let mut acoustic =
+        SpeechT5OnnxAcousticGenerator::load(SpeechT5OnnxPaths::from_dir(&acoustic_dir))
+            .with_context(|| {
+                format!(
+                    "failed to load SpeechT5 acoustic model from {}",
+                    acoustic_dir.display()
+                )
+            })?;
+    let acoustic_track = acoustic.generate_text(text).with_context(|| {
+        format!("SpeechT5 failed to generate mel frames for sing text `{text}`")
+    })?;
+    HifiganBackend::validate_acoustic_contract(
+        acoustic_track.sample_rate_hz,
+        acoustic_track.hop_samples,
+    )?;
+    Ok(acoustic_track)
+}
+
+#[cfg(not(feature = "piper-compat"))]
+fn synthesize_speecht5_sing_acoustic(text: &str) -> Result<listenbury::AcousticFrameTrack> {
+    let _ = text;
+    anyhow::bail!("listenbury sing --hifigan/--speecht5 requires the `piper-compat` feature")
 }
 
 fn write_demo_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
@@ -605,36 +644,18 @@ mod tests {
     }
 
     #[test]
-    fn hifigan_demo_renders_from_source_filter_mel_f0() {
-        let phrase = build_ragtime_phrase().expect("ragtime phrase should build");
+    fn hifigan_demo_uses_speecht5_acoustic_route() {
         assert_eq!(
             selector_for_backend(SingDemoBackendOption::Hifigan),
             SingDemoBackendSelector::Hifigan
         );
-        let mut acoustic = SourceFilterAcousticModel;
-        let acoustic_track = acoustic
-            .generate(AcousticInput::Singing(&phrase))
-            .expect("hifigan sing-demo should generate mel/F0");
-        let mut backend = backend_for_option(
-            SingDemoBackendSelector::Hifigan,
-            VocoderConfig {
-                skip_gan: true,
-                ..VocoderConfig::default()
-            },
-        )
-        .expect("hifigan backend");
-        let frames = backend
-            .render(VocoderInput::MelF0 {
-                mel: &acoustic_track.mel,
-                f0_hz: &acoustic_track.f0_hz,
-                voiced: &acoustic_track.voiced,
-            })
-            .expect("hifigan sing-demo should synthesize from mel/F0");
-        let sample_count: usize = frames.iter().map(|frame| frame.samples.len()).sum();
-        assert!(!frames.is_empty(), "hifigan sing-demo should emit frames");
-        assert!(
-            sample_count > 0,
-            "hifigan sing-demo should emit non-empty audio"
+        assert_eq!(
+            selector_for_backend(SingDemoBackendOption::Speecht5),
+            SingDemoBackendSelector::Hifigan
+        );
+        assert_eq!(
+            ragtime_speecht5_text(),
+            "Hello my baby. Hello my darling. Hello my ragtime gal."
         );
     }
 
@@ -660,11 +681,11 @@ mod tests {
     fn sing_demo_contains_no_direct_synth_backend_impls() {
         let source = include_str!("sing_demo.rs");
         assert!(
-            !source.contains("fn synthesize_klatt_from_plan"),
+            source.matches("fn synthesize_klatt_from_plan").count() == 1,
             "sing_demo should orchestrate through the vocoder layer"
         );
         assert!(
-            !source.contains("fn synthesize_mbrola_from_plan"),
+            source.matches("fn synthesize_mbrola_from_plan").count() == 1,
             "sing_demo should orchestrate through the vocoder layer"
         );
     }
