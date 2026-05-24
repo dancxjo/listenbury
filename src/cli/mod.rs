@@ -232,7 +232,7 @@ pub(crate) struct ContinueCommand {
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
-    #[arg(long, requires = "hifigan")]
+    #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long)]
     pub(crate) whisper_model: Option<PathBuf>,
@@ -342,7 +342,7 @@ pub(crate) struct SingDemoCommand {
     #[arg(long = "hifigan-model")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
-    #[arg(long)]
+    #[arg(long, alias = "hifigan-fallback")]
     pub(crate) skip_gan: bool,
 }
 
@@ -433,7 +433,7 @@ pub(crate) struct SayCommand {
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
-    #[arg(long, requires = "hifigan")]
+    #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "mbrola_voice"])]
     pub(crate) rp: bool,
@@ -602,7 +602,7 @@ pub(crate) struct LiveHalfDuplexCommand {
     #[arg(long = "hifigan-model", requires = "hifigan")]
     pub(crate) hifigan_model: Option<PathBuf>,
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
-    #[arg(long, requires = "hifigan")]
+    #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
     pub(crate) skip_gan: bool,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
@@ -720,6 +720,7 @@ pub(crate) struct ModelsUseCommand {
 pub(crate) enum ModelsUseKind {
     Llm,
     Voice,
+    Acoustic,
     Vocoder,
     Whisper,
 }
@@ -1404,6 +1405,25 @@ mod tests {
     fn say_accepts_skip_gan() {
         let cli = Cli::try_parse_from(["listenbury", "say", "--hifigan", "--skip-gan", "hello"])
             .expect("say should parse skip-gan as a mel debug switch");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.hifigan);
+        assert!(command.skip_gan);
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_hifigan_fallback_alias() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "say",
+            "--hifigan",
+            "--hifigan-fallback",
+            "hello",
+        ])
+        .expect("say should parse hifigan-fallback as an explicit mel debug switch");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");

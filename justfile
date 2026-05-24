@@ -75,11 +75,12 @@ listen-calibrated *args:
 vad-trace-calibrated input_wav *args:
     cargo run -- dev vad-trace "{{input_wav}}" --vad-profile "{{vad-profile}}" "$@"
 
-# Download the full CMU Pronouncing Dictionary into data/cmudict.dict.
-fetch:
+# Download language data and selected model assets.
+fetch *args:
     @mkdir -p "$(dirname "{{cmudict-path}}")"
     @tmp="$(mktemp "{{cmudict-path}}.XXXXXX")" && curl --fail --location --show-error --output "$tmp" "{{cmudict-url}}" && mv "$tmp" "{{cmudict-path}}"
     @for voice in us3 en1; do mkdir -p "data/mbrola/$voice"; tmp="$(mktemp "data/mbrola/$voice/$voice.XXXXXX")"; curl --fail --location --show-error --output "$tmp" "{{mbrola-voices-url}}/$voice/$voice"; mv "$tmp" "data/mbrola/$voice/$voice"; done
+    cargo run -- models fetch "$@"
 
 # Download the default model assets into LISTENBURY_HOME.
 fetch-models *args:

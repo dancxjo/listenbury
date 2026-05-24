@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 
-use crate::acoustic::MelFrame;
+use crate::acoustic::{AcousticFrameTrack, AcousticInput, AcousticModelBackend, MelFrame};
 use crate::audio::frame::AudioFrame;
 use crate::time::ExactTimestamp;
 use crate::vocoder::{BackendFamily, SpeechSynthesizer, VocoderDescriptor, VocoderInput};
@@ -675,6 +675,8 @@ pub struct StageStatus {
     pub readiness: StageReadiness,
     pub input_len: usize,
     pub output_len: usize,
+    pub emitted_duration: Duration,
+    pub commitment: Option<Commitment>,
 }
 
 impl StageStatus {
@@ -689,7 +691,19 @@ impl StageStatus {
             readiness,
             input_len,
             output_len,
+            emitted_duration: Duration::ZERO,
+            commitment: None,
         }
+    }
+
+    pub const fn with_emission(
+        mut self,
+        emitted_duration: Duration,
+        commitment: Option<Commitment>,
+    ) -> Self {
+        self.emitted_duration = emitted_duration;
+        self.commitment = commitment;
+        self
     }
 }
 
@@ -801,6 +815,60 @@ fn representation_start_time(input: &SyntheticRepresentation, fallback: AudioTim
         | SyntheticRepresentation::CoarseText(_)
         | SyntheticRepresentation::SourceFilterTrack(_) => fallback,
     }
+}
+
+fn representation_duration(input: &SyntheticRepresentation) -> Duration {
+    match input {
+        SyntheticRepresentation::Mel(chunk) => frame_duration(
+            chunk.frames.len(),
+            chunk.sample_rate_hz,
+            chunk.frame_hop_samples,
+        ),
+        SyntheticRepresentation::MelF0(chunk) => frame_duration(
+            chunk.mel.len(),
+            chunk.sample_rate_hz,
+            chunk.frame_hop_samples,
+        ),
+        SyntheticRepresentation::Wave(chunk) => {
+            let samples = chunk
+                .end_time
+                .sample_index
+                .saturating_sub(chunk.start_time.sample_index);
+            AudioTime {
+                sample_rate_hz: chunk.sample_rate_hz,
+                sample_index: samples,
+            }
+            .as_duration()
+        }
+        _ => Duration::ZERO,
+    }
+}
+
+fn frame_duration(frame_count: usize, sample_rate_hz: u32, hop_samples: usize) -> Duration {
+    if sample_rate_hz == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_secs_f64((frame_count * hop_samples) as f64 / f64::from(sample_rate_hz))
+}
+
+fn wave_chunks_duration(chunks: &VecDeque<WaveChunk>) -> Duration {
+    chunks
+        .iter()
+        .map(|chunk| {
+            AudioTime {
+                sample_rate_hz: chunk.sample_rate_hz,
+                sample_index: chunk
+                    .end_time
+                    .sample_index
+                    .saturating_sub(chunk.start_time.sample_index),
+            }
+            .as_duration()
+        })
+        .fold(Duration::ZERO, |total, duration| total + duration)
+}
+
+fn wave_chunks_commitment(chunks: &VecDeque<WaveChunk>) -> Option<Commitment> {
+    chunks.front().map(|chunk| chunk.commitment)
 }
 
 fn accepts_representation(descriptor: &VocoderDescriptor, kind: RepresentationKind) -> bool {
@@ -919,6 +987,14 @@ where
             readiness,
             self.pending.len() + self.in_flight,
             self.rendered.len(),
+        )
+        .with_emission(
+            wave_chunks_duration(&self.rendered),
+            wave_chunks_commitment(&self.rendered).or_else(|| {
+                self.pending
+                    .front()
+                    .map(SyntheticRepresentation::commitment)
+            }),
         )
     }
 }
@@ -1055,6 +1131,11 @@ impl TickStage for WavePassthroughRenderer {
             self.pending.len(),
             self.rendered.len(),
         )
+        .with_emission(
+            wave_chunks_duration(&self.rendered),
+            wave_chunks_commitment(&self.rendered)
+                .or_else(|| self.pending.front().map(|chunk| chunk.commitment)),
+        )
     }
 }
 
@@ -1120,10 +1201,23 @@ impl SyntheticWorkGraph {
     }
 
     pub fn tick(&mut self, now: PipelineTime, budget: WorkBudget) -> Vec<StageStatus> {
-        self.stages
+        let statuses = self
+            .stages
             .iter_mut()
             .map(|stage| stage.tick(now, budget))
-            .collect()
+            .collect::<Vec<_>>();
+        for status in &statuses {
+            tracing::debug!(
+                stage_id = status.id,
+                readiness = ?status.readiness,
+                input_len = status.input_len,
+                output_len = status.output_len,
+                emitted_ms = status.emitted_duration.as_millis(),
+                commitment = ?status.commitment,
+                "speech work stage status"
+            );
+        }
+        statuses
     }
 
     pub fn statuses(&self) -> Vec<StageStatus> {
@@ -1133,6 +1227,241 @@ impl SyntheticWorkGraph {
     pub fn watermarks(&self) -> SyntheticPipelineWatermarks {
         self.watermarks.clone()
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AcousticWorkChunk {
+    pub id: ChunkId,
+    pub input: AcousticWorkInput,
+    pub time_start: AudioTime,
+    pub commitment: Commitment,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AcousticWorkInput {
+    PhoneTimed(Vec<PhoneTimedRenderTarget>),
+    SourceFilterTrack(SourceFilterTrack),
+}
+
+pub struct AcousticModelStage<A> {
+    id: &'static str,
+    backend: A,
+    pending: VecDeque<AcousticWorkChunk>,
+    output: VecDeque<SyntheticRepresentation>,
+    failed_jobs: usize,
+    last_status: StageStatus,
+}
+
+impl<A> AcousticModelStage<A>
+where
+    A: AcousticModelBackend,
+{
+    pub fn new(id: &'static str, backend: A) -> Self {
+        Self {
+            id,
+            backend,
+            pending: VecDeque::new(),
+            output: VecDeque::new(),
+            failed_jobs: 0,
+            last_status: StageStatus::new(id, StageReadiness::NeedsInput, 0, 0),
+        }
+    }
+
+    fn generate_representation(
+        &mut self,
+        chunk: AcousticWorkChunk,
+    ) -> Result<SyntheticRepresentation> {
+        let track = match &chunk.input {
+            AcousticWorkInput::PhoneTimed(targets) => {
+                self.backend.generate(AcousticInput::PhoneTimed(targets))?
+            }
+            AcousticWorkInput::SourceFilterTrack(track) => self
+                .backend
+                .generate(AcousticInput::SourceFilterTrack(track))?,
+        };
+        Ok(acoustic_track_to_mel_f0_representation(
+            track,
+            chunk.time_start,
+            chunk.commitment,
+        ))
+    }
+
+    fn current_status(&self) -> StageStatus {
+        let readiness = if self.failed_jobs > 0 {
+            StageReadiness::Blocked
+        } else if !self.pending.is_empty() {
+            StageReadiness::Ready
+        } else {
+            StageReadiness::NeedsInput
+        };
+        let commitment = self
+            .output
+            .front()
+            .map(SyntheticRepresentation::commitment)
+            .or_else(|| self.pending.front().map(|chunk| chunk.commitment));
+        let emitted_duration = self
+            .output
+            .iter()
+            .map(representation_duration)
+            .fold(Duration::ZERO, |total, duration| total + duration);
+        StageStatus::new(self.id, readiness, self.pending.len(), self.output.len())
+            .with_emission(emitted_duration, commitment)
+    }
+}
+
+impl<A> TickStage for AcousticModelStage<A>
+where
+    A: AcousticModelBackend,
+{
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn tick(&mut self, _now: PipelineTime, budget: WorkBudget) -> StageStatus {
+        let mut processed = 0usize;
+        while processed < budget.max_items {
+            let Some(chunk) = self.pending.pop_front() else {
+                break;
+            };
+            match self.generate_representation(chunk) {
+                Ok(output) => self.output.push_back(output),
+                Err(_) => {
+                    self.failed_jobs = self.failed_jobs.saturating_add(1);
+                    break;
+                }
+            }
+            processed += 1;
+        }
+        self.last_status = self.current_status();
+        self.last_status.clone()
+    }
+
+    fn status(&self) -> StageStatus {
+        self.last_status.clone()
+    }
+}
+
+impl<A> StreamStage for AcousticModelStage<A>
+where
+    A: AcousticModelBackend,
+{
+    type Input = AcousticWorkChunk;
+    type Output = SyntheticRepresentation;
+
+    fn accept(&mut self, input: Self::Input) {
+        self.pending.push_back(input);
+        self.last_status = self.current_status();
+    }
+
+    fn drain(&mut self) -> Vec<Self::Output> {
+        let drained = self.output.drain(..).collect();
+        self.last_status = self.current_status();
+        drained
+    }
+}
+
+pub struct TickingSpeechWorkGraph<A, R> {
+    acoustic: AcousticModelStage<A>,
+    renderer: R,
+    wave: VecDeque<WaveChunk>,
+    last_statuses: Vec<StageStatus>,
+}
+
+impl<A, R> TickingSpeechWorkGraph<A, R>
+where
+    A: AcousticModelBackend,
+    R: Renderer,
+{
+    pub fn new(acoustic: AcousticModelStage<A>, renderer: R) -> Self {
+        Self {
+            acoustic,
+            renderer,
+            wave: VecDeque::new(),
+            last_statuses: Vec::new(),
+        }
+    }
+
+    pub fn push_phone_timed(
+        &mut self,
+        id: ChunkId,
+        targets: Vec<PhoneTimedRenderTarget>,
+        time_start: AudioTime,
+        commitment: Commitment,
+    ) {
+        self.acoustic.accept(AcousticWorkChunk {
+            id,
+            input: AcousticWorkInput::PhoneTimed(targets),
+            time_start,
+            commitment,
+        });
+    }
+
+    pub fn tick(&mut self, now: PipelineTime, budget: WorkBudget) -> Vec<StageStatus> {
+        let mut statuses = Vec::new();
+        statuses.push(self.acoustic.tick(now, budget));
+
+        for representation in self.acoustic.drain() {
+            let _ = self.renderer.push(representation);
+        }
+
+        statuses.push(self.renderer.tick(now, budget));
+        self.wave.extend(self.renderer.drain());
+
+        let waveform_status = StageStatus::new(
+            "waveform-stream",
+            if self.wave.is_empty() {
+                StageReadiness::NeedsInput
+            } else {
+                StageReadiness::Ready
+            },
+            0,
+            self.wave.len(),
+        )
+        .with_emission(
+            wave_chunks_duration(&self.wave),
+            wave_chunks_commitment(&self.wave),
+        );
+        statuses.push(waveform_status);
+
+        for status in &statuses {
+            tracing::debug!(
+                stage_id = status.id,
+                readiness = ?status.readiness,
+                input_len = status.input_len,
+                output_len = status.output_len,
+                emitted_ms = status.emitted_duration.as_millis(),
+                commitment = ?status.commitment,
+                "speech work stage status"
+            );
+        }
+
+        self.last_statuses = statuses.clone();
+        statuses
+    }
+
+    pub fn drain_wave(&mut self) -> Vec<WaveChunk> {
+        self.wave.drain(..).collect()
+    }
+
+    pub fn statuses(&self) -> &[StageStatus] {
+        &self.last_statuses
+    }
+}
+
+pub fn acoustic_track_to_mel_f0_representation(
+    track: AcousticFrameTrack,
+    time_start: AudioTime,
+    commitment: Commitment,
+) -> SyntheticRepresentation {
+    SyntheticRepresentation::MelF0(MelF0Chunk {
+        mel: track.mel,
+        f0_hz: track.f0_hz,
+        voiced: track.voiced,
+        frame_hop_samples: track.hop_samples,
+        sample_rate_hz: track.sample_rate_hz,
+        time_start,
+        commitment,
+    })
 }
 
 pub fn render_plan_to_representation(
@@ -1172,6 +1501,9 @@ pub fn render_plan_to_representation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acoustic::SourceFilterAcousticModel;
+    use crate::linguistic::phonology::Phone;
+    use crate::vocoder::MelDebugRendererBackend;
     use crate::vocoder::{BackendCapabilities, BackendFamily, VocoderDescriptor};
     use std::time::Instant;
 
@@ -1453,5 +1785,67 @@ mod tests {
             graph.watermarks().audio_sink.target,
             Duration::from_millis(80)
         );
+    }
+
+    #[test]
+    fn ticking_speech_work_graph_renders_phone_timed_mel_f0_to_wave() {
+        let acoustic = AcousticModelStage::new("source-filter-acoustic", SourceFilterAcousticModel);
+        let renderer =
+            RealtimeVocoderRenderer::new("mel-debug-renderer", MelDebugRendererBackend::new());
+        let mut graph = TickingSpeechWorkGraph::new(acoustic, renderer);
+
+        graph.push_phone_timed(
+            1,
+            vec![
+                PhoneTimedRenderTarget {
+                    phone: Phone::new_ipa("s"),
+                    duration_ms: 48,
+                    f0_hz: None,
+                    amplitude: 0.7,
+                    vibrato: None,
+                },
+                PhoneTimedRenderTarget {
+                    phone: Phone::new_ipa("ɑ"),
+                    duration_ms: 96,
+                    f0_hz: Some(150.0),
+                    amplitude: 0.7,
+                    vibrato: None,
+                },
+            ],
+            AudioTime::zero(16_000),
+            Commitment::Committed,
+        );
+
+        let now = PipelineTime::from_audio(AudioTime::zero(16_000));
+        let mut wave = Vec::new();
+        for _ in 0..100 {
+            graph.tick(now, WorkBudget::new(4, Duration::ZERO));
+            wave = graph.drain_wave();
+            if !wave.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(wave.len(), 1);
+        assert_eq!(wave[0].sample_rate_hz, 16_000);
+        assert_eq!(wave[0].channels, 1);
+        assert!(!wave[0].samples.is_empty());
+        assert_eq!(wave[0].start_time, AudioTime::zero(16_000));
+        assert!(wave[0].end_time.sample_index > wave[0].start_time.sample_index);
+        assert_eq!(wave[0].commitment, Commitment::Committed);
+
+        let statuses = graph.statuses();
+        assert_eq!(statuses.len(), 3);
+        assert!(
+            statuses
+                .iter()
+                .any(|status| status.id == "source-filter-acoustic")
+        );
+        assert!(statuses.iter().any(|status| {
+            status.id == "waveform-stream"
+                && status.emitted_duration > Duration::ZERO
+                && status.commitment == Some(Commitment::Committed)
+        }));
     }
 }

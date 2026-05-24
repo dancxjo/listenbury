@@ -63,6 +63,7 @@ fn model_menu() -> Result<()> {
         vec![
             CategoryChoice::new(ModelKind::Llm)?,
             CategoryChoice::new(ModelKind::Voice)?,
+            CategoryChoice::new(ModelKind::Acoustic)?,
             CategoryChoice::new(ModelKind::Vocoder)?,
             CategoryChoice::new(ModelKind::Whisper)?,
         ],
@@ -92,11 +93,13 @@ fn model_menu() -> Result<()> {
 fn print_models_list() -> Result<()> {
     let llm = selected_bundle(ModelKind::Llm)?.id;
     let voice = selected_bundle(ModelKind::Voice)?.id;
+    let acoustic = selected_bundle(ModelKind::Acoustic)?.id;
     let vocoder = selected_bundle(ModelKind::Vocoder)?.id;
     let whisper = selected_bundle(ModelKind::Whisper)?.id;
     for kind in [
         ModelKind::Llm,
         ModelKind::Voice,
+        ModelKind::Acoustic,
         ModelKind::Vocoder,
         ModelKind::Whisper,
     ] {
@@ -104,6 +107,7 @@ fn print_models_list() -> Result<()> {
         for bundle in MODEL_BUNDLES.iter().filter(|bundle| bundle.kind == kind) {
             let marker = if (kind == ModelKind::Llm && bundle.id == llm)
                 || (kind == ModelKind::Voice && bundle.id == voice)
+                || (kind == ModelKind::Acoustic && bundle.id == acoustic)
                 || (kind == ModelKind::Vocoder && bundle.id == vocoder)
                 || (kind == ModelKind::Whisper && bundle.id == whisper)
             {
@@ -133,6 +137,7 @@ fn use_model(command: ModelsUseCommand) -> Result<()> {
     let kind = match command.kind {
         ModelsUseKind::Llm => ModelKind::Llm,
         ModelsUseKind::Voice => ModelKind::Voice,
+        ModelsUseKind::Acoustic => ModelKind::Acoustic,
         ModelsUseKind::Vocoder => ModelKind::Vocoder,
         ModelsUseKind::Whisper => ModelKind::Whisper,
     };
@@ -152,6 +157,7 @@ fn select_bundle(kind: ModelKind, bundle: &ModelBundle) -> Result<()> {
     match kind {
         ModelKind::Llm => selection.llm = Some(bundle.id.to_string()),
         ModelKind::Voice => selection.voice = Some(bundle.id.to_string()),
+        ModelKind::Acoustic => selection.acoustic = Some(bundle.id.to_string()),
         ModelKind::Vocoder => selection.vocoder = Some(bundle.id.to_string()),
         ModelKind::Whisper => selection.whisper = Some(bundle.id.to_string()),
     }
@@ -179,6 +185,7 @@ impl CategoryChoice {
         let name = match kind {
             ModelKind::Llm => "LLM",
             ModelKind::Voice => "Voice",
+            ModelKind::Acoustic => "Acoustic",
             ModelKind::Vocoder => "Vocoder",
             ModelKind::Whisper => "Whisper",
         };
@@ -240,6 +247,7 @@ fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
     } else if let Some(model) = command.model {
         let bundle = find_bundle(ModelKind::Llm, &model)
             .or_else(|| find_bundle(ModelKind::Voice, &model))
+            .or_else(|| find_bundle(ModelKind::Acoustic, &model))
             .or_else(|| find_bundle(ModelKind::Vocoder, &model))
             .or_else(|| find_bundle(ModelKind::Whisper, &model))
             .with_context(|| format!("unknown model `{model}`; run `listenbury models list`"))?;
@@ -328,6 +336,7 @@ fn verify_models(command: ModelsVerifyCommand) -> Result<()> {
     let assets: Vec<_> = if let Some(model) = &command.model {
         let bundle = find_bundle(ModelKind::Llm, model)
             .or_else(|| find_bundle(ModelKind::Voice, model))
+            .or_else(|| find_bundle(ModelKind::Acoustic, model))
             .or_else(|| find_bundle(ModelKind::Vocoder, model))
             .or_else(|| find_bundle(ModelKind::Whisper, model))
             .with_context(|| format!("unknown model `{model}`; run `listenbury models list`"))?;

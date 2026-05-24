@@ -54,6 +54,7 @@ pub struct FetchProgress {
 pub struct ModelSelection {
     pub llm: Option<String>,
     pub voice: Option<String>,
+    pub acoustic: Option<String>,
     pub vocoder: Option<String>,
     pub whisper: Option<String>,
 }
@@ -97,6 +98,7 @@ pub fn default_bundle_id(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llama-3-2-3b-instruct-q4-k-m",
         ModelKind::Voice => "ryan",
+        ModelKind::Acoustic => "speecht5-tts",
         ModelKind::Vocoder => "speecht5-hifigan",
         ModelKind::Whisper => "whisper-large-v3-turbo",
     }
@@ -131,6 +133,9 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
         ModelKind::Voice => std::env::var("PETE_VOICE")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_VOICE").ok()),
+        ModelKind::Acoustic => std::env::var("PETE_ACOUSTIC")
+            .ok()
+            .or_else(|| std::env::var("LISTENBURY_ACOUSTIC").ok()),
         ModelKind::Vocoder => std::env::var("PETE_VOCODER")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_VOCODER").ok()),
@@ -148,6 +153,7 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
             selection.and_then(|selection| match kind {
                 ModelKind::Llm => selection.llm,
                 ModelKind::Voice => selection.voice,
+                ModelKind::Acoustic => selection.acoustic,
                 ModelKind::Vocoder => selection.vocoder,
                 ModelKind::Whisper => selection.whisper,
             })
@@ -166,6 +172,7 @@ pub fn model_kind_label(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llm",
         ModelKind::Voice => "voice",
+        ModelKind::Acoustic => "acoustic",
         ModelKind::Vocoder => "vocoder",
         ModelKind::Whisper => "whisper",
     }
@@ -255,6 +262,7 @@ pub fn fetch_selected_assets_with_progress_and_jobs_and_verify(
         selected_bundle(ModelKind::Whisper)?,
         selected_bundle(ModelKind::Llm)?,
         selected_bundle(ModelKind::Voice)?,
+        selected_bundle(ModelKind::Acoustic)?,
         selected_bundle(ModelKind::Vocoder)?,
     ];
     fetch_bundles_with_progress(&bundles, jobs, verify_existing, &mut progress)
@@ -516,10 +524,28 @@ mod tests {
     }
 
     #[test]
+    fn acoustic_aliases_resolve_to_speecht5_tts_bundle() {
+        let speecht5 = find_bundle(ModelKind::Acoustic, "speecht5").expect("speecht5 bundle");
+        assert_eq!(speecht5.id, "speecht5-tts");
+
+        let acoustic =
+            find_bundle(ModelKind::Acoustic, "speecht5-acoustic").expect("acoustic bundle");
+        assert_eq!(
+            acoustic.primary_asset_id,
+            "speecht5-tts-decoder-merged-quantized"
+        );
+    }
+
+    #[test]
     fn whisper_defaults_to_multilingual_v3_turbo() {
         assert_eq!(
             default_bundle_id(ModelKind::Whisper),
             "whisper-large-v3-turbo"
         );
+    }
+
+    #[test]
+    fn acoustic_defaults_to_speecht5_tts() {
+        assert_eq!(default_bundle_id(ModelKind::Acoustic), "speecht5-tts");
     }
 }

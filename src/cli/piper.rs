@@ -1317,7 +1317,7 @@ impl SayArgs {
                 } else if word == "--hifigan" {
                     hifigan = true;
                     None
-                } else if word == "--skip-gan" {
+                } else if word == "--skip-gan" || word == "--hifigan-fallback" {
                     skip_gan = true;
                     None
                 } else if word == "--dump-pipeline" || word == "--trace-speech-pipeline" {
@@ -1531,13 +1531,13 @@ fn hifigan_feature_stage() -> String {
 
 fn hifigan_vocoder_stage(args: &SayArgs) -> String {
     if args.skip_gan {
-        "vocoder: mel debug renderer (HiFi-GAN skipped by request)".to_string()
+        "vocoder: deterministic-fallback mel debug renderer (explicit --skip-gan/--hifigan-fallback)".to_string()
     } else {
         #[cfg(feature = "piper-compat")]
         if let Some(model) = &args.hifigan_model {
-            return format!("vocoder: hifigan ({})", model.display());
+            return format!("vocoder: hifigan ONNX ({})", model.display());
         }
-        "vocoder: hifigan".to_string()
+        "vocoder: hifigan ONNX (model resolved at runtime)".to_string()
     }
 }
 
@@ -1623,9 +1623,27 @@ fn synthesize_hifigan_text(
         &acoustic_track.voiced,
     )?;
     let mut backend = if skip_gan {
+        eprintln!(
+            "WARNING: {command_label} using deterministic-fallback mel debug renderer, not ONNX HiFi-GAN."
+        );
+        tracing::warn!(
+            command = command_label,
+            mode = "deterministic-fallback",
+            "HiFi-GAN route is using the explicit mel debug renderer"
+        );
         Box::new(MelDebugRendererBackend::new()) as Box<dyn SpeechSynthesizer>
     } else {
         let model_path = resolve_hifigan_model(hifigan_model)?;
+        eprintln!(
+            "{command_label} using ONNX HiFi-GAN model: {}",
+            model_path.display()
+        );
+        tracing::info!(
+            command = command_label,
+            mode = "onnx",
+            model = %model_path.display(),
+            "HiFi-GAN route is using ONNX vocoding"
+        );
         Box::new(HifiganBackend::load(model_path)?) as Box<dyn SpeechSynthesizer>
     };
     let frames = backend
@@ -2699,6 +2717,33 @@ mod tests {
         assert!(args.skip_gan);
         assert!(should_use_hifigan_backend(&args));
         assert_eq!(say_backend_graph(&args).id, "source-filter-hifigan");
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_hifigan_fallback_alias() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            klatt: false,
+            hifigan: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec![
+                "hello".to_string(),
+                "--hifigan".to_string(),
+                "--hifigan-fallback".to_string(),
+            ],
+        })
+        .expect("trailing --hifigan-fallback should select the mel debug route");
+        assert!(args.hifigan);
+        assert!(args.skip_gan);
+        assert_eq!(args.text, "hello");
     }
 
     #[test]
