@@ -52,7 +52,9 @@ use listenbury::voice::tract::targets::{
     default_english_phone_targets, phone_render_targets_from_string,
 };
 #[cfg(feature = "tts-riper")]
-use listenbury::{AcousticInput, AcousticModelBackend, SourceFilterAcousticModel};
+use listenbury::{
+    AcousticFrameTrack, AcousticInput, AcousticModelBackend, SourceFilterAcousticModel,
+};
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "audio-cpal")]
 use std::io::BufRead;
@@ -1437,6 +1439,11 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         .with_context(|| {
             format!("listenbury say --hifigan failed to generate acoustic frames for `{text}`")
         })?;
+    HifiganBackend::validate_acoustic_contract(
+        acoustic_track.sample_rate_hz,
+        acoustic_track.hop_samples,
+    )?;
+    let source_filter_frames = maybe_render_source_filter_reference(&acoustic_track)?;
     let mut backend = HifiganBackend::load(model_path)?;
     let frames = backend
         .render(VocoderInput::MelF0 {
@@ -1449,12 +1456,114 @@ fn synthesize_hifigan_for_say(args: &SayArgs) -> Result<Vec<AudioFrame>> {
         !frames.is_empty(),
         "listenbury say --hifigan produced no audio for `{text}`"
     );
+    maybe_write_hifigan_debug_artifacts(text, &acoustic_track, &source_filter_frames, &frames)?;
     Ok(frames)
 }
 
 #[cfg(not(feature = "tts-riper"))]
 fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
     anyhow::bail!("listenbury say --hifigan requires the `tts-riper` feature")
+}
+
+#[cfg(feature = "tts-riper")]
+fn maybe_render_source_filter_reference(
+    acoustic_track: &AcousticFrameTrack,
+) -> Result<Vec<AudioFrame>> {
+    if std::env::var_os("LISTENBURY_HIFIGAN_DEBUG_DIR").is_none() {
+        return Ok(Vec::new());
+    }
+    let mut deterministic = HifiganBackend::deterministic();
+    deterministic
+        .render(VocoderInput::MelF0 {
+            mel: &acoustic_track.mel,
+            f0_hz: &acoustic_track.f0_hz,
+            voiced: &acoustic_track.voiced,
+        })
+        .context("failed to render deterministic source-filter A/B reference")
+}
+
+#[cfg(feature = "tts-riper")]
+fn maybe_write_hifigan_debug_artifacts(
+    text: &str,
+    acoustic_track: &AcousticFrameTrack,
+    source_filter_frames: &[AudioFrame],
+    hifigan_frames: &[AudioFrame],
+) -> Result<()> {
+    let Some(debug_dir) = std::env::var_os("LISTENBURY_HIFIGAN_DEBUG_DIR").map(PathBuf::from)
+    else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(&debug_dir).with_context(|| {
+        format!(
+            "failed to create HiFi-GAN debug directory {}",
+            debug_dir.display()
+        )
+    })?;
+    let stem = format!(
+        "utterance-{}-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        std::process::id()
+    );
+
+    let mel_path = debug_dir.join(format!("{stem}-pre-vocoder-mel.txt"));
+    let mut mel_dump = String::new();
+    mel_dump.push_str(&format!("text={text}\n"));
+    mel_dump.push_str(&format!(
+        "sample_rate_hz={} hop_samples={} frame_count={} mel_bins={}\n",
+        acoustic_track.sample_rate_hz,
+        acoustic_track.hop_samples,
+        acoustic_track.mel.len(),
+        acoustic_track
+            .mel
+            .first()
+            .map(|frame| frame.bins.len())
+            .unwrap_or(0)
+    ));
+    for frame in &acoustic_track.mel {
+        let row = frame
+            .bins
+            .iter()
+            .map(|value| format!("{value:.6}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        mel_dump.push_str(&row);
+        mel_dump.push('\n');
+    }
+    std::fs::write(&mel_path, mel_dump).with_context(|| {
+        format!(
+            "failed to write HiFi-GAN mel debug dump {}",
+            mel_path.display()
+        )
+    })?;
+
+    if !source_filter_frames.is_empty() {
+        let source_filter_path = debug_dir.join(format!("{stem}-source-filter-reference.wav"));
+        write_wav(&source_filter_path, source_filter_frames).with_context(|| {
+            format!(
+                "failed to write HiFi-GAN source-filter reference {}",
+                source_filter_path.display()
+            )
+        })?;
+    }
+    let hifigan_path = debug_dir.join(format!("{stem}-hifigan-output.wav"));
+    write_wav(&hifigan_path, hifigan_frames).with_context(|| {
+        format!(
+            "failed to write HiFi-GAN debug wav {}",
+            hifigan_path.display()
+        )
+    })?;
+
+    tracing::debug!(
+        debug_dir = %debug_dir.display(),
+        mel_dump = %mel_path.display(),
+        source_filter_frames = source_filter_frames.len(),
+        hifigan_frames = hifigan_frames.len(),
+        "wrote HiFi-GAN debug artifacts"
+    );
+    Ok(())
 }
 
 fn synthesize_klatt_for_say(text: &str) -> Result<Vec<AudioFrame>> {

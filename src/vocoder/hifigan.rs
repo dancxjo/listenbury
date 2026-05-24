@@ -32,12 +32,40 @@ const MODEL_MEL_BINS: usize = 80;
 const LOG_MEL_MIN: f32 = -8.0;
 const LOG_MEL_MAX: f32 = 2.0;
 const MIN_NORMALIZABLE_PEAK: f32 = 1.0e-4;
+const CLIP_THRESHOLD: f32 = 0.99;
+const SILENCE_THRESHOLD: f32 = 1.0e-5;
+const MODEL_N_FFT: usize = 1_024;
+const MODEL_WIN_LENGTH: usize = 1_024;
+const MODEL_FMIN_HZ: f32 = 0.0;
+const MODEL_FMAX_HZ: f32 = 8_000.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MelScale {
+    Htk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MelNormalization {
+    NaturalLogClamped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MelTensorLayout {
+    FramesBins,
+    BinsFrames,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MelContract {
     pub sample_rate_hz: u32,
     pub hop_samples: usize,
+    pub n_fft: usize,
+    pub win_length: usize,
     pub mel_bins: usize,
+    pub f_min_hz: f32,
+    pub f_max_hz: f32,
+    pub scale: MelScale,
+    pub normalization: MelNormalization,
     pub log_floor: f32,
     pub log_ceiling: f32,
 }
@@ -45,12 +73,35 @@ pub struct MelContract {
 pub const SPEECHT5_HIFIGAN_MEL_CONTRACT: MelContract = MelContract {
     sample_rate_hz: SAMPLE_RATE_HZ,
     hop_samples: HOP_SAMPLES,
+    n_fft: MODEL_N_FFT,
+    win_length: MODEL_WIN_LENGTH,
     mel_bins: MODEL_MEL_BINS,
+    f_min_hz: MODEL_FMIN_HZ,
+    f_max_hz: MODEL_FMAX_HZ,
+    scale: MelScale::Htk,
+    normalization: MelNormalization::NaturalLogClamped,
     log_floor: LOG_MEL_MIN,
     log_ceiling: LOG_MEL_MAX,
 };
 
 impl HifiganBackend {
+    pub fn validate_acoustic_contract(sample_rate_hz: u32, hop_samples: usize) -> Result<()> {
+        let contract = SPEECHT5_HIFIGAN_MEL_CONTRACT;
+        ensure!(
+            sample_rate_hz == contract.sample_rate_hz,
+            "hifigan backend requires {} Hz acoustic input sample rate, got {} Hz",
+            contract.sample_rate_hz,
+            sample_rate_hz
+        );
+        ensure!(
+            hop_samples == contract.hop_samples,
+            "hifigan backend requires {}-sample acoustic hop length, got {} samples",
+            contract.hop_samples,
+            hop_samples
+        );
+        Ok(())
+    }
+
     pub fn deterministic() -> Self {
         Self {
             #[cfg(feature = "tts-riper")]
@@ -136,13 +187,16 @@ impl HifiganBackend {
     ) -> Result<Vec<AudioFrame>> {
         validate_mel_f0_tracks(mel, f0_hz, voiced)?;
         validate_speecht5_hifigan_mel(mel)?;
+        log_hifigan_mel_summary(mel);
 
         #[cfg(feature = "tts-riper")]
         if self.session.is_some() {
             return self.render_mel_onnx(mel);
         }
 
-        Self::render_mel_deterministic(mel, f0_hz, voiced)
+        let frames = Self::render_mel_deterministic(mel, f0_hz, voiced)?;
+        log_hifigan_waveform_summary("deterministic", &frames);
+        Ok(frames)
     }
 
     fn render_mel_deterministic(
@@ -219,19 +273,35 @@ impl HifiganBackend {
             .session
             .as_mut()
             .context("HiFi-GAN ONNX session has not been loaded")?;
-        let (input_name, input_rank) = resolve_hifigan_input(session, &model_path)?;
+        let (input_name, input_shape, layout) = resolve_hifigan_input(session, &model_path)?;
         let output_name = resolve_hifigan_output_name(session, &model_path)?;
         let frames = i64::try_from(mel.len()).context("HiFi-GAN mel sequence is too long")?;
         let bins = i64::try_from(MODEL_MEL_BINS).context("HiFi-GAN mel bin count is invalid")?;
-        let values = flatten_contract_mel(mel);
-        let shape = match input_rank {
-            Some(2) => vec![frames, bins],
-            Some(3) | None => vec![1_i64, frames, bins],
+        let values = flatten_contract_mel(mel, layout);
+        let shape = match input_shape.as_deref().map(|shape| shape.len()) {
+            Some(2) => match layout {
+                MelTensorLayout::FramesBins => vec![frames, bins],
+                MelTensorLayout::BinsFrames => vec![bins, frames],
+            },
+            Some(3) | None => match layout {
+                MelTensorLayout::FramesBins => vec![1_i64, frames, bins],
+                MelTensorLayout::BinsFrames => vec![1_i64, bins, frames],
+            },
             Some(rank) => bail!(
                 "HiFi-GAN ONNX model `{}` expects rank-{rank} input `{input_name}`, but Listenbury can provide rank-2 or rank-3 mel tensors",
                 model_path.display()
             ),
         };
+        tracing::debug!(
+            model = %model_path.display(),
+            input = %input_name,
+            tensor_layout = ?layout,
+            model_input_shape = ?input_shape,
+            requested_shape = ?shape,
+            mel_frames = mel.len(),
+            mel_bins = MODEL_MEL_BINS,
+            "hifigan onnx input contract"
+        );
 
         let tensor = Tensor::from_array((shape, values))
             .with_context(|| format!("failed to build HiFi-GAN ONNX `{input_name}` tensor"))?
@@ -260,13 +330,15 @@ impl HifiganBackend {
 
         let mut samples = samples.to_vec();
         normalize_loudness(&mut samples, 0.075, 0.92);
-        Ok(vec![AudioFrame {
+        let frames = vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
             sample_rate_hz: SAMPLE_RATE_HZ,
             channels: 1,
             samples,
             voice_signatures: Vec::new(),
-        }])
+        }];
+        log_hifigan_waveform_summary("onnx", &frames);
+        Ok(frames)
     }
 }
 
@@ -297,7 +369,10 @@ impl VocoderBackend for HifiganBackend {
 }
 
 #[cfg(feature = "tts-riper")]
-fn resolve_hifigan_input(session: &Session, model_path: &Path) -> Result<(String, Option<usize>)> {
+fn resolve_hifigan_input(
+    session: &Session,
+    model_path: &Path,
+) -> Result<(String, Option<Vec<i64>>, MelTensorLayout)> {
     let candidates = ["spectrogram", "input", "mel", "mel_spectrogram", "logmel"];
     for candidate in candidates {
         if let Some(input) = session
@@ -310,10 +385,9 @@ fn resolve_hifigan_input(session: &Session, model_path: &Path) -> Result<(String
                 "HiFi-GAN ONNX input `{candidate}` in `{}` is not f32",
                 model_path.display()
             );
-            return Ok((
-                candidate.to_string(),
-                input.dtype().tensor_shape().map(|shape| shape.len()),
-            ));
+            let shape = input.dtype().tensor_shape().map(|shape| shape.to_vec());
+            let layout = infer_mel_tensor_layout(shape.as_deref());
+            return Ok((candidate.to_string(), shape, layout));
         }
     }
     let input = session.inputs().first().with_context(|| {
@@ -328,10 +402,9 @@ fn resolve_hifigan_input(session: &Session, model_path: &Path) -> Result<(String
         input.name(),
         model_path.display()
     );
-    Ok((
-        input.name().to_string(),
-        input.dtype().tensor_shape().map(|shape| shape.len()),
-    ))
+    let shape = input.dtype().tensor_shape().map(|shape| shape.to_vec());
+    let layout = infer_mel_tensor_layout(shape.as_deref());
+    Ok((input.name().to_string(), shape, layout))
 }
 
 #[cfg(feature = "tts-riper")]
@@ -421,13 +494,254 @@ fn validate_speecht5_hifigan_mel(mel: &[MelFrame]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "tts-riper")]
-fn flatten_contract_mel(mel: &[MelFrame]) -> Vec<f32> {
-    let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
+fn log_hifigan_mel_summary(mel: &[MelFrame]) {
+    let stats = summarize_mel_values(mel);
+    let ranges = summarize_per_band_ranges(mel);
+    tracing::debug!(
+        contract_sample_rate_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
+        contract_hop_samples = SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples,
+        contract_n_fft = SPEECHT5_HIFIGAN_MEL_CONTRACT.n_fft,
+        contract_win_length = SPEECHT5_HIFIGAN_MEL_CONTRACT.win_length,
+        contract_mel_bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins,
+        contract_f_min_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.f_min_hz,
+        contract_f_max_hz = SPEECHT5_HIFIGAN_MEL_CONTRACT.f_max_hz,
+        contract_scale = ?SPEECHT5_HIFIGAN_MEL_CONTRACT.scale,
+        contract_normalization = ?SPEECHT5_HIFIGAN_MEL_CONTRACT.normalization,
+        tensor_layout = ?MelTensorLayout::FramesBins,
+        frame_count = mel.len(),
+        value_count = stats.count,
+        min = stats.min,
+        max = stats.max,
+        mean = stats.mean,
+        rms = stats.rms,
+        nan_count = stats.nan_count,
+        inf_count = stats.inf_count,
+        per_band_minmax = ?ranges,
+        "hifigan mel contract summary"
+    );
+}
+
+fn log_hifigan_waveform_summary(renderer: &str, frames: &[AudioFrame]) {
+    let stats = summarize_waveform_values(frames);
+    tracing::debug!(
+        renderer,
+        frame_count = frames.len(),
+        sample_rate_hz = frames
+            .first()
+            .map(|frame| frame.sample_rate_hz)
+            .unwrap_or(0),
+        samples = stats.count,
+        min = stats.min,
+        max = stats.max,
+        mean = stats.mean,
+        rms = stats.rms,
+        clip_count = stats.clip_count,
+        silence_count = stats.silence_count,
+        nan_count = stats.nan_count,
+        inf_count = stats.inf_count,
+        "hifigan waveform summary"
+    );
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScalarStats {
+    min: f32,
+    max: f32,
+    mean: f32,
+    rms: f32,
+    count: usize,
+    nan_count: usize,
+    inf_count: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WaveformStats {
+    min: f32,
+    max: f32,
+    mean: f32,
+    rms: f32,
+    count: usize,
+    clip_count: usize,
+    silence_count: usize,
+    nan_count: usize,
+    inf_count: usize,
+}
+
+fn summarize_mel_values(mel: &[MelFrame]) -> ScalarStats {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    let mut sum = 0.0f32;
+    let mut sum_sq = 0.0f32;
+    let mut count = 0usize;
+    let mut nan_count = 0usize;
+    let mut inf_count = 0usize;
     for frame in mel {
-        values.extend_from_slice(&frame.bins);
+        for value in &frame.bins {
+            if value.is_nan() {
+                nan_count += 1;
+                continue;
+            }
+            if value.is_infinite() {
+                inf_count += 1;
+                continue;
+            }
+            min = min.min(*value);
+            max = max.max(*value);
+            sum += *value;
+            sum_sq += value * value;
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        return ScalarStats {
+            min: 0.0,
+            max: 0.0,
+            mean: 0.0,
+            rms: 0.0,
+            count,
+            nan_count,
+            inf_count,
+        };
+    }
+
+    ScalarStats {
+        min,
+        max,
+        mean: sum / count as f32,
+        rms: (sum_sq / count as f32).sqrt(),
+        count,
+        nan_count,
+        inf_count,
+    }
+}
+
+fn summarize_per_band_ranges(mel: &[MelFrame]) -> Vec<(f32, f32)> {
+    let bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins;
+    let mut mins = vec![f32::INFINITY; bins];
+    let mut maxes = vec![f32::NEG_INFINITY; bins];
+    for frame in mel {
+        for (index, value) in frame.bins.iter().enumerate() {
+            mins[index] = mins[index].min(*value);
+            maxes[index] = maxes[index].max(*value);
+        }
+    }
+    mins.into_iter()
+        .zip(maxes)
+        .map(|(min, max)| {
+            if min.is_infinite() || max.is_infinite() {
+                (0.0, 0.0)
+            } else {
+                (min, max)
+            }
+        })
+        .collect()
+}
+
+fn summarize_waveform_values(frames: &[AudioFrame]) -> WaveformStats {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    let mut sum = 0.0f32;
+    let mut sum_sq = 0.0f32;
+    let mut count = 0usize;
+    let mut clip_count = 0usize;
+    let mut silence_count = 0usize;
+    let mut nan_count = 0usize;
+    let mut inf_count = 0usize;
+    for frame in frames {
+        for sample in &frame.samples {
+            if sample.is_nan() {
+                nan_count += 1;
+                continue;
+            }
+            if sample.is_infinite() {
+                inf_count += 1;
+                continue;
+            }
+            min = min.min(*sample);
+            max = max.max(*sample);
+            sum += *sample;
+            sum_sq += sample * sample;
+            if sample.abs() >= CLIP_THRESHOLD {
+                clip_count += 1;
+            }
+            if sample.abs() <= SILENCE_THRESHOLD {
+                silence_count += 1;
+            }
+            count += 1;
+        }
+    }
+
+    if count == 0 {
+        return WaveformStats {
+            min: 0.0,
+            max: 0.0,
+            mean: 0.0,
+            rms: 0.0,
+            count,
+            clip_count,
+            silence_count,
+            nan_count,
+            inf_count,
+        };
+    }
+
+    WaveformStats {
+        min,
+        max,
+        mean: sum / count as f32,
+        rms: (sum_sq / count as f32).sqrt(),
+        count,
+        clip_count,
+        silence_count,
+        nan_count,
+        inf_count,
+    }
+}
+
+#[cfg(feature = "tts-riper")]
+fn flatten_contract_mel(mel: &[MelFrame], layout: MelTensorLayout) -> Vec<f32> {
+    let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
+    match layout {
+        MelTensorLayout::FramesBins => {
+            for frame in mel {
+                values.extend_from_slice(&frame.bins);
+            }
+        }
+        MelTensorLayout::BinsFrames => {
+            for bin_index in 0..SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins {
+                for frame in mel {
+                    values.push(frame.bins[bin_index]);
+                }
+            }
+        }
     }
     values
+}
+
+fn infer_mel_tensor_layout(shape: Option<&[i64]>) -> MelTensorLayout {
+    let Some(shape) = shape else {
+        return MelTensorLayout::FramesBins;
+    };
+    match shape {
+        [left, right] => match (
+            *left == MODEL_MEL_BINS as i64,
+            *right == MODEL_MEL_BINS as i64,
+        ) {
+            (true, false) => MelTensorLayout::BinsFrames,
+            (false, true) => MelTensorLayout::FramesBins,
+            _ => MelTensorLayout::FramesBins,
+        },
+        [_, middle, right] => match (
+            *middle == MODEL_MEL_BINS as i64,
+            *right == MODEL_MEL_BINS as i64,
+        ) {
+            (true, false) => MelTensorLayout::BinsFrames,
+            (false, true) => MelTensorLayout::FramesBins,
+            _ => MelTensorLayout::FramesBins,
+        },
+        _ => MelTensorLayout::FramesBins,
+    }
 }
 
 fn amplitude_for_frame(frame: &MelFrame) -> f32 {
@@ -517,6 +831,78 @@ fn soft_limit(sample: f32, knee: f32, limit: f32) -> f32 {
     let headroom = (limit - knee).max(MIN_NORMALIZABLE_PEAK);
     let curved = knee + (1.0 - (-(magnitude - knee) / headroom).exp()) * headroom;
     sign * curved.min(limit)
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    fn synthetic_mel_frames() -> Vec<MelFrame> {
+        (0..6)
+            .map(|frame_index| MelFrame {
+                bins: (0..MODEL_MEL_BINS)
+                    .map(|bin_index| {
+                        let envelope = 1.0 - (bin_index as f32 / MODEL_MEL_BINS as f32);
+                        ((0.12 + frame_index as f32 * 0.01) * envelope.max(0.05)).ln()
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn infers_bins_frames_layout_from_3d_shape() {
+        assert_eq!(
+            infer_mel_tensor_layout(Some(&[1, MODEL_MEL_BINS as i64, -1])),
+            MelTensorLayout::BinsFrames
+        );
+        assert_eq!(
+            infer_mel_tensor_layout(Some(&[1, -1, MODEL_MEL_BINS as i64])),
+            MelTensorLayout::FramesBins
+        );
+        assert_eq!(
+            infer_mel_tensor_layout(Some(&[1, MODEL_MEL_BINS as i64, MODEL_MEL_BINS as i64])),
+            MelTensorLayout::FramesBins
+        );
+    }
+
+    #[cfg(feature = "tts-riper")]
+    #[test]
+    fn flatten_contract_mel_transposes_for_bins_frames_layout() {
+        let mel = synthetic_mel_frames();
+        let frames_bins = flatten_contract_mel(&mel, MelTensorLayout::FramesBins);
+        let bins_frames = flatten_contract_mel(&mel, MelTensorLayout::BinsFrames);
+        assert_eq!(frames_bins.len(), bins_frames.len());
+        assert_eq!(frames_bins[0], mel[0].bins[0]);
+        assert_eq!(bins_frames[0], mel[0].bins[0]);
+        assert_eq!(bins_frames[1], mel[1].bins[0]);
+        assert_eq!(bins_frames[mel.len()], mel[0].bins[1]);
+    }
+
+    #[test]
+    fn validates_acoustic_contract_metadata() {
+        HifiganBackend::validate_acoustic_contract(
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples,
+        )
+        .expect("contract metadata should validate");
+        let err = HifiganBackend::validate_acoustic_contract(
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.sample_rate_hz,
+            SPEECHT5_HIFIGAN_MEL_CONTRACT.hop_samples + 1,
+        )
+        .expect_err("mismatched hop should fail");
+        assert!(err.to_string().contains("hop length"));
+    }
+
+    #[test]
+    fn synthetic_mel_distribution_matches_contract_bounds() {
+        let mel = synthetic_mel_frames();
+        validate_speecht5_hifigan_mel(&mel).expect("synthetic fixture should satisfy contract");
+        let stats = summarize_mel_values(&mel);
+        assert!(stats.min >= SPEECHT5_HIFIGAN_MEL_CONTRACT.log_floor);
+        assert!(stats.max <= SPEECHT5_HIFIGAN_MEL_CONTRACT.log_ceiling);
+        assert!(stats.rms > 0.0);
+    }
 }
 
 #[cfg(test)]
