@@ -46,6 +46,19 @@ struct HifiganOnnxConfig {
 }
 
 impl HifiganBackend {
+    pub fn deterministic_mel_config() -> MelConfig {
+        MelConfig {
+            sample_rate_hz: SAMPLE_RATE_HZ,
+            hop_samples: HOP_SAMPLES,
+            n_fft: 1024,
+            win_length: 1024,
+            n_mels: 80,
+            f_min_hz: 0.0,
+            f_max_hz: Some(8_000.0),
+            scale: MelScale::NaturalLogEnergy,
+        }
+    }
+
     pub fn default_mel_config() -> MelConfig {
         MelConfig {
             sample_rate_hz: SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ,
@@ -64,7 +77,7 @@ impl HifiganBackend {
         if let Some(config) = &self.onnx_config {
             return config.mel.clone();
         }
-        MelConfig::test_default(80)
+        Self::deterministic_mel_config()
     }
 
     pub fn deterministic() -> Self {
@@ -618,6 +631,17 @@ fn load_hifigan_model_config(model_path: &Path) -> Result<HifiganOnnxConfig> {
         .with_context(|| format!("failed to read HiFi-GAN config {}", config_path.display()))?;
     let json: serde_json::Value = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse HiFi-GAN config {}", config_path.display()))?;
+    let input_layout = match value_string(&json, &["input_layout"]) {
+        Some(layout_name) => Some(parse_mel_tensor_layout(layout_name.clone()).with_context(
+            || {
+                format!(
+                    "HiFi-GAN config {} contains unsupported input_layout `{layout_name}`",
+                    config_path.display()
+                )
+            },
+        )?),
+        None => None,
+    };
     let n_mels = value_usize(&json, &["num_mel_bins", "n_mels"]).unwrap_or(default.mel.n_mels);
     Ok(HifiganOnnxConfig {
         mel: MelConfig {
@@ -630,18 +654,19 @@ fn load_hifigan_model_config(model_path: &Path) -> Result<HifiganOnnxConfig> {
             n_mels,
             f_min_hz: value_f32(&json, &["f_min", "fmin"]).unwrap_or(default.mel.f_min_hz),
             f_max_hz: value_f32(&json, &["f_max", "fmax"]).or(default.mel.f_max_hz),
-            scale: parse_mel_scale(value_string(&json, &["mel_scale", "scale"]))
+            scale: value_string(&json, &["mel_scale", "scale"])
+                .and_then(parse_mel_scale)
                 .unwrap_or(default.mel.scale),
         },
         input_name: value_string(&json, &["input_name", "onnx_input_name"]),
         output_name: value_string(&json, &["output_name", "onnx_output_name"]),
-        input_layout: parse_mel_tensor_layout(value_string(&json, &["input_layout"])),
+        input_layout,
     })
 }
 
 #[cfg(feature = "tts-riper")]
-fn parse_mel_scale(value: Option<String>) -> Option<MelScale> {
-    match value?.to_ascii_lowercase().as_str() {
+fn parse_mel_scale(value: String) -> Option<MelScale> {
+    match value.to_ascii_lowercase().as_str() {
         "linearenergy" | "linear_energy" | "linear" => Some(MelScale::LinearEnergy),
         "naturallogenergy" | "natural_log_energy" | "ln" | "log" => {
             Some(MelScale::NaturalLogEnergy)
@@ -655,8 +680,8 @@ fn parse_mel_scale(value: Option<String>) -> Option<MelScale> {
 }
 
 #[cfg(feature = "tts-riper")]
-fn parse_mel_tensor_layout(value: Option<String>) -> Option<MelTensorLayout> {
-    match value?.to_ascii_lowercase().as_str() {
+fn parse_mel_tensor_layout(value: String) -> Option<MelTensorLayout> {
+    match value.to_ascii_lowercase().as_str() {
         "framesbins" | "frames_bins" | "t_m" => Some(MelTensorLayout::FramesBins),
         "binsframes" | "bins_frames" | "m_t" => Some(MelTensorLayout::BinsFrames),
         "batchframesbins" | "batch_frames_bins" | "1_t_m" => Some(MelTensorLayout::BatchFramesBins),

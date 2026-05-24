@@ -1399,24 +1399,12 @@ fn synthesize_hifigan_for_say(_args: &SayArgs) -> Result<Vec<AudioFrame>> {
 }
 
 #[cfg(feature = "tts-riper")]
-fn hifigan_mel_f0_from_riper_phonemes(
-    phonemes: &PiperPhonemeSequence,
-    text: &str,
-) -> Result<(MelSpectrogram, Vec<f32>, Vec<bool>)> {
-    hifigan_mel_f0_from_riper_phonemes_with_config(
-        phonemes,
-        text,
-        &HifiganBackend::default_mel_config(),
-    )
-}
-
-#[cfg(feature = "tts-riper")]
 fn hifigan_mel_f0_from_riper_phonemes_with_config(
     phonemes: &PiperPhonemeSequence,
     text: &str,
     mel_config: &MelConfig,
 ) -> Result<(MelSpectrogram, Vec<f32>, Vec<bool>)> {
-    let mel_bins = mel_config.n_mels;
+    let mel_bin_count = mel_config.n_mels;
     let mut mel = Vec::new();
     let mut f0_hz = Vec::new();
     let mut voiced = Vec::new();
@@ -1428,7 +1416,7 @@ fn hifigan_mel_f0_from_riper_phonemes_with_config(
             continue;
         }
         if matches!(symbol, "_" | "|" | "‖" | "." | "," | "!" | "?") {
-            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, mel_bins);
+            push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 2, mel_bin_count);
             continue;
         }
 
@@ -1462,7 +1450,7 @@ fn hifigan_mel_f0_from_riper_phonemes_with_config(
                 local_frame as f32 / (frames_for_phone - 1) as f32
             };
             let contour = (progress - 0.5) * 8.0;
-            mel.push(hifigan_mel_frame(mel_bins, energy, brightness));
+            mel.push(hifigan_mel_frame(mel_bin_count, energy, brightness));
             f0_hz.push((base_f0 + contour).clamp(80.0, 260.0));
             voiced.push(is_voiced);
             speech_frame_index += 1;
@@ -1474,7 +1462,7 @@ fn hifigan_mel_f0_from_riper_phonemes_with_config(
             .any(|frame| frame.bins.iter().any(|bin| *bin > 0.0)),
         "Riper produced no HiFi-GAN-renderable phones for `{text}`"
     );
-    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, mel_bins);
+    push_hifigan_silence(&mut mel, &mut f0_hz, &mut voiced, 3, mel_bin_count);
     Ok((
         MelSpectrogram {
             config: mel_config.clone(),
