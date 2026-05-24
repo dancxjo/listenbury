@@ -213,9 +213,15 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         _ => return None,
     };
 
+    let mut expanded = expanded
+        .iter()
+        .map(|symbol| (*symbol).to_string())
+        .collect::<Vec<_>>();
+    maybe_append_espeak_length_marker(base_symbol, &mut expanded, config);
+
     if !expanded
         .iter()
-        .all(|symbol| config.phoneme_id_map.contains_key(*symbol))
+        .all(|symbol| config.phoneme_id_map.contains_key(symbol))
     {
         return None;
     }
@@ -226,8 +232,21 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
     {
         output.push(marker.to_string());
     }
-    output.extend(expanded.iter().map(|symbol| (*symbol).to_string()));
+    output.extend(expanded);
     Some(output)
+}
+
+fn maybe_append_espeak_length_marker(
+    base_symbol: &str,
+    expanded: &mut Vec<String>,
+    config: &PiperVoiceConfig,
+) {
+    if !config.phoneme_id_map.contains_key("ː") {
+        return;
+    }
+    if matches!(base_symbol, "AA" | "AO" | "IY" | "UW") {
+        expanded.push("ː".to_string());
+    }
 }
 
 fn is_arpabet_vowel(symbol: &str) -> bool {
@@ -377,6 +396,47 @@ mod tests {
                 .expect("ARPAbet symbols should expand to Piper codepoints");
 
         assert_eq!(sequence_symbols(&compatible), vec!["a", "ɪ", "s", "i", "."]);
+    }
+
+    #[test]
+    fn compatible_sequence_preserves_long_rhotic_are_when_supported() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "ɑ": [1],
+                "ː": [2],
+                "ɹ": [3]
+              }
+            }
+            "#,
+        );
+
+        let compatible = espeak_compatible_sequence(&sequence(&["AA", "R"]), &config)
+            .expect("AA R should expand to eSpeak IPA with the long-vowel marker");
+
+        assert_eq!(sequence_symbols(&compatible), vec!["ɑ", "ː", "ɹ"]);
+    }
+
+    #[test]
+    fn compatible_sequence_omits_long_vowel_marker_when_unsupported() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "ɑ": [1],
+                "ɹ": [2]
+              }
+            }
+            "#,
+        );
+
+        let compatible = espeak_compatible_sequence(&sequence(&["AA", "R"]), &config)
+            .expect("AA R should still expand for compact voice maps");
+
+        assert_eq!(sequence_symbols(&compatible), vec!["ɑ", "ɹ"]);
     }
 
     #[test]

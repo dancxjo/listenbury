@@ -45,7 +45,7 @@ use crate::cli::model_paths::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::piper::{piper_config_for_voice, resolve_piper_bin};
+use crate::cli::piper::{hifigan_text_to_speech, piper_config_for_voice, resolve_piper_bin};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -367,6 +367,9 @@ fn live_trace_session_metadata(
         "llm_gpu_layers": command.llm_gpu_layers,
         "piper_bin": command.piper_bin.as_ref().map(|path| path.display().to_string()),
         "piper_voice": command.piper_voice.as_ref().map(|path| path.display().to_string()),
+        "hifigan": command.hifigan,
+        "hifigan_model": command.hifigan_model.as_ref().map(|path| path.display().to_string()),
+        "skip_gan": command.skip_gan,
         "vad": format!("{:?}", command.vad),
         "web": command.web,
         "web_host": command.web_host,
@@ -529,8 +532,8 @@ struct SimplexTurnGapMonitor<'a> {
 struct LiveHalfDuplexModelPaths {
     whisper_model: std::path::PathBuf,
     llm_model: std::path::PathBuf,
-    piper_bin: std::path::PathBuf,
-    piper_voice: std::path::PathBuf,
+    piper_bin: Option<std::path::PathBuf>,
+    piper_voice: Option<std::path::PathBuf>,
 }
 
 #[cfg(all(
@@ -541,13 +544,49 @@ struct LiveHalfDuplexModelPaths {
 ))]
 impl LiveHalfDuplexModelPaths {
     fn discover(command: &LiveHalfDuplexCommand) -> Result<Self> {
+        let (piper_bin, piper_voice) = if command.hifigan {
+            (None, None)
+        } else {
+            (
+                Some(resolve_piper_bin(command.piper_bin.clone())?),
+                Some(resolve_piper_voice(command.piper_voice.clone())?),
+            )
+        };
         Ok(Self {
             whisper_model: resolve_whisper_model(command.whisper_model.clone())?,
             llm_model: resolve_llm_model(command.llm_model.clone())?,
-            piper_bin: resolve_piper_bin(command.piper_bin.clone())?,
-            piper_voice: resolve_piper_voice(command.piper_voice.clone())?,
+            piper_bin,
+            piper_voice,
         })
     }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn live_half_duplex_tts_for_command(
+    command: &LiveHalfDuplexCommand,
+    paths: &LiveHalfDuplexModelPaths,
+) -> Result<PiperTextToSpeech> {
+    if command.hifigan {
+        return hifigan_text_to_speech(command.hifigan_model.clone(), command.skip_gan);
+    }
+
+    let piper_bin = paths
+        .piper_bin
+        .as_ref()
+        .context("Piper binary should be resolved for non-HiFi-GAN live speech")?;
+    let piper_voice = paths
+        .piper_voice
+        .as_ref()
+        .context("Piper voice should be resolved for non-HiFi-GAN live speech")?;
+    Ok(PiperTextToSpeech::new(piper_config_for_voice(
+        piper_bin.clone(),
+        piper_voice.clone(),
+    )?))
 }
 
 #[cfg(all(
@@ -599,10 +638,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             paths.llm_model.display()
         )
     })?;
-    let mut tts = PiperTextToSpeech::new(piper_config_for_voice(
-        paths.piper_bin.clone(),
-        paths.piper_voice.clone(),
-    )?);
+    let mut tts = live_half_duplex_tts_for_command(&command, &paths)?;
 
     let host = cpal::default_host();
     let input_device = host

@@ -63,6 +63,9 @@ pub(crate) struct LlmConfig {
 pub(crate) struct MouthPlaybackConfig {
     pub(crate) piper_bin: Option<PathBuf>,
     pub(crate) piper_voice: Option<PathBuf>,
+    pub(crate) hifigan: bool,
+    pub(crate) hifigan_model: Option<PathBuf>,
+    pub(crate) skip_gan: bool,
     pub(crate) no_backchannels: bool,
 }
 
@@ -122,6 +125,9 @@ impl LiveSessionConfig {
             mouth_playback: MouthPlaybackConfig {
                 piper_bin: command.piper_bin.clone(),
                 piper_voice: command.piper_voice.clone(),
+                hifigan: command.hifigan,
+                hifigan_model: command.hifigan_model.clone(),
+                skip_gan: command.skip_gan,
                 no_backchannels: command.no_backchannels,
             },
             tracing: TraceConfig {
@@ -167,6 +173,9 @@ impl LiveSessionConfig {
             mouth_playback: MouthPlaybackConfig {
                 piper_bin: command.piper_bin.clone(),
                 piper_voice: command.piper_voice.clone(),
+                hifigan: command.hifigan,
+                hifigan_model: command.hifigan_model.clone(),
+                skip_gan: command.skip_gan,
                 no_backchannels: false,
             },
             tracing: TraceConfig {
@@ -228,6 +237,9 @@ pub(crate) fn continue_command_from_listen_command(
         llm_gpu_layers: command.llm_gpu_layers,
         piper_bin: command.piper_bin,
         piper_voice: command.piper_voice,
+        hifigan: command.hifigan,
+        hifigan_model: command.hifigan_model,
+        skip_gan: command.skip_gan,
         whisper_model: command.whisper_model,
         vad: command.vad,
         vad_profile: command.vad_profile,

@@ -47,7 +47,7 @@ use crate::cli::model_paths::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::piper::{piper_config_for_voice, resolve_piper_bin};
+use crate::cli::piper::{hifigan_text_to_speech, piper_config_for_voice, resolve_piper_bin};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -572,6 +572,9 @@ fn continue_trace_session_metadata(
         "whisper_model": command.whisper_model.as_ref().map(|path| path.display().to_string()),
         "piper_bin": command.piper_bin.as_ref().map(|path| path.display().to_string()),
         "piper_voice": command.piper_voice.as_ref().map(|path| path.display().to_string()),
+        "hifigan": command.hifigan,
+        "hifigan_model": command.hifigan_model.as_ref().map(|path| path.display().to_string()),
+        "skip_gan": command.skip_gan,
     }))
     .expect("continue trace runtime configuration should serialize to an object");
     TraceSessionMetadata::new(session_id, trace_started_at, runtime)
@@ -783,6 +786,25 @@ fn emit_live_ear_trace_event(
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+fn continue_tts_for_command(command: &ContinueCommand) -> Result<PiperTextToSpeech> {
+    if command.hifigan {
+        return hifigan_text_to_speech(command.hifigan_model.clone(), command.skip_gan);
+    }
+
+    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
+    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+    Ok(PiperTextToSpeech::new(piper_config_for_voice(
+        piper_bin,
+        piper_voice,
+    )?))
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let max_tokens = command
         .max_tokens
@@ -841,8 +863,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         command.verbatim_turns,
     )
     .context("failed to start continued llama.cpp generation")?;
-    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
-    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+    let tts = continue_tts_for_command(&command)?;
     let whisper_model = resolve_whisper_model(command.whisper_model.clone())?;
     let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
     let vad_backend = vad_config.backend;
@@ -909,7 +930,7 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let mut live_trace_turn = 0u64;
     live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(
-        PiperTextToSpeech::new(piper_config_for_voice(piper_bin, piper_voice)?),
+        tts,
         Arc::clone(&capture_enabled),
         Arc::clone(&speaker_reference),
     )?;

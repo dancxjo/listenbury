@@ -225,6 +225,14 @@ pub(crate) struct ContinueCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
     pub(crate) piper_voice: Option<PathBuf>,
+    /// Use the source-filter acoustic model plus HiFi-GAN vocoder for Pete's voice.
+    #[arg(long)]
+    pub(crate) hifigan: bool,
+    #[arg(long = "hifigan-model", requires = "hifigan")]
+    pub(crate) hifigan_model: Option<PathBuf>,
+    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    #[arg(long, requires = "hifigan")]
+    pub(crate) skip_gan: bool,
     #[arg(long)]
     pub(crate) whisper_model: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
@@ -396,6 +404,9 @@ pub(crate) struct SayCommand {
     pub(crate) piper_voice: Option<PathBuf>,
     #[arg(long)]
     pub(crate) output_wav: Option<PathBuf>,
+    /// Print the selected speech pipeline before synthesis.
+    #[arg(long, alias = "trace-speech-pipeline")]
+    pub(crate) dump_pipeline: bool,
     #[arg(long, conflicts_with_all = ["piper", "hifigan", "diphone"])]
     pub(crate) klatt: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "diphone", "rp"])]
@@ -569,6 +580,14 @@ pub(crate) struct LiveHalfDuplexCommand {
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
     pub(crate) piper_voice: Option<PathBuf>,
+    /// Use the source-filter acoustic model plus HiFi-GAN vocoder for Pete's voice.
+    #[arg(long)]
+    pub(crate) hifigan: bool,
+    #[arg(long = "hifigan-model", requires = "hifigan")]
+    pub(crate) hifigan_model: Option<PathBuf>,
+    /// Debug the mel path by rendering without running the HiFi-GAN model.
+    #[arg(long, requires = "hifigan")]
+    pub(crate) skip_gan: bool,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
     /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
@@ -1749,10 +1768,37 @@ mod tests {
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+        assert!(!command.hifigan);
+        assert!(command.hifigan_model.is_none());
+        assert!(!command.skip_gan);
         assert!(!command.web);
         assert!(!command.duplex);
         assert_eq!(command.web_host, "127.0.0.1");
         assert_eq!(command.web_port, 8787);
+    }
+
+    #[test]
+    fn listen_accepts_hifigan_voice_flags() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "listen",
+            "--web",
+            "--hifigan",
+            "--hifigan-model",
+            "models/hifigan.onnx",
+        ])
+        .expect("listen should parse hifigan voice flags");
+
+        let Some(Command::Listen(command)) = cli.command else {
+            panic!("expected listen command");
+        };
+        assert!(command.web);
+        assert!(command.hifigan);
+        assert_eq!(
+            command.hifigan_model,
+            Some(PathBuf::from("models/hifigan.onnx"))
+        );
+        assert!(!command.skip_gan);
     }
 
     #[test]
@@ -1816,6 +1862,8 @@ mod tests {
             "models/ggml-base.en.bin",
             "--piper-voice",
             "voices/pete.onnx",
+            "--hifigan",
+            "--skip-gan",
             "--vad",
             "energy",
         ])
@@ -1834,6 +1882,8 @@ mod tests {
             Some(PathBuf::from("models/ggml-base.en.bin"))
         );
         assert_eq!(command.piper_voice, Some(PathBuf::from("voices/pete.onnx")));
+        assert!(command.hifigan);
+        assert!(command.skip_gan);
         assert_eq!(command.vad, VadBackendOption::Energy);
         assert!(command.duplex_trace_scenario.is_none());
     }
@@ -1874,6 +1924,9 @@ mod tests {
             config.mouth_playback.piper_voice,
             Some(PathBuf::from("voices/pete.onnx"))
         );
+        assert!(!config.mouth_playback.hifigan);
+        assert!(config.mouth_playback.hifigan_model.is_none());
+        assert!(!config.mouth_playback.skip_gan);
         assert_eq!(config.web_bridge.host, "0.0.0.0");
         assert_eq!(config.web_bridge.port, 9000);
         assert_eq!(
