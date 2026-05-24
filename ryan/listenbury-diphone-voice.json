@@ -1,9 +1,9 @@
 {
   "format_version": 1,
   "name": "ryan",
-  "model": "/home/dancxjo/listenbury/out/piper-models/ryan.onnx",
-  "config": "/home/dancxjo/listenbury/out/piper-models/ryan.onnx.json",
-  "cache_dir": "/home/dancxjo/listenbury/ryan/diphone-cache",
+  "model": "/home/dancxjo/Projects/listenbury/out/piper-models/en_US-ryan-medium.onnx",
+  "config": "/home/dancxjo/Projects/listenbury/out/piper-models/en_US-ryan-medium.onnx.json",
+  "cache_dir": "/home/dancxjo/Projects/listenbury/ryan/diphone-cache",
   "inventory": "en-us-basic",
   "sample_rate_hz": 22050
 }

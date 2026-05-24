@@ -167,6 +167,13 @@ impl TextNormalizer {
                 current.push(ch);
                 continue;
             }
+            if let Some(folded) = fold_latin_letter(ch) {
+                if current.is_empty() {
+                    current_start = Some(trim_offset + byte_offset);
+                }
+                current.push_str(folded);
+                continue;
+            }
 
             match ch {
                 '\'' | '’' => {
@@ -311,6 +318,40 @@ impl TextNormalizer {
             punctuation_commitment,
         })
     }
+}
+
+fn fold_latin_letter(ch: char) -> Option<&'static str> {
+    Some(match ch {
+        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' | 'Ă' | 'Ą' | 'à' | 'á' | 'â' | 'ã' | 'ä'
+        | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'Æ' | 'æ' => "ae",
+        'Ç' | 'Ć' | 'Ĉ' | 'Ċ' | 'Č' | 'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => "c",
+        'Ð' | 'Ď' | 'Đ' | 'ð' | 'ď' | 'đ' => "d",
+        'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ĕ' | 'Ė' | 'Ę' | 'Ě' | 'è' | 'é' | 'ê' | 'ë'
+        | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'Ĝ' | 'Ğ' | 'Ġ' | 'Ģ' | 'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'Ĥ' | 'Ħ' | 'ĥ' | 'ħ' => "h",
+        'Ì' | 'Í' | 'Î' | 'Ï' | 'Ĩ' | 'Ī' | 'Ĭ' | 'Į' | 'İ' | 'ì' | 'í' | 'î' | 'ï'
+        | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'Ĵ' | 'ĵ' => "j",
+        'Ķ' | 'ķ' | 'ĸ' => "k",
+        'Ĺ' | 'Ļ' | 'Ľ' | 'Ŀ' | 'Ł' | 'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'Ñ' | 'Ń' | 'Ņ' | 'Ň' | 'ñ' | 'ń' | 'ņ' | 'ň' => "n",
+        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' | 'Ŏ' | 'Ő' | 'ò' | 'ó' | 'ô' | 'õ'
+        | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'Œ' | 'œ' => "oe",
+        'Ŕ' | 'Ŗ' | 'Ř' | 'ŕ' | 'ŗ' | 'ř' => "r",
+        'Ś' | 'Ŝ' | 'Ş' | 'Š' | 'ś' | 'ŝ' | 'ş' | 'š' | 'ſ' => "s",
+        'Ţ' | 'Ť' | 'Ŧ' | 'ţ' | 'ť' | 'ŧ' => "t",
+        'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ũ' | 'Ū' | 'Ŭ' | 'Ů' | 'Ű' | 'Ų' | 'ù' | 'ú' | 'û'
+        | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'Ŵ' | 'ŵ' => "w",
+        'Ý' | 'Ŷ' | 'Ÿ' | 'ý' | 'ÿ' | 'ŷ' => "y",
+        'Ź' | 'Ż' | 'Ž' | 'ź' | 'ż' | 'ž' => "z",
+        'Þ' | 'þ' => "th",
+        'ß' => "ss",
+        _ => return None,
+    })
 }
 
 fn classify_phrase_boundary_kind(
@@ -1226,6 +1267,22 @@ mod tests {
         assert_eq!(normalized.token_spans[1], 5..10);
         assert_eq!(normalized.token_spans[2], 10..11);
         assert_eq!(normalized.token_spans[3], 13..17);
+    }
+
+    #[test]
+    fn folds_latin_diacritics_for_pronounceable_words() {
+        let normalized = TextNormalizer
+            .normalize("No way, José!")
+            .expect("normalize accented Latin text");
+        assert_eq!(
+            normalized.tokens,
+            vec![
+                NormalizedToken::Word("no".to_string()),
+                NormalizedToken::Word("way".to_string()),
+                NormalizedToken::Word("jose".to_string())
+            ]
+        );
+        assert_eq!(normalized.token_spans[2], 8..13);
     }
 
     #[test]

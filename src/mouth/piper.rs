@@ -320,7 +320,7 @@ impl RiperTextPhonemeIds for PiperPhonemeSequence {
         config: &PiperVoiceConfig,
         model_path: &Path,
     ) -> Result<PiperIdSequence> {
-        self.to_piper_ids_compatible(config).with_context(|| {
+        self.to_piper_text_ids_compatible(config).with_context(|| {
             format!(
                 "failed to map phonemes to IDs for Riper model {}",
                 model_path.display()

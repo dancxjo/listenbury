@@ -246,7 +246,7 @@ fn say_mbrola_tts_for_args(_args: &SayArgs) -> Result<PiperTextToSpeech> {
 fn say_riper_tts_for_voice(piper_voice: PathBuf) -> Result<PiperTextToSpeech> {
     Ok(PiperTextToSpeech::new_with_backend_preference(
         piper_config_for_riper_voice(piper_voice)?,
-        PiperBackendPreference::Riper,
+        PiperBackendPreference::RiperWithProcessFallback,
     ))
 }
 
@@ -631,7 +631,7 @@ fn run_echo_impl(command: EchoCommand) -> Result<()> {
     let voice_config = read_riper_voice_config(&riper_config_path)?;
     let ids = phonemized
         .phonemes
-        .to_piper_ids_compatible(&voice_config)
+        .to_piper_text_ids_compatible(&voice_config)
         .with_context(|| {
             format!(
                 "Riper voice config at {} cannot map one or more phonemes for `{}`",
@@ -936,7 +936,7 @@ fn resolve_riper_phoneme_report(
     };
 
     let ids = phoneme_sequence
-        .to_piper_ids_compatible(config)
+        .to_piper_text_ids_compatible(config)
         .with_context(|| {
             format!(
                 "Riper voice config cannot map one or more phonemes for `{}`; pass --phonemes to override",

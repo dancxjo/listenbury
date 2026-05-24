@@ -7,6 +7,7 @@ const PIPER_PAD: &str = "_";
 const PIPER_BOS: &str = "^";
 const PIPER_EOS: &str = "$";
 const PIPER_WORD_SEPARATOR: &str = " ";
+const PHRASE_BREAK_SYMBOL: &str = "|";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperPhoneme(pub String);
@@ -61,6 +62,32 @@ impl PiperPhonemeSequence {
         })
     }
 
+    pub fn to_piper_text_ids_compatible(
+        &self,
+        config: &PiperVoiceConfig,
+    ) -> Result<PiperIdSequence, PiperPhonemeIdConversionError> {
+        self.with_utterance_termination(config)
+            .to_piper_ids_compatible(config)
+    }
+
+    fn with_utterance_termination(&self, config: &PiperVoiceConfig) -> Self {
+        if self.phonemes.is_empty()
+            || self
+                .phonemes
+                .last()
+                .is_some_and(|phoneme| is_terminal_phoneme(&phoneme.0))
+            || !can_encode_terminal_phrase_break(config)
+        {
+            return self.clone();
+        }
+
+        let mut terminated = self.clone();
+        terminated
+            .phonemes
+            .push(PiperPhoneme(PHRASE_BREAK_SYMBOL.to_string()));
+        terminated
+    }
+
     fn to_piper_framed_ids(
         &self,
         config: &PiperVoiceConfig,
@@ -78,6 +105,15 @@ impl PiperPhonemeSequence {
         extend_symbol_ids(&mut ids, PIPER_EOS, config)?;
         Ok(PiperIdSequence { ids })
     }
+}
+
+fn is_terminal_phoneme(symbol: &str) -> bool {
+    matches!(symbol, "|" | "‖" | "." | "," | "!" | "?" | "$")
+}
+
+fn can_encode_terminal_phrase_break(config: &PiperVoiceConfig) -> bool {
+    config.phoneme_id_map.contains_key(PHRASE_BREAK_SYMBOL)
+        || expand_espeak_phoneme(PHRASE_BREAK_SYMBOL, config).is_some()
 }
 
 pub fn espeak_compatible_sequence(
@@ -341,6 +377,66 @@ mod tests {
                 .expect("ARPAbet symbols should expand to Piper codepoints");
 
         assert_eq!(sequence_symbols(&compatible), vec!["a", "ɪ", "s", "i", "."]);
+    }
+
+    #[test]
+    fn text_id_conversion_appends_terminal_phrase_break_before_eos() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                ".": [4],
+                "a": [5],
+                "ɪ": [6]
+              }
+            }
+            "#,
+        );
+
+        let ids = sequence(&["AY"])
+            .to_piper_text_ids_compatible(&config)
+            .expect("text utterance should add a terminal phrase break when encodable");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 2, 5, 2, 6, 2, 4, 2, 3]
+            }
+        );
+    }
+
+    #[test]
+    fn text_id_conversion_does_not_duplicate_existing_terminal_phrase_break() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                ".": [4],
+                "a": [5],
+                "ɪ": [6]
+              }
+            }
+            "#,
+        );
+
+        let ids = sequence(&["AY", "|"])
+            .to_piper_text_ids_compatible(&config)
+            .expect("existing terminal phrase break should be preserved");
+
+        assert_eq!(
+            ids,
+            PiperIdSequence {
+                ids: vec![1, 2, 5, 2, 6, 2, 4, 2, 3]
+            }
+        );
     }
 
     #[test]

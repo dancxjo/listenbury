@@ -517,7 +517,7 @@ impl TtsBackend for RiperBackend {
             .with_context(|| format!("failed to realize Riper phonemes for text `{text}`"))?
             .phonemes;
         let ids = phonemes
-            .to_piper_ids_compatible(&self.config)
+            .to_piper_text_ids_compatible(&self.config)
             .with_context(|| {
                 format!(
                     "failed to map phonemes to IDs for Riper model {}",
@@ -1011,15 +1011,15 @@ mod tests {
         let mut backend = RiperBackend::unloaded_for_tests(model_path.clone(), voice_config());
 
         let error = backend
-            .synthesize("Q.")
+            .synthesize("#")
             .expect_err("unsupported text should fail before ONNX inference");
         let rendered = format!("{error:#}");
         assert!(
-            rendered.contains("failed to realize Riper phonemes for text `Q.`"),
+            rendered.contains("failed to realize Riper phonemes for text `#`"),
             "expected phonemize context, got: {rendered}"
         );
         assert!(
-            rendered.contains("unsupported initial `q`"),
+            rendered.contains("unsupported character"),
             "expected unsupported-text detail, got: {rendered}"
         );
         assert!(
