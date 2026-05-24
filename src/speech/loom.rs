@@ -64,6 +64,10 @@ impl TimeSpan {
     }
 }
 
+fn seconds_to_ms(seconds: f64) -> u64 {
+    (seconds.max(0.0) * 1000.0).round() as u64
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SampleSpan {
     pub start: u64,
@@ -349,8 +353,8 @@ pub fn tts_intended_phone_artifacts(
     for (word_index, segment) in plan.segments.iter().enumerate() {
         for phone in &segment.phones {
             let timing = TimeSpan {
-                start_ms: (phone.timing.t0.max(0.0) * 1000.0).round() as u64,
-                end_ms: (phone.timing.t1.max(phone.timing.t0) * 1000.0).round() as u64,
+                start_ms: seconds_to_ms(phone.timing.t0),
+                end_ms: seconds_to_ms(phone.timing.t1.max(phone.timing.t0)),
             };
             let id = format!("tts-phone-{phone_index}");
             artifacts.push(
@@ -389,24 +393,25 @@ pub fn tts_alignment_from_asr_word_hypotheses(
     asr_words: &[SpeechArtifact],
     source_id: &str,
 ) -> Option<SpeechArtifact> {
-    let mut min_start = u64::MAX;
-    let mut max_end = 0u64;
+    let mut range: Option<TimeSpan> = None;
     let mut dependencies = Vec::new();
     for word in asr_words {
         if let SpeechSpan::Time(span) = word.span {
-            min_start = min_start.min(span.start_ms);
-            max_end = max_end.max(span.end_ms);
+            range = Some(match range {
+                Some(current) => TimeSpan {
+                    start_ms: current.start_ms.min(span.start_ms),
+                    end_ms: current.end_ms.max(span.end_ms),
+                },
+                None => span,
+            });
             dependencies.push(word.id.clone());
         }
     }
-    (min_start <= max_end).then(|| {
+    range.map(|covered| {
         let mut artifact = SpeechArtifact::placeholder(
             "tts-reused-asr-alignment",
             SpeechArtifactKind::Alignment,
-            SpeechSpan::Time(TimeSpan {
-                start_ms: min_start,
-                end_ms: max_end,
-            }),
+            SpeechSpan::Time(covered),
             SpeechProvenance::new(SpeechSourceOrigin::Synthesized).with_source(source_id),
             SpeechArtifactContent::Opaque("reused-asr-word-alignment"),
         );
