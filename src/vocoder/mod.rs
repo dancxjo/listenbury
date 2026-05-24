@@ -22,7 +22,7 @@ use anyhow::Result;
 use crate::audio::frame::AudioFrame;
 
 pub use capability::{BackendCapabilities, BackendFamily, VocoderDescriptor};
-pub use hifigan::HifiganBackend;
+pub use hifigan::{HifiganBackend, MelContract, SPEECHT5_HIFIGAN_MEL_CONTRACT};
 pub use input::{MelFrame, VocoderInput};
 pub use registry::{
     SingDemoBackendSelector, VocoderConfig, backend_by_id, backend_for_option, list_backends,

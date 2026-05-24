@@ -197,10 +197,10 @@ mod tests {
     fn synthetic_mel_frames() -> Vec<crate::vocoder::MelFrame> {
         (0..6)
             .map(|frame_index| crate::vocoder::MelFrame {
-                bins: (0..8)
+                bins: (0..80)
                     .map(|bin_index| {
-                        let envelope = 1.0 - (bin_index as f32 / 8.0);
-                        (0.12 + frame_index as f32 * 0.01) * envelope
+                        let envelope = 1.0 - (bin_index as f32 / 80.0);
+                        ((0.12 + frame_index as f32 * 0.01) * envelope.max(0.05)).ln()
                     })
                     .collect(),
             })
@@ -299,7 +299,7 @@ mod tests {
 
         assert_eq!(backend.id(), "hifigan");
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].sample_rate_hz, 22_050);
+        assert_eq!(frames[0].sample_rate_hz, 16_000);
         assert_eq!(frames[0].channels, 1);
         assert_eq!(frame_samples(&frames), mel.len() * 256);
         assert!(frames[0].samples.iter().any(|sample| sample.abs() > 0.0));

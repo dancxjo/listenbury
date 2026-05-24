@@ -28,14 +28,32 @@ pub struct HifiganBackend {
     session: Option<Session>,
 }
 
-const SAMPLE_RATE_HZ: u32 = 22_050;
-const SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ: u32 = 16_000;
+const SAMPLE_RATE_HZ: u32 = 16_000;
 const HOP_SAMPLES: usize = 256;
 const MIN_F0_HZ: f32 = 55.0;
 const MAX_F0_HZ: f32 = 1_200.0;
 const NOISE_GAIN: f32 = 0.018;
 const MODEL_MEL_BINS: usize = 80;
+const LOG_MEL_MIN: f32 = -8.0;
+const LOG_MEL_MAX: f32 = 2.0;
 const MIN_NORMALIZABLE_PEAK: f32 = 1.0e-4;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MelContract {
+    pub sample_rate_hz: u32,
+    pub hop_samples: usize,
+    pub mel_bins: usize,
+    pub log_floor: f32,
+    pub log_ceiling: f32,
+}
+
+pub const SPEECHT5_HIFIGAN_MEL_CONTRACT: MelContract = MelContract {
+    sample_rate_hz: SAMPLE_RATE_HZ,
+    hop_samples: HOP_SAMPLES,
+    mel_bins: MODEL_MEL_BINS,
+    log_floor: LOG_MEL_MIN,
+    log_ceiling: LOG_MEL_MAX,
+};
 
 impl HifiganBackend {
     pub fn deterministic() -> Self {
@@ -94,12 +112,12 @@ impl HifiganBackend {
             id: "hifigan",
             family: BackendFamily::NeuralVocoder,
             capabilities: BackendCapabilities {
-                accepts_phone_timed: false,
+                accepts_phone_timed: true,
                 accepts_partial_prosody: false,
                 accepts_coarse_text: false,
                 accepts_mel: true,
                 accepts_mel_f0: true,
-                honors_explicit_duration: false,
+                honors_explicit_duration: true,
                 honors_explicit_f0: false,
                 honors_vibrato: false,
                 streaming_safe: false,
@@ -108,8 +126,9 @@ impl HifiganBackend {
             backend_kind: None,
             detail: None,
             notes: &[
-                "Runs a real HiFi-GAN-compatible ONNX mel vocoder when loaded with a model.",
-                "The deterministic local renderer is retained only as a compile-safe fallback for tests and non-ONNX builds.",
+                "Expects SpeechT5 HiFi-GAN mel frames: 80-bin natural-log mel, clamped to [-8, 2], 16 kHz, 256-sample hop.",
+                "Phone-timed and source-filter inputs are adapter paths that synthesize mel frames for the same contract.",
+                "Runs a real HiFi-GAN-compatible ONNX mel vocoder when loaded with a model; the deterministic renderer is a compile-safe fallback.",
             ],
         }
     }
@@ -120,6 +139,9 @@ impl HifiganBackend {
         f0_hz: Option<&[f32]>,
         voiced: Option<&[bool]>,
     ) -> Result<Vec<AudioFrame>> {
+        validate_mel_f0_tracks(mel, f0_hz, voiced)?;
+        validate_speecht5_hifigan_mel(mel)?;
+
         #[cfg(feature = "tts-riper")]
         if self.session.is_some() {
             return self.render_mel_onnx(mel);
@@ -137,7 +159,8 @@ impl HifiganBackend {
     }
 
     fn render_source_filter_track(&mut self, track: &SourceFilterTrack) -> Result<Vec<AudioFrame>> {
-        let mel_f0 = source_filter_track_to_mel_f0(track)?;
+        let mut mel_f0 = source_filter_track_to_mel_f0(track)?;
+        mel_f0.mel = energy_mel_to_speecht5_log_mel(&mel_f0.mel);
         self.render_mel(&mel_f0.mel, Some(&mel_f0.f0_hz), Some(&mel_f0.voiced))
     }
 
@@ -146,29 +169,6 @@ impl HifiganBackend {
         f0_hz: Option<&[f32]>,
         voiced: Option<&[bool]>,
     ) -> Result<Vec<AudioFrame>> {
-        ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
-        if let Some(f0_hz) = f0_hz {
-            ensure!(
-                f0_hz.len() == mel.len(),
-                "hifigan backend received {} F0 values for {} mel frames",
-                f0_hz.len(),
-                mel.len()
-            );
-        }
-        if let Some(voiced) = voiced {
-            ensure!(
-                voiced.len() == mel.len(),
-                "hifigan backend received {} voiced flags for {} mel frames",
-                voiced.len(),
-                mel.len()
-            );
-        }
-        ensure!(
-            mel.iter()
-                .all(|frame| frame.bins.iter().all(|bin| bin.is_finite())),
-            "hifigan backend requires finite mel bins"
-        );
-
         let mut phase = 0.0f32;
         let mut noise_state = 0x4d59_4446u32;
         let mut samples = Vec::with_capacity(mel.len() * HOP_SAMPLES);
@@ -229,13 +229,6 @@ impl HifiganBackend {
 
     #[cfg(feature = "tts-riper")]
     fn render_mel_onnx(&mut self, mel: &[MelFrame]) -> Result<Vec<AudioFrame>> {
-        ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
-        ensure!(
-            mel.iter()
-                .all(|frame| frame.bins.iter().all(|bin| bin.is_finite())),
-            "hifigan backend requires finite mel bins"
-        );
-
         let model_path = self
             .model_path
             .as_ref()
@@ -249,7 +242,7 @@ impl HifiganBackend {
         let output_name = resolve_hifigan_output_name(session, &model_path)?;
         let frames = i64::try_from(mel.len()).context("HiFi-GAN mel sequence is too long")?;
         let bins = i64::try_from(MODEL_MEL_BINS).context("HiFi-GAN mel bin count is invalid")?;
-        let values = normalize_mel_for_onnx(mel, MODEL_MEL_BINS);
+        let values = flatten_contract_mel(mel);
         let shape = match input_rank {
             Some(2) => vec![frames, bins],
             Some(3) | None => vec![1_i64, frames, bins],
@@ -288,7 +281,7 @@ impl HifiganBackend {
         normalize_loudness(&mut samples, 0.075, 0.92);
         Ok(vec![AudioFrame {
             captured_at: ExactTimestamp::now(),
-            sample_rate_hz: SPEECHT5_HIFIGAN_SAMPLE_RATE_HZ,
+            sample_rate_hz: SAMPLE_RATE_HZ,
             channels: 1,
             samples,
             voice_signatures: Vec::new(),
@@ -400,12 +393,67 @@ fn resolve_hifigan_output_name(session: &Session, model_path: &Path) -> Result<S
     Ok(output.name().to_string())
 }
 
-#[cfg(feature = "tts-riper")]
-fn normalize_mel_for_onnx(mel: &[MelFrame], target_bins: usize) -> Vec<f32> {
-    if mel.is_empty() || target_bins == 0 {
+fn validate_mel_f0_tracks(
+    mel: &[MelFrame],
+    f0_hz: Option<&[f32]>,
+    voiced: Option<&[bool]>,
+) -> Result<()> {
+    ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
+    if let Some(f0_hz) = f0_hz {
+        ensure!(
+            f0_hz.len() == mel.len(),
+            "hifigan backend received {} F0 values for {} mel frames",
+            f0_hz.len(),
+            mel.len()
+        );
+    }
+    if let Some(voiced) = voiced {
+        ensure!(
+            voiced.len() == mel.len(),
+            "hifigan backend received {} voiced flags for {} mel frames",
+            voiced.len(),
+            mel.len()
+        );
+    }
+    Ok(())
+}
+
+fn validate_speecht5_hifigan_mel(mel: &[MelFrame]) -> Result<()> {
+    let contract = SPEECHT5_HIFIGAN_MEL_CONTRACT;
+    ensure!(!mel.is_empty(), "hifigan backend received empty mel input");
+    for (frame_index, frame) in mel.iter().enumerate() {
+        ensure!(
+            frame.bins.len() == contract.mel_bins,
+            "hifigan backend requires {} mel bins per frame for the SpeechT5 HiFi-GAN contract; frame {} has {}",
+            contract.mel_bins,
+            frame_index,
+            frame.bins.len()
+        );
+        for (bin_index, bin) in frame.bins.iter().enumerate() {
+            ensure!(
+                bin.is_finite(),
+                "hifigan backend requires finite mel bins; frame {frame_index} bin {bin_index} is {bin}"
+            );
+            ensure!(
+                *bin >= contract.log_floor && *bin <= contract.log_ceiling,
+                "hifigan backend requires natural-log mel bins in [{}, {}]; frame {} bin {} is {}",
+                contract.log_floor,
+                contract.log_ceiling,
+                frame_index,
+                bin_index,
+                bin
+            );
+        }
+    }
+    Ok(())
+}
+
+fn energy_mel_to_speecht5_log_mel(mel: &[MelFrame]) -> Vec<MelFrame> {
+    if mel.is_empty() {
         return Vec::new();
     }
 
+    let target_bins = SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins;
     let mut values = Vec::with_capacity(mel.len() * target_bins);
     for frame in mel {
         let frame_peak = (0..target_bins)
@@ -414,14 +462,32 @@ fn normalize_mel_for_onnx(mel: &[MelFrame], target_bins: usize) -> Vec<f32> {
         let adaptive_floor = (frame_peak * 0.006).max(1.0e-5);
         for index in 0..target_bins {
             let source = resample_bin(&frame.bins, index, target_bins);
-            values.push(source.max(adaptive_floor).ln().clamp(-8.0, 2.0));
+            values.push(
+                source
+                    .max(adaptive_floor)
+                    .ln()
+                    .clamp(LOG_MEL_MIN, LOG_MEL_MAX),
+            );
         }
     }
     smooth_normalized_mel_frames(&mut values, target_bins);
     values
+        .chunks_exact(target_bins)
+        .map(|bins| MelFrame {
+            bins: bins.to_vec(),
+        })
+        .collect()
 }
 
 #[cfg(feature = "tts-riper")]
+fn flatten_contract_mel(mel: &[MelFrame]) -> Vec<f32> {
+    let mut values = Vec::with_capacity(mel.len() * SPEECHT5_HIFIGAN_MEL_CONTRACT.mel_bins);
+    for frame in mel {
+        values.extend_from_slice(&frame.bins);
+    }
+    values
+}
+
 fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
     if bins == 0 || values.len() < bins * 3 {
         return;
@@ -437,7 +503,6 @@ fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
     }
 }
 
-#[cfg(feature = "tts-riper")]
 fn resample_bin(bins: &[f32], target_index: usize, target_bins: usize) -> f32 {
     if bins.is_empty() {
         return 0.0;
@@ -460,14 +525,12 @@ fn amplitude_for_frame(frame: &MelFrame) -> f32 {
     if frame.bins.is_empty() {
         return 0.0;
     }
-    let mean_abs = frame.bins.iter().map(|bin| bin.abs()).sum::<f32>() / frame.bins.len() as f32;
-    let mean_positive =
-        frame.bins.iter().map(|bin| bin.max(0.0)).sum::<f32>() / frame.bins.len() as f32;
-    let level = if mean_abs > 2.0 {
-        10.0f32.powf((mean_abs - 80.0) / 40.0)
-    } else {
-        mean_positive.max(mean_abs * 0.25)
-    };
+    let level = frame
+        .bins
+        .iter()
+        .map(|bin| mel_bin_energy(*bin))
+        .sum::<f32>()
+        / frame.bins.len() as f32;
     level.sqrt().clamp(0.0, 0.35)
 }
 
@@ -479,7 +542,7 @@ fn brightness_for_frame(frame: &MelFrame) -> f32 {
     let mut total = 0.0f32;
     let max_index = (frame.bins.len() - 1).max(1) as f32;
     for (index, bin) in frame.bins.iter().enumerate() {
-        let energy = bin.max(0.0).abs();
+        let energy = mel_bin_energy(*bin);
         weighted += energy * (index as f32 / max_index);
         total += energy;
     }
@@ -487,6 +550,14 @@ fn brightness_for_frame(frame: &MelFrame) -> f32 {
         0.0
     } else {
         (weighted / total).clamp(0.0, 1.0)
+    }
+}
+
+fn mel_bin_energy(bin: f32) -> f32 {
+    if (LOG_MEL_MIN..=LOG_MEL_MAX).contains(&bin) {
+        bin.exp()
+    } else {
+        bin.max(0.0)
     }
 }
 
