@@ -72,11 +72,22 @@ enum Command {
         #[command(subcommand)]
         command: VadCommand,
     },
+    #[command(about = "Run diagnostic tracing tools")]
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommand,
+    },
     #[command(hide = true)]
     Dev {
         #[command(subcommand)]
         command: DevCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum DebugCommand {
+    #[command(about = "Record an end-to-end loop timing trace")]
+    LoopTrace(LoopTraceCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -136,6 +147,67 @@ pub(crate) struct RecordWavCommand {
 #[derive(Debug, Args)]
 pub(crate) struct PlayWavCommand {
     pub(crate) input_wav: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct LoopTraceCommand {
+    /// Pipeline profile to trace.
+    #[arg(long, value_enum, default_value_t = LoopTraceProfile::Mock)]
+    pub(crate) profile: LoopTraceProfile,
+    /// Synthetic capture window represented in the trace.
+    #[arg(long, default_value_t = 20)]
+    pub(crate) duration: u64,
+    /// Use the real microphone path. Implies --profile ear.
+    #[arg(long)]
+    pub(crate) real_mic: bool,
+    /// Use the real ASR path. Implies --profile ear.
+    #[arg(long)]
+    pub(crate) real_asr: bool,
+    /// Explicitly request the synthetic microphone path.
+    #[arg(long)]
+    pub(crate) mock_mic: bool,
+    /// Explicitly request the synthetic LLM path.
+    #[arg(long)]
+    pub(crate) mock_llm: bool,
+    /// Explicitly request the synthetic mouth/playback path.
+    #[arg(long)]
+    pub(crate) mock_mouth: bool,
+    /// Print the latency summary as JSON.
+    #[arg(long, conflicts_with = "pretty")]
+    pub(crate) json: bool,
+    /// Print the human-readable latency summary.
+    #[arg(long)]
+    pub(crate) pretty: bool,
+    /// Disable synthetic self-hearing capture/transcription events.
+    #[arg(long)]
+    pub(crate) no_self_hearing: bool,
+    /// Destination JSONL trace file.
+    #[arg(long, default_value = "out/loop-trace.jsonl")]
+    pub(crate) write: PathBuf,
+    #[arg(long, alias = "model-path")]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
+    pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum LoopTraceProfile {
+    #[default]
+    Mock,
+    Ear,
+}
+
+impl LoopTraceCommand {
+    pub(crate) fn effective_profile(&self) -> LoopTraceProfile {
+        if self.real_mic || self.real_asr {
+            LoopTraceProfile::Ear
+        } else {
+            self.profile
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -1000,7 +1072,9 @@ pub(crate) fn run() -> Result<()> {
 
     listenbury::set_developer_diagnostics_enabled(matches!(
         &command,
-        Command::Dev { .. } | Command::Listen(LiveHalfDuplexCommand { duplex: true, .. })
+        Command::Debug { .. }
+            | Command::Dev { .. }
+            | Command::Listen(LiveHalfDuplexCommand { duplex: true, .. })
     ));
 
     match command {
@@ -1021,7 +1095,14 @@ pub(crate) fn run() -> Result<()> {
         Command::Models { command } => commands::run_models(command),
         Command::Diphone { command } => commands::run_diphone(command),
         Command::Vad { command } => commands::run_vad(command),
+        Command::Debug { command } => run_debug(command),
         Command::Dev { command } => run_dev(command),
+    }
+}
+
+fn run_debug(command: DebugCommand) -> Result<()> {
+    match command {
+        DebugCommand::LoopTrace(cmd) => commands::run_loop_trace(cmd),
     }
 }
 
@@ -1080,6 +1161,73 @@ mod tests {
         assert_eq!(command.seconds, 30);
         assert!(!command.until_ctrl_c);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+    }
+
+    #[test]
+    fn debug_loop_trace_parses_proposed_command() {
+        let cli = Cli::try_parse_from(["listenbury", "debug", "loop-trace", "--duration", "20"])
+            .expect("debug loop-trace should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::LoopTrace(command) = command;
+        assert_eq!(command.duration, 20);
+        assert_eq!(command.profile, LoopTraceProfile::Mock);
+        assert_eq!(command.effective_profile(), LoopTraceProfile::Mock);
+        assert_eq!(command.write, PathBuf::from("out/loop-trace.jsonl"));
+        assert!(!command.json);
+        assert!(!command.no_self_hearing);
+    }
+
+    #[test]
+    fn debug_loop_trace_ear_profile_parses_without_audio_hardware() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "debug",
+            "loop-trace",
+            "--profile",
+            "ear",
+            "--duration",
+            "20",
+            "--mock-llm",
+            "--mock-mouth",
+        ])
+        .expect("debug loop-trace ear profile should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::LoopTrace(command) = command;
+        assert_eq!(command.profile, LoopTraceProfile::Ear);
+        assert_eq!(command.effective_profile(), LoopTraceProfile::Ear);
+        assert!(command.mock_llm);
+        assert!(command.mock_mouth);
+    }
+
+    #[test]
+    fn debug_loop_trace_real_flags_imply_ear_profile() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "debug",
+            "loop-trace",
+            "--duration",
+            "20",
+            "--real-mic",
+            "--real-asr",
+            "--mock-llm",
+            "--mock-mouth",
+        ])
+        .expect("debug loop-trace real flags should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::LoopTrace(command) = command;
+        assert_eq!(command.profile, LoopTraceProfile::Mock);
+        assert_eq!(command.effective_profile(), LoopTraceProfile::Ear);
+        assert!(command.real_mic);
+        assert!(command.real_asr);
     }
 
     #[test]

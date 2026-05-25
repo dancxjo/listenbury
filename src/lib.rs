@@ -6,6 +6,7 @@ pub mod event;
 pub mod hearing;
 pub mod linguistic;
 pub mod live_trace;
+pub mod loop_trace;
 pub mod memory;
 pub mod mind;
 #[cfg(feature = "model-download")]
@@ -51,6 +52,10 @@ pub use event::{
     VisionEvent,
 };
 pub use hearing::{BreathGroupSegmenter, VadBackendKind, create_vad_backend};
+pub use loop_trace::{
+    LatencyBucket, LatencySummary, MockLoopTraceConfig, TraceEvent, append_mock_downstream_trace,
+    mock_interaction_trace, mock_payload, real_payload, summarize_latency, write_trace_jsonl,
+};
 pub use memory::{
     DEFAULT_KNOWN_VOICE_REGISTRY_PATH, DeterministicKnownVoiceEmbeddingProvider,
     KNOWN_VOICE_EMBEDDING_BACKEND, KNOWN_VOICE_LOCALITY, KNOWN_VOICE_QDRANT_COLLECTION,
