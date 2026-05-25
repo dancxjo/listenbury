@@ -90,6 +90,8 @@ enum DebugCommand {
     LoopTrace(LoopTraceCommand),
     #[command(about = "Record live mic audio and render a VAD waveform/spectrogram diagnostic")]
     EarScope(EarScopeCommand),
+    #[command(about = "Stream one LLM thought into the mouth pipeline")]
+    ThinkSay(ThinkSayCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -214,6 +216,47 @@ pub(crate) struct EarScopeCommand {
     /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
     #[arg(long)]
     pub(crate) vad_profile: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ThinkSayCommand {
+    /// Use a deterministic local token stream instead of the configured LLM backend.
+    #[arg(long)]
+    pub(crate) mock_llm: bool,
+    /// Record mouth queueing without synthesizing or playing audio.
+    #[arg(long)]
+    pub(crate) mock_mouth: bool,
+    /// Mouth backend to use when --mock-mouth is not set.
+    #[arg(long, value_enum, default_value_t = ThinkSayMouthOption::Current)]
+    pub(crate) mouth: ThinkSayMouthOption,
+    #[arg(long, alias = "model-path")]
+    pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
+    /// Maximum tokens the LLM may generate.
+    #[arg(long, default_value_t = 80)]
+    pub(crate) max_tokens: u32,
+    /// Flush only sentence/newline boundaries unless the LLM completes.
+    #[arg(long, conflicts_with = "breath_group")]
+    pub(crate) sentence_by_sentence: bool,
+    /// Allow breath-group-sized fallback flushes when punctuation does not arrive.
+    #[arg(long, conflicts_with = "sentence_by_sentence")]
+    pub(crate) breath_group: bool,
+    /// Optional JSONL trace destination.
+    #[arg(long)]
+    pub(crate) dump: Option<PathBuf>,
+    #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    pub(crate) prompt: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub(crate) enum ThinkSayMouthOption {
+    #[default]
+    Current,
+    Piper,
+    Klatt,
+    Diphone,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
@@ -1127,6 +1170,7 @@ fn run_debug(command: DebugCommand) -> Result<()> {
     match command {
         DebugCommand::LoopTrace(cmd) => commands::run_loop_trace(cmd),
         DebugCommand::EarScope(cmd) => commands::run_ear_scope(cmd),
+        DebugCommand::ThinkSay(cmd) => commands::run_think_say(cmd),
     }
 }
 
@@ -1276,6 +1320,58 @@ mod tests {
         assert_eq!(command.output_png, PathBuf::from("out/ear-scope.png"));
         assert_eq!(command.output_jsonl, PathBuf::from("out/ear-scope.jsonl"));
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+    }
+
+    #[test]
+    fn debug_think_say_parses_prompt_and_mocks() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "debug",
+            "think-say",
+            "--mock-llm",
+            "--mock-mouth",
+            "Say hello.",
+        ])
+        .expect("debug think-say should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::ThinkSay(command) = command else {
+            panic!("expected think-say command");
+        };
+        assert!(command.mock_llm);
+        assert!(command.mock_mouth);
+        assert_eq!(command.mouth, ThinkSayMouthOption::Current);
+        assert_eq!(command.max_tokens, 80);
+        assert_eq!(command.prompt, ["Say hello."]);
+    }
+
+    #[test]
+    fn debug_think_say_accepts_mouth_and_dump_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "debug",
+            "think-say",
+            "--mouth",
+            "klatt",
+            "--dump",
+            "out/think-say.jsonl",
+            "--max-tokens",
+            "12",
+            "Say hello.",
+        ])
+        .expect("debug think-say options should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::ThinkSay(command) = command else {
+            panic!("expected think-say command");
+        };
+        assert_eq!(command.mouth, ThinkSayMouthOption::Klatt);
+        assert_eq!(command.dump, Some(PathBuf::from("out/think-say.jsonl")));
+        assert_eq!(command.max_tokens, 12);
     }
 
     #[test]
