@@ -17,7 +17,6 @@ use super::{
 const RIPER_FRAME_SAMPLES: usize = 1024;
 // Piper ONNX vits output is a single waveform tensor for one speaker stream.
 const RIPER_CHANNELS: u16 = 1;
-const RIPER_DEFAULT_LENGTH_SCALE_MULTIPLIER: f32 = 1.12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PiperModelContract {
@@ -771,7 +770,7 @@ fn resolve_tensor_by_alias<'a>(
 fn inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
     [
         config.noise_scale.unwrap_or(0.667),
-        config.length_scale.unwrap_or(1.0) * RIPER_DEFAULT_LENGTH_SCALE_MULTIPLIER,
+        config.length_scale.unwrap_or(1.0),
         config.noise_w.unwrap_or(0.8),
     ]
 }
@@ -1079,9 +1078,9 @@ mod tests {
     }
 
     #[test]
-    fn inference_scales_slow_default_rate_slightly() {
+    fn inference_scales_match_piper_defaults() {
         let scales = inference_scales(&voice_config());
-        assert!((scales[1] - 1.12).abs() < f32::EPSILON);
+        assert!((scales[1] - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

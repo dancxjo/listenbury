@@ -62,6 +62,8 @@ impl PhonePlan {
 
     pub fn from_riper_phonemized_unit(source_text: &str, unit: &PhonemizedUnit) -> Self {
         let mut source_to_plan_index = vec![None; unit.phonemes.phonemes.len()];
+        let lexical_stress = lexical_stress_by_source_phone(unit);
+        let word_final_phones = word_final_source_phones(unit);
         let mut phones = Vec::new();
         let mut cursor_ms = 0.0_f32;
 
@@ -70,11 +72,8 @@ impl PhonePlan {
                 continue;
             }
 
-            let duration_ms = unit
-                .length_hints
-                .get(source_index)
-                .map(|hint| duration_ms_for_length_class(hint.class))
-                .unwrap_or(100.0);
+            let duration_ms =
+                shaped_phone_duration_ms(unit, &lexical_stress, &word_final_phones, source_index);
             let plan_index = phones.len();
             source_to_plan_index[source_index] = Some(plan_index);
             phones.push(PhoneSpan {
@@ -162,12 +161,153 @@ fn is_stress_marked_vowel(symbol: &str) -> bool {
     )
 }
 
-fn duration_ms_for_length_class(class: crate::mouth::riper::PhoneLengthClass) -> f32 {
-    match class {
-        crate::mouth::riper::PhoneLengthClass::Short => 70.0,
-        crate::mouth::riper::PhoneLengthClass::Medium => 120.0,
-        crate::mouth::riper::PhoneLengthClass::Long => 145.0,
+fn lexical_stress_by_source_phone(unit: &PhonemizedUnit) -> Vec<Option<LexicalStressLevel>> {
+    let mut stress = vec![None; unit.phonemes.phonemes.len()];
+    for target in &unit.lexical_stress {
+        if let Some(slot) = stress.get_mut(target.phoneme_index) {
+            *slot = Some(target.stress);
+        }
     }
+    stress
+}
+
+fn word_final_source_phones(unit: &PhonemizedUnit) -> Vec<bool> {
+    let mut word_final = vec![false; unit.phonemes.phonemes.len()];
+    for target in &unit.word_targets {
+        let source_index = target.phoneme_range.clone().rev().find(|index| {
+            unit.phonemes
+                .phonemes
+                .get(*index)
+                .is_some_and(|phoneme| is_speakable_plan_symbol(&phoneme.0))
+        });
+        if let Some(source_index) = source_index {
+            if let Some(slot) = word_final.get_mut(source_index) {
+                *slot = true;
+            }
+        }
+    }
+    word_final
+}
+
+fn shaped_phone_duration_ms(
+    unit: &PhonemizedUnit,
+    lexical_stress: &[Option<LexicalStressLevel>],
+    word_final_phones: &[bool],
+    source_index: usize,
+) -> f32 {
+    let symbol = unit.phonemes.phonemes[source_index].0.as_str();
+    let class = PhoneDurationClass::for_symbol(symbol);
+    let mut duration = class.base_duration_ms();
+
+    match lexical_stress.get(source_index).copied().flatten() {
+        Some(LexicalStressLevel::Primary) => duration *= 1.25,
+        Some(LexicalStressLevel::Secondary) => duration *= 1.10,
+        Some(LexicalStressLevel::Unstressed) if class.is_vocalic() => duration *= 0.75,
+        _ => {}
+    }
+
+    if word_final_phones
+        .get(source_index)
+        .copied()
+        .unwrap_or(false)
+        && class.is_sonorant()
+    {
+        duration *= 1.15;
+    }
+
+    if is_phrase_final_phone(unit, source_index) {
+        duration *= 1.30;
+    }
+
+    if class == PhoneDurationClass::Stop && next_speakable_phone_is_stop(unit, source_index) {
+        duration *= 0.75;
+    }
+
+    duration.round().clamp(35.0, 240.0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhoneDurationClass {
+    Vowel,
+    Diphthong,
+    Approximant,
+    Nasal,
+    Fricative,
+    Stop,
+    Affricate,
+    H,
+    Unknown,
+}
+
+impl PhoneDurationClass {
+    fn for_symbol(symbol: &str) -> Self {
+        match strip_arpabet_stress(symbol).as_str() {
+            "AA" | "AE" | "AH" | "AO" | "EH" | "ER" | "IH" | "IY" | "UH" | "UW" => Self::Vowel,
+            "AW" | "AY" | "EY" | "OW" | "OY" => Self::Diphthong,
+            "L" | "R" | "W" | "Y" => Self::Approximant,
+            "M" | "N" | "NG" => Self::Nasal,
+            "F" | "V" | "TH" | "DH" | "S" | "Z" | "SH" | "ZH" => Self::Fricative,
+            "P" | "B" | "T" | "D" | "K" | "G" => Self::Stop,
+            "CH" | "JH" => Self::Affricate,
+            "HH" => Self::H,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn base_duration_ms(self) -> f32 {
+        match self {
+            Self::Vowel => 120.0,
+            Self::Diphthong => 145.0,
+            Self::Approximant => 90.0,
+            Self::Nasal => 85.0,
+            Self::Fricative => 75.0,
+            Self::Stop => 55.0,
+            Self::Affricate => 80.0,
+            Self::H => 55.0,
+            Self::Unknown => 90.0,
+        }
+    }
+
+    fn is_vocalic(self) -> bool {
+        matches!(self, Self::Vowel | Self::Diphthong)
+    }
+
+    fn is_sonorant(self) -> bool {
+        matches!(
+            self,
+            Self::Vowel | Self::Diphthong | Self::Approximant | Self::Nasal
+        )
+    }
+}
+
+fn strip_arpabet_stress(symbol: &str) -> String {
+    symbol
+        .strip_suffix(['0', '1', '2'])
+        .filter(|base| is_stress_marked_vowel(base))
+        .unwrap_or(symbol)
+        .to_ascii_uppercase()
+}
+
+fn is_phrase_final_phone(unit: &PhonemizedUnit, source_index: usize) -> bool {
+    for phoneme in unit.phonemes.phonemes.iter().skip(source_index + 1) {
+        match phoneme.0.as_str() {
+            "|" => return true,
+            symbol if is_speakable_plan_symbol(symbol) => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+fn next_speakable_phone_is_stop(unit: &PhonemizedUnit, source_index: usize) -> bool {
+    unit.phonemes
+        .phonemes
+        .iter()
+        .skip(source_index + 1)
+        .find(|phoneme| is_speakable_plan_symbol(&phoneme.0))
+        .is_some_and(|phoneme| {
+            PhoneDurationClass::for_symbol(&phoneme.0) == PhoneDurationClass::Stop
+        })
 }
 
 fn stress_pattern_for_word(
@@ -207,5 +347,76 @@ mod tests {
         assert!(plan.phones.iter().all(|phone| phone.duration_ms > 0.0));
         assert_eq!(plan.phones[0].phone, "d");
         assert_eq!(plan.phones[0].word_index, Some(0));
+    }
+
+    #[test]
+    fn phone_plan_shapes_duration_by_stress_class_and_position() {
+        let plan = PhonePlan::from_text_with_riper_g2p("Hello, my ragtime gal.")
+            .expect("acceptance phrase should produce a phone plan");
+
+        let hello = &plan.words[0];
+        assert_eq!(hello.text, "hello");
+        let hello_hh = &plan.phones[hello.start_phone];
+        let hello_ah = &plan.phones[hello.start_phone + 1];
+        let hello_l = &plan.phones[hello.start_phone + 2];
+        let hello_ow = &plan.phones[hello.start_phone + 3];
+
+        assert_eq!(hello_hh.phone, "hh");
+        assert_eq!(hello_hh.duration_ms, 55.0);
+        assert_eq!(hello_ah.phone, "ah");
+        assert_eq!(hello_ah.duration_ms, 90.0);
+        assert_eq!(hello_l.phone, "l");
+        assert_eq!(hello_l.duration_ms, 90.0);
+        assert_eq!(hello_ow.phone, "ow");
+        assert!(
+            hello_ow.duration_ms > hello_ah.duration_ms,
+            "stressed word-final diphthong should be longer than unstressed vowel: {:?}",
+            plan.phones
+        );
+
+        let ragtime = plan
+            .words
+            .iter()
+            .find(|word| word.text == "ragtime")
+            .expect("ragtime word plan");
+        let ragtime_ae = plan.phones[ragtime.start_phone..ragtime.end_phone]
+            .iter()
+            .find(|phone| phone.phone == "ae")
+            .expect("ragtime primary vowel");
+        let ragtime_t = plan.phones[ragtime.start_phone..ragtime.end_phone]
+            .iter()
+            .find(|phone| phone.phone == "t")
+            .expect("ragtime stop");
+        assert_eq!(ragtime_ae.duration_ms, 150.0);
+        assert_eq!(ragtime_t.duration_ms, 55.0);
+
+        let gal = plan
+            .words
+            .iter()
+            .find(|word| word.text == "gal")
+            .expect("gal word plan");
+        let gal_ae = plan.phones[gal.start_phone..gal.end_phone]
+            .iter()
+            .find(|phone| phone.phone == "ae")
+            .expect("gal primary vowel");
+        let final_l = &plan.phones[gal.end_phone - 1];
+        assert_eq!(gal_ae.duration_ms, 150.0);
+        assert_eq!(final_l.phone, "l");
+        assert!(
+            final_l.duration_ms > hello_l.duration_ms,
+            "phrase-final word-final sonorant should lengthen: {:?}",
+            plan.phones
+        );
+
+        let distinct_durations = plan
+            .phones
+            .iter()
+            .map(|phone| phone.duration_ms as u32)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            distinct_durations.len() >= 5,
+            "acceptance phrase should no longer be near-uniform: {:?}",
+            plan.phones
+        );
     }
 }

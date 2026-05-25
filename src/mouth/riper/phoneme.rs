@@ -96,9 +96,6 @@ impl PiperPhonemeSequence {
         extend_symbol_ids(&mut ids, PIPER_BOS, config)?;
         extend_symbol_ids(&mut ids, PIPER_PAD, config)?;
         for phoneme in &self.phonemes {
-            if phoneme.0 == PIPER_WORD_SEPARATOR {
-                continue;
-            }
             extend_symbol_ids(&mut ids, &phoneme.0, config)?;
             extend_symbol_ids(&mut ids, PIPER_PAD, config)?;
         }
@@ -153,6 +150,14 @@ fn extend_symbol_ids(
 }
 
 fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<String>> {
+    if symbol == PIPER_WORD_SEPARATOR {
+        return if config.phoneme_id_map.contains_key(PIPER_WORD_SEPARATOR) {
+            Some(vec![PIPER_WORD_SEPARATOR.to_string()])
+        } else {
+            Some(Vec::new())
+        };
+    }
+
     let stress_marker = match symbol.chars().next_back() {
         Some('1') => Some("ˈ"),
         Some('2') => Some("ˌ"),
@@ -164,7 +169,6 @@ fn expand_espeak_phoneme(symbol: &str, config: &PiperVoiceConfig) -> Option<Vec<
         .unwrap_or(symbol);
 
     let expanded = match (symbol, base_symbol) {
-        (PIPER_WORD_SEPARATOR, _) => &[][..],
         ("AH0", _) => &["ə"][..],
         ("AH1" | "AH2", _) => &["ʌ"],
         (_, "AA") => &["ɑ"],
@@ -371,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn compatible_sequence_expands_without_piper_padding_or_word_separator_tokens() {
+    fn compatible_sequence_expands_without_piper_padding_and_preserves_word_separator_tokens() {
         let config = config_from_json(
             r#"
             {
@@ -395,7 +399,10 @@ mod tests {
             espeak_compatible_sequence(&sequence(&["AY", " ", "S", "IY", "|"]), &config)
                 .expect("ARPAbet symbols should expand to Piper codepoints");
 
-        assert_eq!(sequence_symbols(&compatible), vec!["a", "ɪ", "s", "i", "."]);
+        assert_eq!(
+            sequence_symbols(&compatible),
+            vec!["a", "ɪ", " ", "s", "i", "."]
+        );
     }
 
     #[test]
@@ -553,7 +560,7 @@ mod tests {
         assert_eq!(
             ids,
             PiperIdSequence {
-                ids: vec![1, 2, 6, 2, 7, 2, 8, 2, 3]
+                ids: vec![1, 2, 6, 2, 7, 2, 8, 2, 4, 2, 3]
             }
         );
     }
