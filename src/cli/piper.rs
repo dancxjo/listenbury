@@ -28,16 +28,16 @@ use listenbury::mouth::riper::phoneme::espeak_compatible_sequence;
 #[cfg(feature = "piper-compat")]
 use listenbury::mouth::riper::{
     BreathGroupProsodyPlanner, PhonemeProsodyCandidate, PhonemeProsodyCandidateEvent,
-    PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperVoiceConfig, ProsodyEnergy,
-    ProsodyList, ProsodyOp, ProsodyPitchShape, ProsodyTarget, RiperBackend,
+    PiperIdSequence, PiperPhoneme, PiperPhonemeSequence, PiperTextIdTrace, PiperVoiceConfig,
+    ProsodyEnergy, ProsodyList, ProsodyOp, ProsodyPitchShape, ProsodyTarget, RiperBackend,
     RiperProsodyRealization, SentenceAnalysis, SimpleEnglishG2p, SyntacticLinkKind,
     SyntacticLinkParse,
 };
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
 use listenbury::mouth::tts::TextToSpeech;
-use listenbury::speech::phone_plan::PhonePlan;
 use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
+use listenbury::speech::phone_plan::PhonePlan;
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
@@ -102,6 +102,9 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
     if piper_args.dump_phonemes && !piper_args.stdin_stream {
         print_say_phonemes(&piper_args)?;
+    }
+    if piper_args.dump_piper_tensors && !piper_args.stdin_stream {
+        print_say_piper_tensors(&piper_args)?;
     }
     if piper_args.dump_phone_plan && !piper_args.stdin_stream {
         print_say_phone_plan(&piper_args)?;
@@ -229,6 +232,9 @@ fn stream_klatt_stdin_to_frames(
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
         }
+        if piper_args.dump_piper_tensors {
+            print_say_piper_tensors(&piper_args)?;
+        }
         if piper_args.dump_phone_plan {
             print_say_phone_plan(&piper_args)?;
             continue;
@@ -257,6 +263,9 @@ fn stream_hifigan_stdin_to_frames(
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
         }
+        if piper_args.dump_piper_tensors {
+            print_say_piper_tensors(&piper_args)?;
+        }
         if piper_args.dump_phone_plan {
             print_say_phone_plan(&piper_args)?;
             continue;
@@ -284,6 +293,9 @@ fn stream_speecht5_stdin_to_frames(
         piper_args.text = text.to_string();
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
+        }
+        if piper_args.dump_piper_tensors {
+            print_say_piper_tensors(&piper_args)?;
         }
         if piper_args.dump_phone_plan {
             print_say_phone_plan(&piper_args)?;
@@ -314,6 +326,10 @@ fn stream_piper_stdin_to_frames(
         if piper_args.dump_phonemes {
             let line_args = piper_args.clone_for_text(text);
             print_say_phonemes(&line_args)?;
+        }
+        if piper_args.dump_piper_tensors {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_piper_tensors(&line_args)?;
         }
         if piper_args.dump_phone_plan {
             let line_args = piper_args.clone_for_text(text);
@@ -347,6 +363,10 @@ fn stream_mbrola_stdin_to_frames(
         if piper_args.dump_phonemes {
             let line_args = piper_args.clone_for_text(text);
             print_say_phonemes(&line_args)?;
+        }
+        if piper_args.dump_piper_tensors {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_piper_tensors(&line_args)?;
         }
         if piper_args.dump_phone_plan {
             let line_args = piper_args.clone_for_text(text);
@@ -1049,6 +1069,14 @@ fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
         .unwrap_or_else(|| riper_model_path.with_extension("onnx.json"));
     let riper_voice_config = read_riper_voice_config(&riper_config_path)?;
     let riper_phonemes = resolve_riper_phoneme_report(&args, &riper_voice_config)?;
+    let riper_contract = RiperBackend::load(&riper_model_path, riper_voice_config.clone())
+        .and_then(|backend| backend.validate_model_contract())
+        .with_context(|| {
+            format!(
+                "failed to inspect Riper ONNX contract for {}",
+                riper_model_path.display()
+            )
+        })?;
     let riper_stats = synthesize_riper_for_compare(
         &riper_model_path,
         &riper_voice_config,
@@ -1057,6 +1085,19 @@ fn run_riper_compare_impl(command: RiperCompareCommand) -> Result<()> {
     )?;
 
     report_compare_phonemes(&process_phonemes, &riper_phonemes);
+    print!(
+        "{}",
+        format_piper_tensor_dump(
+            "riper-compare",
+            &args.text,
+            &riper_model_path,
+            &riper_config_path,
+            false,
+            &riper_phonemes.trace,
+            &riper_voice_config,
+            &riper_contract.input_names,
+        )
+    );
     report_compare_stats(&process_stats, &riper_stats);
 
     if let Some(output) = args.process_output_wav {
@@ -1142,6 +1183,7 @@ struct RiperPhonemeReport {
     phonemes: PiperPhonemeSequence,
     compatible_phonemes: Option<PiperPhonemeSequence>,
     ids: PiperIdSequence,
+    trace: PiperTextIdTrace,
     sentence_analysis: Option<SentenceAnalysis>,
 }
 
@@ -1289,6 +1331,9 @@ fn resolve_riper_phoneme_report(
                 args.text
             )
         })?;
+    let trace = phoneme_sequence
+        .to_piper_text_id_trace(config)
+        .with_context(|| format!("failed to build Piper ID trace for `{}`", args.text))?;
     let compatible_phonemes = espeak_compatible_sequence(&phoneme_sequence, config).ok();
 
     Ok(RiperPhonemeReport {
@@ -1296,6 +1341,7 @@ fn resolve_riper_phoneme_report(
         phonemes: phoneme_sequence,
         compatible_phonemes,
         ids,
+        trace,
         sentence_analysis,
     })
 }
@@ -1414,6 +1460,86 @@ fn report_compare_phonemes(process: &ProcessNativePhonemes, riper: &RiperPhoneme
     println!("Riper phoneme ids:");
     println!("  {:?}", riper.ids.ids);
     report_link_grammar(&riper.sentence_analysis);
+}
+
+#[cfg(feature = "piper-compat")]
+fn format_piper_tensor_dump(
+    backend_id: &str,
+    text: &str,
+    model_path: &Path,
+    config_path: &Path,
+    external_process: bool,
+    trace: &PiperTextIdTrace,
+    voice_config: &PiperVoiceConfig,
+    input_names: &[String],
+) -> String {
+    let input_len = trace.ids_after_framing.len();
+    let scales = piper_inference_scales(voice_config);
+    let sid_input = input_names
+        .iter()
+        .find(|name| name.as_str() == "sid" || name.as_str() == "speaker_id");
+
+    let mut output = String::new();
+    output.push_str(&format!("piper tensor dump: {backend_id}\n"));
+    output.push_str(&format!("input text: {text}\n"));
+    output.push_str(&format!("model: {}\n", model_path.display()));
+    output.push_str(&format!("config: {}\n", config_path.display()));
+    if external_process {
+        output.push_str("external Piper process tensors:\n");
+        output.push_str(
+            "  unavailable: the process API returns audio only; it does not expose final ONNX input IDs\n",
+        );
+        output.push_str("Listenbury internal-compatible tensor candidate:\n");
+    } else {
+        output.push_str("Listenbury internal Piper-compatible tensors:\n");
+    }
+    output.push_str(&format!("  source symbols: {:?}\n", trace.source_symbols));
+    output.push_str(&format!(
+        "  text symbols after termination: {:?}\n",
+        trace.text_symbols
+    ));
+    output.push_str(&format!(
+        "  symbols before id mapping: {:?}\n",
+        trace.symbols_before_id_mapping
+    ));
+    output.push_str(&format!(
+        "  ids before BOS/PAD/EOS framing: {:?}\n",
+        trace.ids_before_framing
+    ));
+    output.push_str(&format!(
+        "  ids after BOS/PAD/EOS framing: {:?}\n",
+        trace.ids_after_framing
+    ));
+    output.push_str("  input tensor:\n");
+    output.push_str(&format!("    shape=[1, {input_len}]\n"));
+    output.push_str(&format!("    values={:?}\n", trace.ids_after_framing));
+    output.push_str("  input_lengths:\n");
+    output.push_str("    shape=[1]\n");
+    output.push_str(&format!("    values=[{input_len}]\n"));
+    output.push_str("  scales:\n");
+    output.push_str("    shape=[3]\n");
+    output.push_str(&format!(
+        "    values=[{:.6}, {:.6}, {:.6}]\n",
+        scales[0], scales[1], scales[2]
+    ));
+    output.push_str("  sid:\n");
+    if let Some(name) = sid_input {
+        output.push_str(&format!("    input={name}\n"));
+        output.push_str("    shape=[1]\n");
+        output.push_str("    values=[0]\n");
+    } else {
+        output.push_str("    absent\n");
+    }
+    output
+}
+
+#[cfg(feature = "piper-compat")]
+fn piper_inference_scales(config: &PiperVoiceConfig) -> [f32; 3] {
+    [
+        config.noise_scale.unwrap_or(0.667),
+        config.length_scale.unwrap_or(1.0),
+        config.noise_w.unwrap_or(0.8),
+    ]
 }
 
 #[cfg(feature = "piper-compat")]
@@ -1630,6 +1756,7 @@ struct SayArgs {
     dump_pipeline: bool,
     dump_phonemes: bool,
     dump_phone_plan: bool,
+    dump_piper_tensors: bool,
     klatt: bool,
     hifigan: bool,
     speecht5: bool,
@@ -1654,6 +1781,7 @@ impl SayArgs {
         let mut dump_pipeline = command.dump_pipeline;
         let mut dump_phonemes = command.dump_phonemes;
         let mut dump_phone_plan = command.dump_phone_plan;
+        let mut dump_piper_tensors = command.dump_piper_tensors;
         let mut rp = command.rp;
         let mut diphone = command.diphone;
         let mut words = command
@@ -1683,6 +1811,9 @@ impl SayArgs {
                     None
                 } else if word == "--dump-phone-plan" {
                     dump_phone_plan = true;
+                    None
+                } else if word == "--dump-piper-tensors" {
+                    dump_piper_tensors = true;
                     None
                 } else if word == "--riper" {
                     None
@@ -1757,6 +1888,7 @@ impl SayArgs {
             dump_pipeline,
             dump_phonemes,
             dump_phone_plan,
+            dump_piper_tensors,
             piper,
             klatt,
             hifigan,
@@ -1831,6 +1963,11 @@ fn print_say_phone_plan(args: &SayArgs) -> Result<()> {
     Ok(())
 }
 
+fn print_say_piper_tensors(args: &SayArgs) -> Result<()> {
+    print!("{}", format_say_piper_tensors(args)?);
+    Ok(())
+}
+
 fn format_say_pipeline(args: &SayArgs) -> String {
     let backend_graph = say_backend_graph(args);
     let mut output = String::new();
@@ -1886,6 +2023,65 @@ fn format_say_phonemes(args: &SayArgs) -> Result<String> {
         backend_phone_translation_note(args)
     ));
     Ok(output)
+}
+
+#[cfg(feature = "piper-compat")]
+fn format_say_piper_tensors(args: &SayArgs) -> Result<String> {
+    anyhow::ensure!(
+        !should_use_klatt_backend(args)
+            && !should_use_source_filter_hifigan_backend(args)
+            && !should_use_speecht5_backend(args)
+            && !should_use_mbrola_backend(args),
+        "listenbury say --dump-piper-tensors only applies to --piper or the default piper-compat route"
+    );
+
+    let piper_voice = resolve_piper_voice(args.piper_voice.clone())?;
+    let piper_config = if args.piper {
+        let piper_bin = resolve_piper_bin(args.piper_bin.clone())?;
+        piper_config_for_voice(piper_bin, piper_voice)?
+    } else {
+        piper_config_for_riper_voice(piper_voice)?
+    };
+    let config_path = piper_config
+        .config_path
+        .clone()
+        .unwrap_or_else(|| piper_config.model_path.with_extension("onnx.json"));
+    let voice_config = read_riper_voice_config(&config_path)?;
+    let unit = SimpleEnglishG2p::default()
+        .phonemize_unit(&args.text)
+        .with_context(|| format!("failed to phonemize `{}`", args.text))?;
+    let trace = unit
+        .phonemes
+        .to_piper_text_id_trace(&voice_config)
+        .with_context(|| {
+            format!(
+                "failed to build Piper ID trace for model config {}",
+                config_path.display()
+            )
+        })?;
+    let contract = RiperBackend::load(&piper_config.model_path, voice_config.clone())
+        .and_then(|backend| backend.validate_model_contract())
+        .with_context(|| {
+            format!(
+                "failed to inspect Piper ONNX contract for {}",
+                piper_config.model_path.display()
+            )
+        })?;
+    Ok(format_piper_tensor_dump(
+        say_backend_graph(args).id,
+        &args.text,
+        &piper_config.model_path,
+        &config_path,
+        args.piper,
+        &trace,
+        &voice_config,
+        &contract.input_names,
+    ))
+}
+
+#[cfg(not(feature = "piper-compat"))]
+fn format_say_piper_tensors(_args: &SayArgs) -> Result<String> {
+    anyhow::bail!("listenbury say --dump-piper-tensors requires the `piper-compat` feature")
 }
 
 #[cfg(not(feature = "piper-compat"))]
@@ -2952,6 +3148,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -2980,6 +3177,7 @@ mod tests {
             dump_pipeline: true,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3010,6 +3208,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: true,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3041,6 +3240,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: true,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3069,6 +3269,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3099,6 +3300,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3131,6 +3333,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3165,6 +3368,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3200,6 +3404,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3230,6 +3435,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3256,6 +3462,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3284,6 +3491,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3324,6 +3532,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: true,
@@ -3363,6 +3572,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3389,6 +3599,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3419,6 +3630,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3445,6 +3657,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3474,6 +3687,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3505,6 +3719,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3530,6 +3745,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3558,6 +3774,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3584,6 +3801,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3615,6 +3833,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3644,6 +3863,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3673,6 +3893,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3706,6 +3927,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3742,6 +3964,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3785,6 +4008,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3814,6 +4038,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3844,6 +4069,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3872,6 +4098,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3897,6 +4124,7 @@ mod tests {
             dump_pipeline: false,
             dump_phonemes: false,
             dump_phone_plan: false,
+            dump_piper_tensors: false,
             klatt: true,
             hifigan: false,
             speecht5: false,

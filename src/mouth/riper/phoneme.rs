@@ -22,6 +22,16 @@ pub struct PiperIdSequence {
     pub ids: Vec<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PiperTextIdTrace {
+    pub source_symbols: Vec<String>,
+    pub text_symbols: Vec<String>,
+    pub symbols_before_id_mapping: Vec<String>,
+    pub ids_before_framing: Vec<i64>,
+    pub ids_after_framing: Vec<i64>,
+    pub framed: bool,
+}
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PiperPhonemeIdConversionError {
     #[error("unknown Piper phoneme symbol `{symbol}`")]
@@ -70,6 +80,53 @@ impl PiperPhonemeSequence {
             .to_piper_ids_compatible(config)
     }
 
+    pub fn to_piper_text_id_trace(
+        &self,
+        config: &PiperVoiceConfig,
+    ) -> Result<PiperTextIdTrace, PiperPhonemeIdConversionError> {
+        let text_sequence = self.with_utterance_termination(config);
+        let source_symbols = self.symbols();
+        let text_symbols = text_sequence.symbols();
+        let framed = config_has_piper_framing(config);
+
+        let (symbols_before_id_mapping, ids_before_framing, ids_after_framing) = if framed {
+            match text_sequence.to_piper_ids(config) {
+                Ok(ids_before_framing) => {
+                    let ids_after_framing = text_sequence.to_piper_framed_ids(config)?.ids;
+                    (
+                        text_sequence.symbols(),
+                        ids_before_framing.ids,
+                        ids_after_framing,
+                    )
+                }
+                Err(_) => {
+                    let compatible = espeak_compatible_sequence(&text_sequence, config)?;
+                    let ids_before_framing = compatible.to_piper_ids(config)?.ids;
+                    let ids_after_framing = compatible.to_piper_framed_ids(config)?.ids;
+                    (compatible.symbols(), ids_before_framing, ids_after_framing)
+                }
+            }
+        } else {
+            match text_sequence.to_piper_ids(config) {
+                Ok(ids) => (text_sequence.symbols(), ids.ids.clone(), ids.ids),
+                Err(_) => {
+                    let compatible = espeak_compatible_sequence(&text_sequence, config)?;
+                    let ids = compatible.to_piper_ids(config)?.ids;
+                    (compatible.symbols(), ids.clone(), ids)
+                }
+            }
+        };
+
+        Ok(PiperTextIdTrace {
+            source_symbols,
+            text_symbols,
+            symbols_before_id_mapping,
+            ids_before_framing,
+            ids_after_framing,
+            framed,
+        })
+    }
+
     fn with_utterance_termination(&self, config: &PiperVoiceConfig) -> Self {
         if self.phonemes.is_empty()
             || self
@@ -101,6 +158,13 @@ impl PiperPhonemeSequence {
         }
         extend_symbol_ids(&mut ids, PIPER_EOS, config)?;
         Ok(PiperIdSequence { ids })
+    }
+
+    fn symbols(&self) -> Vec<String> {
+        self.phonemes
+            .iter()
+            .map(|phoneme| phoneme.0.clone())
+            .collect()
     }
 }
 
@@ -563,6 +627,40 @@ mod tests {
                 ids: vec![1, 2, 6, 2, 7, 2, 8, 2, 4, 2, 3]
             }
         );
+    }
+
+    #[test]
+    fn text_id_trace_reports_symbols_before_and_after_framing() {
+        let config = config_from_json(
+            r#"
+            {
+              "audio": { "sample_rate": 22050 },
+              "phoneme_id_map": {
+                "^": [1],
+                "_": [2],
+                "$": [3],
+                " ": [4],
+                ".": [5],
+                "a": [6],
+                "ɪ": [7]
+              }
+            }
+            "#,
+        );
+
+        let trace = sequence(&["AY", " "])
+            .to_piper_text_id_trace(&config)
+            .expect("trace should map ARPAbet symbols through Piper framing");
+
+        assert_eq!(trace.source_symbols, vec!["AY", " "]);
+        assert_eq!(trace.text_symbols, vec!["AY", " ", "|"]);
+        assert_eq!(trace.symbols_before_id_mapping, vec!["a", "ɪ", " ", "."]);
+        assert_eq!(trace.ids_before_framing, vec![6, 7, 4, 5]);
+        assert_eq!(
+            trace.ids_after_framing,
+            vec![1, 2, 6, 2, 7, 2, 4, 2, 5, 2, 3]
+        );
+        assert!(trace.framed);
     }
 
     #[test]

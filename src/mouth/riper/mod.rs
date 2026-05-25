@@ -55,6 +55,7 @@ pub use morphophonology::{
 };
 pub use phoneme::{
     PiperIdSequence, PiperPhoneme, PiperPhonemeIdConversionError, PiperPhonemeSequence,
+    PiperTextIdTrace,
 };
 pub use prosody_audit::{
     PauseReason, PhoLikeDiagnosticEntry, PhoLikeDiagnostics, PhraseBoundaryKind, ProminenceClass,

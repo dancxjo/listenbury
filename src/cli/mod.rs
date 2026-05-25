@@ -434,6 +434,9 @@ pub(crate) struct SayCommand {
     /// Print the shared JSON phone plan and exit before synthesis.
     #[arg(long)]
     pub(crate) dump_phone_plan: bool,
+    /// Print the Piper-compatible ONNX tensor contract before synthesis.
+    #[arg(long)]
+    pub(crate) dump_piper_tensors: bool,
     #[arg(long, conflicts_with_all = ["piper", "hifigan", "speecht5", "diphone"])]
     pub(crate) klatt: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "speecht5", "diphone", "rp"])]
@@ -1426,6 +1429,18 @@ mod tests {
             panic!("expected say command");
         };
         assert!(command.dump_phone_plan);
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_dump_piper_tensors() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--dump-piper-tensors", "hello"])
+            .expect("say should parse Piper tensor dump flag");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.dump_piper_tensors);
         assert_eq!(command.words, ["hello"]);
     }
 
