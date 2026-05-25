@@ -285,12 +285,12 @@ pub struct StreamChunk<T> {
 pub type RepresentationStream<T> = StreamChunk<T>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WordPlan {
+pub struct LingWordPlan {
     pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PhonePlan {
+pub struct LingPhonePlan {
     pub symbol: String,
 }
 
@@ -319,8 +319,8 @@ pub enum Cadence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LingChunk {
     pub id: ChunkId,
-    pub words: Vec<WordPlan>,
-    pub phones: Vec<PhonePlan>,
+    pub words: Vec<LingWordPlan>,
+    pub phones: Vec<LingPhonePlan>,
     pub syllables: Vec<SyllablePlan>,
     pub phrase: PhraseShape,
     pub commitment: Commitment,

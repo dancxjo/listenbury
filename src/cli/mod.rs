@@ -416,6 +416,9 @@ pub(crate) struct TranscribeCommand {
 pub(crate) struct SayCommand {
     #[arg(long)]
     pub(crate) piper: bool,
+    /// Select the internal Riper route. This is the default, but the flag is accepted for explicit inspection commands.
+    #[arg(long, conflicts_with_all = ["piper", "klatt", "hifigan", "speecht5", "diphone", "rp"])]
+    pub(crate) riper: bool,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long, alias = "model-path")]
@@ -428,6 +431,9 @@ pub(crate) struct SayCommand {
     /// Print phoneme and phone translations before synthesis.
     #[arg(long)]
     pub(crate) dump_phonemes: bool,
+    /// Print the shared JSON phone plan and exit before synthesis.
+    #[arg(long)]
+    pub(crate) dump_phone_plan: bool,
     #[arg(long, conflicts_with_all = ["piper", "hifigan", "speecht5", "diphone"])]
     pub(crate) klatt: bool,
     #[arg(long, conflicts_with_all = ["piper", "klatt", "speecht5", "diphone", "rp"])]
@@ -1365,16 +1371,21 @@ mod tests {
     }
 
     #[test]
-    fn say_rejects_riper_flag_before_text() {
-        let error = Cli::try_parse_from(["listenbury", "say", "--riper", "hello", "there"])
-            .expect_err("--riper should be removed");
-        assert!(error.to_string().contains("--riper"));
+    fn say_accepts_riper_flag_before_text() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--riper", "hello", "there"])
+            .expect("--riper should be accepted as an explicit default route");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.riper);
+        assert_eq!(command.words, ["hello", "there"]);
     }
 
     #[test]
-    fn say_keeps_riper_flag_after_text_for_runtime_rejection() {
+    fn say_keeps_trailing_riper_flag_for_runtime_normalization() {
         let cli = Cli::try_parse_from(["listenbury", "say", "hello", "there", "--riper"])
-            .expect("say trailing text is collected before runtime validation");
+            .expect("say trailing text is collected before SayArgs normalization");
 
         let Some(Command::Say(command)) = cli.command else {
             panic!("expected say command");
@@ -1403,6 +1414,18 @@ mod tests {
             panic!("expected say command");
         };
         assert!(command.dump_phonemes);
+        assert_eq!(command.words, ["hello"]);
+    }
+
+    #[test]
+    fn say_accepts_dump_phone_plan() {
+        let cli = Cli::try_parse_from(["listenbury", "say", "--dump-phone-plan", "hello"])
+            .expect("say should parse phone plan dump flag");
+
+        let Some(Command::Say(command)) = cli.command else {
+            panic!("expected say command");
+        };
+        assert!(command.dump_phone_plan);
         assert_eq!(command.words, ["hello"]);
     }
 

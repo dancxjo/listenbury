@@ -36,6 +36,7 @@ use listenbury::mouth::riper::{
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, EchoProsodyPlan};
 use listenbury::mouth::tts::TextToSpeech;
+use listenbury::speech::phone_plan::PhonePlan;
 use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
@@ -101,6 +102,10 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
     }
     if piper_args.dump_phonemes && !piper_args.stdin_stream {
         print_say_phonemes(&piper_args)?;
+    }
+    if piper_args.dump_phone_plan && !piper_args.stdin_stream {
+        print_say_phone_plan(&piper_args)?;
+        return Ok(());
     }
     if piper_args.stdin_stream {
         return run_say_stdin_stream(piper_args);
@@ -224,6 +229,10 @@ fn stream_klatt_stdin_to_frames(
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
         }
+        if piper_args.dump_phone_plan {
+            print_say_phone_plan(&piper_args)?;
+            continue;
+        }
         let frames = synthesize_klatt_for_say(text)?;
         frame_tx
             .send(frames)
@@ -248,6 +257,10 @@ fn stream_hifigan_stdin_to_frames(
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
         }
+        if piper_args.dump_phone_plan {
+            print_say_phone_plan(&piper_args)?;
+            continue;
+        }
         let frames = synthesize_hifigan_for_say(&piper_args)?;
         frame_tx
             .send(frames)
@@ -271,6 +284,10 @@ fn stream_speecht5_stdin_to_frames(
         piper_args.text = text.to_string();
         if piper_args.dump_phonemes {
             print_say_phonemes(&piper_args)?;
+        }
+        if piper_args.dump_phone_plan {
+            print_say_phone_plan(&piper_args)?;
+            continue;
         }
         let frames = synthesize_speecht5_for_say(&piper_args)?;
         frame_tx
@@ -297,6 +314,11 @@ fn stream_piper_stdin_to_frames(
         if piper_args.dump_phonemes {
             let line_args = piper_args.clone_for_text(text);
             print_say_phonemes(&line_args)?;
+        }
+        if piper_args.dump_phone_plan {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_phone_plan(&line_args)?;
+            continue;
         }
         tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             text.to_string(),
@@ -325,6 +347,11 @@ fn stream_mbrola_stdin_to_frames(
         if piper_args.dump_phonemes {
             let line_args = piper_args.clone_for_text(text);
             print_say_phonemes(&line_args)?;
+        }
+        if piper_args.dump_phone_plan {
+            let line_args = piper_args.clone_for_text(text);
+            print_say_phone_plan(&line_args)?;
+            continue;
         }
         tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
             text.to_string(),
@@ -1602,6 +1629,7 @@ struct SayArgs {
     output_wav: Option<PathBuf>,
     dump_pipeline: bool,
     dump_phonemes: bool,
+    dump_phone_plan: bool,
     klatt: bool,
     hifigan: bool,
     speecht5: bool,
@@ -1625,6 +1653,7 @@ impl SayArgs {
         let mut skip_gan = command.skip_gan;
         let mut dump_pipeline = command.dump_pipeline;
         let mut dump_phonemes = command.dump_phonemes;
+        let mut dump_phone_plan = command.dump_phone_plan;
         let mut rp = command.rp;
         let mut diphone = command.diphone;
         let mut words = command
@@ -1652,6 +1681,11 @@ impl SayArgs {
                 } else if word == "--dump-phonemes" {
                     dump_phonemes = true;
                     None
+                } else if word == "--dump-phone-plan" {
+                    dump_phone_plan = true;
+                    None
+                } else if word == "--riper" {
+                    None
                 } else if word == "--diphone" {
                     diphone = true;
                     None
@@ -1663,10 +1697,6 @@ impl SayArgs {
                 }
             })
             .collect::<Vec<_>>();
-        anyhow::ensure!(
-            !words.iter().any(|word| word == "--riper"),
-            "listenbury say: --riper has been removed; Riper is the default"
-        );
         let explicit_piper_bin = command.piper_bin.is_some();
         let explicit_hifigan_model = command.hifigan_model.is_some();
         let mut piper_bin = command.piper_bin;
@@ -1726,6 +1756,7 @@ impl SayArgs {
             output_wav: command.output_wav,
             dump_pipeline,
             dump_phonemes,
+            dump_phone_plan,
             piper,
             klatt,
             hifigan,
@@ -1791,6 +1822,12 @@ fn print_say_pipeline(args: &SayArgs) {
 
 fn print_say_phonemes(args: &SayArgs) -> Result<()> {
     print!("{}", format_say_phonemes(args)?);
+    Ok(())
+}
+
+fn print_say_phone_plan(args: &SayArgs) -> Result<()> {
+    let plan = PhonePlan::from_text_with_riper_g2p(&args.text)?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
     Ok(())
 }
 
@@ -2908,11 +2945,13 @@ mod tests {
     fn say_args_treats_single_word_as_text() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -2934,11 +2973,13 @@ mod tests {
     fn say_args_accepts_dump_pipeline_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: true,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -2962,11 +3003,13 @@ mod tests {
     fn say_args_accepts_dump_phonemes_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: true,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -2988,14 +3031,44 @@ mod tests {
     }
 
     #[test]
-    fn say_args_accepts_trailing_dump_phonemes_flag() {
+    fn say_args_accepts_dump_phone_plan_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: true,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: true,
+            klatt: false,
+            hifigan: false,
+            speecht5: false,
+            hifigan_model: None,
+            skip_gan: false,
+            rp: false,
+            diphone: false,
+            mbrola_voice: None,
+            words: vec!["Don't be jealous.".to_string()],
+        })
+        .expect("--dump-phone-plan should parse without synthesis setup");
+
+        assert!(args.dump_phone_plan);
+        let plan = PhonePlan::from_text_with_riper_g2p(&args.text).expect("plan should build");
+        assert_eq!(plan.words[0].phones, ["d", "ow", "n", "t"]);
+    }
+
+    #[test]
+    fn say_args_accepts_trailing_dump_phonemes_flag() {
+        let args = SayArgs::from_command(SayCommand {
+            piper: false,
+            riper: false,
+            piper_bin: None,
+            piper_voice: None,
+            output_wav: None,
+            dump_pipeline: false,
+            dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3019,11 +3092,13 @@ mod tests {
     fn say_args_accepts_trailing_trace_speech_pipeline_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3049,11 +3124,13 @@ mod tests {
     fn say_args_accepts_legacy_piper_bin_position() {
         let args = SayArgs::from_command(SayCommand {
             piper: true,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3081,11 +3158,13 @@ mod tests {
     fn say_args_accepts_legacy_voice_position() {
         let args = SayArgs::from_command(SayCommand {
             piper: true,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3111,14 +3190,16 @@ mod tests {
     }
 
     #[test]
-    fn say_args_rejects_trailing_riper_flag() {
-        let error = SayArgs::from_command(SayCommand {
+    fn say_args_accepts_trailing_riper_flag() {
+        let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3133,22 +3214,22 @@ mod tests {
                 "--riper".to_string(),
             ],
         })
-        .expect_err("--riper should be removed");
-        assert!(
-            error.to_string().contains("--riper"),
-            "unexpected error: {error}"
-        );
+        .expect("--riper should be accepted as an explicit default route");
+        assert_eq!(args.text, "hello there");
+        assert!(!args.piper);
     }
 
     #[test]
     fn say_args_accepts_trailing_klatt_flag() {
         let error = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3168,11 +3249,13 @@ mod tests {
     fn say_args_accepts_klatt() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3194,11 +3277,13 @@ mod tests {
     fn say_args_accepts_hifigan() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3232,11 +3317,13 @@ mod tests {
     fn say_args_accepts_speecht5_as_native_acoustic_route() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: true,
@@ -3269,11 +3356,13 @@ mod tests {
     fn say_args_accepts_trailing_speecht5_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3293,11 +3382,13 @@ mod tests {
     fn say_args_rejects_hifigan_model_without_hifigan_or_speecht5() {
         let error = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3321,11 +3412,13 @@ mod tests {
     fn say_args_accepts_trailing_hifigan_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3345,11 +3438,13 @@ mod tests {
     fn say_args_accepts_skip_gan_as_hifigan_modifier() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3372,11 +3467,13 @@ mod tests {
     fn say_args_accepts_trailing_hifigan_fallback_alias() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3401,11 +3498,13 @@ mod tests {
     fn say_args_rejects_skip_gan_without_hifigan() {
         let error = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3424,11 +3523,13 @@ mod tests {
     fn say_args_accepts_diphone_voice() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3450,11 +3551,13 @@ mod tests {
     fn say_args_accepts_diphone() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3474,11 +3577,13 @@ mod tests {
     fn say_backend_graph_defaults_to_piper_compat() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3503,11 +3608,13 @@ mod tests {
     fn say_backend_graph_reports_external_piper_process() {
         let args = SayArgs::from_command(SayCommand {
             piper: true,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3530,11 +3637,13 @@ mod tests {
     fn say_backend_graph_reports_klatt_worker_contract() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: true,
             hifigan: false,
             speecht5: false,
@@ -3557,11 +3666,13 @@ mod tests {
     fn say_backend_graph_reports_mbrola_internal_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3588,11 +3699,13 @@ mod tests {
     fn say_backend_graph_reports_hifigan_speecht5_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3622,11 +3735,13 @@ mod tests {
     fn say_backend_graph_reports_hifigan_fallback_feature_bridge_workers() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: true,
             speecht5: false,
@@ -3663,11 +3778,13 @@ mod tests {
     fn say_args_rp_selects_en1_mbrola_voice() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3690,11 +3807,13 @@ mod tests {
     fn say_args_accepts_trailing_rp_flag() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3718,11 +3837,13 @@ mod tests {
     fn say_args_rejects_rp_with_klatt() {
         let error = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3744,11 +3865,13 @@ mod tests {
     fn say_args_uses_default_diphone_demo_text() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: false,
             hifigan: false,
             speecht5: false,
@@ -3767,11 +3890,13 @@ mod tests {
     fn say_args_treats_dash_as_stdin_stream() {
         let args = SayArgs::from_command(SayCommand {
             piper: false,
+            riper: false,
             piper_bin: None,
             piper_voice: None,
             output_wav: None,
             dump_pipeline: false,
             dump_phonemes: false,
+            dump_phone_plan: false,
             klatt: true,
             hifigan: false,
             speecht5: false,

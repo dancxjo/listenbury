@@ -103,6 +103,7 @@ pub use span::{
     SpanRevision, SpanState, Text, TextId,
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
+pub use speech::phone_plan::{LexicalStatus, PhonePlan, PhoneSpan, WordPlan};
 pub use speech::prosody_timing::{
     AlignedPhone, AlignedWord, BreakReason, BreathGroup, ExternalAlignmentCommand, ForcedAlignment,
     PiperTimingBreak, PiperTimingPhone, PiperTimingPlan, PraatCommandConfig, PraatNucleus,
@@ -127,14 +128,14 @@ pub use speech::work::{
     AcousticChunk, AcousticPhoneTiming, AcousticStage, ArticulatoryChunk, AudioTime,
     BlockingVocoderRenderer, Boundary, BoundaryHint, BreathPlan, BufferWatermarks,
     CANONICAL_SYNTHETIC_WORK_FLOW, Cadence, ChunkId, CoarseTextChunk, CommitHorizons, Commitment,
-    Curve, CurvePoint, LingChunk, LingStage, LpcNetChunk, MelChunk, MelF0Chunk,
-    PartialProsodyChunk, PhonePlan, PhraseShape, PipelineTime, PlaybackStage,
+    Curve, CurvePoint, LingChunk, LingPhonePlan, LingStage, LingWordPlan, LpcNetChunk, MelChunk,
+    MelF0Chunk, PartialProsodyChunk, PhraseShape, PipelineTime, PlaybackStage,
     RealtimeVocoderRenderer, RenderStage, RenderStatus, Renderer, RepairPlan, RepairStrategy,
     RepresentationKind, RepresentationStage, RepresentationStream, SpeechWorkGraph, StageReadiness,
     StageStatus, StreamChunk, StreamStage, SyntheticClock, SyntheticClockKind, SyntheticEvent,
     SyntheticPipelineWatermarks, SyntheticRepresentation, SyntheticStageRuntimePolicy,
     SyntheticWorkGraph, SyntheticWorkStageKind, TextChunk, TextSource, TextStage, TickStage,
-    TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WordPlan, WorkBudget, WorldChunk,
+    TimedItem, VoiceProfile, WaveChunk, WavePassthroughRenderer, WorkBudget, WorldChunk,
     render_plan_to_representation,
 };
 pub use speech_timeline::{AudioClipId, SessionId, SyntheticUnitId, TranscriptRevisionId, TurnId};
