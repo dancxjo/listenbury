@@ -88,6 +88,8 @@ enum Command {
 enum DebugCommand {
     #[command(about = "Record an end-to-end loop timing trace")]
     LoopTrace(LoopTraceCommand),
+    #[command(about = "Record live mic audio and render a VAD waveform/spectrogram diagnostic")]
+    EarScope(EarScopeCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -186,6 +188,27 @@ pub(crate) struct LoopTraceCommand {
     pub(crate) write: PathBuf,
     #[arg(long, alias = "model-path")]
     pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
+    pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct EarScopeCommand {
+    /// Live microphone capture duration.
+    #[arg(long, default_value_t = 10)]
+    pub(crate) duration: u64,
+    /// Destination WAV file for the normalized 16 kHz mono capture.
+    #[arg(long, default_value = "out/ear-scope.wav")]
+    pub(crate) output_wav: PathBuf,
+    /// Destination PNG timeline diagnostic.
+    #[arg(long, default_value = "out/ear-scope.png")]
+    pub(crate) output_png: PathBuf,
+    /// Destination per-frame JSONL diagnostics.
+    #[arg(long, default_value = "out/ear-scope.jsonl")]
+    pub(crate) output_jsonl: PathBuf,
     #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
     pub(crate) vad: VadBackendOption,
     /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
@@ -1103,6 +1126,7 @@ pub(crate) fn run() -> Result<()> {
 fn run_debug(command: DebugCommand) -> Result<()> {
     match command {
         DebugCommand::LoopTrace(cmd) => commands::run_loop_trace(cmd),
+        DebugCommand::EarScope(cmd) => commands::run_ear_scope(cmd),
     }
 }
 
@@ -1171,7 +1195,9 @@ mod tests {
         let Some(Command::Debug { command }) = cli.command else {
             panic!("expected debug command");
         };
-        let DebugCommand::LoopTrace(command) = command;
+        let DebugCommand::LoopTrace(command) = command else {
+            panic!("expected loop-trace command");
+        };
         assert_eq!(command.duration, 20);
         assert_eq!(command.profile, LoopTraceProfile::Mock);
         assert_eq!(command.effective_profile(), LoopTraceProfile::Mock);
@@ -1198,7 +1224,9 @@ mod tests {
         let Some(Command::Debug { command }) = cli.command else {
             panic!("expected debug command");
         };
-        let DebugCommand::LoopTrace(command) = command;
+        let DebugCommand::LoopTrace(command) = command else {
+            panic!("expected loop-trace command");
+        };
         assert_eq!(command.profile, LoopTraceProfile::Ear);
         assert_eq!(command.effective_profile(), LoopTraceProfile::Ear);
         assert!(command.mock_llm);
@@ -1223,11 +1251,31 @@ mod tests {
         let Some(Command::Debug { command }) = cli.command else {
             panic!("expected debug command");
         };
-        let DebugCommand::LoopTrace(command) = command;
+        let DebugCommand::LoopTrace(command) = command else {
+            panic!("expected loop-trace command");
+        };
         assert_eq!(command.profile, LoopTraceProfile::Mock);
         assert_eq!(command.effective_profile(), LoopTraceProfile::Ear);
         assert!(command.real_mic);
         assert!(command.real_asr);
+    }
+
+    #[test]
+    fn debug_ear_scope_parses_default_outputs() {
+        let cli = Cli::try_parse_from(["listenbury", "debug", "ear-scope", "--duration", "10"])
+            .expect("debug ear-scope should parse");
+
+        let Some(Command::Debug { command }) = cli.command else {
+            panic!("expected debug command");
+        };
+        let DebugCommand::EarScope(command) = command else {
+            panic!("expected ear-scope command");
+        };
+        assert_eq!(command.duration, 10);
+        assert_eq!(command.output_wav, PathBuf::from("out/ear-scope.wav"));
+        assert_eq!(command.output_png, PathBuf::from("out/ear-scope.png"));
+        assert_eq!(command.output_jsonl, PathBuf::from("out/ear-scope.jsonl"));
+        assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 
     #[test]

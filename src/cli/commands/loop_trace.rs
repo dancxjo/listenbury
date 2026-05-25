@@ -12,7 +12,7 @@ use listenbury::{
 use serde_json::json;
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use std::sync::{
     Arc,
@@ -32,11 +32,9 @@ use listenbury::audio::capture::{
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::event::HearingEvent;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-use listenbury::hearing::breath::{BreathGroupEndReason, BreathGroupId, BreathGroupSegmenter};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::hearing::vad::{VadBackendKind, create_vad_backend_with_profile};
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+use listenbury::hearing::{UtteranceEndReason, UtteranceSmoother, UtteranceSmootherEvent};
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
@@ -242,12 +240,7 @@ fn real_ear_loop_trace(command: &LoopTraceCommand) -> anyhow::Result<Vec<TraceEv
     let mut state = EarTraceState {
         vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
         vad_backend,
-        segmenter: vad_config
-            .profile
-            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
-            .unwrap_or_default(),
-        active_groups: HashMap::new(),
-        last_vad_state: None,
+        utterance_smoother: UtteranceSmoother::default(),
         frame_index: 0,
         first_asr_final_elapsed: None,
     };
@@ -295,7 +288,7 @@ fn real_ear_loop_trace(command: &LoopTraceCommand) -> anyhow::Result<Vec<TraceEv
     )?;
 
     if state.first_asr_final_elapsed.is_none() {
-        force_close_active_groups(
+        finish_active_utterance(
             &mut state,
             &mut recognizer,
             &model_path,
@@ -323,17 +316,10 @@ fn real_ear_loop_trace(command: &LoopTraceCommand) -> anyhow::Result<Vec<TraceEv
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-struct ActiveEarGroup {
-    frames: Vec<AudioFrame>,
-}
-
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
 struct EarTraceState {
     vad: Box<dyn listenbury::hearing::vad::VoiceActivityDetector>,
     vad_backend: VadBackendKind,
-    segmenter: BreathGroupSegmenter,
-    active_groups: HashMap<BreathGroupId, ActiveEarGroup>,
-    last_vad_state: Option<bool>,
+    utterance_smoother: UtteranceSmoother,
     frame_index: u64,
     first_asr_final_elapsed: Option<Duration>,
 }
@@ -389,13 +375,14 @@ fn process_ear_frame(
     events: &mut Vec<TraceEvent>,
 ) -> anyhow::Result<()> {
     let observed_at = started_at.elapsed();
+    let frame_index = state.frame_index;
     events.push(TraceEvent::new(
         observed_at,
         "audio_capture",
         "audio_frame_received",
         Some(real_payload(json!({
             "source": "real_mic",
-            "frame_index": state.frame_index,
+            "frame_index": frame_index,
             "sample_rate_hz": frame.sample_rate_hz,
             "channel_count": frame.channels,
             "frame_size": frame.samples.len()
@@ -404,104 +391,146 @@ fn process_ear_frame(
     state.frame_index = state.frame_index.saturating_add(1);
 
     let vad_result = state.vad.process_frame(&frame)?;
-    let vad_transition = match (state.last_vad_state, vad_result.is_speech) {
-        (Some(true), false) => Some("speech_end"),
-        (previous, true) if previous != Some(true) => Some("speech_start"),
-        _ => None,
-    };
-    if let Some(kind) = vad_transition {
-        events.push(TraceEvent::new(
-            started_at.elapsed(),
-            "vad",
-            kind,
-            Some(real_payload(json!({
-                "backend": state.vad_backend.as_str(),
-                "speech_prob": vad_result.speech_prob
-            }))),
-        ));
-    }
-    state.last_vad_state = Some(vad_result.is_speech);
+    events.push(TraceEvent::new(
+        started_at.elapsed(),
+        "vad",
+        "frame_decision",
+        Some(real_payload(json!({
+            "backend": state.vad_backend.as_str(),
+            "frame_index": frame_index,
+            "is_speech": vad_result.is_speech,
+            "speech_prob": vad_result.speech_prob
+        }))),
+    ));
 
-    let hearing_events = state.segmenter.process(vad_result);
-    for event in &hearing_events {
-        if let HearingEvent::BreathGroupOpened { id } = event {
-            state
-                .active_groups
-                .entry(*id)
-                .or_insert_with(|| ActiveEarGroup { frames: Vec::new() });
-        }
-    }
-    for group in state.active_groups.values_mut() {
-        group.frames.push(frame.clone());
-    }
-    for event in hearing_events {
-        if let HearingEvent::BreathGroupClosed { id, reason } = event
-            && let Some(group) = state.active_groups.remove(&id)
-        {
-            transcribe_closed_group(
-                group, reason, state, recognizer, model_path, started_at, events,
-            )?;
-        }
-    }
+    let utterance_events = state.utterance_smoother.process(vad_result, frame);
+    handle_utterance_events(
+        utterance_events,
+        state,
+        recognizer,
+        model_path,
+        started_at,
+        events,
+    )?;
 
     Ok(())
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn force_close_active_groups(
+fn finish_active_utterance(
     state: &mut EarTraceState,
     recognizer: &mut WhisperSpeechRecognizer,
     model_path: &std::path::Path,
     started_at: Instant,
     events: &mut Vec<TraceEvent>,
 ) -> anyhow::Result<()> {
-    let groups = std::mem::take(&mut state.active_groups);
-    if groups.is_empty() {
-        return Ok(());
-    }
-    if state.last_vad_state == Some(true) {
-        events.push(TraceEvent::new(
-            started_at.elapsed(),
-            "vad",
-            "speech_end",
-            Some(real_payload(json!({
-                "backend": "shutdown",
-                "reason": "duration_elapsed"
-            }))),
-        ));
-    }
-    for (_, group) in groups {
-        transcribe_closed_group(
-            group,
-            BreathGroupEndReason::Timeout,
-            state,
-            recognizer,
-            model_path,
-            started_at,
-            events,
-        )?;
+    let utterance_events = state.utterance_smoother.finish();
+    handle_utterance_events(
+        utterance_events,
+        state,
+        recognizer,
+        model_path,
+        started_at,
+        events,
+    )
+}
+
+#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+fn handle_utterance_events(
+    utterance_events: Vec<UtteranceSmootherEvent>,
+    state: &mut EarTraceState,
+    recognizer: &mut WhisperSpeechRecognizer,
+    model_path: &std::path::Path,
+    started_at: Instant,
+    events: &mut Vec<TraceEvent>,
+) -> anyhow::Result<()> {
+    for event in utterance_events {
+        match event {
+            UtteranceSmootherEvent::SpeechStarted {
+                pre_roll_frames,
+                speech_prob,
+            } => {
+                events.push(TraceEvent::new(
+                    started_at.elapsed(),
+                    "utterance",
+                    "speech_start",
+                    Some(real_payload(json!({
+                        "backend": state.vad_backend.as_str(),
+                        "speech_prob": speech_prob,
+                        "pre_roll_frames": pre_roll_frames
+                    }))),
+                ));
+            }
+            UtteranceSmootherEvent::SpeechEnded {
+                reason,
+                frames,
+                duration_ms,
+                pre_roll_frames,
+                post_roll_frames,
+            } => {
+                events.push(TraceEvent::new(
+                    started_at.elapsed(),
+                    "utterance",
+                    "speech_end",
+                    Some(real_payload(json!({
+                        "backend": state.vad_backend.as_str(),
+                        "reason": format!("{reason:?}"),
+                        "duration_ms": duration_ms,
+                        "frames": frames.len(),
+                        "pre_roll_frames": pre_roll_frames,
+                        "post_roll_frames": post_roll_frames
+                    }))),
+                ));
+                transcribe_closed_utterance(
+                    frames, reason, state, recognizer, model_path, started_at, events,
+                )?;
+            }
+            UtteranceSmootherEvent::UtteranceDropped {
+                reason,
+                frames,
+                duration_ms,
+                pre_roll_frames,
+                post_roll_frames,
+            } => {
+                events.push(TraceEvent::new(
+                    started_at.elapsed(),
+                    "utterance",
+                    "speech_dropped",
+                    Some(real_payload(json!({
+                        "backend": state.vad_backend.as_str(),
+                        "reason": format!("{reason:?}"),
+                        "duration_ms": duration_ms,
+                        "frames": frames.len(),
+                        "pre_roll_frames": pre_roll_frames,
+                        "post_roll_frames": post_roll_frames
+                    }))),
+                ));
+            }
+        }
+
         if state.first_asr_final_elapsed.is_some() {
             break;
         }
     }
+
     Ok(())
 }
 
 #[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
-fn transcribe_closed_group(
-    group: ActiveEarGroup,
-    reason: BreathGroupEndReason,
+fn transcribe_closed_utterance(
+    frames: Vec<AudioFrame>,
+    reason: UtteranceEndReason,
     state: &mut EarTraceState,
     recognizer: &mut WhisperSpeechRecognizer,
     model_path: &std::path::Path,
     started_at: Instant,
     events: &mut Vec<TraceEvent>,
 ) -> anyhow::Result<()> {
-    if group.frames.is_empty() {
+    if frames.is_empty() {
         return Ok(());
     }
     let asr_started_at = Instant::now();
-    let whisper_frames = prepare_whisper_frames(&group.frames, WHISPER_FRAME_SAMPLES)?;
+    let whisper_frames = prepare_whisper_frames(&frames, WHISPER_FRAME_SAMPLES)?;
     for frame in &whisper_frames {
         recognizer.push_frame(frame)?;
     }
@@ -523,7 +552,7 @@ fn transcribe_closed_group(
             "final_text": final_text,
             "text": final_text,
             "confidence": confidence,
-            "breath_group_end_reason": format!("{reason:?}")
+            "utterance_end_reason": format!("{reason:?}")
         }))),
     ));
     state.first_asr_final_elapsed.get_or_insert(asr_elapsed);

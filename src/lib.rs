@@ -51,7 +51,10 @@ pub use event::{
     AudioEvent, HearingEvent, MindEvent, MouthEvent, PeteEvent, TranscriptEvent, UtteranceId,
     VisionEvent,
 };
-pub use hearing::{BreathGroupSegmenter, VadBackendKind, create_vad_backend};
+pub use hearing::{
+    BreathGroupSegmenter, UtteranceEndReason, UtteranceSmoother, UtteranceSmootherConfig,
+    UtteranceSmootherEvent, UtteranceSmootherState, VadBackendKind, create_vad_backend,
+};
 pub use loop_trace::{
     LatencyBucket, LatencySummary, MockLoopTraceConfig, TraceEvent, append_mock_downstream_trace,
     mock_interaction_trace, mock_payload, real_payload, summarize_latency, write_trace_jsonl,

@@ -146,8 +146,14 @@ pub fn mock_interaction_trace(config: MockLoopTraceConfig) -> Vec<TraceEvent> {
     trace.emit(
         80,
         "vad",
+        "frame_decision",
+        mock_payload(json!({"backend": "mock_vad", "frame_index": 7, "is_speech": true, "speech_prob": 0.91})),
+    );
+    trace.emit(
+        80,
+        "utterance",
         "speech_start",
-        mock_payload(json!({"backend": "mock_vad"})),
+        mock_payload(json!({"backend": "mock_vad", "pre_roll_frames": 20})),
     );
     trace.emit(
         120,
@@ -170,8 +176,14 @@ pub fn mock_interaction_trace(config: MockLoopTraceConfig) -> Vec<TraceEvent> {
     trace.emit(
         900,
         "vad",
+        "frame_decision",
+        mock_payload(json!({"backend": "mock_vad", "frame_index": 89, "is_speech": false, "speech_prob": 0.04})),
+    );
+    trace.emit(
+        900,
+        "utterance",
         "speech_end",
-        mock_payload(json!({"backend": "mock_vad"})),
+        mock_payload(json!({"backend": "mock_vad", "reason": "Silence", "duration_ms": 820, "post_roll_frames": 30})),
     );
     trace.emit(
         930,
@@ -293,22 +305,22 @@ pub fn summarize_latency(events: &[TraceEvent]) -> LatencySummary {
     push_bucket(
         &mut buckets,
         &first_by_key,
-        "capture to VAD speech start",
+        "capture to utterance speech start",
         ("audio_capture", "capture_start"),
-        ("vad", "speech_start"),
+        ("utterance", "speech_start"),
     );
     push_bucket(
         &mut buckets,
         &first_by_key,
-        "user speech duration",
-        ("vad", "speech_start"),
-        ("vad", "speech_end"),
+        "user utterance duration",
+        ("utterance", "speech_start"),
+        ("utterance", "speech_end"),
     );
     push_bucket(
         &mut buckets,
         &first_by_key,
-        "VAD end to ASR final",
-        ("vad", "speech_end"),
+        "utterance end to ASR final",
+        ("utterance", "speech_end"),
         ("asr", "final_result"),
     );
     push_bucket(
@@ -349,8 +361,8 @@ pub fn summarize_latency(events: &[TraceEvent]) -> LatencySummary {
     push_bucket(
         &mut buckets,
         &first_by_key,
-        "speech end to playback start",
-        ("vad", "speech_end"),
+        "utterance end to playback start",
+        ("utterance", "speech_end"),
         ("playback", "playback_start"),
     );
     push_bucket(
@@ -492,8 +504,8 @@ mod tests {
         let bucket = summary
             .buckets
             .iter()
-            .find(|bucket| bucket.label == "speech end to playback start")
-            .expect("summary should include speech end to playback start");
+            .find(|bucket| bucket.label == "utterance end to playback start")
+            .expect("summary should include utterance end to playback start");
         assert!(bucket.duration_ms > 0.0);
         assert!(bucket.duration_ms < 1_000.0);
 
