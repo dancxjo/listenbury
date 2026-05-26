@@ -493,6 +493,38 @@ fn log_hifigan_mel_summary(mel: &[MelFrame], mel_config: &MelConfig) {
         per_band_minmax = ?ranges,
         "hifigan mel contract summary"
     );
+    log_hifigan_mel_segment_summaries(mel);
+}
+
+fn log_hifigan_mel_segment_summaries(mel: &[MelFrame]) {
+    if mel.len() < 3 {
+        return;
+    }
+
+    let first_end = mel.len() / 3;
+    let middle_end = mel.len() * 2 / 3;
+    for (label, start, end) in [
+        ("first", 0, first_end),
+        ("middle", first_end, middle_end),
+        ("last", middle_end, mel.len()),
+    ] {
+        let segment = &mel[start..end];
+        let stats = summarize_mel_values(segment);
+        tracing::debug!(
+            segment = label,
+            start_frame = start,
+            end_frame = end,
+            frame_count = segment.len(),
+            value_count = stats.count,
+            min = stats.min,
+            max = stats.max,
+            mean = stats.mean,
+            rms = stats.rms,
+            nan_count = stats.nan_count,
+            inf_count = stats.inf_count,
+            "hifigan mel segment summary"
+        );
+    }
 }
 
 fn log_hifigan_waveform_summary(renderer: &str, frames: &[AudioFrame]) {

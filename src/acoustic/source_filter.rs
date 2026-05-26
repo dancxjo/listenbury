@@ -15,14 +15,14 @@ use crate::voice::{
 const SOURCE_FILTER_SAMPLE_RATE_HZ: u32 = 16_000;
 const SOURCE_FILTER_FRAME_MS: u64 = 16;
 const MEL_BINS: usize = 80;
-const MEL_MIN_HZ: f32 = 0.0;
+const MEL_MIN_HZ: f32 = 80.0;
 const SPECTRAL_REFERENCE_HZ: f32 = 80.0;
-const MEL_MAX_HZ: f32 = 8_000.0;
+const MEL_MAX_HZ: f32 = 7_600.0;
 const MEL_SPECTRAL_FLOOR: f32 = 0.006;
 const MEL_TEMPORAL_SMOOTHING: f32 = 0.38;
 const MEL_MIN_FRAME_ENERGY_RATIO: f32 = 0.46;
 const TEMPORAL_TRANSITION_GUARD_DELTA: f32 = 0.65;
-const LOG_MEL_MIN: f32 = -8.0;
+const LOG_MEL_MIN: f32 = -10.0;
 const LOG_MEL_MAX: f32 = 2.0;
 
 pub struct SourceFilterAcousticModel;
@@ -255,33 +255,17 @@ fn energy_mel_to_log_mel(mel: &[MelFrame]) -> Vec<MelFrame> {
             values.push(
                 source
                     .max(adaptive_floor)
-                    .ln()
+                    .log10()
                     .clamp(LOG_MEL_MIN, LOG_MEL_MAX),
             );
         }
     }
-    smooth_normalized_mel_frames(&mut values, MEL_BINS);
     values
         .chunks_exact(MEL_BINS)
         .map(|bins| MelFrame {
             bins: bins.to_vec(),
         })
         .collect()
-}
-
-fn smooth_normalized_mel_frames(values: &mut [f32], bins: usize) {
-    if bins == 0 || values.len() < bins * 3 {
-        return;
-    }
-    let original = values.to_vec();
-    let frames = values.len() / bins;
-    for frame_index in 1..frames - 1 {
-        for bin in 0..bins {
-            let index = frame_index * bins + bin;
-            let neighbor_mean = (original[index - bins] + original[index + bins]) * 0.5;
-            values[index] = original[index] * 0.82 + neighbor_mean * 0.18;
-        }
-    }
 }
 
 fn resample_bin(bins: &[f32], target_index: usize, target_bins: usize) -> f32 {
@@ -670,17 +654,35 @@ fn mel_bin_center_hz(index: usize, bins: usize) -> f32 {
     } else {
         index as f32 / (bins - 1) as f32
     };
-    let min_mel = hz_to_mel(MEL_MIN_HZ);
-    let max_mel = hz_to_mel(MEL_MAX_HZ);
-    mel_to_hz(lerp(min_mel, max_mel, t))
+    let min_mel = hz_to_slaney_mel(MEL_MIN_HZ);
+    let max_mel = hz_to_slaney_mel(MEL_MAX_HZ);
+    slaney_mel_to_hz(lerp(min_mel, max_mel, t))
 }
 
-fn hz_to_mel(hz: f32) -> f32 {
-    2_595.0 * (1.0 + hz / 700.0).log10()
+fn hz_to_slaney_mel(hz: f32) -> f32 {
+    const F_SP: f32 = 200.0 / 3.0;
+    const MIN_LOG_HZ: f32 = 1_000.0;
+    const MIN_LOG_MEL: f32 = MIN_LOG_HZ / F_SP;
+    const LOGSTEP: f32 = 0.06875178;
+
+    if hz < MIN_LOG_HZ {
+        hz / F_SP
+    } else {
+        MIN_LOG_MEL + (hz / MIN_LOG_HZ).ln() / LOGSTEP
+    }
 }
 
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * (10.0f32.powf(mel / 2_595.0) - 1.0)
+fn slaney_mel_to_hz(mel: f32) -> f32 {
+    const F_SP: f32 = 200.0 / 3.0;
+    const MIN_LOG_HZ: f32 = 1_000.0;
+    const MIN_LOG_MEL: f32 = MIN_LOG_HZ / F_SP;
+    const LOGSTEP: f32 = 0.06875178;
+
+    if mel < MIN_LOG_MEL {
+        mel * F_SP
+    } else {
+        MIN_LOG_HZ * (LOGSTEP * (mel - MIN_LOG_MEL)).exp()
+    }
 }
 
 fn smoothstep(alpha: f32) -> f32 {
@@ -778,6 +780,17 @@ mod tests {
         assert!(summary.mean_abs_delta > 0.0);
         assert!(summary.p95_abs_delta >= summary.mean_abs_delta);
         assert!(summary.max_abs_delta >= summary.p95_abs_delta);
+    }
+
+    #[test]
+    fn mel_bin_centers_follow_speecht5_slaney_band() {
+        assert!((mel_bin_center_hz(0, MEL_BINS) - MEL_MIN_HZ).abs() < 1.0e-3);
+        assert!((mel_bin_center_hz(MEL_BINS - 1, MEL_BINS) - MEL_MAX_HZ).abs() < 1.0e-2);
+
+        let linear_region_hz = slaney_mel_to_hz(hz_to_slaney_mel(500.0));
+        let log_region_hz = slaney_mel_to_hz(hz_to_slaney_mel(3_000.0));
+        assert!((linear_region_hz - 500.0).abs() < 1.0e-3);
+        assert!((log_region_hz - 3_000.0).abs() < 1.0e-2);
     }
 
     #[test]

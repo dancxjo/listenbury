@@ -38,6 +38,10 @@ use listenbury::mouth::riper::{EchoComparisonRecord, EchoProsodyObservation, Ech
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::speech::loom::{CurrentBackendGraphView, CurrentSayBackendKind, SpeechLoom};
 use listenbury::speech::phone_plan::PhonePlan;
+use listenbury::speech::pipeline::{
+    AcousticPlan, AcousticPlanner, AudioRender, LinguisticAnalyzer, LinguisticPlan, MouthSink,
+    ProsodyPlanner, SpeechPipeline, SpeechStageDescriptor, SpeechStageKind, VocoderRenderer,
+};
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 use listenbury::speech::recognizer::SpeechRecognizer;
 use listenbury::time::ExactTimestamp;
@@ -114,65 +118,202 @@ pub(crate) fn run_say(command: SayCommand) -> Result<()> {
         return run_say_stdin_stream(piper_args);
     }
 
-    if should_use_klatt_backend(&piper_args) {
-        let frames = synthesize_klatt_for_say(&piper_args.text)?;
-        if let Some(output_path) = piper_args.output_wav {
-            write_say_wav(&output_path, &frames)?;
-        } else {
-            play_say_audio_with_source(&frames, "Klatt")?;
+    let text = piper_args.text.clone();
+    let mut pipeline = build_say_pipeline(&piper_args)?;
+    pipeline.run(&text)
+}
+
+fn build_say_pipeline(args: &SayArgs) -> Result<SpeechPipeline> {
+    Ok(SpeechPipeline::new(
+        Box::new(SayLinguisticAnalyzer::new(say_language_variety(args))),
+        Box::new(SayProsodyPlanner),
+        Box::new(SayAcousticPlanner::new(args)),
+        Box::new(SayVocoderRenderer::new(args.clone())?),
+        Box::new(SayMouthSink::new(
+            args.output_wav.clone(),
+            say_output_source(args),
+        )),
+    ))
+}
+
+struct SayLinguisticAnalyzer {
+    language_variety: &'static str,
+}
+
+impl SayLinguisticAnalyzer {
+    fn new(language_variety: &'static str) -> Self {
+        Self { language_variety }
+    }
+}
+
+impl LinguisticAnalyzer for SayLinguisticAnalyzer {
+    fn describe(&self) -> SpeechStageDescriptor {
+        SpeechStageDescriptor::new(
+            SpeechStageKind::Analyzer,
+            "riper-simple-english-g2p",
+            format!("language variety: {}", self.language_variety),
+        )
+    }
+
+    fn analyze(&mut self, text: &str) -> Result<LinguisticPlan> {
+        Ok(LinguisticPlan {
+            text: text.to_string(),
+            phone_plan: PhonePlan::from_text_with_riper_g2p(text)?,
+        })
+    }
+}
+
+struct SayProsodyPlanner;
+
+impl ProsodyPlanner for SayProsodyPlanner {
+    fn describe(&self) -> SpeechStageDescriptor {
+        SpeechStageDescriptor::new(
+            SpeechStageKind::ProsodyPlanner,
+            "say-phone-prosody-plan",
+            "shared phone timing/prosody plan",
+        )
+    }
+
+    fn plan(&mut self, linguistic: LinguisticPlan) -> Result<PhonePlan> {
+        Ok(linguistic.phone_plan)
+    }
+}
+
+struct SayAcousticPlanner {
+    route_id: &'static str,
+    detail: String,
+}
+
+impl SayAcousticPlanner {
+    fn new(args: &SayArgs) -> Self {
+        let graph = say_backend_graph(args);
+        Self {
+            route_id: graph.id,
+            detail: say_acoustic_stage_detail(args),
         }
-        return Ok(());
+    }
+}
+
+impl AcousticPlanner for SayAcousticPlanner {
+    fn describe(&self) -> SpeechStageDescriptor {
+        SpeechStageDescriptor::new(
+            SpeechStageKind::AcousticModel,
+            self.route_id,
+            self.detail.clone(),
+        )
     }
 
-    if should_use_speecht5_backend(&piper_args) {
-        let frames = synthesize_speecht5_for_say(&piper_args)?;
-        if let Some(output_path) = piper_args.output_wav {
-            write_say_wav(&output_path, &frames)?;
+    fn plan(&mut self, phone_plan: PhonePlan, text: &str) -> Result<AcousticPlan> {
+        Ok(AcousticPlan {
+            route_id: self.route_id.to_string(),
+            text: text.to_string(),
+            phone_plan,
+            detail: self.detail.clone(),
+        })
+    }
+}
+
+struct SayVocoderRenderer {
+    args: SayArgs,
+    piper_voice: Option<PathBuf>,
+    descriptor: SpeechStageDescriptor,
+}
+
+impl SayVocoderRenderer {
+    fn new(args: SayArgs) -> Result<Self> {
+        let piper_voice = (!should_use_klatt_backend(&args)
+            && !should_use_source_filter_hifigan_backend(&args)
+            && !should_use_speecht5_backend(&args)
+            && !should_use_mbrola_backend(&args))
+        .then(|| resolve_piper_voice(args.piper_voice.clone()))
+        .transpose()?;
+        let descriptor = SpeechStageDescriptor::new(
+            SpeechStageKind::Vocoder,
+            say_backend_graph(&args).id,
+            say_renderer_stage_detail(&args),
+        );
+        Ok(Self {
+            args,
+            piper_voice,
+            descriptor,
+        })
+    }
+}
+
+impl VocoderRenderer for SayVocoderRenderer {
+    fn describe(&self) -> SpeechStageDescriptor {
+        self.descriptor.clone()
+    }
+
+    fn render(&mut self, acoustic: AcousticPlan) -> Result<AudioRender> {
+        let frames = if should_use_klatt_backend(&self.args) {
+            synthesize_klatt_for_say(&acoustic.text)?
+        } else if should_use_speecht5_backend(&self.args) {
+            synthesize_speecht5_for_say(&self.args.clone_for_text(&acoustic.text))?
+        } else if should_use_source_filter_hifigan_backend(&self.args) {
+            synthesize_hifigan_for_say(&self.args.clone_for_text(&acoustic.text))?
+        } else if should_use_mbrola_backend(&self.args) {
+            let line_args = self.args.clone_for_text(&acoustic.text);
+            let mut tts = say_mbrola_tts_for_args(&line_args)?;
+            tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+                acoustic.text.clone(),
+            )))?;
+            collect_tts_audio(&mut tts, Duration::from_secs(30))?
         } else {
-            play_say_audio_with_source(&frames, "SpeechT5")?;
+            let piper_voice = self
+                .piper_voice
+                .clone()
+                .context("Piper voice was not resolved for say pipeline")?;
+            let line_args = self.args.clone_for_text(&acoustic.text);
+            let mut tts = say_tts_for_args(&line_args, piper_voice)?;
+            tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+                acoustic.text.clone(),
+            )))?;
+            collect_tts_audio(&mut tts, Duration::from_secs(30))?
+        };
+
+        Ok(AudioRender {
+            frames,
+            source_label: say_output_source(&self.args).to_string(),
+        })
+    }
+}
+
+struct SayMouthSink {
+    output_wav: Option<PathBuf>,
+    source_label: &'static str,
+}
+
+impl SayMouthSink {
+    fn new(output_wav: Option<PathBuf>, source_label: &'static str) -> Self {
+        Self {
+            output_wav,
+            source_label,
         }
-        return Ok(());
+    }
+}
+
+impl MouthSink for SayMouthSink {
+    fn describe(&self) -> SpeechStageDescriptor {
+        let detail = match &self.output_wav {
+            Some(path) => format!("wav writer: {}", path.display()),
+            None => "speaker playback".to_string(),
+        };
+        SpeechStageDescriptor::new(SpeechStageKind::MouthSink, "say-output", detail)
     }
 
-    if should_use_source_filter_hifigan_backend(&piper_args) {
-        let frames = synthesize_hifigan_for_say(&piper_args)?;
-        if let Some(output_path) = piper_args.output_wav {
-            write_say_wav(&output_path, &frames)?;
+    fn accept(&mut self, audio: AudioRender) -> Result<()> {
+        if let Some(output_path) = &self.output_wav {
+            write_say_wav(output_path, &audio.frames)
         } else {
-            play_say_audio_with_source(&frames, "HiFi-GAN")?;
+            let source = if audio.source_label.trim().is_empty() {
+                self.source_label
+            } else {
+                audio.source_label.as_str()
+            };
+            play_say_audio_with_source(&audio.frames, source)
         }
-        return Ok(());
     }
-
-    if should_use_mbrola_backend(&piper_args) {
-        let mut tts = say_mbrola_tts_for_args(&piper_args)?;
-        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
-            piper_args.text,
-        )))?;
-        let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
-
-        if let Some(output_path) = piper_args.output_wav {
-            write_say_wav(&output_path, &frames)?;
-        } else {
-            play_say_audio_with_source(&frames, "MBROLA")?;
-        }
-        return Ok(());
-    }
-
-    let piper_voice = resolve_piper_voice(piper_args.piper_voice.clone())?;
-    let mut tts = say_tts_for_args(&piper_args, piper_voice)?;
-    tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
-        piper_args.text,
-    )))?;
-    let frames = collect_tts_audio(&mut tts, Duration::from_secs(30))?;
-
-    if let Some(output_path) = piper_args.output_wav {
-        write_say_wav(&output_path, &frames)?;
-    } else {
-        play_say_audio(&frames)?;
-    }
-
-    Ok(())
 }
 
 fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
@@ -2154,6 +2295,52 @@ fn say_pipeline_stages(args: &SayArgs) -> Vec<String> {
     stages
 }
 
+fn say_acoustic_stage_detail(args: &SayArgs) -> String {
+    if should_use_klatt_backend(args) {
+        "klatt formant target plan".to_string()
+    } else if should_use_source_filter_hifigan_backend(args) {
+        "source-filter acoustic feature plan".to_string()
+    } else if should_use_speecht5_backend(args) {
+        "SpeechT5 encoder/decoder mel plan".to_string()
+    } else if should_use_mbrola_backend(args) {
+        mbrola_voice_stage(args)
+    } else if args.piper {
+        "external Piper fused acoustic plan".to_string()
+    } else {
+        "Piper-compatible ONNX fused acoustic plan".to_string()
+    }
+}
+
+fn say_renderer_stage_detail(args: &SayArgs) -> String {
+    if should_use_klatt_backend(args) {
+        "klatt formant renderer".to_string()
+    } else if should_use_source_filter_hifigan_backend(args) {
+        hifigan_vocoder_stage(args)
+    } else if should_use_speecht5_backend(args) {
+        speecht5_vocoder_stage(args)
+    } else if should_use_mbrola_backend(args) {
+        "MBROLA-compatible diphone renderer".to_string()
+    } else if args.piper {
+        "external Piper process renderer".to_string()
+    } else {
+        "Piper-compatible ONNX renderer".to_string()
+    }
+}
+
+fn say_output_source(args: &SayArgs) -> &'static str {
+    if should_use_klatt_backend(args) {
+        "Klatt"
+    } else if should_use_source_filter_hifigan_backend(args) {
+        "HiFi-GAN"
+    } else if should_use_speecht5_backend(args) {
+        "SpeechT5"
+    } else if should_use_mbrola_backend(args) {
+        "MBROLA"
+    } else {
+        "Piper TTS"
+    }
+}
+
 fn say_language_variety(args: &SayArgs) -> &'static str {
     if args.mbrola_voice.as_deref() == Some(received_pronunciation_mbrola_voice().as_path()) {
         "en-GB-RP"
@@ -2869,25 +3056,15 @@ fn write_say_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
 }
 
 #[cfg(feature = "audio-cpal")]
-fn play_say_audio(frames: &[AudioFrame]) -> Result<()> {
-    play_say_audio_with_source(frames, "Piper TTS")
-}
-
-#[cfg(feature = "audio-cpal")]
 fn play_say_audio_with_source(frames: &[AudioFrame], source: &str) -> Result<()> {
     play_audio_frames(frames, source)
 }
 
 #[cfg(not(feature = "audio-cpal"))]
-fn play_say_audio(_frames: &[AudioFrame]) -> Result<()> {
+fn play_say_audio_with_source(_frames: &[AudioFrame], _source: &str) -> Result<()> {
     anyhow::bail!(
         "listenbury say needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
     )
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-fn play_say_audio_with_source(frames: &[AudioFrame], _source: &str) -> Result<()> {
-    play_say_audio(frames)
 }
 
 fn looks_like_piper_bin(word: &str) -> bool {

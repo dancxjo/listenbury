@@ -112,6 +112,10 @@ pub use span::{
 };
 pub use speech::breath_asr::{BreathAsrConfig, BreathAudioSegment, collect_breath_segments};
 pub use speech::phone_plan::{LexicalStatus, PhonePlan, PhoneSpan, WordPlan};
+pub use speech::pipeline::{
+    AcousticPlan, AcousticPlanner, AudioRender, LinguisticAnalyzer, LinguisticPlan, MouthSink,
+    ProsodyPlanner, SpeechPipeline, SpeechStageDescriptor, SpeechStageKind, VocoderRenderer,
+};
 pub use speech::prosody_timing::{
     AlignedPhone, AlignedWord, BreakReason, BreathGroup, ExternalAlignmentCommand, ForcedAlignment,
     PiperTimingBreak, PiperTimingPhone, PiperTimingPlan, PraatCommandConfig, PraatNucleus,
