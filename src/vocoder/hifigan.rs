@@ -792,7 +792,7 @@ mod contract_tests {
                 bins: (0..MODEL_MEL_BINS)
                     .map(|bin_index| {
                         let envelope = 1.0 - (bin_index as f32 / MODEL_MEL_BINS as f32);
-                        ((0.12 + frame_index as f32 * 0.01) * envelope.max(0.05)).ln()
+                        ((0.12 + frame_index as f32 * 0.01) * envelope.max(0.05)).log10()
                     })
                     .collect(),
             })
