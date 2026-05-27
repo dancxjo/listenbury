@@ -44,7 +44,7 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
     let mut related_nodes = vec![provenance.clone()];
     let mut relationships = Vec::new();
 
-    let primary_node = match trace {
+    let mut primary_node = match trace {
         MemoryTrace::ConversationTurnFinalized {
             speaker,
             text,
@@ -184,6 +184,50 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
             }
             extraction_node
         }
+        MemoryTrace::GraphNodeFieldsUpdated {
+            update,
+            occurred_at,
+        } => {
+            let update_node = Neo4jNode {
+                logical_id: format!(
+                    "graph_node_field_update:{}:{sequence}",
+                    vector_safe_id(&update.node_id)
+                ),
+                label: "GraphNodeFieldUpdate".to_string(),
+                properties: props([
+                    ("node_id", json!(update.node_id.as_str())),
+                    ("label", optional_string(update.label.as_deref())),
+                    ("fields", json!(update.fields)),
+                    (
+                        "source_text",
+                        optional_string(update.source_text.as_deref()),
+                    ),
+                    ("confidence", json!(update.confidence)),
+                    ("occurred_at", json!(occurred_at)),
+                ]),
+            };
+            let mut target_properties = update.fields.clone();
+            if let Some(label) = update.label.as_deref() {
+                target_properties.insert("label".to_string(), json!(label));
+            }
+            target_properties.insert("last_updated_at".to_string(), json!(occurred_at));
+            target_properties.insert(
+                "last_update_confidence".to_string(),
+                json!(update.confidence),
+            );
+            let target_node = Neo4jNode {
+                logical_id: update.node_id.clone(),
+                label: "GraphNode".to_string(),
+                properties: target_properties,
+            };
+            relationships.push(Neo4jRelationship {
+                from_logical_id: update_node.logical_id.clone(),
+                to_logical_id: target_node.logical_id.clone(),
+                kind: "UPDATES_NODE".to_string(),
+            });
+            related_nodes.push(target_node);
+            update_node
+        }
         MemoryTrace::ImageVectorCaptured { image, captured_at } => {
             let observation_node = Neo4jNode {
                 logical_id: format!("image_observation:{sequence}"),
@@ -271,6 +315,11 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
         }
     };
 
+    ensure_node_description(&mut primary_node);
+    for node in &mut related_nodes {
+        ensure_node_description(node);
+    }
+
     relationships.push(Neo4jRelationship {
         from_logical_id: primary_node.logical_id.clone(),
         to_logical_id: provenance.logical_id,
@@ -294,6 +343,62 @@ fn provenance_node(trace: &MemoryTrace, sequence: u64) -> Neo4jNode {
             ("occurred_at", json!(trace.occurred_at())),
         ]),
     }
+}
+
+fn ensure_node_description(node: &mut Neo4jNode) {
+    if node
+        .properties
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty())
+    {
+        return;
+    }
+    node.properties
+        .insert("description".to_string(), json!(node_description(node)));
+}
+
+fn node_description(node: &Neo4jNode) -> String {
+    let label = node.properties.get("label").and_then(Value::as_str);
+    match node.label.as_str() {
+        "Person" => named_description("person", label, &node.logical_id),
+        "Place" => named_description("place", label, &node.logical_id),
+        "Topic" => named_description("topic", label, &node.logical_id),
+        "Organization" => named_description("organization", label, &node.logical_id),
+        "Object" => named_description("object", label, &node.logical_id),
+        "Task" => named_description("task", label, &node.logical_id),
+        "Entity" | "GraphNode" => named_description("graph node", label, &node.logical_id),
+        "ConversationTurn" => node
+            .properties
+            .get("speaker")
+            .and_then(Value::as_str)
+            .map(|speaker| format!("conversation turn from {speaker}"))
+            .unwrap_or_else(|| "conversation turn".to_string()),
+        "TimedWordStream" => "timed word stream".to_string(),
+        "MemorySummary" => "memory summary".to_string(),
+        "MouthPlaybackStarted" => "mouth playback start event".to_string(),
+        "MouthPlaybackCompleted" => "mouth playback completion event".to_string(),
+        "AuditoryObservation" => "auditory scene observation".to_string(),
+        "OverlapEvent" => "overlapping speech event".to_string(),
+        "RecallResult" => "memory recall result".to_string(),
+        "EntityExtraction" => "entity extraction event".to_string(),
+        "GraphNodeFieldUpdate" => "graph node field update event".to_string(),
+        "ImageObservation" => "image observation".to_string(),
+        "ImageArtifact" => "image artifact".to_string(),
+        "VisualReferent" => "visual referent".to_string(),
+        "VoiceSignature" => "voice signature".to_string(),
+        "Voice" => "heard voice".to_string(),
+        "MemoryTraceEvent" => "memory trace event".to_string(),
+        other => named_description(&other.to_ascii_lowercase(), label, &node.logical_id),
+    }
+}
+
+fn named_description(kind: &str, label: Option<&str>, fallback: &str) -> String {
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(|label| format!("{kind} named {label}"))
+        .unwrap_or_else(|| format!("{kind} {fallback}"))
 }
 
 fn playback_node(
@@ -348,6 +453,23 @@ fn optional_u64(value: Option<u64>) -> Value {
     value.map_or(Value::Null, |value| json!(value))
 }
 
+fn optional_string(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, |value| json!(value))
+}
+
+fn vector_safe_id(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | ':') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +509,60 @@ mod tests {
             relationship.from_logical_id == "entity_extraction:7"
                 && relationship.to_logical_id == "person:travis"
                 && relationship.kind == "EXTRACTED_ENTITY"
+        }));
+        for node in std::iter::once(&write.primary_node).chain(write.related_nodes.iter()) {
+            assert!(
+                node.properties
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty()),
+                "node {} should have description",
+                node.logical_id
+            );
+        }
+    }
+
+    #[test]
+    fn graph_node_field_update_write_targets_updated_node_properties() {
+        let trace = MemoryTrace::GraphNodeFieldsUpdated {
+            update: crate::memory::trace::MemoryGraphNodeFieldUpdate {
+                node_id: "person:travis".to_string(),
+                label: Some("Travis".to_string()),
+                fields: props([
+                    ("preferred_name", json!("Trav")),
+                    ("timezone", json!("America/Los_Angeles")),
+                ]),
+                source_text: Some("Pete command".to_string()),
+                confidence: 0.97,
+            },
+            occurred_at: ExactTimestamp::now(),
+        };
+
+        let write = trace_write_for(&trace, 4);
+        let target = write
+            .related_nodes
+            .iter()
+            .find(|node| node.logical_id == "person:travis")
+            .expect("updated graph node should be related");
+
+        assert_eq!(write.primary_node.label, "GraphNodeFieldUpdate");
+        assert_eq!(
+            target
+                .properties
+                .get("preferred_name")
+                .and_then(Value::as_str),
+            Some("Trav")
+        );
+        assert_eq!(
+            target.properties.get("timezone").and_then(Value::as_str),
+            Some("America/Los_Angeles")
+        );
+        assert_eq!(
+            target.properties.get("description").and_then(Value::as_str),
+            Some("graph node named Travis")
+        );
+        assert!(write.relationships.iter().any(|relationship| {
+            relationship.kind == "UPDATES_NODE" && relationship.to_logical_id == "person:travis"
         }));
     }
 }

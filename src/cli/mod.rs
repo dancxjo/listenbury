@@ -890,6 +890,8 @@ pub(crate) struct ModelsUseCommand {
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub(crate) enum ModelsUseKind {
     Llm,
+    #[value(alias = "embedding", alias = "embed", alias = "text")]
+    TextEmbedding,
     Voice,
     Acoustic,
     Vocoder,
@@ -3131,5 +3133,26 @@ mod tests {
             panic!("expected models verify command");
         };
         assert_eq!(command.model.as_deref(), Some("whisper-tiny"));
+    }
+
+    #[test]
+    fn models_use_parses_text_embedding_kind() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "models",
+            "use",
+            "text-embedding",
+            "embeddinggemma",
+        ])
+        .expect("models use text-embedding should parse");
+
+        let Some(Command::Models {
+            command: Some(ModelsCommand::Use(command)),
+        }) = cli.command
+        else {
+            panic!("expected models use command");
+        };
+        assert_eq!(command.kind, ModelsUseKind::TextEmbedding);
+        assert_eq!(command.model, "embeddinggemma");
     }
 }

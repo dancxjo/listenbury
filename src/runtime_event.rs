@@ -199,6 +199,11 @@ impl RuntimeEvent {
                 Some("entity_extraction".to_string()),
                 Some(json!({ "entities": entities })),
             ),
+            MemoryTrace::GraphNodeFieldsUpdated { update, .. } => (
+                Some(format!("updated graph node {}", update.node_id)),
+                Some("graph_node_fields_updated".to_string()),
+                Some(json!({ "update": update })),
+            ),
             MemoryTrace::ImageVectorCaptured { image, .. } => (
                 Some(format!("image vector {}", image.image_id)),
                 Some("image_vector".to_string()),
@@ -228,6 +233,9 @@ impl RuntimeEvent {
                     .iter()
                     .map(|entity| format!("entity:{}", entity.node_id)),
             );
+        }
+        if let MemoryTrace::GraphNodeFieldsUpdated { update, .. } = trace {
+            causality.push(format!("graph_node:{}", update.node_id));
         }
         if let MemoryTrace::ImageVectorCaptured { image, .. } = trace {
             causality.push(format!("image:{}", image.image_id));

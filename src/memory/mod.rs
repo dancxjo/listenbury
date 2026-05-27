@@ -53,6 +53,7 @@ pub use qdrant::{
 };
 pub use sink::{ChannelMemorySink, MemorySink, NoopMemorySink};
 pub use trace::{
-    MemoryEntityMention, MemoryImageVector, MemoryTrace, MemoryVoiceVector, SpeakerRole,
+    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemoryImageVector, MemoryTrace,
+    MemoryVoiceVector, SpeakerRole,
 };
 pub use worker::{ColdMemoryWorker, ColdMemoryWorkerConfig, ColdMemoryWorkerReport};

@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::memory::{EmbeddingProvider, QdrantSearchHit, QdrantStore};
 use crate::mind::controller::ConversationRole;
@@ -78,6 +78,31 @@ pub struct ContextNode {
     pub relevance: f32,
     pub reason: String,
     pub summary: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNodeFieldUpdate {
+    pub node_id: GraphNodeId,
+    pub label: Option<String>,
+    pub fields: Map<String, Value>,
+    pub reason: String,
+    pub relevance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNodeSearchQuery {
+    pub text: Option<String>,
+    pub field: Option<String>,
+    pub value: Option<Value>,
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphNodeSearchHit {
+    pub node: GraphNodeRef,
+    pub score: f32,
+    pub fields: Map<String, Value>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1030,6 +1055,14 @@ struct TopicActivationState {
     last_activated_turn: u64,
 }
 
+#[derive(Debug, Clone)]
+struct GraphNodeFieldOverlay {
+    label: Option<String>,
+    fields: Map<String, Value>,
+    reason: String,
+    relevance: f32,
+}
+
 #[derive(Debug, Default)]
 struct ActiveTopicTracker {
     current_turn: u64,
@@ -1047,6 +1080,7 @@ pub struct EmbeddingRecallProvider {
     entity_extractor: Option<Arc<dyn EntityExtractor>>,
     pinned_nodes: Arc<Mutex<Vec<PinnedContextNode>>>,
     active_topics: Arc<Mutex<ActiveTopicTracker>>,
+    graph_node_fields: Arc<Mutex<HashMap<GraphNodeId, GraphNodeFieldOverlay>>>,
 }
 
 impl EmbeddingRecallProvider {
@@ -1060,6 +1094,7 @@ impl EmbeddingRecallProvider {
             entity_extractor: None,
             pinned_nodes: Arc::new(Mutex::new(Vec::new())),
             active_topics: Arc::new(Mutex::new(ActiveTopicTracker::default())),
+            graph_node_fields: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1135,6 +1170,114 @@ impl EmbeddingRecallProvider {
             .unwrap_or_default()
     }
 
+    pub fn update_graph_node_fields(&self, update: GraphNodeFieldUpdate) {
+        let Ok(mut fields_by_node) = self.graph_node_fields.lock() else {
+            return;
+        };
+        fields_by_node
+            .entry(update.node_id)
+            .and_modify(|overlay| {
+                if let Some(label) = update.label.as_ref() {
+                    overlay.label = Some(label.clone());
+                }
+                overlay.fields.extend(update.fields.clone());
+                overlay.reason = update.reason.clone();
+                overlay.relevance = update.relevance;
+            })
+            .or_insert_with(|| GraphNodeFieldOverlay {
+                label: update.label,
+                fields: update.fields,
+                reason: update.reason,
+                relevance: update.relevance,
+            });
+    }
+
+    pub fn graph_node_fields_snapshot(&self, node_id: &str) -> Option<Map<String, Value>> {
+        self.graph_node_fields
+            .lock()
+            .ok()
+            .and_then(|fields| fields.get(node_id).map(|overlay| overlay.fields.clone()))
+    }
+
+    pub fn search_graph_nodes(&self, query: GraphNodeSearchQuery) -> Vec<GraphNodeSearchHit> {
+        let text = query
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| text.to_ascii_lowercase());
+        let field = query
+            .field
+            .as_deref()
+            .map(str::trim)
+            .filter(|field| !field.is_empty());
+        if text.is_none() && field.is_none() && query.value.is_none() {
+            return Vec::new();
+        }
+
+        let Ok(fields_by_node) = self.graph_node_fields.lock() else {
+            return Vec::new();
+        };
+        let mut hits = fields_by_node
+            .iter()
+            .filter_map(|(node_id, overlay)| {
+                graph_node_search_hit(
+                    node_id,
+                    overlay,
+                    text.as_deref(),
+                    field,
+                    query.value.as_ref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        hits.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.node.id.cmp(&right.node.id))
+        });
+        hits.truncate(query.limit.max(1));
+        hits
+    }
+
+    fn field_overlay(&self, node_id: &str) -> Option<GraphNodeFieldOverlay> {
+        self.graph_node_fields
+            .lock()
+            .ok()
+            .and_then(|fields| fields.get(node_id).cloned())
+    }
+
+    fn overlay_node_ref(&self, node: GraphNodeRef) -> GraphNodeRef {
+        let Some(overlay) = self.field_overlay(&node.id) else {
+            return node;
+        };
+        GraphNodeRef {
+            label: overlay.label.unwrap_or(node.label),
+            ..node
+        }
+    }
+
+    fn apply_field_overlays(&self, nodes: &mut [ContextNode]) {
+        for node in nodes {
+            let Some(overlay) = self.field_overlay(&node.node.id) else {
+                continue;
+            };
+            if let Some(label) = overlay.label {
+                node.node.label = label;
+            }
+            let fields = summarize_graph_node_fields(&overlay.fields);
+            if !fields.is_empty() {
+                if node.summary.trim().is_empty() {
+                    node.summary = fields;
+                } else if !node.summary.contains(&fields) {
+                    node.summary = format!("{}; fields: {}", node.summary.trim(), fields);
+                }
+            }
+            node.reason = format!("{}; {}", node.reason.trim(), overlay.reason.trim());
+            node.relevance = node.relevance.max(overlay.relevance);
+        }
+    }
+
     fn active_topic_nodes_snapshot(&self) -> Vec<ContextNode> {
         self.active_topics
             .lock()
@@ -1142,15 +1285,19 @@ impl EmbeddingRecallProvider {
                 let mut topics = tracker
                     .topics
                     .values()
-                    .map(|state| ContextNode {
-                        node: state.node.clone(),
-                        role: ContextNodeRole::ActiveTopic,
-                        relevance: state.salience,
-                        reason: format!(
-                            "active-topic salience {:.2} (last activated turn {})",
-                            state.salience, state.last_activated_turn
-                        ),
-                        summary: "Conversationally salient topic".to_string(),
+                    .map(|state| {
+                        let mut node = ContextNode {
+                            node: state.node.clone(),
+                            role: ContextNodeRole::ActiveTopic,
+                            relevance: state.salience,
+                            reason: format!(
+                                "active-topic salience {:.2} (last activated turn {})",
+                                state.salience, state.last_activated_turn
+                            ),
+                            summary: "Conversationally salient topic".to_string(),
+                        };
+                        self.apply_field_overlays(std::slice::from_mut(&mut node));
+                        node
                     })
                     .collect::<Vec<_>>();
                 topics.sort_by(|left, right| right.relevance.total_cmp(&left.relevance));
@@ -1234,10 +1381,10 @@ impl EmbeddingRecallProvider {
                 .topics
                 .entry(pinned.node_id.clone())
                 .or_insert_with(|| TopicActivationState {
-                    node: GraphNodeRef {
+                    node: self.overlay_node_ref(GraphNodeRef {
                         id: pinned.node_id.clone(),
                         label: pinned.node_id.clone(),
-                    },
+                    }),
                     salience: PINNED_TOPIC_SALIENCE_FLOOR,
                     last_activated_turn: current_turn,
                 });
@@ -1343,6 +1490,7 @@ impl ContextProvider for EmbeddingRecallProvider {
             }
         }
 
+        self.apply_field_overlays(&mut selected);
         let pinned_nodes = self.pinned_nodes_snapshot();
         let turn_fingerprint = input_turn_fingerprint(utterance, conversation_tail);
         self.update_active_topics(&selected, &pinned_nodes, turn_fingerprint);
@@ -1440,6 +1588,130 @@ fn payload_string(payload: &serde_json::Map<String, Value>, keys: &[&str]) -> Op
         .map(str::trim)
         .find(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn summarize_graph_node_fields(fields: &Map<String, Value>) -> String {
+    let mut pairs = fields
+        .iter()
+        .filter_map(|(key, value)| {
+            if value.is_null() {
+                return None;
+            }
+            Some(format!("{}={}", key, compact_json_value(value)))
+        })
+        .collect::<Vec<_>>();
+    pairs.sort();
+    pairs.join(", ")
+}
+
+fn graph_node_search_hit(
+    node_id: &str,
+    overlay: &GraphNodeFieldOverlay,
+    text: Option<&str>,
+    field: Option<&str>,
+    value: Option<&Value>,
+) -> Option<GraphNodeSearchHit> {
+    let mut score = 0.0_f32;
+    let mut reasons = Vec::new();
+
+    if let Some(field) = field {
+        let Some(field_value) = overlay.fields.get(field) else {
+            return None;
+        };
+        score += 1.0;
+        reasons.push(format!("field {field} exists"));
+        if let Some(expected) = value {
+            if !json_values_match(field_value, expected) {
+                return None;
+            }
+            score += 1.0;
+            reasons.push(format!(
+                "field {field} matched value {}",
+                compact_json_value(expected)
+            ));
+        }
+    } else if let Some(expected) = value {
+        if !overlay
+            .fields
+            .values()
+            .any(|field_value| json_values_match(field_value, expected))
+        {
+            return None;
+        }
+        score += 1.0;
+        reasons.push(format!(
+            "some field matched value {}",
+            compact_json_value(expected)
+        ));
+    }
+
+    if let Some(text) = text {
+        let searchable = graph_node_search_text(node_id, overlay);
+        if !searchable.contains(text) {
+            return None;
+        }
+        score += 1.0;
+        reasons.push(format!("text matched {text}"));
+    }
+
+    if score <= 0.0 {
+        return None;
+    }
+
+    Some(GraphNodeSearchHit {
+        node: GraphNodeRef {
+            id: node_id.to_string(),
+            label: overlay.label.clone().unwrap_or_else(|| node_id.to_string()),
+        },
+        score,
+        fields: overlay.fields.clone(),
+        reason: reasons.join("; "),
+    })
+}
+
+fn graph_node_search_text(node_id: &str, overlay: &GraphNodeFieldOverlay) -> String {
+    let mut parts = vec![node_id.to_ascii_lowercase()];
+    if let Some(label) = &overlay.label {
+        parts.push(label.to_ascii_lowercase());
+    }
+    for (key, value) in &overlay.fields {
+        parts.push(key.to_ascii_lowercase());
+        parts.push(compact_json_value(value).to_ascii_lowercase());
+    }
+    parts.join(" ")
+}
+
+fn json_values_match(candidate: &Value, expected: &Value) -> bool {
+    if candidate == expected {
+        return true;
+    }
+    match (candidate, expected) {
+        (Value::String(candidate), Value::String(expected)) => {
+            candidate.eq_ignore_ascii_case(expected)
+        }
+        (Value::String(candidate), _) => {
+            candidate.eq_ignore_ascii_case(&compact_json_value(expected))
+        }
+        (_, Value::String(expected)) => {
+            compact_json_value(candidate).eq_ignore_ascii_case(expected)
+        }
+        _ => false,
+    }
+}
+
+fn compact_json_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Array(values) => values
+            .iter()
+            .map(compact_json_value)
+            .collect::<Vec<_>>()
+            .join("|"),
+        Value::Object(_) => serde_json::to_string(value).unwrap_or_else(|_| "<object>".to_string()),
+        Value::Null => "null".to_string(),
+    }
 }
 
 fn recall_query_text(
@@ -2175,6 +2447,83 @@ mod tests {
                 .iter()
                 .any(|node| node.node_id == "topic:mood")
         );
+    }
+
+    #[test]
+    fn graph_node_field_updates_overlay_extracted_context_nodes() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_entity_extractor(Arc::new(KeywordTopicExtractor::new(
+            "aurora",
+            "Project Aurora",
+        )));
+        provider.update_graph_node_fields(GraphNodeFieldUpdate {
+            node_id: "topic:project_aurora".to_string(),
+            label: Some("Project Aurora".to_string()),
+            fields: serde_json::Map::from_iter([
+                ("status".to_string(), Value::String("blocked".to_string())),
+                ("owner".to_string(), Value::String("Travis".to_string())),
+            ]),
+            reason: "Pete updated graph node fields on turn 7".to_string(),
+            relevance: 1.0,
+        });
+
+        let context = build_conversation_context(
+            &provider,
+            "system",
+            "Tell me about Project Aurora",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let rendered = context.render_compact_nodes();
+
+        assert!(rendered.contains("Project Aurora"));
+        assert!(rendered.contains("owner=Travis"));
+        assert!(rendered.contains("status=blocked"));
+    }
+
+    #[test]
+    fn graph_node_search_matches_field_value_and_text() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        });
+        provider.update_graph_node_fields(GraphNodeFieldUpdate {
+            node_id: "person:travis".to_string(),
+            label: Some("Travis".to_string()),
+            fields: serde_json::Map::from_iter([
+                (
+                    "timezone".to_string(),
+                    Value::String("America/Los_Angeles".to_string()),
+                ),
+                (
+                    "favorite_city".to_string(),
+                    Value::String("Seattle".to_string()),
+                ),
+            ]),
+            reason: "test fields".to_string(),
+            relevance: 0.9,
+        });
+
+        let field_hits = provider.search_graph_nodes(GraphNodeSearchQuery {
+            text: None,
+            field: Some("timezone".to_string()),
+            value: Some(Value::String("america/los_angeles".to_string())),
+            limit: 8,
+        });
+        let text_hits = provider.search_graph_nodes(GraphNodeSearchQuery {
+            text: Some("seattle".to_string()),
+            field: None,
+            value: None,
+            limit: 8,
+        });
+
+        assert_eq!(field_hits.len(), 1);
+        assert_eq!(field_hits[0].node.id, "person:travis");
+        assert_eq!(text_hits.len(), 1);
+        assert_eq!(text_hits[0].node.label, "Travis");
     }
 
     #[test]

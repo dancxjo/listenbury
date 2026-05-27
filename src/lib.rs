@@ -71,9 +71,10 @@ pub use mind::context::{
     DEFAULT_GRAPH_SUMMARY_CHARS_PER_TOKEN, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID,
     DEFAULT_SELF_NODE_LABEL, EmbeddingRecall, EmbeddingRecallProvider, ExpandedContextGraph,
     ExpandedEdge, ExpandedNode, GraphExpansionRequest, GraphNeighborhoodSummary,
-    GraphNeighborhoodSummaryConfig, GraphNeighborhoodSummaryStats, GraphNodeId, GraphNodeRef,
-    GraphTraversalEdge, PinScope, PinnedContextNode, QdrantEmbeddingRecall, RecallHit, RecallQuery,
-    RecallSource, StubContextProvider, TraversalDirection, TraversalPathEdge, TraversalProvenance,
+    GraphNeighborhoodSummaryConfig, GraphNeighborhoodSummaryStats, GraphNodeFieldUpdate,
+    GraphNodeId, GraphNodeRef, GraphNodeSearchHit, GraphNodeSearchQuery, GraphTraversalEdge,
+    PinScope, PinnedContextNode, QdrantEmbeddingRecall, RecallHit, RecallQuery, RecallSource,
+    StubContextProvider, TraversalDirection, TraversalPathEdge, TraversalProvenance,
     build_conversation_context, expand_context_graph,
 };
 pub use mind::controller::{

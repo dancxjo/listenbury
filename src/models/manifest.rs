@@ -24,6 +24,7 @@ pub struct ModelAsset {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
     Llm,
+    TextEmbedding,
     Voice,
     Acoustic,
     Vocoder,
@@ -473,6 +474,14 @@ pub const DEFAULT_MODELS: &[ModelAsset] = &[
 ];
 
 pub const MODEL_BUNDLES: &[ModelBundle] = &[
+    ModelBundle {
+        id: "embeddinggemma",
+        display_name: "EmbeddingGemma",
+        kind: ModelKind::TextEmbedding,
+        asset_ids: &[],
+        primary_asset_id: "",
+        aliases: &["embedding-gemma", "embed", "embedding", "text-embedding"],
+    },
     ModelBundle {
         id: "whisper-tiny-en",
         display_name: "Whisper tiny.en",

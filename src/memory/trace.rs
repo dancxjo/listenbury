@@ -1,5 +1,6 @@
 use crate::time::ExactTimestamp;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 /// A voice label captured in a memory trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +47,18 @@ pub struct MemoryVoiceVector {
     pub source: String,
     pub span_id: Option<u64>,
     pub vector: Vec<f32>,
+    pub confidence: f32,
+}
+
+/// Field/property updates Pete explicitly applies to an existing or provisional graph node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryGraphNodeFieldUpdate {
+    pub node_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub fields: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_text: Option<String>,
     pub confidence: f32,
 }
 
@@ -108,6 +121,11 @@ pub enum MemoryTrace {
         entities: Vec<MemoryEntityMention>,
         occurred_at: ExactTimestamp,
     },
+    /// Pete explicitly updated fields/properties on a graph node.
+    GraphNodeFieldsUpdated {
+        update: MemoryGraphNodeFieldUpdate,
+        occurred_at: ExactTimestamp,
+    },
     /// A camera frame was vectorized without retaining raw image bytes.
     ImageVectorCaptured {
         image: MemoryImageVector,
@@ -132,6 +150,7 @@ impl MemoryTrace {
             Self::OverlapDetected { .. } => "overlap_detected",
             Self::RecallResultUsed { .. } => "recall_result_used",
             Self::EntityExtractionPerformed { .. } => "entity_extraction_performed",
+            Self::GraphNodeFieldsUpdated { .. } => "graph_node_fields_updated",
             Self::ImageVectorCaptured { .. } => "image_vector_captured",
             Self::VoiceVectorCaptured { .. } => "voice_vector_captured",
         }
@@ -147,7 +166,8 @@ impl MemoryTrace {
             | Self::AuditorySceneObservation { occurred_at, .. }
             | Self::OverlapDetected { occurred_at, .. }
             | Self::RecallResultUsed { occurred_at, .. }
-            | Self::EntityExtractionPerformed { occurred_at, .. } => *occurred_at,
+            | Self::EntityExtractionPerformed { occurred_at, .. }
+            | Self::GraphNodeFieldsUpdated { occurred_at, .. } => *occurred_at,
             Self::ImageVectorCaptured { captured_at, .. }
             | Self::VoiceVectorCaptured { captured_at, .. } => *captured_at,
         }

@@ -53,6 +53,7 @@ pub struct FetchProgress {
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 pub struct ModelSelection {
     pub llm: Option<String>,
+    pub text_embedding: Option<String>,
     pub voice: Option<String>,
     pub acoustic: Option<String>,
     pub vocoder: Option<String>,
@@ -97,6 +98,7 @@ pub fn write_model_selection(selection: &ModelSelection) -> Result<()> {
 pub fn default_bundle_id(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llama-3-2-3b-instruct-q4-k-m",
+        ModelKind::TextEmbedding => "embeddinggemma",
         ModelKind::Voice => "ryan",
         ModelKind::Acoustic => "speecht5-tts",
         ModelKind::Vocoder => "speecht5-hifigan",
@@ -130,6 +132,12 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
         ModelKind::Llm => std::env::var("PETE_LLM")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_LLM").ok()),
+        ModelKind::TextEmbedding => std::env::var("EMBEDDINGS_MODEL")
+            .ok()
+            .or_else(|| std::env::var("PETE_TEXT_EMBEDDING").ok())
+            .or_else(|| std::env::var("PETE_TEXT_EMBEDDING_MODEL").ok())
+            .or_else(|| std::env::var("LISTENBURY_TEXT_EMBEDDING").ok())
+            .or_else(|| std::env::var("LISTENBURY_TEXT_EMBEDDING_MODEL").ok()),
         ModelKind::Voice => std::env::var("PETE_VOICE")
             .ok()
             .or_else(|| std::env::var("LISTENBURY_VOICE").ok()),
@@ -152,6 +160,7 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
         .or_else(|| {
             selection.and_then(|selection| match kind {
                 ModelKind::Llm => selection.llm,
+                ModelKind::TextEmbedding => selection.text_embedding,
                 ModelKind::Voice => selection.voice,
                 ModelKind::Acoustic => selection.acoustic,
                 ModelKind::Vocoder => selection.vocoder,
@@ -171,6 +180,7 @@ pub fn selected_bundle(kind: ModelKind) -> Result<&'static ModelBundle> {
 pub fn model_kind_label(kind: ModelKind) -> &'static str {
     match kind {
         ModelKind::Llm => "llm",
+        ModelKind::TextEmbedding => "text-embedding",
         ModelKind::Voice => "voice",
         ModelKind::Acoustic => "acoustic",
         ModelKind::Vocoder => "vocoder",
@@ -261,6 +271,7 @@ pub fn fetch_selected_assets_with_progress_and_jobs_and_verify(
     let bundles = [
         selected_bundle(ModelKind::Whisper)?,
         selected_bundle(ModelKind::Llm)?,
+        selected_bundle(ModelKind::TextEmbedding)?,
         selected_bundle(ModelKind::Voice)?,
         selected_bundle(ModelKind::Acoustic)?,
         selected_bundle(ModelKind::Vocoder)?,
@@ -547,5 +558,17 @@ mod tests {
     #[test]
     fn acoustic_defaults_to_speecht5_tts() {
         assert_eq!(default_bundle_id(ModelKind::Acoustic), "speecht5-tts");
+    }
+
+    #[test]
+    fn text_embedding_defaults_to_daringsby_embeddinggemma() {
+        assert_eq!(
+            default_bundle_id(ModelKind::TextEmbedding),
+            "embeddinggemma"
+        );
+        let bundle = find_bundle(ModelKind::TextEmbedding, "embedding")
+            .expect("text embedding bundle alias");
+        assert_eq!(bundle.id, "embeddinggemma");
+        assert!(bundle.asset_ids.is_empty());
     }
 }

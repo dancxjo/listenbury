@@ -146,7 +146,9 @@ use listenbury::live_trace::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::memory::{MemoryEntityMention, MemorySink, MemoryTrace, NoopMemorySink};
+use listenbury::memory::{
+    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, NoopMemorySink,
+};
 #[cfg(any(
     test,
     all(
@@ -241,7 +243,8 @@ use listenbury::{
 use listenbury::{
     ContextBudget, ConversationContext, ConversationController, ConversationMessage,
     ConversationTurn, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider,
-    FillerContext, GraphNodeRef, PinScope, PinnedContextNode, build_conversation_context,
+    FillerContext, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, PinScope,
+    PinnedContextNode, build_conversation_context,
 };
 #[cfg(all(
     target_os = "linux",
@@ -260,7 +263,7 @@ use listenbury::{LinuxVideoCaptureConfig, spawn_linux_video_vector_capture};
         feature = "tts-piper"
     )
 ))]
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -332,7 +335,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, and queryMemories are already available in scope; imports from \"pete:will\" are also allowed.\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in the graph.\nIf the user identifies themselves by name, extract that exact sentence so the person node can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, and queryMemories are already available in scope; imports from \"pete:will\" are also allowed.\nEvery graph node can and should have a description field. The description must be a natural language noun phrase describing what the node represents. Description text is vectorized and linked back to that graph node.\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search graph nodes by text, field, value, or field/value pair.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing graph node. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in the graph.\nIf the user identifies themselves by name, extract that exact sentence so the person node can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -1741,6 +1744,19 @@ fn stream_speech_to_tts(
                                     user_turn_id,
                                 )?;
                             }
+                            LiveTypeScriptCommand::UpdateGraphNodeFields {
+                                node_id,
+                                label,
+                                fields,
+                            } => {
+                                execute_live_graph_node_field_update(
+                                    &node_id,
+                                    label.as_deref(),
+                                    fields,
+                                    state,
+                                    user_turn_id,
+                                )?;
+                            }
                             LiveTypeScriptCommand::QueryMemories {
                                 text,
                                 limit,
@@ -1756,6 +1772,25 @@ fn stream_speech_to_tts(
                                 if !memory_context.is_empty() {
                                     llm.append_prompt(generation_id, memory_context)
                                         .context("failed to append queryMemories results")?;
+                                }
+                            }
+                            LiveTypeScriptCommand::SearchGraphNodes {
+                                text,
+                                field,
+                                value,
+                                limit,
+                            } => {
+                                let graph_context = execute_live_graph_node_search(
+                                    text,
+                                    field,
+                                    value,
+                                    limit,
+                                    state,
+                                    user_turn_id,
+                                )?;
+                                if !graph_context.is_empty() {
+                                    llm.append_prompt(generation_id, graph_context)
+                                        .context("failed to append searchGraphNodes results")?;
                                 }
                             }
                         }
@@ -2332,10 +2367,21 @@ enum LiveTypeScriptCommand {
     ExtractEntities {
         text: Option<String>,
     },
+    UpdateGraphNodeFields {
+        node_id: String,
+        label: Option<String>,
+        fields: Map<String, Value>,
+    },
     QueryMemories {
         text: String,
         limit: Option<usize>,
         min_score: Option<f32>,
+    },
+    SearchGraphNodes {
+        text: Option<String>,
+        field: Option<String>,
+        value: Option<Value>,
+        limit: Option<usize>,
     },
 }
 
@@ -2359,12 +2405,29 @@ enum LiveTypeScriptCommandPayload {
     ExtractEntities {
         text: Option<String>,
     },
+    UpdateGraphNodeFields {
+        node_id: String,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        fields: Map<String, Value>,
+    },
     QueryMemories {
         text: String,
         #[serde(default)]
         limit: Option<usize>,
         #[serde(default)]
         min_score: Option<f32>,
+    },
+    SearchGraphNodes {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        value: Option<Value>,
+        #[serde(default)]
+        limit: Option<usize>,
     },
 }
 
@@ -2427,6 +2490,17 @@ fn execute_live_typescript_commands(script: &str) -> Result<Vec<LiveTypeScriptCo
                     text: text.and_then(|text| non_empty_text(&text).map(str::to_string)),
                 })
             }
+            LiveTypeScriptCommandPayload::UpdateGraphNodeFields {
+                node_id,
+                label,
+                fields,
+            } => non_empty_text(&node_id).and_then(|node_id| {
+                (!fields.is_empty()).then_some(LiveTypeScriptCommand::UpdateGraphNodeFields {
+                    node_id: node_id.to_string(),
+                    label: label.and_then(|label| non_empty_text(&label).map(str::to_string)),
+                    fields,
+                })
+            }),
             LiveTypeScriptCommandPayload::QueryMemories {
                 text,
                 limit,
@@ -2436,6 +2510,23 @@ fn execute_live_typescript_commands(script: &str) -> Result<Vec<LiveTypeScriptCo
                 limit: limit.map(|limit| limit.clamp(1, 16)),
                 min_score,
             }),
+            LiveTypeScriptCommandPayload::SearchGraphNodes {
+                text,
+                field,
+                value,
+                limit,
+            } => {
+                let text = text.and_then(|text| non_empty_text(&text).map(str::to_string));
+                let field = field.and_then(|field| non_empty_text(&field).map(str::to_string));
+                (text.is_some() || field.is_some() || value.is_some()).then_some(
+                    LiveTypeScriptCommand::SearchGraphNodes {
+                        text,
+                        field,
+                        value,
+                        limit: limit.map(|limit| limit.clamp(1, 16)),
+                    },
+                )
+            }
         })
         .collect())
 }
@@ -2453,7 +2544,9 @@ fn live_typescript_source_with_default_will_imports(script: &str) -> String {
     if script.contains("\"pete:will\"") || script.contains("'pete:will'") {
         return script.to_string();
     }
-    format!("import {{ say, extractEntities, queryMemories }} from \"pete:will\";\n{script}")
+    format!(
+        "import {{ say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories }} from \"pete:will\";\n{script}"
+    )
 }
 
 #[cfg(any(
@@ -2497,6 +2590,12 @@ fn live_will_typescript_module() -> InternalModule {
         .with_function("say", ts_say, 2)
         .with_function("extractEntities", ts_extract_entities, 1)
         .with_function("extract_entities", ts_extract_entities, 1)
+        .with_function("updateGraphNodeFields", ts_update_graph_node_fields, 3)
+        .with_function("update_graph_node_fields", ts_update_graph_node_fields, 3)
+        .with_function("updateEntityFields", ts_update_graph_node_fields, 3)
+        .with_function("searchGraphNodes", ts_search_graph_nodes, 2)
+        .with_function("search_graph_nodes", ts_search_graph_nodes, 2)
+        .with_function("searchEntities", ts_search_graph_nodes, 2)
         .with_function("queryMemories", ts_query_memories, 2)
         .with_function("query_memories", ts_query_memories, 2)
         .with_function("recallMemories", ts_query_memories, 2)
@@ -2587,6 +2686,61 @@ fn optional_number_arg(args: &[JsValue], index: usize, property: &str) -> Option
         feature = "tts-piper"
     )
 ))]
+fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<Value> {
+    let value = args.get(index)?;
+    if let JsValue::Object(_) = value {
+        return api::get_property(value, property)
+            .ok()
+            .and_then(|value| js_value_to_json(&value).ok())
+            .filter(|value| !value.is_null());
+    }
+    None
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<String> {
+    optional_json_property_arg(args, index, property).and_then(|value| match value {
+        Value::String(value) => non_empty_text(&value).map(str::to_string),
+        _ => None,
+    })
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn object_arg(args: &[JsValue], index: usize) -> Map<String, Value> {
+    let Some(value) = args.get(index) else {
+        return Map::new();
+    };
+    let Ok(Value::Object(object)) = js_value_to_json(value).map_err(tsrun_error) else {
+        return Map::new();
+    };
+    object
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn non_empty_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(trimmed)
@@ -2641,6 +2795,98 @@ fn ts_extract_entities(
 ) -> std::result::Result<Guarded, JsError> {
     let text = string_arg(args, 0);
     command_value(interp, json!({ "kind": "extract_entities", "text": text }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_update_graph_node_fields(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let node_id = string_arg(args, 0);
+    let fields = object_arg(args, 1);
+    let label = args.get(2).and_then(|value| match value {
+        JsValue::String(value) => Some(value.to_string()),
+        JsValue::Object(_) => match api::get_property(value, "label") {
+            Ok(JsValue::String(value)) => Some(value.to_string()),
+            _ => None,
+        },
+        _ => None,
+    });
+    command_value(
+        interp,
+        json!({
+            "kind": "update_graph_node_fields",
+            "node_id": node_id,
+            "label": label,
+            "fields": fields,
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_search_graph_nodes(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let mut text = None;
+    let mut field = None;
+    let mut value = None;
+    let mut limit = None;
+
+    match args.first() {
+        Some(JsValue::String(raw)) => {
+            let raw = raw.to_string();
+            text = non_empty_text(&raw).map(str::to_string);
+        }
+        Some(JsValue::Object(_)) => {
+            text = optional_string_property_arg(args, 0, "text");
+            field = optional_string_property_arg(args, 0, "field");
+            value = optional_json_property_arg(args, 0, "value");
+            limit = optional_number_arg(args, 0, "limit")
+                .map(|value| value.round().clamp(1.0, 16.0) as usize);
+        }
+        _ => {}
+    }
+
+    if let Some(options) = args.get(1)
+        && matches!(options, JsValue::Object(_))
+    {
+        text = optional_string_property_arg(args, 1, "text").or(text);
+        field = optional_string_property_arg(args, 1, "field").or(field);
+        value = optional_json_property_arg(args, 1, "value").or(value);
+        limit = optional_number_arg(args, 1, "limit")
+            .map(|value| value.round().clamp(1.0, 16.0) as usize)
+            .or(limit);
+    }
+
+    command_value(
+        interp,
+        json!({
+            "kind": "search_graph_nodes",
+            "text": text,
+            "field": field,
+            "value": value,
+            "limit": limit,
+        }),
+    )
 }
 
 #[cfg(any(
@@ -2776,6 +3022,312 @@ fn format_memory_query_prompt_append(text: &str, hits: &[listenbury::RecallHit])
         text.trim(),
         summary
     )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_live_graph_node_search(
+    text: Option<String>,
+    field: Option<String>,
+    value: Option<Value>,
+    limit: Option<usize>,
+    state: &mut LiveHalfDuplexState,
+    turn_id: u64,
+) -> Result<String> {
+    let occurred_at = ExactTimestamp::now();
+    let query = GraphNodeSearchQuery {
+        text,
+        field,
+        value,
+        limit: limit.unwrap_or(8).clamp(1, 16),
+    };
+    let hits = state.context_provider.search_graph_nodes(query.clone());
+    let result_summary = graph_node_search_result_summary(&query, &hits);
+    state.memory_sink.submit(MemoryTrace::RecallResultUsed {
+        query: format_graph_node_search_query(&query),
+        result_summary: result_summary.clone(),
+        occurred_at,
+    });
+    for hit in &hits {
+        state.context_provider.pin_node(PinnedContextNode {
+            node_id: hit.node.id.clone(),
+            scope: PinScope::Temporary { remaining_turns: 2 },
+            reason: format!("searchGraphNodes match score {:.3}", hit.score),
+        });
+    }
+    let mut event = state
+        .trace
+        .event(turn_id, "pete_command_search_graph_nodes", occurred_at);
+    event.text = Some(format_graph_node_search_query(&query));
+    event.artifact = Some(json!({
+        "command": "searchGraphNodes",
+        "query": {
+            "text": query.text,
+            "field": query.field,
+            "value": query.value,
+            "limit": query.limit,
+        },
+        "hitCount": hits.len(),
+        "hits": hits.iter().map(|hit| {
+            json!({
+                "nodeId": hit.node.id.as_str(),
+                "label": hit.node.label.as_str(),
+                "score": hit.score,
+                "reason": hit.reason.as_str(),
+                "fields": hit.fields,
+            })
+        }).collect::<Vec<_>>(),
+    }));
+    state.trace.emit(event)?;
+    eprintln!(
+        "[live-half-duplex] Pete executed searchGraphNodes; hits={}",
+        hits.len()
+    );
+    Ok(format_graph_node_search_prompt_append(&query, &hits))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn graph_node_search_result_summary(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    if hits.is_empty() {
+        return format!(
+            "No graph nodes matched search: {}",
+            format_graph_node_search_query(query)
+        );
+    }
+    hits.iter()
+        .map(|hit| {
+            format!(
+                "{} ({}) score {:.3}: {}; fields: {}",
+                hit.node.label,
+                hit.node.id,
+                hit.score,
+                hit.reason,
+                summarize_command_fields(&hit.fields)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_graph_node_search_prompt_append(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    let summary = graph_node_search_result_summary(query, hits);
+    format!(
+        "\n\n[Private graph node search result for searchGraphNodes]\nQuery: {}\n{}\n[/Private graph node search result]\n",
+        format_graph_node_search_query(query),
+        summary
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_graph_node_search_query(query: &GraphNodeSearchQuery) -> String {
+    let mut parts = Vec::new();
+    if let Some(text) = query
+        .text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        parts.push(format!("text={text}"));
+    }
+    if let Some(field) = query
+        .field
+        .as_deref()
+        .map(str::trim)
+        .filter(|field| !field.is_empty())
+    {
+        parts.push(format!("field={field}"));
+    }
+    if let Some(value) = query.value.as_ref() {
+        parts.push(format!("value={}", compact_command_value(value)));
+    }
+    if parts.is_empty() {
+        "empty".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_live_graph_node_field_update(
+    node_id: &str,
+    label: Option<&str>,
+    mut fields: Map<String, Value>,
+    state: &mut LiveHalfDuplexState,
+    turn_id: u64,
+) -> Result<()> {
+    let occurred_at = ExactTimestamp::now();
+    ensure_command_description_field(node_id, label, &mut fields);
+    state
+        .context_provider
+        .update_graph_node_fields(GraphNodeFieldUpdate {
+            node_id: node_id.to_string(),
+            label: label.map(str::to_string),
+            fields: fields.clone(),
+            reason: format!("Pete updated graph node fields on turn {turn_id}"),
+            relevance: 1.0,
+        });
+    state.context_provider.pin_node(PinnedContextNode {
+        node_id: node_id.to_string(),
+        scope: PinScope::Session,
+        reason: format!(
+            "graph fields updated: {}",
+            summarize_command_fields(&fields)
+        ),
+    });
+    state
+        .memory_sink
+        .submit(MemoryTrace::GraphNodeFieldsUpdated {
+            update: MemoryGraphNodeFieldUpdate {
+                node_id: node_id.to_string(),
+                label: label.map(str::to_string),
+                fields: fields.clone(),
+                source_text: Some(format!("Pete command turn {turn_id}")),
+                confidence: 1.0,
+            },
+            occurred_at,
+        });
+    let mut event = state.trace.event(
+        turn_id,
+        "pete_command_update_graph_node_fields",
+        occurred_at,
+    );
+    event.text = Some(node_id.to_string());
+    event.artifact = Some(json!({
+        "command": "updateGraphNodeFields",
+        "nodeId": node_id,
+        "label": label,
+        "fields": fields,
+    }));
+    state.trace.emit(event)?;
+    eprintln!("[live-half-duplex] Pete executed updateGraphNodeFields; node={node_id}");
+    Ok(())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn summarize_command_fields(fields: &Map<String, Value>) -> String {
+    let mut pairs = fields
+        .iter()
+        .map(|(key, value)| format!("{}={}", key, compact_command_value(value)))
+        .collect::<Vec<_>>();
+    pairs.sort();
+    pairs.join(", ")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ensure_command_description_field(
+    node_id: &str,
+    label: Option<&str>,
+    fields: &mut Map<String, Value>,
+) {
+    if fields
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty())
+    {
+        return;
+    }
+    fields.insert(
+        "description".to_string(),
+        Value::String(command_node_description(node_id, label)),
+    );
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn command_node_description(node_id: &str, label: Option<&str>) -> String {
+    let kind = node_id
+        .split_once(':')
+        .map(|(kind, _)| kind.replace('_', " "))
+        .unwrap_or_else(|| "graph node".to_string());
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(|label| format!("{kind} named {label}"))
+        .unwrap_or_else(|| format!("{kind} {node_id}"))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn compact_command_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => "null".to_string(),
+        Value::Array(_) | Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "<value>".to_string())
+        }
+    }
 }
 
 #[cfg(all(
@@ -4051,10 +4603,10 @@ mod tests {
     use super::{
         FamiliarVoiceMemory, HarmonyFinalFilter, LiveCommandFilter, LivePromptFormat,
         LiveTypeScriptCommand, SimplexTurnGapStatus, build_prompt, convert_frame_samples,
-        execute_live_typescript_commands, format_memory_query_prompt_append,
-        live_half_duplex_stops, maybe_plan_cached_backchannel, planner_units_from_events,
-        prompt_format_for_model, read_aloud_timed_word_stream, simplex_turn_gap_status,
-        vad_frame_format,
+        execute_live_typescript_commands, format_graph_node_search_prompt_append,
+        format_memory_query_prompt_append, live_half_duplex_stops, maybe_plan_cached_backchannel,
+        planner_units_from_events, prompt_format_for_model, read_aloud_timed_word_stream,
+        simplex_turn_gap_status, vad_frame_format,
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
@@ -4062,8 +4614,8 @@ mod tests {
     use listenbury::word::WordCommitment;
     use listenbury::{
         ConversationController, ConversationMessage, ConversationRole, FillerPlanner,
-        FillerPlannerConfig, GraphNodeRef, RecallHit, RecallSource, RuntimePacket,
-        SyntheticPlannerConfig,
+        FillerPlannerConfig, GraphNodeRef, GraphNodeSearchHit, GraphNodeSearchQuery, RecallHit,
+        RecallSource, RuntimePacket, SyntheticPlannerConfig,
     };
 
     fn token(text: &str) -> LlmEvent {
@@ -4193,6 +4745,68 @@ mod tests {
     }
 
     #[test]
+    fn live_typescript_executes_update_graph_node_fields_builder() {
+        let commands = execute_live_typescript_commands(
+            r#"[updateGraphNodeFields("person:travis", { preferred_name: "Trav", timezone: "America/Los_Angeles" }, "Travis")]"#,
+        )
+        .expect("typescript should execute");
+
+        let mut expected_fields = serde_json::Map::new();
+        expected_fields.insert(
+            "preferred_name".to_string(),
+            serde_json::Value::String("Trav".to_string()),
+        );
+        expected_fields.insert(
+            "timezone".to_string(),
+            serde_json::Value::String("America/Los_Angeles".to_string()),
+        );
+        assert_eq!(
+            commands,
+            vec![LiveTypeScriptCommand::UpdateGraphNodeFields {
+                node_id: "person:travis".to_string(),
+                label: Some("Travis".to_string()),
+                fields: expected_fields,
+            }]
+        );
+    }
+
+    #[test]
+    fn command_field_updates_add_default_description_when_missing() {
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "timezone".to_string(),
+            serde_json::Value::String("America/Los_Angeles".to_string()),
+        );
+
+        super::ensure_command_description_field("person:travis", Some("Travis"), &mut fields);
+
+        assert_eq!(
+            fields
+                .get("description")
+                .and_then(serde_json::Value::as_str),
+            Some("person named Travis")
+        );
+    }
+
+    #[test]
+    fn live_typescript_executes_search_graph_nodes_builder() {
+        let commands = execute_live_typescript_commands(
+            r#"[searchGraphNodes({ field: "timezone", value: "America/Los_Angeles", text: "trav", limit: 4 })]"#,
+        )
+        .expect("typescript should execute");
+
+        assert_eq!(
+            commands,
+            vec![LiveTypeScriptCommand::SearchGraphNodes {
+                text: Some("trav".to_string()),
+                field: Some("timezone".to_string()),
+                value: Some(serde_json::Value::String("America/Los_Angeles".to_string())),
+                limit: Some(4),
+            }]
+        );
+    }
+
+    #[test]
     fn memory_query_prompt_append_renders_private_recall_context() {
         let hits = vec![RecallHit {
             node: GraphNodeRef {
@@ -4214,6 +4828,38 @@ mod tests {
         assert!(appended.contains("Query: Seattle packing"));
         assert!(appended.contains("Seattle trip (memory:seattle) score 0.870"));
         assert!(appended.contains("Travis mentioned packing rain gear."));
+    }
+
+    #[test]
+    fn graph_node_search_prompt_append_renders_private_field_results() {
+        let query = GraphNodeSearchQuery {
+            text: Some("trav".to_string()),
+            field: Some("timezone".to_string()),
+            value: Some(serde_json::Value::String("America/Los_Angeles".to_string())),
+            limit: 4,
+        };
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "timezone".to_string(),
+            serde_json::Value::String("America/Los_Angeles".to_string()),
+        );
+        let hits = vec![GraphNodeSearchHit {
+            node: GraphNodeRef {
+                id: "person:travis".to_string(),
+                label: "Travis".to_string(),
+            },
+            score: 3.0,
+            fields,
+            reason: "field timezone matched value America/Los_Angeles; text matched trav"
+                .to_string(),
+        }];
+
+        let appended = format_graph_node_search_prompt_append(&query, &hits);
+
+        assert!(appended.contains("[Private graph node search result for searchGraphNodes]"));
+        assert!(appended.contains("field=timezone"));
+        assert!(appended.contains("value=America/Los_Angeles"));
+        assert!(appended.contains("Travis (person:travis) score 3.000"));
     }
 
     #[test]

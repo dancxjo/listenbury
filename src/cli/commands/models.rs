@@ -62,6 +62,7 @@ fn model_menu() -> Result<()> {
         "Model category",
         vec![
             CategoryChoice::new(ModelKind::Llm)?,
+            CategoryChoice::new(ModelKind::TextEmbedding)?,
             CategoryChoice::new(ModelKind::Voice)?,
             CategoryChoice::new(ModelKind::Acoustic)?,
             CategoryChoice::new(ModelKind::Vocoder)?,
@@ -92,12 +93,14 @@ fn model_menu() -> Result<()> {
 #[cfg(feature = "model-download")]
 fn print_models_list() -> Result<()> {
     let llm = selected_bundle(ModelKind::Llm)?.id;
+    let text_embedding = selected_bundle(ModelKind::TextEmbedding)?.id;
     let voice = selected_bundle(ModelKind::Voice)?.id;
     let acoustic = selected_bundle(ModelKind::Acoustic)?.id;
     let vocoder = selected_bundle(ModelKind::Vocoder)?.id;
     let whisper = selected_bundle(ModelKind::Whisper)?.id;
     for kind in [
         ModelKind::Llm,
+        ModelKind::TextEmbedding,
         ModelKind::Voice,
         ModelKind::Acoustic,
         ModelKind::Vocoder,
@@ -106,6 +109,7 @@ fn print_models_list() -> Result<()> {
         println!("{}", listenbury::models::model_kind_label(kind).bold());
         for bundle in MODEL_BUNDLES.iter().filter(|bundle| bundle.kind == kind) {
             let marker = if (kind == ModelKind::Llm && bundle.id == llm)
+                || (kind == ModelKind::TextEmbedding && bundle.id == text_embedding)
                 || (kind == ModelKind::Voice && bundle.id == voice)
                 || (kind == ModelKind::Acoustic && bundle.id == acoustic)
                 || (kind == ModelKind::Vocoder && bundle.id == vocoder)
@@ -115,7 +119,9 @@ fn print_models_list() -> Result<()> {
             } else {
                 " "
             };
-            let state = if bundle_present(bundle)? {
+            let state = if bundle.asset_ids.is_empty() {
+                "external".yellow().to_string()
+            } else if bundle_present(bundle)? {
                 "present".green().to_string()
             } else {
                 "missing".red().to_string()
@@ -136,6 +142,7 @@ fn print_models_list() -> Result<()> {
 fn use_model(command: ModelsUseCommand) -> Result<()> {
     let kind = match command.kind {
         ModelsUseKind::Llm => ModelKind::Llm,
+        ModelsUseKind::TextEmbedding => ModelKind::TextEmbedding,
         ModelsUseKind::Voice => ModelKind::Voice,
         ModelsUseKind::Acoustic => ModelKind::Acoustic,
         ModelsUseKind::Vocoder => ModelKind::Vocoder,
@@ -156,6 +163,7 @@ fn select_bundle(kind: ModelKind, bundle: &ModelBundle) -> Result<()> {
     let mut selection = read_model_selection()?;
     match kind {
         ModelKind::Llm => selection.llm = Some(bundle.id.to_string()),
+        ModelKind::TextEmbedding => selection.text_embedding = Some(bundle.id.to_string()),
         ModelKind::Voice => selection.voice = Some(bundle.id.to_string()),
         ModelKind::Acoustic => selection.acoustic = Some(bundle.id.to_string()),
         ModelKind::Vocoder => selection.vocoder = Some(bundle.id.to_string()),
@@ -184,6 +192,7 @@ impl CategoryChoice {
     fn new(kind: ModelKind) -> Result<Self> {
         let name = match kind {
             ModelKind::Llm => "LLM",
+            ModelKind::TextEmbedding => "Text embedding",
             ModelKind::Voice => "Voice",
             ModelKind::Acoustic => "Acoustic",
             ModelKind::Vocoder => "Vocoder",
@@ -215,7 +224,9 @@ struct BundleChoice {
 #[cfg(feature = "model-download")]
 impl BundleChoice {
     fn new(bundle: &'static ModelBundle) -> Result<Self> {
-        let state = if bundle_present(bundle)? {
+        let state = if bundle.asset_ids.is_empty() {
+            "external".yellow().to_string()
+        } else if bundle_present(bundle)? {
             "present".green().to_string()
         } else {
             "missing".red().to_string()
@@ -246,6 +257,7 @@ fn fetch_models(command: ModelsFetchCommand) -> Result<()> {
         )
     } else if let Some(model) = command.model {
         let bundle = find_bundle(ModelKind::Llm, &model)
+            .or_else(|| find_bundle(ModelKind::TextEmbedding, &model))
             .or_else(|| find_bundle(ModelKind::Voice, &model))
             .or_else(|| find_bundle(ModelKind::Acoustic, &model))
             .or_else(|| find_bundle(ModelKind::Vocoder, &model))
@@ -335,6 +347,7 @@ fn verify_models(command: ModelsVerifyCommand) -> Result<()> {
     let home = resolve_listenbury_home()?;
     let assets: Vec<_> = if let Some(model) = &command.model {
         let bundle = find_bundle(ModelKind::Llm, model)
+            .or_else(|| find_bundle(ModelKind::TextEmbedding, model))
             .or_else(|| find_bundle(ModelKind::Voice, model))
             .or_else(|| find_bundle(ModelKind::Acoustic, model))
             .or_else(|| find_bundle(ModelKind::Vocoder, model))

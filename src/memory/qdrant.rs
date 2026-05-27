@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::memory::neo4j::Neo4jWriteResult;
+use crate::memory::neo4j::{Neo4jTraceWrite, Neo4jWriteResult, trace_write_for};
 use crate::memory::trace::MemoryTrace;
 
 pub const DEFAULT_QDRANT_COLLECTION: &str = "listenbury_memory";
@@ -71,7 +71,7 @@ pub fn vector_documents_for_trace(
 ) -> Vec<VectorDocument> {
     let artifact_node_id = graph_result.primary_node_id.clone();
     let related_graph_node_ids = graph_result.related_node_ids.clone();
-    match trace {
+    let mut documents = match trace {
         MemoryTrace::ConversationTurnFinalized { text, .. } => vec![vector_document(
             format!("conversation_turn_vector:{sequence}"),
             text.clone(),
@@ -261,7 +261,82 @@ pub fn vector_documents_for_trace(
             ],
         )],
         _ => Vec::new(),
-    }
+    };
+    documents.extend(graph_node_description_documents_for_trace(
+        trace,
+        sequence,
+        graph_result,
+    ));
+    documents
+}
+
+fn graph_node_description_documents_for_trace(
+    trace: &MemoryTrace,
+    sequence: u64,
+    graph_result: &Neo4jWriteResult,
+) -> Vec<VectorDocument> {
+    let write = trace_write_for(trace, sequence);
+    graph_node_description_documents_for_write(write, sequence, graph_result)
+}
+
+fn graph_node_description_documents_for_write(
+    write: Neo4jTraceWrite,
+    sequence: u64,
+    graph_result: &Neo4jWriteResult,
+) -> Vec<VectorDocument> {
+    let mut seen = Vec::<String>::new();
+    std::iter::once((write.primary_node, true))
+        .chain(write.related_nodes.into_iter().map(|node| (node, false)))
+        .filter_map(|(node, is_primary)| {
+            let graph_node_id = if is_primary {
+                graph_result
+                    .primary_node_id
+                    .clone()
+                    .unwrap_or_else(|| node.logical_id.clone())
+            } else {
+                node.logical_id.clone()
+            };
+            if seen.iter().any(|seen_id| seen_id == &graph_node_id) {
+                return None;
+            }
+            seen.push(graph_node_id.clone());
+            let description = node
+                .properties
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|description| !description.is_empty())?
+                .to_string();
+            Some(vector_document(
+                format!(
+                    "graph_node_description_vector:{sequence}:{}",
+                    vector_safe_id(&graph_node_id)
+                ),
+                description.clone(),
+                [
+                    ("kind", json!("graph_node_description")),
+                    ("headline", json!(description.as_str())),
+                    ("text", json!(description.as_str())),
+                    ("description", json!(description.as_str())),
+                    ("graph_node_id", json!(graph_node_id.as_str())),
+                    ("neo4j_node_id", json!(graph_node_id.as_str())),
+                    ("vector_target", json!("graph_node_description")),
+                    (
+                        "artifact_node_id",
+                        optional(graph_result.primary_node_id.clone()),
+                    ),
+                    ("referent_node_id", json!(graph_node_id.as_str())),
+                    (
+                        "related_graph_node_ids",
+                        json!(related_graph_node_ids_with_referent(
+                            &graph_result.related_node_ids,
+                            &graph_node_id
+                        )),
+                    ),
+                ],
+            ))
+        })
+        .collect()
 }
 
 fn vector_document<const N: usize>(
@@ -374,8 +449,13 @@ mod tests {
 
         let documents = vector_documents_for_trace(&trace, 2, &graph_result);
 
-        assert_eq!(documents.len(), 1);
-        let payload = &documents[0].payload;
+        let payload = &documents
+            .iter()
+            .find(|document| {
+                document.payload.get("kind").and_then(Value::as_str) == Some("entity_mention")
+            })
+            .expect("entity mention vector document")
+            .payload;
         assert_eq!(
             payload.get("graph_node_id").and_then(Value::as_str),
             Some("person:travis")
@@ -391,6 +471,31 @@ mod tests {
         assert_eq!(
             payload.get("vector_target").and_then(Value::as_str),
             Some("referent")
+        );
+        let description_payload = &documents
+            .iter()
+            .find(|document| {
+                document.payload.get("kind").and_then(Value::as_str)
+                    == Some("graph_node_description")
+                    && document
+                        .payload
+                        .get("graph_node_id")
+                        .and_then(Value::as_str)
+                        == Some("person:travis")
+            })
+            .expect("entity graph node description vector")
+            .payload;
+        assert_eq!(
+            description_payload
+                .get("description")
+                .and_then(Value::as_str),
+            Some("person named Travis")
+        );
+        assert_eq!(
+            description_payload
+                .get("referent_node_id")
+                .and_then(Value::as_str),
+            Some("person:travis")
         );
     }
 
@@ -441,21 +546,24 @@ mod tests {
 
         let documents = vector_documents_for_trace(&trace, 4, &Neo4jWriteResult::default());
 
-        assert_eq!(documents.len(), 1);
+        let image_document = documents
+            .iter()
+            .find(|document| document.collection.as_deref() == Some(PICTURE_QDRANT_COLLECTION))
+            .expect("image vector document");
         assert_eq!(
-            documents[0].collection.as_deref(),
+            image_document.collection.as_deref(),
             Some(PICTURE_QDRANT_COLLECTION)
         );
-        assert_eq!(documents[0].vector, Some(vec![0.1, 0.2, 0.3]));
+        assert_eq!(image_document.vector, Some(vec![0.1, 0.2, 0.3]));
         assert_eq!(
-            documents[0]
+            image_document
                 .payload
                 .get("graph_node_id")
                 .and_then(Value::as_str),
             Some("object:mug")
         );
         assert_eq!(
-            documents[0]
+            image_document
                 .payload
                 .get("artifact_node_id")
                 .and_then(Value::as_str),
@@ -479,14 +587,17 @@ mod tests {
 
         let documents = vector_documents_for_trace(&trace, 5, &Neo4jWriteResult::default());
 
-        assert_eq!(documents.len(), 1);
+        let voice_document = documents
+            .iter()
+            .find(|document| document.collection.as_deref() == Some(VOICE_QDRANT_COLLECTION))
+            .expect("voice vector document");
         assert_eq!(
-            documents[0].collection.as_deref(),
+            voice_document.collection.as_deref(),
             Some(VOICE_QDRANT_COLLECTION)
         );
-        assert_eq!(documents[0].vector, Some(vec![0.4, 0.5]));
+        assert_eq!(voice_document.vector, Some(vec![0.4, 0.5]));
         assert_eq!(
-            documents[0]
+            voice_document
                 .payload
                 .get("referent_node_id")
                 .and_then(Value::as_str),
