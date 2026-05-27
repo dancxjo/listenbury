@@ -11,6 +11,8 @@ use crate::mind::controller::ConversationRole;
 use crate::mind::entity::{EntityExtractor, resolve_entities};
 
 pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 1_024;
+pub const DEFAULT_GRAPH_SUMMARY_MAX_CHARS: usize = 768;
+pub const DEFAULT_GRAPH_SUMMARY_CHARS_PER_TOKEN: usize = 4;
 pub const DEFAULT_SELF_NODE_ID: &str = "pete:self";
 pub const DEFAULT_SELF_NODE_LABEL: &str = "Pete Listenbury";
 pub const DEFAULT_SELF_NODE_SUMMARY: &str = "Pete is the Listenbury live voice system. The user is speaking aloud; ASR transcribes that speech into the text Pete receives, and Pete speaks replies aloud through TTS. Pete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt. When asked about identity, hearing, memory, or how the prompt works, answer from these runtime facts: Pete is not just a generic text-only chatbot, and should not claim there is no speech input, no memory context, or no larger Listenbury system.";
@@ -375,6 +377,65 @@ pub struct ExpandedContextGraph {
     pub edges: Vec<ExpandedEdge>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNeighborhoodSummaryConfig {
+    pub max_chars: usize,
+    pub max_tokens: Option<usize>,
+    pub chars_per_token: usize,
+    pub verbatim_node_ids: Vec<GraphNodeId>,
+    pub max_edge_lines: usize,
+}
+
+impl Default for GraphNeighborhoodSummaryConfig {
+    fn default() -> Self {
+        Self {
+            max_chars: DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
+            max_tokens: None,
+            chars_per_token: DEFAULT_GRAPH_SUMMARY_CHARS_PER_TOKEN,
+            verbatim_node_ids: Vec::new(),
+            max_edge_lines: 12,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNeighborhoodSummaryStats {
+    pub original_node_count: usize,
+    pub original_edge_count: usize,
+    pub compressed_node_count: usize,
+    pub compressed_edge_count: usize,
+    pub rendered_chars: usize,
+    pub rendered_tokens_estimate: usize,
+    pub budget_chars: usize,
+    pub budget_tokens: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNeighborhoodSummary {
+    pub rendered: String,
+    pub kept_node_ids: Vec<GraphNodeId>,
+    pub kept_edge_count: usize,
+    pub stats: GraphNeighborhoodSummaryStats,
+}
+
+impl GraphNeighborhoodSummary {
+    pub fn debug_view(&self) -> String {
+        format!(
+            "original_graph=nodes:{} edges:{} compressed_graph=nodes:{} edges:{} prompt_budget=chars:{}/{} tokens~:{}/{}",
+            self.stats.original_node_count,
+            self.stats.original_edge_count,
+            self.stats.compressed_node_count,
+            self.stats.compressed_edge_count,
+            self.stats.rendered_chars,
+            self.stats.budget_chars,
+            self.stats.rendered_tokens_estimate,
+            self.stats
+                .budget_tokens
+                .map_or_else(|| "none".to_string(), |tokens| tokens.to_string()),
+        )
+    }
+}
+
 impl ExpandedContextGraph {
     pub fn debug_view(&self) -> String {
         let mut lines = Vec::new();
@@ -409,6 +470,278 @@ impl ExpandedContextGraph {
         }
         lines.join("\n")
     }
+
+    pub fn summarize_neighborhood(
+        &self,
+        config: GraphNeighborhoodSummaryConfig,
+    ) -> GraphNeighborhoodSummary {
+        let budget_chars = effective_graph_summary_char_budget(&config);
+        let mut lines = Vec::new();
+        let mut used_chars = 0usize;
+
+        let header = format!(
+            "Neighborhood summary from {} node(s), {} edge(s):",
+            self.nodes.len(),
+            self.edges.len()
+        );
+        append_summary_line(&mut lines, &mut used_chars, budget_chars, header);
+
+        let verbatim_ids = config
+            .verbatim_node_ids
+            .iter()
+            .map(|id| id.as_str())
+            .collect::<HashSet<_>>();
+        let mut nodes = self.nodes.iter().collect::<Vec<_>>();
+        nodes.sort_by(|left, right| {
+            node_priority(right, &verbatim_ids)
+                .cmp(&node_priority(left, &verbatim_ids))
+                .then_with(|| left.min_depth.cmp(&right.min_depth))
+                .then_with(|| left.node.id.cmp(&right.node.id))
+        });
+
+        let mut kept_node_ids = Vec::new();
+        let mut emitted_node_ids = HashSet::new();
+        let mut omitted_nodes = 0usize;
+
+        for node in nodes {
+            let is_verbatim = verbatim_ids.contains(node.node.id.as_str());
+            let line = summarize_node_line(node, &self.edges, is_verbatim);
+            if append_summary_line(&mut lines, &mut used_chars, budget_chars, line.clone()) {
+                if emitted_node_ids.insert(node.node.id.as_str()) {
+                    kept_node_ids.push(node.node.id.clone());
+                }
+                continue;
+            }
+
+            let is_critical = is_verbatim || node.min_depth == 0;
+            if is_critical
+                && append_summary_line(
+                    &mut lines,
+                    &mut used_chars,
+                    budget_chars,
+                    truncate_for_budget(&line, 72),
+                )
+            {
+                if emitted_node_ids.insert(node.node.id.as_str()) {
+                    kept_node_ids.push(node.node.id.clone());
+                }
+                continue;
+            }
+
+            omitted_nodes += 1;
+        }
+
+        if omitted_nodes > 0 {
+            append_summary_line(
+                &mut lines,
+                &mut used_chars,
+                budget_chars,
+                format!("- [Compressed] Omitted {omitted_nodes} node(s) due to budget limits."),
+            );
+        }
+
+        let kept_node_set = kept_node_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut kept_edge_count = 0usize;
+        let mut edge_lines = 0usize;
+        for edge in &self.edges {
+            if edge_lines >= config.max_edge_lines {
+                break;
+            }
+            if !kept_node_set.contains(edge.edge.from.as_str())
+                || !kept_node_set.contains(edge.edge.to.as_str())
+            {
+                continue;
+            }
+            let line = format!(
+                "- [Edge] {} -{}-> {} (depth={})",
+                edge.edge.from, edge.edge.kind, edge.edge.to, edge.min_depth
+            );
+            if !append_summary_line(&mut lines, &mut used_chars, budget_chars, line) {
+                break;
+            }
+            kept_edge_count += 1;
+            edge_lines += 1;
+        }
+
+        let rendered = lines.join("\n");
+        let rendered_chars = rendered.len();
+        let rendered_tokens_estimate = estimate_tokens(rendered_chars, config.chars_per_token);
+        GraphNeighborhoodSummary {
+            rendered,
+            kept_node_ids,
+            kept_edge_count,
+            stats: GraphNeighborhoodSummaryStats {
+                original_node_count: self.nodes.len(),
+                original_edge_count: self.edges.len(),
+                compressed_node_count: emitted_node_ids.len(),
+                compressed_edge_count: kept_edge_count,
+                rendered_chars,
+                rendered_tokens_estimate,
+                budget_chars,
+                budget_tokens: config.max_tokens,
+            },
+        }
+    }
+}
+
+fn node_priority(node: &ExpandedNode, verbatim_ids: &HashSet<&str>) -> i32 {
+    let mut priority = (10_i32.saturating_sub(node.min_depth as i32)).saturating_mul(10);
+    priority = priority.saturating_add((node.provenance.len() as i32).saturating_mul(4));
+    if verbatim_ids.contains(node.node.id.as_str()) {
+        priority = priority.saturating_add(1_000);
+    }
+    if looks_eventful(&node.node) {
+        priority = priority.saturating_add(20);
+    }
+    if looks_emotional(&node.node) {
+        priority = priority.saturating_add(20);
+    }
+    priority
+}
+
+fn summarize_node_line(node: &ExpandedNode, edges: &[ExpandedEdge], verbatim: bool) -> String {
+    let mut outgoing = Vec::new();
+    let mut incoming = Vec::new();
+    for edge in edges {
+        if edge.edge.from == node.node.id {
+            outgoing.push((edge.edge.kind.as_str(), edge.edge.to.as_str()));
+        }
+        if edge.edge.to == node.node.id {
+            incoming.push((edge.edge.kind.as_str(), edge.edge.from.as_str()));
+        }
+    }
+    outgoing.sort_unstable();
+    incoming.sort_unstable();
+
+    let outgoing_hint = outgoing
+        .iter()
+        .take(2)
+        .map(|(kind, target)| format!("{kind}->{target}"))
+        .collect::<Vec<_>>();
+    let incoming_hint = incoming
+        .iter()
+        .take(2)
+        .map(|(kind, source)| format!("{source}-{kind}"))
+        .collect::<Vec<_>>();
+    let mut continuity_tags = Vec::new();
+    if looks_eventful(&node.node) {
+        continuity_tags.push("recent-event");
+    }
+    if looks_emotional(&node.node) {
+        continuity_tags.push("emotion");
+    }
+    if continuity_tags.is_empty() && node.min_depth <= 1 {
+        continuity_tags.push("narrative-anchor");
+    }
+
+    if verbatim {
+        return format!(
+            "- [NodeVerbatim] {} ({}) depth={} outgoing=[{}] incoming=[{}] continuity=[{}]",
+            node.node.label,
+            node.node.id,
+            node.min_depth,
+            outgoing_hint.join(", "),
+            incoming_hint.join(", "),
+            continuity_tags.join(", "),
+        );
+    }
+
+    format!(
+        "- [NodeSummary] {} ({}) depth={} links(out=[{}], in=[{}]) continuity=[{}]",
+        node.node.label,
+        node.node.id,
+        node.min_depth,
+        outgoing_hint.join(", "),
+        incoming_hint.join(", "),
+        continuity_tags.join(", "),
+    )
+}
+
+fn looks_eventful(node: &GraphNodeRef) -> bool {
+    let lowered = format!("{} {}", node.id, node.label).to_ascii_lowercase();
+    [
+        "event",
+        "episode",
+        "turn",
+        "message",
+        "recent",
+        "today",
+        "yesterday",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn looks_emotional(node: &GraphNodeRef) -> bool {
+    let lowered = format!("{} {}", node.id, node.label).to_ascii_lowercase();
+    [
+        "emotion", "mood", "feeling", "feel", "happy", "sad", "angry", "afraid", "anxious", "calm",
+    ]
+    .iter()
+    .any(|needle| lowered.contains(needle))
+}
+
+fn append_summary_line(
+    lines: &mut Vec<String>,
+    used_chars: &mut usize,
+    max_chars: usize,
+    line: String,
+) -> bool {
+    let separator_len = if lines.is_empty() { 0 } else { 1 };
+    if used_chars
+        .saturating_add(separator_len)
+        .saturating_add(line.len())
+        <= max_chars
+    {
+        *used_chars = used_chars
+            .saturating_add(separator_len)
+            .saturating_add(line.len());
+        lines.push(line);
+        true
+    } else {
+        false
+    }
+}
+
+fn truncate_for_budget(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        return text.to_string();
+    }
+    if max_chars <= 1 {
+        return "…".to_string();
+    }
+    let content_limit = max_chars.saturating_sub(1);
+    let mut truncated = String::new();
+    let mut char_count = 0usize;
+    for ch in text.chars() {
+        if char_count >= content_limit {
+            break;
+        }
+        truncated.push(ch);
+        char_count = char_count.saturating_add(1);
+    }
+    truncated.push('…');
+    truncated
+}
+
+fn effective_graph_summary_char_budget(config: &GraphNeighborhoodSummaryConfig) -> usize {
+    let token_budget_chars = config
+        .max_tokens
+        .map(|tokens| tokens.saturating_mul(config.chars_per_token.max(1)));
+    token_budget_chars
+        .map(|token_chars| token_chars.min(config.max_chars))
+        .unwrap_or(config.max_chars)
+        .max(1)
+}
+
+fn estimate_tokens(chars: usize, chars_per_token: usize) -> usize {
+    let chars_per_token = chars_per_token.max(1);
+    chars
+        .saturating_add(chars_per_token.saturating_sub(1))
+        .saturating_div(chars_per_token)
 }
 
 pub trait EmbeddingRecall: Send + Sync {
@@ -1568,6 +1901,162 @@ mod tests {
                 .nodes
                 .iter()
                 .any(|node| node.node.id == DEFAULT_SELF_NODE_ID)
+        );
+    }
+
+    #[test]
+    fn neighborhood_summary_respects_budget() {
+        let graph = ExpandedContextGraph {
+            nodes: vec![
+                ExpandedNode {
+                    node: GraphNodeRef {
+                        id: "topic:seed".to_string(),
+                        label: "Seed topic".to_string(),
+                    },
+                    min_depth: 0,
+                    provenance: vec![TraversalProvenance {
+                        seed: GraphNodeRef {
+                            id: "topic:seed".to_string(),
+                            label: "Seed topic".to_string(),
+                        },
+                        depth: 0,
+                        path: Vec::new(),
+                    }],
+                },
+                ExpandedNode {
+                    node: GraphNodeRef {
+                        id: "event:recent".to_string(),
+                        label: "Recent event".to_string(),
+                    },
+                    min_depth: 1,
+                    provenance: vec![TraversalProvenance {
+                        seed: GraphNodeRef {
+                            id: "topic:seed".to_string(),
+                            label: "Seed topic".to_string(),
+                        },
+                        depth: 1,
+                        path: Vec::new(),
+                    }],
+                },
+                ExpandedNode {
+                    node: GraphNodeRef {
+                        id: "emotion:calm".to_string(),
+                        label: "Calm mood".to_string(),
+                    },
+                    min_depth: 1,
+                    provenance: vec![TraversalProvenance {
+                        seed: GraphNodeRef {
+                            id: "topic:seed".to_string(),
+                            label: "Seed topic".to_string(),
+                        },
+                        depth: 1,
+                        path: Vec::new(),
+                    }],
+                },
+            ],
+            edges: vec![
+                ExpandedEdge {
+                    edge: GraphTraversalEdge {
+                        from: "topic:seed".to_string(),
+                        to: "event:recent".to_string(),
+                        kind: "ABOUT".to_string(),
+                    },
+                    min_depth: 1,
+                    provenance: Vec::new(),
+                },
+                ExpandedEdge {
+                    edge: GraphTraversalEdge {
+                        from: "event:recent".to_string(),
+                        to: "emotion:calm".to_string(),
+                        kind: "AFFECTS".to_string(),
+                    },
+                    min_depth: 2,
+                    provenance: Vec::new(),
+                },
+            ],
+        };
+
+        let config = GraphNeighborhoodSummaryConfig {
+            max_chars: 150,
+            max_tokens: Some(25),
+            chars_per_token: 4,
+            verbatim_node_ids: Vec::new(),
+            max_edge_lines: 8,
+        };
+        let expected_budget = effective_graph_summary_char_budget(&config);
+        let summary = graph.summarize_neighborhood(config);
+
+        assert!(summary.rendered.len() <= expected_budget);
+        assert!(summary.stats.rendered_chars <= summary.stats.budget_chars);
+        assert!(
+            summary
+                .debug_view()
+                .contains("original_graph=nodes:3 edges:2")
+        );
+    }
+
+    #[test]
+    fn neighborhood_summary_keeps_key_nodes_verbatim() {
+        let graph = ExpandedContextGraph {
+            nodes: vec![
+                ExpandedNode {
+                    node: GraphNodeRef {
+                        id: "topic:aurora".to_string(),
+                        label: "Aurora".to_string(),
+                    },
+                    min_depth: 0,
+                    provenance: vec![TraversalProvenance {
+                        seed: GraphNodeRef {
+                            id: "topic:aurora".to_string(),
+                            label: "Aurora".to_string(),
+                        },
+                        depth: 0,
+                        path: Vec::new(),
+                    }],
+                },
+                ExpandedNode {
+                    node: GraphNodeRef {
+                        id: "event:flight".to_string(),
+                        label: "Flight event".to_string(),
+                    },
+                    min_depth: 1,
+                    provenance: Vec::new(),
+                },
+            ],
+            edges: vec![ExpandedEdge {
+                edge: GraphTraversalEdge {
+                    from: "topic:aurora".to_string(),
+                    to: "event:flight".to_string(),
+                    kind: "ABOUT".to_string(),
+                },
+                min_depth: 1,
+                provenance: Vec::new(),
+            }],
+        };
+
+        let summary = graph.summarize_neighborhood(GraphNeighborhoodSummaryConfig {
+            max_chars: 320,
+            max_tokens: None,
+            chars_per_token: 4,
+            verbatim_node_ids: vec!["topic:aurora".to_string()],
+            max_edge_lines: 8,
+        });
+
+        assert!(
+            summary
+                .rendered
+                .contains("[NodeVerbatim] Aurora (topic:aurora)")
+        );
+        assert!(
+            summary
+                .kept_node_ids
+                .iter()
+                .any(|node_id| node_id == "topic:aurora")
+        );
+        assert!(
+            summary
+                .rendered
+                .contains("[Edge] topic:aurora -ABOUT-> event:flight")
         );
     }
 
