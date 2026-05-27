@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
@@ -101,10 +102,18 @@ pub struct PinnedContextNode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TopicActivation {
+    pub node_id: GraphNodeId,
+    pub salience: f32,
+    pub last_activated_turn: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConversationContext {
     pub system_prompt: String,
     pub self_node: GraphNodeRef,
     pub pinned_nodes: Vec<PinnedContextNode>,
+    pub active_topics: Vec<TopicActivation>,
     pub selected_nodes: Vec<ContextNode>,
     pub conversation_tail: Vec<ConversationTurn>,
     pub budget: ContextBudget,
@@ -190,9 +199,18 @@ impl ConversationContext {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let active_topics = if self.active_topics.is_empty() {
+            "none".to_string()
+        } else {
+            self.active_topics
+                .iter()
+                .map(|topic| format!("{}({:.2})", topic.node_id, topic.salience))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         format!(
-            "self={} pinned=[{}] selected=[{}]",
-            self.self_node.id, pinned, selected
+            "self={} pinned=[{}] active_topics=[{}] selected=[{}]",
+            self.self_node.id, pinned, active_topics, selected
         )
     }
 
@@ -657,6 +675,34 @@ impl EmbeddingRecall for QdrantEmbeddingRecall {
     }
 }
 
+/// Fraction of salience retained by unmentioned topics each turn.
+const TOPIC_DECAY_PER_TURN: f32 = 0.82;
+/// Baseline boost applied whenever a topic is mentioned in the current turn.
+const TOPIC_REINFORCEMENT_BASE: f32 = 0.35;
+/// Additional boost scaled by mention relevance (0..1).
+const TOPIC_REINFORCEMENT_RELEVANCE_WEIGHT: f32 = 0.65;
+/// Drop topics once salience fades below this floor (unless pinned).
+const TOPIC_MIN_SALIENCE: f32 = 0.10;
+/// Upper bound to prevent runaway salience growth; with ~1.0 max boost/turn,
+/// this caps reinforcement to a handful of strongly repeated turns.
+const TOPIC_MAX_SALIENCE: f32 = 4.0;
+/// Pinned topics keep at least this salience and do not decay.
+const PINNED_TOPIC_SALIENCE_FLOOR: f32 = 0.75;
+
+#[derive(Debug, Clone)]
+struct TopicActivationState {
+    node: GraphNodeRef,
+    salience: f32,
+    last_activated_turn: u64,
+}
+
+#[derive(Debug, Default)]
+struct ActiveTopicTracker {
+    current_turn: u64,
+    last_turn_fingerprint: Option<u64>,
+    topics: HashMap<GraphNodeId, TopicActivationState>,
+}
+
 #[derive(Clone)]
 pub struct EmbeddingRecallProvider {
     self_node: GraphNodeRef,
@@ -666,6 +712,7 @@ pub struct EmbeddingRecallProvider {
     conversation_tail_limit: usize,
     entity_extractor: Option<Arc<dyn EntityExtractor>>,
     pinned_nodes: Arc<Mutex<Vec<PinnedContextNode>>>,
+    active_topics: Arc<Mutex<ActiveTopicTracker>>,
 }
 
 impl EmbeddingRecallProvider {
@@ -678,6 +725,7 @@ impl EmbeddingRecallProvider {
             conversation_tail_limit: 6,
             entity_extractor: None,
             pinned_nodes: Arc::new(Mutex::new(Vec::new())),
+            active_topics: Arc::new(Mutex::new(ActiveTopicTracker::default())),
         }
     }
 
@@ -736,6 +784,120 @@ impl EmbeddingRecallProvider {
             .map(|pins| pins.clone())
             .unwrap_or_default()
     }
+
+    fn active_topic_nodes_snapshot(&self) -> Vec<ContextNode> {
+        self.active_topics
+            .lock()
+            .map(|tracker| {
+                let mut topics = tracker
+                    .topics
+                    .values()
+                    .map(|state| ContextNode {
+                        node: state.node.clone(),
+                        role: ContextNodeRole::ActiveTopic,
+                        relevance: state.salience,
+                        reason: format!(
+                            "active-topic salience {:.2} (last activated turn {})",
+                            state.salience, state.last_activated_turn
+                        ),
+                        summary: "Conversationally salient topic".to_string(),
+                    })
+                    .collect::<Vec<_>>();
+                topics.sort_by(|left, right| right.relevance.total_cmp(&left.relevance));
+                topics
+            })
+            .unwrap_or_default()
+    }
+
+    fn active_topics_snapshot(&self) -> Vec<TopicActivation> {
+        self.active_topics
+            .lock()
+            .map(|tracker| {
+                let mut topics = tracker
+                    .topics
+                    .values()
+                    .map(|state| TopicActivation {
+                        node_id: state.node.id.clone(),
+                        salience: state.salience,
+                        last_activated_turn: state.last_activated_turn,
+                    })
+                    .collect::<Vec<_>>();
+                topics.sort_by(|left, right| right.salience.total_cmp(&left.salience));
+                topics
+            })
+            .unwrap_or_default()
+    }
+
+    fn topic_reinforcement_boost(relevance: f32) -> f32 {
+        TOPIC_REINFORCEMENT_BASE + relevance.clamp(0.0, 1.0) * TOPIC_REINFORCEMENT_RELEVANCE_WEIGHT
+    }
+
+    fn update_active_topics(
+        &self,
+        selected_nodes: &[ContextNode],
+        pinned_nodes: &[PinnedContextNode],
+        turn_fingerprint: u64,
+    ) {
+        let Ok(mut tracker) = self.active_topics.lock() else {
+            return;
+        };
+        if tracker.last_turn_fingerprint != Some(turn_fingerprint) {
+            tracker.current_turn = tracker.current_turn.saturating_add(1);
+            tracker.last_turn_fingerprint = Some(turn_fingerprint);
+        }
+        let current_turn = tracker.current_turn;
+
+        let pinned_ids = pinned_nodes
+            .iter()
+            .map(|pin| pin.node_id.as_str())
+            .collect::<HashSet<_>>();
+
+        for (node_id, state) in &mut tracker.topics {
+            if pinned_ids.contains(node_id.as_str()) {
+                state.salience = state.salience.max(PINNED_TOPIC_SALIENCE_FLOOR);
+            } else {
+                state.salience *= TOPIC_DECAY_PER_TURN;
+            }
+        }
+
+        let mut seen_node_ids = HashSet::new();
+        for node in selected_nodes {
+            if !seen_node_ids.insert(node.node.id.as_str()) {
+                continue;
+            }
+            let entry = tracker
+                .topics
+                .entry(node.node.id.clone())
+                .or_insert_with(|| TopicActivationState {
+                    node: node.node.clone(),
+                    salience: 0.0,
+                    last_activated_turn: current_turn,
+                });
+            entry.node = node.node.clone();
+            let boost = Self::topic_reinforcement_boost(node.relevance);
+            entry.salience = (entry.salience + boost).min(TOPIC_MAX_SALIENCE);
+            entry.last_activated_turn = current_turn;
+        }
+
+        for pinned in pinned_nodes {
+            let entry = tracker
+                .topics
+                .entry(pinned.node_id.clone())
+                .or_insert_with(|| TopicActivationState {
+                    node: GraphNodeRef {
+                        id: pinned.node_id.clone(),
+                        label: pinned.node_id.clone(),
+                    },
+                    salience: PINNED_TOPIC_SALIENCE_FLOOR,
+                    last_activated_turn: current_turn,
+                });
+            entry.salience = entry.salience.max(PINNED_TOPIC_SALIENCE_FLOOR);
+        }
+
+        tracker.topics.retain(|node_id, state| {
+            pinned_ids.contains(node_id.as_str()) || state.salience >= TOPIC_MIN_SALIENCE
+        });
+    }
 }
 
 pub trait ContextProvider {
@@ -750,6 +912,10 @@ pub trait ContextProvider {
     }
 
     fn pinned_nodes(&self) -> Vec<PinnedContextNode> {
+        Vec::new()
+    }
+
+    fn active_topics(&self) -> Vec<TopicActivation> {
         Vec::new()
     }
 
@@ -827,6 +993,23 @@ impl ContextProvider for EmbeddingRecallProvider {
             }
         }
 
+        let pinned_nodes = self.pinned_nodes_snapshot();
+        let turn_fingerprint = input_turn_fingerprint(utterance, conversation_tail);
+        self.update_active_topics(&selected, &pinned_nodes, turn_fingerprint);
+        let active_topic_nodes = self.active_topic_nodes_snapshot();
+        for active_node in active_topic_nodes {
+            if let Some(existing) = selected
+                .iter_mut()
+                .find(|existing| existing.node.id == active_node.node.id)
+            {
+                if active_node.relevance > existing.relevance {
+                    existing.relevance = active_node.relevance;
+                }
+            } else {
+                selected.push(active_node);
+            }
+        }
+
         selected
     }
 
@@ -853,6 +1036,10 @@ impl ContextProvider for EmbeddingRecallProvider {
             }
             pins.retain(|pin| !matches!(pin.scope, PinScope::Temporary { remaining_turns: 0 }));
         }
+    }
+
+    fn active_topics(&self) -> Vec<TopicActivation> {
+        self.active_topics_snapshot()
     }
 }
 
@@ -936,6 +1123,16 @@ fn recall_query_text(
     sections.join("\n\n")
 }
 
+fn input_turn_fingerprint(utterance: &str, conversation_tail: &[ConversationTurn]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    utterance.trim().hash(&mut hasher);
+    for turn in conversation_tail {
+        turn.role.label().hash(&mut hasher);
+        turn.text.trim().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 impl StubContextProvider {
     pub fn new(self_node: GraphNodeRef) -> Self {
         Self { self_node }
@@ -967,6 +1164,7 @@ pub fn build_conversation_context(
     let self_node = provider.self_node();
     let mut selected_nodes = provider.selected_nodes(utterance, &conversation_tail, &budget);
     let pinned_nodes = provider.pinned_nodes();
+    let active_topics = provider.active_topics();
     if !pinned_nodes.is_empty() {
         let pinned_ids = pinned_nodes
             .iter()
@@ -979,6 +1177,7 @@ pub fn build_conversation_context(
         system_prompt: system_prompt.into(),
         self_node,
         pinned_nodes,
+        active_topics,
         selected_nodes,
         conversation_tail,
         budget,
@@ -988,12 +1187,14 @@ pub fn build_conversation_context(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::ops::Range;
     use std::sync::Arc;
 
     use serde_json::json;
 
     use super::*;
     use crate::memory::{EmbeddingProvider, QdrantPoint, QdrantSearchHit, QdrantStore};
+    use crate::mind::entity::{EntityKind, ExtractedEntity};
 
     #[test]
     fn stub_context_always_contains_self_node() {
@@ -1022,6 +1223,7 @@ mod tests {
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
             pinned_nodes: Vec::new(),
+            active_topics: Vec::new(),
             selected_nodes: vec![
                 ContextNode {
                     node: GraphNodeRef {
@@ -1169,6 +1371,7 @@ mod tests {
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
             pinned_nodes: Vec::new(),
+            active_topics: Vec::new(),
             selected_nodes: vec![ContextNode {
                 node: GraphNodeRef {
                     id: "topic:latency".to_string(),
@@ -1277,6 +1480,7 @@ mod tests {
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
             pinned_nodes: Vec::new(),
+            active_topics: Vec::new(),
             selected_nodes: vec![ContextNode {
                 node: GraphNodeRef {
                     id: "topic:seed".to_string(),
@@ -1369,6 +1573,7 @@ mod tests {
                 scope: PinScope::Session,
                 reason: "active mission".to_string(),
             }],
+            active_topics: Vec::new(),
             selected_nodes: vec![ContextNode {
                 node: GraphNodeRef {
                     id: "memory:old".to_string(),
@@ -1456,9 +1661,166 @@ mod tests {
         );
     }
 
+    #[test]
+    fn repeated_mentions_reinforce_topic_salience() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_entity_extractor(Arc::new(KeywordTopicExtractor::new("aurora", "Aurora")));
+
+        let first = build_conversation_context(
+            &provider,
+            "system",
+            "Let's discuss aurora today.",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let first_salience = first
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("topic should be active after first mention");
+
+        let second = build_conversation_context(
+            &provider,
+            "system",
+            "aurora details again please",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let second_salience = second
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("topic should remain active");
+
+        assert!(second_salience > first_salience);
+        assert!(second.debug_nodes().contains("active_topics=[topic:aurora"));
+    }
+
+    #[test]
+    fn unmentioned_topics_decay_gradually_across_turns() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_entity_extractor(Arc::new(KeywordTopicExtractor::new("aurora", "Aurora")));
+
+        let first = build_conversation_context(
+            &provider,
+            "system",
+            "aurora mission planning",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let first_salience = first
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("topic should be active after mention");
+
+        let second = build_conversation_context(
+            &provider,
+            "system",
+            "Let's switch to weather.",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let second_salience = second
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("topic should not disappear immediately");
+
+        assert!(second_salience < first_salience);
+        assert!(second_salience > 0.0);
+    }
+
+    #[test]
+    fn pinned_topics_bypass_decay() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_entity_extractor(Arc::new(KeywordTopicExtractor::new("aurora", "Aurora")));
+        provider.pin_node(PinnedContextNode {
+            node_id: "topic:aurora".to_string(),
+            scope: PinScope::Session,
+            reason: "keep mission topic active".to_string(),
+        });
+
+        let first = build_conversation_context(
+            &provider,
+            "system",
+            "aurora mission planning",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let first_salience = first
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("topic should be active after mention");
+
+        let second = build_conversation_context(
+            &provider,
+            "system",
+            "unrelated subject",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+        let second_salience = second
+            .active_topics
+            .iter()
+            .find(|topic| topic.node_id == "topic:aurora")
+            .map(|topic| topic.salience)
+            .expect("pinned topic should stay active");
+
+        assert!(second_salience >= first_salience);
+    }
+
     #[derive(Clone)]
     struct StaticQdrantStore {
         hits: Vec<QdrantSearchHit>,
+    }
+
+    struct KeywordTopicExtractor {
+        keyword: String,
+        label: String,
+    }
+
+    impl KeywordTopicExtractor {
+        fn new(keyword: &str, label: &str) -> Self {
+            Self {
+                keyword: keyword.to_ascii_lowercase(),
+                label: label.to_string(),
+            }
+        }
+    }
+
+    impl EntityExtractor for KeywordTopicExtractor {
+        fn extract(&self, text: &str) -> Vec<ExtractedEntity> {
+            let lowered = text.to_ascii_lowercase();
+            let Some(start) = lowered.find(&self.keyword) else {
+                return Vec::new();
+            };
+            let Some(end) = start.checked_add(self.keyword.len()) else {
+                return Vec::new();
+            };
+            let span: Range<usize> = start..end;
+            vec![ExtractedEntity {
+                text: self.label.clone(),
+                span,
+                kind: EntityKind::Topic,
+                confidence: 0.8,
+            }]
+        }
     }
 
     impl QdrantStore for StaticQdrantStore {
