@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
 use serde_json::Value;
@@ -76,10 +76,35 @@ pub struct ContextNode {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinScope {
+    Permanent,
+    Session,
+    Temporary { remaining_turns: usize },
+}
+
+impl PinScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PinScope::Permanent => "Permanent",
+            PinScope::Session => "Session",
+            PinScope::Temporary { .. } => "Temporary",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedContextNode {
+    pub node_id: GraphNodeId,
+    pub scope: PinScope,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConversationContext {
     pub system_prompt: String,
     pub self_node: GraphNodeRef,
+    pub pinned_nodes: Vec<PinnedContextNode>,
     pub selected_nodes: Vec<ContextNode>,
     pub conversation_tail: Vec<ConversationTurn>,
     pub budget: ContextBudget,
@@ -97,6 +122,16 @@ impl ConversationContext {
         ));
 
         let mut used_chars = lines.iter().map(String::len).sum::<usize>();
+        for pinned in &self.pinned_nodes {
+            let line = format!(
+                "- [Pinned:{}] {} reason={}",
+                pinned.scope.as_str(),
+                pinned.node_id,
+                pinned.reason.trim()
+            );
+            used_chars += line.len();
+            lines.push(line);
+        }
         let mut omitted = 0usize;
 
         let mut selected_nodes = self.selected_nodes.iter().collect::<Vec<_>>();
@@ -130,6 +165,15 @@ impl ConversationContext {
     }
 
     pub fn debug_nodes(&self) -> String {
+        let pinned = if self.pinned_nodes.is_empty() {
+            "none".to_string()
+        } else {
+            self.pinned_nodes
+                .iter()
+                .map(|node| format!("{}:{}({})", node.scope.as_str(), node.node_id, node.reason))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let selected = if self.selected_nodes.is_empty() {
             "none".to_string()
         } else {
@@ -146,7 +190,10 @@ impl ConversationContext {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        format!("self={} selected=[{}]", self.self_node.id, selected)
+        format!(
+            "self={} pinned=[{}] selected=[{}]",
+            self.self_node.id, pinned, selected
+        )
     }
 
     pub fn graph_expansion_request(
@@ -159,6 +206,14 @@ impl ConversationContext {
         let mut roots = Vec::new();
         roots.push(self.self_node.clone());
         seen.insert(self.self_node.id.clone());
+        for pinned in &self.pinned_nodes {
+            if seen.insert(pinned.node_id.clone()) {
+                roots.push(GraphNodeRef {
+                    id: pinned.node_id.clone(),
+                    label: format!("Pinned node {}", pinned.node_id),
+                });
+            }
+        }
         for seed in self
             .selected_nodes
             .iter()
@@ -610,6 +665,7 @@ pub struct EmbeddingRecallProvider {
     min_score: Option<f32>,
     conversation_tail_limit: usize,
     entity_extractor: Option<Arc<dyn EntityExtractor>>,
+    pinned_nodes: Arc<Mutex<Vec<PinnedContextNode>>>,
 }
 
 impl EmbeddingRecallProvider {
@@ -621,6 +677,7 @@ impl EmbeddingRecallProvider {
             min_score: None,
             conversation_tail_limit: 6,
             entity_extractor: None,
+            pinned_nodes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -651,6 +708,34 @@ impl EmbeddingRecallProvider {
         self.entity_extractor = Some(extractor);
         self
     }
+
+    pub fn with_pinned_node(self, pinned: PinnedContextNode) -> Self {
+        self.pin_node(pinned);
+        self
+    }
+
+    pub fn pin_node(&self, pinned: PinnedContextNode) {
+        if let Ok(mut pins) = self.pinned_nodes.lock() {
+            pins.retain(|existing| existing.node_id != pinned.node_id);
+            pins.push(pinned);
+        }
+    }
+
+    pub fn unpin_node(&self, node_id: &str) -> bool {
+        if let Ok(mut pins) = self.pinned_nodes.lock() {
+            let original_len = pins.len();
+            pins.retain(|pin| pin.node_id != node_id);
+            return pins.len() != original_len;
+        }
+        false
+    }
+
+    pub fn pinned_nodes_snapshot(&self) -> Vec<PinnedContextNode> {
+        self.pinned_nodes
+            .lock()
+            .map(|pins| pins.clone())
+            .unwrap_or_default()
+    }
 }
 
 pub trait ContextProvider {
@@ -663,6 +748,12 @@ pub trait ContextProvider {
     ) -> Vec<ContextNode> {
         Vec::new()
     }
+
+    fn pinned_nodes(&self) -> Vec<PinnedContextNode> {
+        Vec::new()
+    }
+
+    fn advance_pins(&self) {}
 }
 
 impl ContextProvider for EmbeddingRecallProvider {
@@ -717,9 +808,9 @@ impl ContextProvider for EmbeddingRecallProvider {
                                 role: ContextNodeRole::RetrievedMemory,
                                 relevance: hit.score,
                                 reason: hit.reason,
-                                summary: hit
-                                    .summary
-                                    .unwrap_or_else(|| "Retrieved from embedding recall".to_string()),
+                                summary: hit.summary.unwrap_or_else(|| {
+                                    "Retrieved from embedding recall".to_string()
+                                }),
                             })
                             .collect();
                         let seeds: Vec<String> = recall_nodes
@@ -737,6 +828,31 @@ impl ContextProvider for EmbeddingRecallProvider {
         }
 
         selected
+    }
+
+    fn pinned_nodes(&self) -> Vec<PinnedContextNode> {
+        self.pinned_nodes
+            .lock()
+            .map(|pins| {
+                pins.iter()
+                    .filter(|pin| !matches!(pin.scope, PinScope::Temporary { remaining_turns: 0 }))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn advance_pins(&self) {
+        if let Ok(mut pins) = self.pinned_nodes.lock() {
+            for pin in pins.iter_mut() {
+                if let PinScope::Temporary { remaining_turns } = &mut pin.scope
+                    && *remaining_turns > 0
+                {
+                    *remaining_turns -= 1;
+                }
+            }
+            pins.retain(|pin| !matches!(pin.scope, PinScope::Temporary { remaining_turns: 0 }));
+        }
     }
 }
 
@@ -849,10 +965,20 @@ pub fn build_conversation_context(
     budget: ContextBudget,
 ) -> ConversationContext {
     let self_node = provider.self_node();
-    let selected_nodes = provider.selected_nodes(utterance, &conversation_tail, &budget);
+    let mut selected_nodes = provider.selected_nodes(utterance, &conversation_tail, &budget);
+    let pinned_nodes = provider.pinned_nodes();
+    if !pinned_nodes.is_empty() {
+        let pinned_ids = pinned_nodes
+            .iter()
+            .map(|node| node.node_id.as_str())
+            .collect::<HashSet<_>>();
+        selected_nodes.retain(|node| !pinned_ids.contains(node.node.id.as_str()));
+    }
+    provider.advance_pins();
     ConversationContext {
         system_prompt: system_prompt.into(),
         self_node,
+        pinned_nodes,
         selected_nodes,
         conversation_tail,
         budget,
@@ -895,6 +1021,7 @@ mod tests {
                 id: DEFAULT_SELF_NODE_ID.to_string(),
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
+            pinned_nodes: Vec::new(),
             selected_nodes: vec![
                 ContextNode {
                     node: GraphNodeRef {
@@ -1041,6 +1168,7 @@ mod tests {
                 id: DEFAULT_SELF_NODE_ID.to_string(),
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
+            pinned_nodes: Vec::new(),
             selected_nodes: vec![ContextNode {
                 node: GraphNodeRef {
                     id: "topic:latency".to_string(),
@@ -1148,6 +1276,7 @@ mod tests {
                 id: DEFAULT_SELF_NODE_ID.to_string(),
                 label: DEFAULT_SELF_NODE_LABEL.to_string(),
             },
+            pinned_nodes: Vec::new(),
             selected_nodes: vec![ContextNode {
                 node: GraphNodeRef {
                     id: "topic:seed".to_string(),
@@ -1224,6 +1353,106 @@ mod tests {
                 .nodes
                 .iter()
                 .any(|node| node.node.id == DEFAULT_SELF_NODE_ID)
+        );
+    }
+
+    #[test]
+    fn pinned_nodes_are_rendered_and_debugged_separately() {
+        let context = ConversationContext {
+            system_prompt: "system".to_string(),
+            self_node: GraphNodeRef {
+                id: DEFAULT_SELF_NODE_ID.to_string(),
+                label: DEFAULT_SELF_NODE_LABEL.to_string(),
+            },
+            pinned_nodes: vec![PinnedContextNode {
+                node_id: "topic:mission".to_string(),
+                scope: PinScope::Session,
+                reason: "active mission".to_string(),
+            }],
+            selected_nodes: vec![ContextNode {
+                node: GraphNodeRef {
+                    id: "memory:old".to_string(),
+                    label: "Old memory".to_string(),
+                },
+                role: ContextNodeRole::RetrievedMemory,
+                relevance: 0.1,
+                reason: "older mention".to_string(),
+                summary: "Low-priority memory node that should be omitted.".to_string(),
+            }],
+            conversation_tail: Vec::new(),
+            budget: ContextBudget { max_chars: 180 },
+        };
+
+        let rendered = context.render_compact_nodes();
+        assert!(rendered.contains("[Pinned:Session] topic:mission"));
+        assert!(
+            context
+                .debug_nodes()
+                .contains("pinned=[Session:topic:mission(active mission)]")
+        );
+    }
+
+    #[test]
+    fn session_pins_survive_unrelated_turns_and_temporary_pins_expire() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        });
+        provider.pin_node(PinnedContextNode {
+            node_id: "topic:project-aurora".to_string(),
+            scope: PinScope::Session,
+            reason: "ongoing project".to_string(),
+        });
+        provider.pin_node(PinnedContextNode {
+            node_id: "topic:mood".to_string(),
+            scope: PinScope::Temporary { remaining_turns: 1 },
+            reason: "temporary emotional theme".to_string(),
+        });
+
+        let first = build_conversation_context(
+            &provider,
+            "system",
+            "What's the weather tomorrow?",
+            vec![ConversationTurn {
+                role: ConversationRole::User,
+                text: "Tell me a joke".to_string(),
+            }],
+            ContextBudget::default(),
+        );
+        assert!(
+            first
+                .pinned_nodes
+                .iter()
+                .any(|node| node.node_id == "topic:project-aurora")
+        );
+        assert!(
+            first
+                .pinned_nodes
+                .iter()
+                .any(|node| node.node_id == "topic:mood")
+        );
+
+        let second = build_conversation_context(
+            &provider,
+            "system",
+            "Do you know any spaceship trivia?",
+            vec![ConversationTurn {
+                role: ConversationRole::User,
+                text: "Different subject now".to_string(),
+            }],
+            ContextBudget::default(),
+        );
+        assert!(
+            second
+                .pinned_nodes
+                .iter()
+                .any(|node| node.node_id == "topic:project-aurora")
+        );
+        assert!(
+            !second
+                .pinned_nodes
+                .iter()
+                .any(|node| node.node_id == "topic:mood")
         );
     }
 

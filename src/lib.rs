@@ -69,8 +69,8 @@ pub use mind::context::{
     ConversationContext, ConversationTurn, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_SELF_NODE_ID,
     DEFAULT_SELF_NODE_LABEL, EmbeddingRecall, EmbeddingRecallProvider, ExpandedContextGraph,
     ExpandedEdge, ExpandedNode, GraphExpansionRequest, GraphNodeId, GraphNodeRef,
-    GraphTraversalEdge, QdrantEmbeddingRecall, RecallHit, RecallQuery, RecallSource,
-    StubContextProvider, TraversalDirection, TraversalPathEdge, TraversalProvenance,
+    GraphTraversalEdge, PinScope, PinnedContextNode, QdrantEmbeddingRecall, RecallHit, RecallQuery,
+    RecallSource, StubContextProvider, TraversalDirection, TraversalPathEdge, TraversalProvenance,
     build_conversation_context, expand_context_graph,
 };
 pub use mind::controller::{
