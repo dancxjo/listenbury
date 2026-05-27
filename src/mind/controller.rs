@@ -1,5 +1,4 @@
 use crate::event::HearingEvent;
-use crate::hearing::breath::DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS;
 use crate::mind::llm::LlmEvent;
 use crate::mind::turn::{TurnState, TurnTracker};
 use crate::mouth::planner::{
@@ -8,7 +7,7 @@ use crate::mouth::planner::{
 use std::collections::VecDeque;
 
 pub const DEFAULT_FILLER_REPEAT_COOLDOWN_MS: u64 = 60_000;
-pub const DEFAULT_FILLER_ACTIVATION_DELAY_MS: u64 = DEFAULT_CONVERSATIONAL_TURN_SILENCE_MS;
+pub const DEFAULT_FILLER_ACTIVATION_DELAY_MS: u64 = 1_200;
 pub const DEFAULT_INTERRUPT_BLIP_MS: u64 = 80;
 pub const DEFAULT_INTERRUPT_FADE_THRESHOLD_MS: u64 = 160;
 pub const DEFAULT_INTERRUPT_STOP_THRESHOLD_MS: u64 = 450;

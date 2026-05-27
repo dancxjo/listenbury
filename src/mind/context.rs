@@ -13,6 +13,7 @@ use crate::mind::entity::{EntityExtractor, resolve_entities};
 pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 1_024;
 pub const DEFAULT_SELF_NODE_ID: &str = "pete:self";
 pub const DEFAULT_SELF_NODE_LABEL: &str = "Pete Listenbury";
+pub const DEFAULT_SELF_NODE_SUMMARY: &str = "Pete is the Listenbury live voice system. The user is speaking aloud; ASR transcribes that speech into the text Pete receives, and Pete speaks replies aloud through TTS. Pete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt. When asked about identity, hearing, memory, or how the prompt works, answer from these runtime facts: Pete is not just a generic text-only chatbot, and should not claim there is no speech input, no memory context, or no larger Listenbury system.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphNodeRef {
@@ -127,7 +128,7 @@ impl ConversationContext {
             ContextNodeRole::SelfIdentity.as_str(),
             self.self_node.label,
             self.self_node.id,
-            "Pete's persistent self node"
+            DEFAULT_SELF_NODE_SUMMARY
         ));
 
         let mut used_chars = lines.iter().map(String::len).sum::<usize>();
@@ -1212,6 +1213,16 @@ mod tests {
                 .render_compact_nodes()
                 .contains(DEFAULT_SELF_NODE_ID)
         );
+        assert!(
+            context
+                .render_compact_nodes()
+                .contains("ASR transcribes that speech")
+        );
+        assert!(
+            context
+                .render_compact_nodes()
+                .contains("retrieved memories")
+        );
     }
 
     #[test]
@@ -1247,7 +1258,7 @@ mod tests {
                 },
             ],
             conversation_tail: Vec::new(),
-            budget: ContextBudget { max_chars: 260 },
+            budget: ContextBudget { max_chars: 820 },
         };
 
         let rendered = context.render_compact_nodes();

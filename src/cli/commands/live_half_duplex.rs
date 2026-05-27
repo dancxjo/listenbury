@@ -22,7 +22,7 @@ use crate::cli::ModelProfile;
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use crate::cli::commands::cpal_diag::play_audio_frames;
+use crate::cli::commands::cpal_diag::{play_audio_frames, prepare_audio_playback};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -288,7 +288,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -296,6 +296,34 @@ const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud thro
     feature = "tts-piper"
 ))]
 const FILLER_SILENCE_DURATION_MS: u64 = listenbury::DEFAULT_FILLER_ACTIVATION_DELAY_MS;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const PETE_TURN_CHIME_SAMPLE_RATE_HZ: u32 = 48_000;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const PETE_TURN_CHIME_DURATION_MS: u64 = 90;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const PETE_TURN_CHIME_FADE_MS: u64 = 8;
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+const PETE_TURN_CHIME_GAIN: f32 = 0.045;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -454,6 +482,7 @@ struct LiveTurnTraceState {
     first_safe_synthetic_unit_emitted: bool,
     first_tts_audio_frame_emitted: bool,
     playback_started: bool,
+    pete_turn_entry_chime_played: bool,
 }
 
 #[cfg(all(
@@ -470,6 +499,48 @@ impl LiveTurnTraceState {
             first_safe_synthetic_unit_emitted: false,
             first_tts_audio_frame_emitted: false,
             playback_started: false,
+            pete_turn_entry_chime_played: false,
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[derive(Debug, Clone, Copy)]
+enum PeteTurnChime {
+    Entry,
+    Exit,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+impl PeteTurnChime {
+    fn frequencies_hz(self) -> (f32, f32) {
+        match self {
+            Self::Entry => (697.0, 1_209.0),
+            Self::Exit => (770.0, 1_336.0),
+        }
+    }
+
+    fn source(self) -> &'static str {
+        match self {
+            Self::Entry => "live-half-duplex pete-turn-entry-chime",
+            Self::Exit => "live-half-duplex pete-turn-exit-chime",
+        }
+    }
+
+    fn trace_kind(self) -> &'static str {
+        match self {
+            Self::Entry => "pete_turn_entry_chime",
+            Self::Exit => "pete_turn_exit_chime",
         }
     }
 }
@@ -1268,7 +1339,7 @@ fn stream_speech_to_tts(
                 }
                 SimplexTurnGapStatus::Ready => {
                     playback_allowed = true;
-                    capture_enabled.store(false, Ordering::SeqCst);
+                    begin_pete_turn_playback(capture_enabled, &mut state.trace, &mut trace_state)?;
                     if !prepared_audio.is_empty() {
                         play_tts_audio_frames(
                             std::mem::take(&mut prepared_audio),
@@ -1481,7 +1552,7 @@ fn stream_speech_to_tts(
             }
             SimplexTurnGapStatus::Ready => {
                 playback_allowed = true;
-                capture_enabled.store(false, Ordering::SeqCst);
+                begin_pete_turn_playback(capture_enabled, &mut state.trace, &mut trace_state)?;
             }
             SimplexTurnGapStatus::Waiting => {}
         }
@@ -1543,6 +1614,7 @@ fn stream_speech_to_tts(
             "Piper produced no audio frames before timeout"
         );
     }
+    play_pete_turn_chime(PeteTurnChime::Exit, &mut state.trace, &trace_state)?;
     state.self_hearing.mark_output_finished();
     emit_read_aloud_timed_word_stream_revision(
         &mut state.trace,
@@ -2218,6 +2290,106 @@ fn collect_ready_tts_audio(
     }
     prepared_audio.extend(frames);
     Ok(true)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn begin_pete_turn_playback(
+    capture_enabled: &AtomicBool,
+    trace: &mut LiveTrace,
+    trace_state: &mut LiveTurnTraceState,
+) -> Result<()> {
+    capture_enabled.store(false, Ordering::SeqCst);
+    if trace_state.pete_turn_entry_chime_played {
+        return Ok(());
+    }
+    play_pete_turn_chime(PeteTurnChime::Entry, trace, trace_state)?;
+    trace_state.pete_turn_entry_chime_played = true;
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn play_pete_turn_chime(
+    chime: PeteTurnChime,
+    trace: &mut LiveTrace,
+    trace_state: &LiveTurnTraceState,
+) -> Result<()> {
+    trace.emit_now(trace_state.turn, chime.trace_kind(), ExactTimestamp::now())?;
+    play_audio_frames_quietly(&pete_turn_chime_audio(chime), chime.source())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn pete_turn_chime_audio(chime: PeteTurnChime) -> [AudioFrame; 1] {
+    let (low_hz, high_hz) = chime.frequencies_hz();
+    let sample_count = ((u64::from(PETE_TURN_CHIME_SAMPLE_RATE_HZ) * PETE_TURN_CHIME_DURATION_MS)
+        / 1_000) as usize;
+    let fade_samples =
+        ((u64::from(PETE_TURN_CHIME_SAMPLE_RATE_HZ) * PETE_TURN_CHIME_FADE_MS) / 1_000) as usize;
+    let sample_rate = PETE_TURN_CHIME_SAMPLE_RATE_HZ as f32;
+    let mut samples = Vec::with_capacity(sample_count);
+    for index in 0..sample_count {
+        let t = index as f32 / sample_rate;
+        let fade_in = if fade_samples == 0 {
+            1.0
+        } else {
+            (index as f32 / fade_samples as f32).min(1.0)
+        };
+        let remaining = sample_count.saturating_sub(index + 1);
+        let fade_out = if fade_samples == 0 {
+            1.0
+        } else {
+            (remaining as f32 / fade_samples as f32).min(1.0)
+        };
+        let envelope = fade_in.min(fade_out);
+        let low = (2.0 * std::f32::consts::PI * low_hz * t).sin();
+        let high = (2.0 * std::f32::consts::PI * high_hz * t).sin();
+        samples.push((low + high) * PETE_TURN_CHIME_GAIN * envelope);
+    }
+    [AudioFrame {
+        captured_at: ExactTimestamp::now(),
+        sample_rate_hz: PETE_TURN_CHIME_SAMPLE_RATE_HZ,
+        channels: MONO_CHANNELS,
+        samples,
+        voice_signatures: Vec::new(),
+    }]
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn play_audio_frames_quietly(frames: &[AudioFrame], source: &str) -> Result<()> {
+    let playback = prepare_audio_playback(frames, source)?;
+    let playback_cursor = Arc::new(AtomicUsize::new(0));
+    let playback_paused = Arc::new(AtomicBool::new(false));
+    let done_threshold = playback.sample_count();
+    let stream = playback.build_stream(Arc::clone(&playback_cursor), playback_paused)?;
+    stream
+        .play()
+        .with_context(|| format!("failed to start playback on {}", playback.device_name))?;
+
+    while playback_cursor.load(Ordering::Relaxed) < done_threshold {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    std::thread::sleep(Duration::from_millis(10));
+    drop(stream);
+    Ok(())
 }
 
 #[cfg(all(
@@ -2978,6 +3150,9 @@ mod tests {
                 "Working memory graph nodes:\n- [SelfIdentity] Pete Listenbury (pete:self)"
             )
         );
+        assert!(prompt.contains("ASR transcribes that speech"));
+        assert!(prompt.contains("retrieved memories"));
+        assert!(prompt.contains("not a generic text-only chatbot"));
         assert!(prompt.contains("Current user message:\nUser: What did I just ask?"));
     }
 
@@ -3030,7 +3205,7 @@ mod tests {
             false,
             42,
             10_000,
-            10_800,
+            11_200,
             false,
             false,
         );
@@ -3059,7 +3234,7 @@ mod tests {
             false,
             42,
             10_100,
-            10_900,
+            11_300,
             false,
             false,
         );
@@ -3077,7 +3252,7 @@ mod tests {
             false,
             42,
             10_000,
-            10_799,
+            11_199,
             false,
             false,
         );
@@ -3089,7 +3264,7 @@ mod tests {
             false,
             42,
             10_000,
-            10_800,
+            11_200,
             false,
             false,
         );
@@ -3107,7 +3282,7 @@ mod tests {
             false,
             43,
             20_000,
-            20_800,
+            21_200,
             true,
             false,
         );
@@ -3119,7 +3294,7 @@ mod tests {
             false,
             44,
             30_000,
-            30_800,
+            31_200,
             false,
             true,
         );
