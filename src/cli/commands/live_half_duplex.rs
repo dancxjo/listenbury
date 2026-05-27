@@ -663,6 +663,7 @@ struct LiveHalfDuplexState {
     prosody: StreamingProsodyAnalyzer,
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
+    pending_in_flight_thought: Option<InFlightThought>,
 }
 
 #[cfg(all(
@@ -692,8 +693,23 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("prosody", &self.prosody.latest_model())
             .field("frame_time_ms", &self.frame_time_ms)
             .field("last_vad_state", &self.last_vad_state)
+            .field("pending_in_flight_thought", &self.pending_in_flight_thought)
             .finish()
     }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InFlightThought {
+    response: String,
 }
 
 #[cfg(all(
@@ -1193,6 +1209,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         prosody: StreamingProsodyAnalyzer::default(),
         frame_time_ms: 0,
         last_vad_state: None,
+        pending_in_flight_thought: None,
     };
     let mut turns = 0usize;
 
@@ -1563,6 +1580,7 @@ fn stream_speech_to_tts(
     user_turn_id: u64,
 ) -> Result<LiveSpeechOutcome> {
     let prompt_format = prompt_format_for_model(llm_model_path);
+    let in_flight_thought = state.pending_in_flight_thought.take();
     let generation_max_tokens = max_tokens(model_profile, prompt_format);
     let reserved_generation_tokens = reserved_generation_tokens.max(generation_max_tokens);
     let prompt_budget = PromptBudget::new(context_size, reserved_generation_tokens);
@@ -1572,6 +1590,7 @@ fn stream_speech_to_tts(
         state.controller.conversation_history(),
         prompt_format,
         prompt_budget,
+        in_flight_thought.as_ref(),
     );
     eprintln!(
         "[live-half-duplex] selected context nodes for turn {user_turn_id}: {}",
@@ -1631,6 +1650,7 @@ fn stream_speech_to_tts(
     );
     let mut current_spoken_text = String::new();
     let mut response_fragments = Vec::new();
+    let mut generated_visible_response = String::new();
     let mut main_llm_has_emitted_token = false;
     let mut main_llm_has_safe_synthetic_unit = false;
     let mut filler_attempted = false;
@@ -1641,12 +1661,16 @@ fn stream_speech_to_tts(
     let mut trace_state = LiveTurnTraceState::new(user_turn_id);
     let mut harmony_filter =
         (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
-    let mut command_filter = LiveCommandFilter::default();
+    let mut command_filter =
+        LiveCommandFilter::for_prompt_prefill(prompt_format, in_flight_thought.is_some());
     loop {
         if !playback_allowed {
             match poll_simplex_turn_gap(turn_gap, state)? {
                 SimplexTurnGapStatus::Waiting => {}
                 SimplexTurnGapStatus::Interrupted => {
+                    state.pending_in_flight_thought =
+                        build_in_flight_thought(&generated_visible_response, &response_fragments)
+                            .or_else(|| in_flight_thought.clone());
                     cancel_prepared_simplex_response(
                         llm,
                         generation_id,
@@ -1770,12 +1794,14 @@ fn stream_speech_to_tts(
         };
         let command_output = command_filter.filter_events(&speech_events);
         let mut planner_events = command_output.events;
+        append_llm_token_text(&mut generated_visible_response, &planner_events);
         for source in command_output.sources {
             match execute_live_typescript_commands(&source) {
                 Ok(commands) => {
                     for command in commands {
                         match command {
                             LiveTypeScriptCommand::Say { text, .. } => {
+                                append_spoken_text_fragment(&mut generated_visible_response, &text);
                                 planner_events.push(LlmEvent::Token { text });
                             }
                             LiveTypeScriptCommand::Sleeping { reason } => {
@@ -1954,6 +1980,9 @@ fn stream_speech_to_tts(
     if !playback_allowed {
         match wait_for_simplex_turn_gap(turn_gap, state)? {
             SimplexTurnGapStatus::Interrupted => {
+                state.pending_in_flight_thought =
+                    build_in_flight_thought(&generated_visible_response, &response_fragments)
+                        .or_else(|| in_flight_thought.clone());
                 cancel_prepared_simplex_response(
                     llm,
                     generation_id,
@@ -2170,6 +2199,60 @@ fn cancel_prepared_simplex_response(
         feature = "tts-piper"
     )
 ))]
+fn build_in_flight_thought(
+    generated_visible_response: &str,
+    response_fragments: &[String],
+) -> Option<InFlightThought> {
+    let response = if generated_visible_response.trim().is_empty() {
+        join_spoken_fragments(response_fragments)
+    } else {
+        generated_visible_response.trim().to_string()
+    };
+    (!response.trim().is_empty()).then(|| InFlightThought { response })
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn append_llm_token_text(output: &mut String, events: &[LlmEvent]) {
+    for event in events {
+        if let LlmEvent::Token { text } = event {
+            append_spoken_text_fragment(output, text);
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn append_spoken_text_fragment(output: &mut String, text: &str) {
+    if output.is_empty() && text.trim().is_empty() {
+        return;
+    }
+    output.push_str(text);
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn planner_units_from_events(
     controller: &mut ConversationController,
     events: &[LlmEvent],
@@ -2230,6 +2313,17 @@ struct LiveCommandFilterOutput {
     )
 ))]
 impl LiveCommandFilter {
+    fn for_prompt_prefill(format: LivePromptFormat, prefill_opens_thinking: bool) -> Self {
+        if prefill_opens_thinking && format != LivePromptFormat::GptOssHarmony {
+            Self {
+                thought_end: Some("</thinking>"),
+                ..Self::default()
+            }
+        } else {
+            Self::default()
+        }
+    }
+
     fn filter_events(&mut self, events: &[LlmEvent]) -> LiveCommandFilterOutput {
         let mut output = LiveCommandFilterOutput::default();
         for event in events {
@@ -4358,6 +4452,7 @@ fn build_prompt_and_context<'a>(
         history,
         format,
         PromptBudget::default(),
+        None,
     )
 }
 
@@ -4376,6 +4471,7 @@ fn build_prompt_and_context_with_provider<'a>(
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
     budget: PromptBudget,
+    in_flight_thought: Option<&InFlightThought>,
 ) -> (String, ConversationContext, PromptAssemblyDiagnostics) {
     let context = build_turn_conversation_context_with_provider(
         provider,
@@ -4385,9 +4481,21 @@ fn build_prompt_and_context_with_provider<'a>(
             max_chars: budget.graph_context_char_budget,
         },
     );
-    let (user_content, mut diagnostics) =
-        build_user_prompt_content(transcript, &context, format, budget);
-    let prompt = render_live_prompt(format, &context.system_prompt, &user_content);
+    let assistant_prefill =
+        in_flight_thought.map(|thought| format_in_flight_thinking_prefill(thought, transcript));
+    let (user_content, diagnostics) = build_user_prompt_content(
+        transcript,
+        &context,
+        format,
+        budget,
+        assistant_prefill.as_deref(),
+    );
+    let prompt = render_live_prompt(
+        format,
+        &context.system_prompt,
+        &user_content,
+        assistant_prefill.as_deref(),
+    );
     (prompt, context, diagnostics)
 }
 
@@ -4416,6 +4524,23 @@ struct PromptBudget {
         feature = "tts-piper"
     )
 ))]
+fn format_in_flight_thinking_prefill(thought: &InFlightThought, transcript: &str) -> String {
+    format!(
+        "<thinking>The interlocutor is in the middle of saying something. We were about to say \"{}\", and then we heard \"{}\". Continue from this in-flight thought before deciding what to say.\n",
+        prompt_quote(&thought.response),
+        prompt_quote(transcript.trim())
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 impl PromptBudget {
     fn new(context_size: u32, reserved_generation_tokens: usize) -> Self {
         let context_size_tokens = usize::try_from(context_size).unwrap_or(usize::MAX);
@@ -4431,6 +4556,22 @@ impl PromptBudget {
             graph_context_char_budget: graph_context_char_budget.max(512),
         }
     }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn prompt_quote(text: &str) -> String {
+    text.trim()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
 }
 
 #[cfg(any(
@@ -4494,6 +4635,7 @@ fn build_user_prompt_content(
     context: &ConversationContext,
     format: LivePromptFormat,
     budget: PromptBudget,
+    assistant_prefill: Option<&str>,
 ) -> (String, PromptAssemblyDiagnostics) {
     let history_lines = render_conversation_history_lines(context.conversation_tail.iter());
     let mut history_start = 0usize;
@@ -4527,7 +4669,12 @@ fn build_user_prompt_content(
             )
         };
 
-        let prompt = render_live_prompt(format, &context.system_prompt, &user_content);
+        let prompt = render_live_prompt(
+            format,
+            &context.system_prompt,
+            &user_content,
+            assistant_prefill,
+        );
         let total_estimated_prompt_tokens = estimate_prompt_tokens(&prompt);
         if total_estimated_prompt_tokens <= budget.prompt_budget_tokens {
             diagnostics.total_estimated_prompt_tokens = total_estimated_prompt_tokens;
@@ -4560,22 +4707,35 @@ fn build_user_prompt_content(
         feature = "tts-piper"
     )
 ))]
-fn render_live_prompt(format: LivePromptFormat, system_prompt: &str, user_content: &str) -> String {
+fn render_live_prompt(
+    format: LivePromptFormat,
+    system_prompt: &str,
+    user_content: &str,
+    assistant_prefill: Option<&str>,
+) -> String {
+    let assistant_prefill = assistant_prefill.unwrap_or_default();
     match format {
         LivePromptFormat::Llama3Instruct => format!(
-            "<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+            "<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{assistant_prefill}"
         ),
-        LivePromptFormat::GptOssHarmony => format!(
-            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\n{system_prompt}<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant"
-        ),
+        LivePromptFormat::GptOssHarmony => {
+            let assistant_prefill = if assistant_prefill.is_empty() {
+                String::new()
+            } else {
+                format!("<|channel|>analysis<|message|>{assistant_prefill}")
+            };
+            format!(
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\n{system_prompt}<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant{assistant_prefill}"
+            )
+        }
         LivePromptFormat::Gemma3Instruct => {
             format!(
-                "<start_of_turn>user\n{system_prompt}\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n"
+                "<start_of_turn>user\n{system_prompt}\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n{assistant_prefill}"
             )
         }
         LivePromptFormat::Gemma4Instruct => {
             format!(
-                "<|turn>system\n{system_prompt}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n"
+                "<|turn>system\n{system_prompt}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n{assistant_prefill}"
             )
         }
     }
@@ -4648,11 +4808,14 @@ fn build_turn_conversation_context_with_provider<'a>(
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 fn join_spoken_fragments(fragments: &[String]) -> String {
     fragments
@@ -4907,8 +5070,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        FamiliarVoiceMemory, HarmonyFinalFilter, LiveCommandFilter, LivePromptFormat,
-        LiveTypeScriptCommand, PromptBudget, SimplexTurnGapStatus, build_prompt,
+        FamiliarVoiceMemory, HarmonyFinalFilter, InFlightThought, LiveCommandFilter,
+        LivePromptFormat, LiveTypeScriptCommand, PromptBudget, SimplexTurnGapStatus, build_prompt,
         build_prompt_and_context_with_provider, convert_frame_samples,
         execute_live_typescript_commands, format_graph_node_search_prompt_append,
         format_memory_query_prompt_append, live_half_duplex_stops, maybe_plan_cached_backchannel,
@@ -5059,6 +5222,22 @@ mod tests {
             output.events.as_slice(),
             [LlmEvent::Token { text: first }, LlmEvent::Token { text: second }]
                 if first == "Hello " && second == "world ."
+        ));
+        assert!(output.sources.is_empty());
+    }
+
+    #[test]
+    fn live_command_filter_continues_open_prompt_thinking_privately() {
+        let mut filter =
+            LiveCommandFilter::for_prompt_prefill(LivePromptFormat::Llama3Instruct, true);
+        let output = filter.filter_events(&[
+            token("still private "),
+            token("until this closes</thinking>Now aloud."),
+        ]);
+
+        assert!(matches!(
+            output.events.as_slice(),
+            [LlmEvent::Token { text }] if text == "Now aloud."
         ));
         assert!(output.sources.is_empty());
     }
@@ -5424,7 +5603,7 @@ mod tests {
                 ),
             })
             .collect::<Vec<_>>();
-        let budget = PromptBudget::new(1024, 384);
+        let budget = PromptBudget::new(2048, 384);
 
         let (prompt_a, context_a, diagnostics_a) = build_prompt_and_context_with_provider(
             &LargeContextProvider,
@@ -5432,6 +5611,7 @@ mod tests {
             history.iter(),
             LivePromptFormat::Llama3Instruct,
             budget,
+            None,
         );
         let (prompt_b, context_b, diagnostics_b) = build_prompt_and_context_with_provider(
             &LargeContextProvider,
@@ -5439,6 +5619,7 @@ mod tests {
             history.iter(),
             LivePromptFormat::Llama3Instruct,
             budget,
+            None,
         );
 
         assert_eq!(context_a.debug_nodes(), context_b.debug_nodes());
@@ -5453,6 +5634,29 @@ mod tests {
             prompt_a.contains("Working memory graph nodes:"),
             "stress prompt should still include graph section"
         );
+    }
+
+    #[test]
+    fn live_prompt_prefills_open_in_flight_thinking_tag() {
+        let thought = InFlightThought {
+            response: "I was about to answer \"yes\".\n".to_string(),
+        };
+        let history: [ConversationMessage; 0] = [];
+        let (prompt, _, _) = super::build_prompt_and_context_with_provider(
+            &listenbury::StubContextProvider::default(),
+            "and another thing",
+            history.iter(),
+            LivePromptFormat::Llama3Instruct,
+            PromptBudget::default(),
+            Some(&thought),
+        );
+
+        assert!(
+            prompt.contains("<thinking>The interlocutor is in the middle of saying something.")
+        );
+        assert!(prompt.contains("We were about to say \"I was about to answer \\\"yes\\\".\""));
+        assert!(prompt.contains("and then we heard \"and another thing\""));
+        assert!(!prompt.contains("</thinking>"));
     }
 
     #[test]
