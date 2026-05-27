@@ -69,6 +69,10 @@ pub fn vector_documents_for_trace(
                     "neo4j_node_id",
                     optional(graph_result.primary_node_id.clone()),
                 ),
+                (
+                    "graph_node_id",
+                    optional(graph_result.primary_node_id.clone()),
+                ),
             ],
         )],
         MemoryTrace::TimedWordStreamFinalized {
@@ -83,6 +87,10 @@ pub fn vector_documents_for_trace(
                 ("stream_id", json!(stream_id)),
                 (
                     "neo4j_node_id",
+                    optional(graph_result.primary_node_id.clone()),
+                ),
+                (
+                    "graph_node_id",
                     optional(graph_result.primary_node_id.clone()),
                 ),
             ],
@@ -101,6 +109,10 @@ pub fn vector_documents_for_trace(
                 ("salience", json!(salience)),
                 (
                     "neo4j_node_id",
+                    optional(graph_result.primary_node_id.clone()),
+                ),
+                (
+                    "graph_node_id",
                     optional(graph_result.primary_node_id.clone()),
                 ),
             ],

@@ -206,6 +206,7 @@ impl EmbeddingRecall for QdrantEmbeddingRecall {
             .embed(text)
             .with_context(|| format!("embed recall query text ({text})"))?;
         let mut hits = self.qdrant.search(&self.collection, &vector, query.limit)?;
+        hits.retain(|hit| hit.score.is_finite());
         hits.sort_by(|left, right| {
             right
                 .score
@@ -296,19 +297,13 @@ impl ContextProvider for EmbeddingRecallProvider {
             limit: self.recall_limit,
             min_score: self.min_score,
         };
-        let mut hits = match recall.recall(recall_query) {
+        let hits = match recall.recall(recall_query) {
             Ok(hits) => hits,
             Err(error) => {
                 tracing::warn!("embedding recall failed: {error:#}");
                 return Vec::new();
             }
         };
-        hits.sort_by(|left, right| {
-            right
-                .score
-                .partial_cmp(&left.score)
-                .unwrap_or(Ordering::Equal)
-        });
         let selected = hits
             .into_iter()
             .map(|hit| ContextNode {
@@ -343,7 +338,9 @@ fn recall_hit_from_qdrant_hit(
     if min_score.is_some_and(|minimum| hit.score < minimum) {
         return None;
     }
-    let node_id = payload_string(&hit.payload, &["neo4j_node_id", "graph_node_id"])?;
+    // Keep `neo4j_node_id` fallback for old payloads while `graph_node_id`
+    // is the preferred database-agnostic key going forward.
+    let node_id = payload_string(&hit.payload, &GRAPH_NODE_ID_KEYS)?;
     let node_label = payload_string(&hit.payload, &["headline", "node_label", "text"])
         .unwrap_or_else(|| format!("Graph node {node_id}"));
     let kind = payload_string(&hit.payload, &["kind"]).unwrap_or_else(|| "memory".to_string());
@@ -366,6 +363,8 @@ fn recall_hit_from_qdrant_hit(
         summary,
     })
 }
+
+const GRAPH_NODE_ID_KEYS: [&str; 2] = ["graph_node_id", "neo4j_node_id"];
 
 fn payload_string(payload: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
     keys.iter()
@@ -391,8 +390,13 @@ fn recall_query_text(
             .saturating_sub(conversation_tail_limit);
         let tail = conversation_tail[start..]
             .iter()
-            .map(|turn| format!("{}: {}", turn.role.label(), turn.text.trim()))
-            .filter(|line| !line.ends_with(": "))
+            .filter_map(|turn| {
+                let text = turn.text.trim();
+                if text.is_empty() {
+                    return None;
+                }
+                Some(format!("{}: {text}", turn.role.label()))
+            })
             .collect::<Vec<_>>();
         if !tail.is_empty() {
             sections.push(format!("Conversation tail:\n{}", tail.join("\n")));
@@ -568,6 +572,49 @@ mod tests {
         assert_eq!(hits[0].node.id, "node:high");
         assert_eq!(hits[1].node.id, "node:low");
         assert!(hits[0].score >= hits[1].score);
+    }
+
+    #[test]
+    fn payload_string_uses_first_non_empty_key() {
+        let payload = serde_json::from_value(json!({
+            "primary": "  ",
+            "secondary": "fallback",
+            "ignored": 42
+        }))
+        .expect("valid payload");
+        assert_eq!(
+            payload_string(&payload, &["primary", "secondary", "ignored"]),
+            Some("fallback".to_string())
+        );
+        assert_eq!(payload_string(&payload, &["missing"]), None);
+    }
+
+    #[test]
+    fn recall_query_text_combines_utterance_and_tail() {
+        let text = recall_query_text(
+            "  hello  ",
+            &[
+                ConversationTurn {
+                    role: ConversationRole::User,
+                    text: "first".to_string(),
+                },
+                ConversationTurn {
+                    role: ConversationRole::Pete,
+                    text: "second".to_string(),
+                },
+                ConversationTurn {
+                    role: ConversationRole::User,
+                    text: "   ".to_string(),
+                },
+            ],
+            2,
+        );
+        assert!(text.contains("Utterance: hello"));
+        assert!(text.contains("Pete: second"));
+        assert!(!text.contains("User:    "));
+
+        let only_utterance = recall_query_text("hello", &[], 0);
+        assert_eq!(only_utterance, "Utterance: hello");
     }
 
     #[derive(Clone)]
