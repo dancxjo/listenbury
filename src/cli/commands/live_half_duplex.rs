@@ -4289,7 +4289,6 @@ fn build_prompt_and_context_with_provider<'a>(
     let (user_content, mut diagnostics) =
         build_user_prompt_content(transcript, &context, format, budget);
     let prompt = render_live_prompt(format, &context.system_prompt, &user_content);
-    diagnostics.total_estimated_prompt_tokens = estimate_prompt_tokens(&prompt);
     (prompt, context, diagnostics)
 }
 
@@ -4397,7 +4396,8 @@ fn build_user_prompt_content(
     format: LivePromptFormat,
     budget: PromptBudget,
 ) -> (String, PromptAssemblyDiagnostics) {
-    let mut history_lines = render_conversation_history_lines(context.conversation_tail.iter());
+    let history_lines = render_conversation_history_lines(context.conversation_tail.iter());
+    let mut history_start = 0usize;
     let mut graph_lines = context
         .render_compact_nodes()
         .lines()
@@ -4411,7 +4411,7 @@ fn build_user_prompt_content(
     };
 
     loop {
-        let history = history_lines.join("\n");
+        let history = history_lines[history_start..].join("\n");
         let working_memory = graph_lines.join("\n");
         diagnostics.graph_context_tokens = estimate_prompt_tokens(&working_memory);
         diagnostics.conversation_history_tokens = estimate_prompt_tokens(&history);
@@ -4436,8 +4436,8 @@ fn build_user_prompt_content(
         }
 
         diagnostics.prompt_truncated = true;
-        if !history_lines.is_empty() {
-            history_lines.remove(0);
+        if history_start < history_lines.len() {
+            history_start += 1;
             diagnostics.truncated_history_lines += 1;
             continue;
         }
@@ -4492,8 +4492,7 @@ fn render_live_prompt(format: LivePromptFormat, system_prompt: &str, user_conten
     )
 ))]
 fn estimate_prompt_tokens(text: &str) -> usize {
-    text.chars()
-        .count()
+    text.len()
         .saturating_add(PROMPT_CHARS_PER_TOKEN_ESTIMATE - 1)
         / PROMPT_CHARS_PER_TOKEN_ESTIMATE
 }
@@ -4834,6 +4833,10 @@ mod tests {
         }
     }
 
+    const STRESS_TEST_SUMMARY_REPETITIONS: usize = 3;
+    const STRESS_TEST_NODE_COUNT: usize = 220;
+    const STRESS_TEST_SUMMARY: &str = "A long memory summary for stress testing prompt budgeting with graph-backed context assembly.\n";
+
     fn controller_with_fillers_enabled() -> ConversationController {
         let mut controller = ConversationController::default();
         controller.filler_planner = FillerPlanner::new(FillerPlannerConfig {
@@ -4859,7 +4862,7 @@ mod tests {
             _conversation_tail: &[ConversationTurn],
             _budget: &listenbury::ContextBudget,
         ) -> Vec<ContextNode> {
-            (0..220)
+            (0..STRESS_TEST_NODE_COUNT)
                 .map(|index| ContextNode {
                     node: GraphNodeRef {
                         id: format!("memory:{index}"),
@@ -4868,8 +4871,7 @@ mod tests {
                     role: ContextNodeRole::RetrievedMemory,
                     relevance: 1.0 - (index as f32 / 500.0),
                     reason: "stress test".to_string(),
-                    summary: "A long memory summary for stress testing prompt budgeting with graph-backed context assembly."
-                        .repeat(3),
+                    summary: STRESS_TEST_SUMMARY.repeat(STRESS_TEST_SUMMARY_REPETITIONS),
                 })
                 .collect()
         }
