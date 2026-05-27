@@ -68,7 +68,8 @@ impl ProcessPiperBackend {
 impl TtsBackend for ProcessPiperBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         let t0 = Instant::now();
-        let samples = synthesize_process(&self.config, text)?;
+        let process_text = normalize_process_piper_pronunciations(text);
+        let samples = synthesize_process(&self.config, &process_text)?;
         let elapsed = t0.elapsed();
         debug!(
             backend = "process",
@@ -78,6 +79,56 @@ impl TtsBackend for ProcessPiperBackend {
         );
         Ok(frames_from_samples(&self.config, samples))
     }
+}
+
+fn normalize_process_piper_pronunciations(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    let mut index = 0;
+
+    while index < text.len() {
+        let ch = text[index..]
+            .chars()
+            .next()
+            .expect("index should stay on a char boundary");
+        if !ch.is_ascii_alphabetic() {
+            normalized.push(ch);
+            index += ch.len_utf8();
+            continue;
+        }
+
+        let start = index;
+        index += ch.len_utf8();
+        while index < text.len() {
+            let next = text[index..]
+                .chars()
+                .next()
+                .expect("index should stay on a char boundary");
+            if next.is_ascii_alphabetic() {
+                index += next.len_utf8();
+                continue;
+            }
+            if next == '-'
+                && text[index + next.len_utf8()..]
+                    .chars()
+                    .next()
+                    .is_some_and(|after_dash| after_dash.is_ascii_alphabetic())
+            {
+                index += next.len_utf8();
+                continue;
+            }
+            break;
+        }
+
+        let token = &text[start..index];
+        match token.to_ascii_lowercase().as_str() {
+            "mmm" => normalized.push_str("[[m:]]"),
+            "mm" => normalized.push_str("[[m]]"),
+            "mm-hm" | "mm-hmm" => normalized.push_str("[[m h@m]]"),
+            _ => normalized.push_str(token),
+        }
+    }
+
+    normalized
 }
 
 #[cfg(feature = "piper-compat")]
@@ -726,6 +777,22 @@ mod tests {
         // directly here.  The test passes as long as no panic occurs and audio
         // is produced (meaning the stripped text "Hello  world." was non-empty).
         // See `empty_text_after_emoji_strip_is_skipped` for the empty case.
+    }
+
+    #[test]
+    fn process_piper_normalizes_backchannel_nasal_pronunciations() {
+        assert_eq!(
+            normalize_process_piper_pronunciations("Mmm. Mm. Mm-hmm. Mm-hm"),
+            "[[m:]]. [[m]]. [[m h@m]]. [[m h@m]]"
+        );
+    }
+
+    #[test]
+    fn process_piper_pronunciation_normalizer_leaves_other_words_alone() {
+        assert_eq!(
+            normalize_process_piper_pronunciations("model low-latency mms"),
+            "model low-latency mms"
+        );
     }
 
     // Regression: `stop` should not panic and subsequent enqueues should not error.

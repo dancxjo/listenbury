@@ -15,12 +15,12 @@ use anyhow::Result;
 use crate::voice::mbrola::diphone_provider::{DiphoneLookup, DiphoneProvider};
 
 use super::cache::{CacheEntryMetadata, CacheKey, DiphoneCache};
+#[cfg(feature = "piper-compat")]
+use super::forge::fingerprint_config;
 use super::forge::{
     CARRIER_STRATEGY_VERSION, FORGE_SETTINGS_VERSION, ForgeSettings, NORMALIZATION_VERSION,
     fingerprint_path,
 };
-#[cfg(feature = "piper-compat")]
-use super::forge::fingerprint_config;
 
 // ── NeuralDiphoneProvider ─────────────────────────────────────────────────────
 

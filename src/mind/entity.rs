@@ -217,20 +217,41 @@ const PERSON_PREPOSITIONS: &[&str] = &["with", "by", "for", "from"];
 
 /// Prepositions that signal a following proper noun is a Place.
 const PLACE_CUES: &[&str] = &[
-    "in", "at", "near", "around", "outside", "inside", "within", "toward",
-    "towards", "visiting",
+    "in", "at", "near", "around", "outside", "inside", "within", "toward", "towards", "visiting",
 ];
 
 /// Words that signal a following proper noun is a Topic or concept.
 const TOPIC_CUES: &[&str] = &[
-    "about", "regarding", "on", "concerning", "discussing", "discussed", "using",
-    "via", "through", "like",
+    "about",
+    "regarding",
+    "on",
+    "concerning",
+    "discussing",
+    "discussed",
+    "using",
+    "via",
+    "through",
+    "like",
 ];
 
 /// Words that signal a following proper noun is a Task or project.
 const TASK_CUES: &[&str] = &[
-    "fix", "create", "build", "implement", "write", "design", "review", "update",
-    "migrate", "deploy", "refactor", "test", "debug", "task", "project", "issue",
+    "fix",
+    "create",
+    "build",
+    "implement",
+    "write",
+    "design",
+    "review",
+    "update",
+    "migrate",
+    "deploy",
+    "refactor",
+    "test",
+    "debug",
+    "task",
+    "project",
+    "issue",
     "ticket",
 ];
 
@@ -567,7 +588,8 @@ fn extract_heuristic(text: &str) -> Vec<ExtractedEntity> {
 
         let confidence = if ctx != EntityContext::None {
             CONFIDENCE_WITH_CONTEXT_CUE
-        } else if is_place_name(&span_text) || has_org_suffix(&span_text) || is_acronym(&span_text) {
+        } else if is_place_name(&span_text) || has_org_suffix(&span_text) || is_acronym(&span_text)
+        {
             CONFIDENCE_PATTERN_MATCH
         } else if i == 0 {
             CONFIDENCE_SENTENCE_START

@@ -1642,6 +1642,20 @@ mod tests {
     }
 
     #[test]
+    fn phonemizes_backchannel_nasals_without_letter_names() {
+        let g2p = SimpleEnglishG2p::default();
+        let unit = g2p
+            .phonemize_unit("Mmm. Mm. Mm-hmm. Mm-hm")
+            .expect("phonemize");
+        assert_eq!(
+            symbols(&unit.phonemes),
+            vec![
+                "M", " ", "M", " ", "M", " ", "HH", "M", " ", "M", " ", "HH", "M"
+            ]
+        );
+    }
+
+    #[test]
     fn phonemizes_possessive_twilight_with_long_i() {
         let g2p = SimpleEnglishG2p::default();
         let unit = g2p.phonemize_unit("twilight's").expect("phonemize");

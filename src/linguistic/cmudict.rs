@@ -143,7 +143,9 @@ impl CmudictPronouncer {
     /// Build a [`CmudictPronouncer`] from the CMUdict data bundled with this
     /// crate.
     pub fn bundled() -> Self {
-        Self::from_str(BUNDLED_CMUDICT)
+        let mut pronouncer = Self::from_str(BUNDLED_CMUDICT);
+        pronouncer.extend_from_str(SUPPLEMENTAL_CMUDICT);
+        pronouncer
     }
 
     /// Parse a string in CMUdict format and build the pronunciation index.
@@ -153,8 +155,14 @@ impl CmudictPronouncer {
     /// stored alongside the primary pronunciation.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(data: &str) -> Self {
-        let mut entries: HashMap<Box<str>, Vec<Vec<CmuPhoneme>>> = HashMap::new();
+        let mut pronouncer = Self {
+            entries: HashMap::new(),
+        };
+        pronouncer.extend_from_str(data);
+        pronouncer
+    }
 
+    fn extend_from_str(&mut self, data: &str) {
         for line in data.lines() {
             let line = line.trim();
             if line.starts_with(";;;") || line.is_empty() {
@@ -180,10 +188,8 @@ impl CmudictPronouncer {
                 continue;
             }
 
-            entries.entry(key).or_default().push(phonemes);
+            self.entries.entry(key).or_default().push(phonemes);
         }
-
-        Self { entries }
     }
 
     /// Return the primary (first) pronunciation for `word`, or `None` if the
@@ -367,6 +373,15 @@ impl OrthographyToPhonemes for CmudictPronouncer {
 
 /// The CMUdict data shipped with this crate.
 static BUNDLED_CMUDICT: &str = include_str!("../../data/cmudict.dict");
+
+/// Project-local pronunciations that are absent from the upstream CMUdict data
+/// used for development builds.
+static SUPPLEMENTAL_CMUDICT: &str = "\
+mm M
+mm-hm M HH M
+mm-hmm M HH M
+mmm M
+";
 
 /// Normalize a raw transcript word for CMUdict lookup.
 ///
@@ -662,6 +677,27 @@ mod tests {
             .map(|ph| ph.base.as_str())
             .collect();
         assert_eq!(bases, vec!["D", "AA", "K", "T", "ER"]);
+    }
+
+    #[test]
+    fn lookup_entry_handles_backchannel_nasals() {
+        let p = pronouncer();
+
+        for (surface, lookup, expected) in [
+            ("Mmm.", "mmm", vec!["M"]),
+            ("Mm.", "mm", vec!["M"]),
+            ("Mm-hmm.", "mm-hmm", vec!["M", "HH", "M"]),
+            ("Mm-hm", "mm-hm", vec!["M", "HH", "M"]),
+        ] {
+            let entry = p.lookup_entry(surface);
+            let bases: Vec<&str> = entry.candidates[0]
+                .iter()
+                .map(|phoneme| phoneme.base.as_str())
+                .collect();
+            assert_eq!(entry.lookup, lookup);
+            assert_eq!(bases, expected, "{surface}");
+            assert_ne!(entry.status, PronunciationStatus::Missing);
+        }
     }
 
     #[test]

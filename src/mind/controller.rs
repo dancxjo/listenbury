@@ -201,7 +201,7 @@ pub struct FillerPlannerConfig {
 impl Default for FillerPlannerConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             min_silence_for_filler_ms: DEFAULT_FILLER_ACTIVATION_DELAY_MS,
             repeat_cooldown_ms: DEFAULT_FILLER_REPEAT_COOLDOWN_MS,
             allow_multiple_fillers_per_turn: false,
@@ -521,23 +521,20 @@ mod tests {
     }
 
     #[test]
-    fn planner_can_fill_by_default() {
+    fn planner_is_disabled_by_default() {
         let mut planner = FillerPlanner::default();
+        let ctx = thinking_context(10_000, 1);
+        assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
+    }
+
+    #[test]
+    fn planner_can_be_enabled() {
+        let mut planner = enabled_filler_planner();
         let ctx = thinking_context(10_000, 1);
         assert!(matches!(
             planner.decide(&ctx),
             FillerDecision::PlayCachedBackchannel { id } if is_thinking_filler(id)
         ));
-    }
-
-    #[test]
-    fn planner_can_still_be_disabled() {
-        let mut planner = FillerPlanner::new(FillerPlannerConfig {
-            enabled: false,
-            ..FillerPlannerConfig::default()
-        });
-        let ctx = thinking_context(10_000, 1);
-        assert_eq!(planner.decide(&ctx), FillerDecision::Silence);
     }
 
     #[test]

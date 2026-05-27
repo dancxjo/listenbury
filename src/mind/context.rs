@@ -1078,6 +1078,22 @@ impl EmbeddingRecallProvider {
         self
     }
 
+    pub fn recall_text(
+        &self,
+        text: impl Into<String>,
+        limit: Option<usize>,
+        min_score: Option<f32>,
+    ) -> anyhow::Result<Vec<RecallHit>> {
+        let Some(recall) = self.recall.as_ref() else {
+            return Ok(Vec::new());
+        };
+        recall.recall(RecallQuery {
+            text: text.into(),
+            limit: limit.unwrap_or(self.recall_limit).max(1),
+            min_score: min_score.or(self.min_score),
+        })
+    }
+
     pub fn with_conversation_tail_limit(mut self, conversation_tail_limit: usize) -> Self {
         self.conversation_tail_limit = conversation_tail_limit;
         self
