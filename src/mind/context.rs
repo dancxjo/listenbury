@@ -689,7 +689,7 @@ fn append_summary_line(
     max_chars: usize,
     line: String,
 ) -> bool {
-    let separator_len = usize::from(!lines.is_empty());
+    let separator_len = if lines.is_empty() { 0 } else { 1 };
     if used_chars
         .saturating_add(separator_len)
         .saturating_add(line.len())
@@ -712,12 +712,15 @@ fn truncate_for_budget(text: &str, max_chars: usize) -> String {
     if max_chars <= 1 {
         return "…".to_string();
     }
+    let content_limit = max_chars.saturating_sub(1);
     let mut truncated = String::new();
+    let mut char_count = 0usize;
     for ch in text.chars() {
-        if truncated.chars().count().saturating_add(1) >= max_chars {
+        if char_count >= content_limit {
             break;
         }
         truncated.push(ch);
+        char_count = char_count.saturating_add(1);
     }
     truncated.push('…');
     truncated
@@ -1962,15 +1965,17 @@ mod tests {
             ],
         };
 
-        let summary = graph.summarize_neighborhood(GraphNeighborhoodSummaryConfig {
+        let config = GraphNeighborhoodSummaryConfig {
             max_chars: 150,
             max_tokens: Some(25),
             chars_per_token: 4,
             verbatim_node_ids: Vec::new(),
             max_edge_lines: 8,
-        });
+        };
+        let expected_budget = effective_graph_summary_char_budget(&config);
+        let summary = graph.summarize_neighborhood(config);
 
-        assert!(summary.rendered.len() <= 100);
+        assert!(summary.rendered.len() <= expected_budget);
         assert!(summary.stats.rendered_chars <= summary.stats.budget_chars);
         assert!(
             summary
