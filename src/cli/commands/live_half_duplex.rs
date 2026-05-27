@@ -219,7 +219,10 @@ use listenbury::{
         feature = "tts-piper"
     )
 ))]
-use listenbury::{ConversationController, ConversationMessage, FillerContext};
+use listenbury::{
+    ContextBudget, ConversationContext, ConversationController, ConversationMessage,
+    ConversationTurn, FillerContext, StubContextProvider, build_conversation_context,
+};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -276,6 +279,16 @@ const CALLBACK_SAMPLE_CAPACITY: usize = 16_384;
     feature = "tts-piper"
 ))]
 const AUDIO_RING_CAPACITY: usize = 256;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -1199,10 +1212,14 @@ fn stream_speech_to_tts(
     user_turn_id: u64,
 ) -> Result<LiveSpeechOutcome> {
     let prompt_format = prompt_format_for_model(llm_model_path);
-    let prompt = build_prompt(
+    let (prompt, conversation_context) = build_prompt_and_context(
         transcript,
         state.controller.conversation_history(),
         prompt_format,
+    );
+    eprintln!(
+        "[live-half-duplex] selected context nodes for turn {user_turn_id}: {}",
+        conversation_context.debug_nodes()
     );
     state.controller.turn_tracker.on_pete_thinking_started();
     let generation_id = llm
@@ -2377,21 +2394,8 @@ fn build_prompt<'a>(
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
 ) -> String {
-    let user_content = build_user_prompt_content(transcript, history);
-    match format {
-        LivePromptFormat::Llama3Instruct => format!(
-            "<|start_header_id|>system<|end_header_id|>\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
-        ),
-        LivePromptFormat::GptOssHarmony => format!(
-            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant"
-        ),
-        LivePromptFormat::Gemma3Instruct => format!(
-            "<start_of_turn>user\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n"
-        ),
-        LivePromptFormat::Gemma4Instruct => format!(
-            "<|turn>system\nYou are Pete, speaking aloud through a TTS system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n"
-        ),
-    }
+    let (prompt, _) = build_prompt_and_context(transcript, history, format);
+    prompt
 }
 
 #[cfg(any(
@@ -2403,16 +2407,54 @@ fn build_prompt<'a>(
         feature = "tts-piper"
     )
 ))]
-fn build_user_prompt_content<'a>(
+fn build_prompt_and_context<'a>(
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
-) -> String {
-    let history = render_conversation_history(history);
+    format: LivePromptFormat,
+) -> (String, ConversationContext) {
+    let context = build_turn_conversation_context(transcript, history);
+    let user_content = build_user_prompt_content(transcript, &context);
+    let prompt = match format {
+        LivePromptFormat::Llama3Instruct => format!(
+            "<|start_header_id|>system<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+            context.system_prompt
+        ),
+        LivePromptFormat::GptOssHarmony => format!(
+            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\n{}<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant",
+            context.system_prompt
+        ),
+        LivePromptFormat::Gemma3Instruct => format!(
+            "<start_of_turn>user\n{}\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n",
+            context.system_prompt
+        ),
+        LivePromptFormat::Gemma4Instruct => format!(
+            "<|turn>system\n{}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n",
+            context.system_prompt
+        ),
+    };
+    (prompt, context)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn build_user_prompt_content(transcript: &str, context: &ConversationContext) -> String {
+    let history = render_conversation_history(context.conversation_tail.iter());
+    let working_memory = context.render_compact_nodes();
     if history.is_empty() {
-        transcript.trim().to_string()
+        format!(
+            "Working memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
+            transcript.trim()
+        )
     } else {
         format!(
-            "Conversation so far:\n{history}\n\nCurrent user message:\nUser: {}",
+            "Conversation so far:\n{history}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
             transcript.trim()
         )
     }
@@ -2428,7 +2470,7 @@ fn build_user_prompt_content<'a>(
     )
 ))]
 fn render_conversation_history<'a>(
-    history: impl IntoIterator<Item = &'a ConversationMessage>,
+    history: impl IntoIterator<Item = &'a ConversationTurn>,
 ) -> String {
     history
         .into_iter()
@@ -2436,6 +2478,37 @@ fn render_conversation_history<'a>(
         .filter(|line| !line.ends_with(": "))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn build_turn_conversation_context<'a>(
+    transcript: &str,
+    history: impl IntoIterator<Item = &'a ConversationMessage>,
+) -> ConversationContext {
+    let conversation_tail = history
+        .into_iter()
+        .map(|message| ConversationTurn {
+            role: message.role,
+            text: message.text.trim().to_string(),
+        })
+        .filter(|turn| !turn.text.is_empty())
+        .collect();
+
+    build_conversation_context(
+        &StubContextProvider::default(),
+        PETE_CONVERSATION_SYSTEM_PROMPT,
+        transcript,
+        conversation_tail,
+        ContextBudget::default(),
+    )
 }
 
 #[cfg(all(
@@ -2900,6 +2973,11 @@ mod tests {
 
         assert!(prompt.contains("Conversation so far:\nUser: Can you hear me?"));
         assert!(prompt.contains("\nPete: Yes, I can hear you."));
+        assert!(
+            prompt.contains(
+                "Working memory graph nodes:\n- [SelfIdentity] Pete Listenbury (pete:self)"
+            )
+        );
         assert!(prompt.contains("Current user message:\nUser: What did I just ask?"));
     }
 

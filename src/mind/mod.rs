@@ -1,3 +1,4 @@
+pub mod context;
 pub mod controller;
 #[cfg(feature = "llm-llama-cpp")]
 pub mod llama_cpp;
