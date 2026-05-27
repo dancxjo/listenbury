@@ -62,6 +62,14 @@ pub struct MemoryGraphNodeFieldUpdate {
     pub confidence: f32,
 }
 
+/// Current scene metadata used to anchor private assistant analysis.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemorySceneRef {
+    pub node_id: String,
+    pub description: String,
+    pub summary: String,
+}
+
 /// A single runtime trace event emitted by the Listenbury engine.
 ///
 /// Traces are produced on the hot path but consumed asynchronously via a
@@ -115,6 +123,12 @@ pub enum MemoryTrace {
         result_summary: String,
         occurred_at: ExactTimestamp,
     },
+    /// Private assistant analysis was produced and should be retained as memory.
+    AssistantAnalysisCaptured {
+        text: String,
+        scene: MemorySceneRef,
+        occurred_at: ExactTimestamp,
+    },
     /// Pete explicitly ran entity extraction over text.
     EntityExtractionPerformed {
         source_text: String,
@@ -149,6 +163,7 @@ impl MemoryTrace {
             Self::AuditorySceneObservation { .. } => "auditory_scene_observation",
             Self::OverlapDetected { .. } => "overlap_detected",
             Self::RecallResultUsed { .. } => "recall_result_used",
+            Self::AssistantAnalysisCaptured { .. } => "assistant_analysis_captured",
             Self::EntityExtractionPerformed { .. } => "entity_extraction_performed",
             Self::GraphNodeFieldsUpdated { .. } => "graph_node_fields_updated",
             Self::ImageVectorCaptured { .. } => "image_vector_captured",
@@ -166,6 +181,7 @@ impl MemoryTrace {
             | Self::AuditorySceneObservation { occurred_at, .. }
             | Self::OverlapDetected { occurred_at, .. }
             | Self::RecallResultUsed { occurred_at, .. }
+            | Self::AssistantAnalysisCaptured { occurred_at, .. }
             | Self::EntityExtractionPerformed { occurred_at, .. }
             | Self::GraphNodeFieldsUpdated { occurred_at, .. } => *occurred_at,
             Self::ImageVectorCaptured { captured_at, .. }

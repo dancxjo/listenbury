@@ -161,8 +161,8 @@ use listenbury::live_trace::{
 ))]
 use listenbury::memory::{
     ColdMemoryWorker, ColdMemoryWorkerConfig, DEFAULT_QDRANT_COLLECTION, EmbeddingProvider,
-    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, Neo4jHttpStore,
-    Neo4jStore, QdrantHttpStore, QdrantStore,
+    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySceneRef, MemorySink, MemoryTrace,
+    Neo4jHttpStore, Neo4jStore, QdrantHttpStore, QdrantStore,
 };
 #[cfg(any(
     test,
@@ -1908,11 +1908,13 @@ fn stream_speech_to_tts(
             }
             main_llm_has_emitted_token = true;
         }
-        let speech_events = if let Some(filter) = &mut harmony_filter {
-            filter.filter_events(&events)
+        let (speech_events, analysis_fragments) = if let Some(filter) = &mut harmony_filter {
+            let output = filter.filter_events(&events);
+            (output.events, output.analysis)
         } else {
-            events.clone()
+            (events.clone(), Vec::new())
         };
+        submit_harmony_analysis_fragments(analysis_fragments, state, user_turn_id)?;
         let terminal_in_batch = events.iter().any(is_terminal_llm_event);
         let command_output = command_filter.filter_events(&speech_events);
         let mut planner_events = command_output.events;
@@ -3975,6 +3977,109 @@ fn append_live_typescript_result_context(
     }
 }
 
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn submit_harmony_analysis_fragments(
+    fragments: Vec<String>,
+    state: &mut LiveHalfDuplexState,
+    turn_id: u64,
+) -> Result<()> {
+    for fragment in fragments {
+        let text = fragment.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let scene = current_memory_scene_ref(state);
+        let occurred_at = ExactTimestamp::now();
+        state
+            .memory_sink
+            .submit(MemoryTrace::AssistantAnalysisCaptured {
+                text: text.to_string(),
+                scene: scene.clone(),
+                occurred_at,
+            });
+        let mut event = state
+            .trace
+            .event(turn_id, "assistant_analysis_captured", occurred_at);
+        event.text = Some(text.to_string());
+        event.artifact = Some(json!({
+            "scene_node_id": scene.node_id,
+            "scene_description": scene.description,
+            "scene_summary": scene.summary,
+        }));
+        state.trace.emit(event)?;
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn current_memory_scene_ref(state: &LiveHalfDuplexState) -> MemorySceneRef {
+    let stage = state
+        .context_provider
+        .stage_instruction_snapshot()
+        .unwrap_or_else(|| listenbury::EpisodicMemory::empty().current_stage_instruction);
+    memory_scene_ref_for_stage(&stage)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn memory_scene_ref_for_stage(stage: &StageInstruction) -> MemorySceneRef {
+    let description = stage.text.trim();
+    let summary = stage.summary.trim();
+    let basis = if description.is_empty() {
+        summary
+    } else {
+        description
+    };
+    MemorySceneRef {
+        node_id: format!("scene:{}", stable_scene_hash(basis)),
+        description: if description.is_empty() {
+            "current live scene".to_string()
+        } else {
+            description.to_string()
+        },
+        summary: if summary.is_empty() {
+            basis.to_string()
+        } else {
+            summary.to_string()
+        },
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn stable_scene_hash(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.trim().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 #[cfg(any(
     test,
     all(
@@ -4549,6 +4654,7 @@ fn submit_voice_vector_for_group(
 struct HarmonyFinalFilter {
     pending: String,
     in_final: bool,
+    in_analysis: bool,
 }
 
 #[cfg(any(
@@ -4561,39 +4667,46 @@ struct HarmonyFinalFilter {
     )
 ))]
 impl HarmonyFinalFilter {
-    fn filter_events(&mut self, events: &[LlmEvent]) -> Vec<LlmEvent> {
-        let mut filtered = Vec::new();
+    fn filter_events(&mut self, events: &[LlmEvent]) -> HarmonyFilterOutput {
+        let mut output = HarmonyFilterOutput::default();
         for event in events {
             match event {
                 LlmEvent::Token { text } => {
-                    let text = self.push(text);
-                    if !text.is_empty() {
-                        filtered.push(LlmEvent::Token { text });
+                    let chunk = self.push(text);
+                    output.analysis.extend(chunk.analysis);
+                    if !chunk.visible.is_empty() {
+                        output.events.push(LlmEvent::Token {
+                            text: chunk.visible,
+                        });
                     }
                 }
                 LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
-                    let text = self.finish();
-                    if !text.is_empty() {
-                        filtered.push(LlmEvent::Token { text });
+                    let chunk = self.finish();
+                    output.analysis.extend(chunk.analysis);
+                    if !chunk.visible.is_empty() {
+                        output.events.push(LlmEvent::Token {
+                            text: chunk.visible,
+                        });
                     }
-                    filtered.push(event.clone());
+                    output.events.push(event.clone());
                 }
             }
         }
-        filtered
+        output
     }
 
-    fn push(&mut self, text: &str) -> String {
+    fn push(&mut self, text: &str) -> HarmonyFilterChunk {
         self.pending.push_str(text);
         self.drain(false)
     }
 
-    fn finish(&mut self) -> String {
+    fn finish(&mut self) -> HarmonyFilterChunk {
         self.drain(true)
     }
 
-    fn drain(&mut self, completed: bool) -> String {
+    fn drain(&mut self, completed: bool) -> HarmonyFilterChunk {
         let mut visible = String::new();
+        let mut analysis = Vec::new();
         loop {
             if self.in_final {
                 if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_ENDS) {
@@ -4612,20 +4725,77 @@ impl HarmonyFinalFilter {
                 break;
             }
 
-            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_STARTS) {
+            if self.in_analysis {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_ENDS) {
+                    let text = self.pending[..start].trim();
+                    if !text.is_empty() {
+                        analysis.push(text.to_string());
+                    }
+                    self.pending.drain(..start + marker.len());
+                    self.in_analysis = false;
+                    continue;
+                }
+                let keep_from = if completed {
+                    self.pending.len()
+                } else {
+                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_ENDS)
+                };
+                let text = self.pending[..keep_from].trim();
+                if !text.is_empty() {
+                    analysis.push(text.to_string());
+                }
+                self.pending.drain(..keep_from);
+                break;
+            }
+
+            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_STARTS) {
                 self.pending.drain(..start + marker.len());
-                self.in_final = true;
+                if HARMONY_FINAL_STARTS.contains(&marker) {
+                    self.in_final = true;
+                } else {
+                    self.in_analysis = true;
+                }
                 continue;
             }
             if completed {
                 self.pending.clear();
             } else {
-                keep_possible_marker_prefix(&mut self.pending, HARMONY_FINAL_STARTS);
+                keep_possible_marker_prefix(&mut self.pending, HARMONY_CHANNEL_STARTS);
             }
             break;
         }
-        visible
+        HarmonyFilterChunk { visible, analysis }
     }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+struct HarmonyFilterOutput {
+    events: Vec<LlmEvent>,
+    analysis: Vec<String>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+struct HarmonyFilterChunk {
+    visible: String,
+    analysis: Vec<String>,
 }
 
 #[cfg(any(
@@ -4640,6 +4810,22 @@ impl HarmonyFinalFilter {
 const HARMONY_FINAL_STARTS: &[&str] = &[
     "<|channel|>final<|message|>",
     "<|start|>assistant<|channel|>final<|message|>",
+];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const HARMONY_CHANNEL_STARTS: &[&str] = &[
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+    "<|channel|>analysis<|message|>",
+    "<|start|>assistant<|channel|>analysis<|message|>",
 ];
 
 #[cfg(any(
@@ -6602,16 +6788,20 @@ mod tests {
     #[test]
     fn harmony_filter_only_emits_final_channel() {
         let mut filter = HarmonyFinalFilter::default();
-        let events = filter.filter_events(&[
+        let output = filter.filter_events(&[
             token("<|channel|>analysis<|message|>User asks whether Pete can hear them."),
             token("<|end|><|start|>assistant<|channel|>final<|message|>Yes, I hear you."),
             LlmEvent::Completed,
         ]);
 
         assert!(matches!(
-            events.as_slice(),
+            output.events.as_slice(),
             [LlmEvent::Token { text }, LlmEvent::Completed] if text == "Yes, I hear you."
         ));
+        assert_eq!(
+            output.analysis,
+            vec!["User asks whether Pete can hear them.".to_string()]
+        );
     }
 
     #[test]

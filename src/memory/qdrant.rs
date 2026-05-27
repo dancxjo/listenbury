@@ -399,6 +399,33 @@ pub fn vector_documents_for_trace(
                 ("related_graph_node_ids", json!(related_graph_node_ids)),
             ],
         )],
+        MemoryTrace::AssistantAnalysisCaptured { text, scene, .. } => vec![vector_document(
+            format!("assistant_analysis_vector:{sequence}"),
+            text.clone(),
+            [
+                ("kind", json!("assistant_analysis")),
+                ("headline", json!(scene.summary.as_str())),
+                ("text", json!(text)),
+                ("scene_node_id", json!(scene.node_id.as_str())),
+                ("scene_description", json!(scene.description.as_str())),
+                ("scene_summary", json!(scene.summary.as_str())),
+                (
+                    "neo4j_node_id",
+                    optional(graph_result.primary_node_id.clone()),
+                ),
+                ("graph_node_id", optional(artifact_node_id.clone())),
+                ("vector_target", json!("artifact")),
+                ("artifact_node_id", optional(artifact_node_id.clone())),
+                ("referent_node_id", json!(scene.node_id.as_str())),
+                (
+                    "related_graph_node_ids",
+                    json!(related_graph_node_ids_with_referent(
+                        &related_graph_node_ids,
+                        &scene.node_id
+                    )),
+                ),
+            ],
+        )],
         MemoryTrace::EntityExtractionPerformed {
             source_text,
             entities,

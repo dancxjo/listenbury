@@ -392,6 +392,37 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                 ("occurred_at", json!(occurred_at)),
             ]),
         },
+        MemoryTrace::AssistantAnalysisCaptured {
+            text,
+            scene,
+            occurred_at,
+        } => {
+            let analysis_node = Neo4jNode {
+                logical_id: format!("assistant_analysis:{sequence}"),
+                label: "AssistantAnalysis".to_string(),
+                properties: props([
+                    ("text", json!(text)),
+                    ("scene_node_id", json!(scene.node_id.as_str())),
+                    ("occurred_at", json!(occurred_at)),
+                ]),
+            };
+            let scene_node = Neo4jNode {
+                logical_id: scene.node_id.clone(),
+                label: "Scene".to_string(),
+                properties: props([
+                    ("description", json!(scene.description.as_str())),
+                    ("summary", json!(scene.summary.as_str())),
+                    ("last_observed_at", json!(occurred_at)),
+                ]),
+            };
+            relationships.push(Neo4jRelationship {
+                from_logical_id: analysis_node.logical_id.clone(),
+                to_logical_id: scene_node.logical_id.clone(),
+                kind: "ANALYSIS_OF_SCENE".to_string(),
+            });
+            related_nodes.push(scene_node);
+            analysis_node
+        }
         MemoryTrace::EntityExtractionPerformed {
             source_text,
             entities,
@@ -625,6 +656,8 @@ fn node_description(node: &Neo4jNode) -> String {
         "AuditoryObservation" => "auditory scene observation".to_string(),
         "OverlapEvent" => "overlapping speech event".to_string(),
         "RecallResult" => "memory recall result".to_string(),
+        "AssistantAnalysis" => "private assistant analysis".to_string(),
+        "Scene" => named_description("scene", label, &node.logical_id),
         "EntityExtraction" => "entity extraction event".to_string(),
         "GraphNodeFieldUpdate" => "graph node field update event".to_string(),
         "ImageObservation" => "image observation".to_string(),
@@ -717,7 +750,7 @@ fn vector_safe_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trace::MemoryEntityMention;
+    use crate::memory::trace::{MemoryEntityMention, MemorySceneRef};
     use crate::time::ExactTimestamp;
 
     #[test]
@@ -764,6 +797,40 @@ mod tests {
                 node.logical_id
             );
         }
+    }
+
+    #[test]
+    fn assistant_analysis_write_links_to_scene_node() {
+        let trace = MemoryTrace::AssistantAnalysisCaptured {
+            text: "Pete should inspect the source listing before answering.".to_string(),
+            scene: MemorySceneRef {
+                node_id: "scene:source-review".to_string(),
+                description: "Setting: live coding session. Action: Pete reviews source files."
+                    .to_string(),
+                summary: "Pete reviews source files.".to_string(),
+            },
+            occurred_at: ExactTimestamp::now(),
+        };
+
+        let write = trace_write_for(&trace, 11);
+
+        assert_eq!(write.primary_node.logical_id, "assistant_analysis:11");
+        assert_eq!(write.primary_node.label, "AssistantAnalysis");
+        let scene = write
+            .related_nodes
+            .iter()
+            .find(|node| node.logical_id == "scene:source-review")
+            .expect("scene node should be related");
+        assert_eq!(scene.label, "Scene");
+        assert_eq!(
+            scene.properties.get("summary").and_then(Value::as_str),
+            Some("Pete reviews source files.")
+        );
+        assert!(write.relationships.iter().any(|relationship| {
+            relationship.from_logical_id == "assistant_analysis:11"
+                && relationship.to_logical_id == "scene:source-review"
+                && relationship.kind == "ANALYSIS_OF_SCENE"
+        }));
     }
 
     #[test]

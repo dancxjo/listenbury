@@ -189,7 +189,8 @@ impl RuntimeEvent {
             | MemoryTrace::RecallResultUsed {
                 result_summary: text,
                 ..
-            } => (Some(text.clone()), None, None),
+            }
+            | MemoryTrace::AssistantAnalysisCaptured { text, .. } => (Some(text.clone()), None, None),
             MemoryTrace::EntityExtractionPerformed {
                 source_text,
                 entities,
