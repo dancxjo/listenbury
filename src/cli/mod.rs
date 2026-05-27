@@ -388,9 +388,16 @@ pub(crate) struct ContinueCommand {
     /// llama.cpp context size for the live session.
     #[arg(long, default_value_t = 8192)]
     pub(crate) context_size: u32,
+    /// Tokens reserved for generation when budgeting live prompt assembly.
+    #[arg(long, default_value_t = 512)]
+    pub(crate) reserved_generation_tokens: u32,
     /// Number of recent listened/spoken turns to keep verbatim before summarizing older turns.
     #[arg(long, default_value_t = 8)]
     pub(crate) verbatim_turns: usize,
+    #[arg(long, value_enum, default_value_t = ModelProfile::Tiny)]
+    pub(crate) model_profile: ModelProfile,
+    #[arg(long)]
+    pub(crate) no_backchannels: bool,
     /// Continuous VAD speech duration before TTS auto-pauses while Pete is speaking.
     #[arg(long, default_value_t = 250)]
     pub(crate) tts_vad_pause_ms: u64,
@@ -412,6 +419,24 @@ pub(crate) struct ContinueCommand {
     /// Write either a JSONL trace file or a structured trace-session directory (required when --duplex-trace-scenario is set).
     #[arg(long)]
     pub(crate) jsonl: Option<PathBuf>,
+    /// Capture native Linux camera frames from a V4L2 device and vectorize them.
+    #[arg(long)]
+    pub(crate) native_video: bool,
+    /// V4L2 camera device for --native-video.
+    #[arg(long, default_value = "/dev/video0")]
+    pub(crate) video_device: PathBuf,
+    /// Capture width for --native-video.
+    #[arg(long, default_value_t = 320)]
+    pub(crate) video_width: u32,
+    /// Capture height for --native-video.
+    #[arg(long, default_value_t = 240)]
+    pub(crate) video_height: u32,
+    /// Frames per second for --native-video.
+    #[arg(long, default_value_t = 2)]
+    pub(crate) video_fps: u32,
+    /// Mark native video artifacts as retained. The default is vector-only.
+    #[arg(long)]
+    pub(crate) retain_video_images: bool,
     /// Initial prompt text. If omitted, generation starts from Pete's continuous-awareness seed.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
@@ -2286,6 +2311,19 @@ mod tests {
             "--skip-gan",
             "--vad",
             "energy",
+            "--no-backchannels",
+            "--reserved-generation-tokens",
+            "768",
+            "--native-video",
+            "--video-device",
+            "/dev/video2",
+            "--video-width",
+            "640",
+            "--video-height",
+            "480",
+            "--video-fps",
+            "5",
+            "--retain-video-images",
         ])
         .expect("listen should parse duplex pipeline options");
 
@@ -2305,6 +2343,14 @@ mod tests {
         assert!(command.hifigan);
         assert!(command.skip_gan);
         assert_eq!(command.vad, VadBackendOption::Energy);
+        assert!(command.no_backchannels);
+        assert_eq!(command.reserved_generation_tokens, 768);
+        assert!(command.native_video);
+        assert_eq!(command.video_device, PathBuf::from("/dev/video2"));
+        assert_eq!(command.video_width, 640);
+        assert_eq!(command.video_height, 480);
+        assert_eq!(command.video_fps, 5);
+        assert!(command.retain_video_images);
         assert!(command.duplex_trace_scenario.is_none());
     }
 

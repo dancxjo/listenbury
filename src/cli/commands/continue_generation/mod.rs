@@ -39,7 +39,8 @@ use crate::cli::commands::prepare_audio_playback;
     feature = "tts-piper"
 ))]
 use crate::cli::model_paths::{
-    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_text_embedding_model,
+    resolve_whisper_model,
 };
 #[cfg(all(
     feature = "audio-cpal",
@@ -169,6 +170,27 @@ use listenbury::live_trace::{
     DiskTraceWriter, JsonlTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink,
     TraceRuntimeMetadata, TraceSessionMetadata,
 };
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::memory::{
+    ColdMemoryWorker, ColdMemoryWorkerConfig, DEFAULT_QDRANT_COLLECTION, EmbeddingProvider,
+    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, Neo4jHttpStore,
+    Neo4jStore, QdrantHttpStore, QdrantStore,
+};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mind::entity::{EntityExtractor, HeuristicEntityExtractor, resolve_entities};
 #[cfg(any(
     test,
     all(
@@ -239,6 +261,29 @@ use listenbury::word::{
     )
 ))]
 use listenbury::{AudioFrame, ExactTimestamp};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::{
+    ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
+    EmbeddingRecallProvider, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery,
+    LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, PinScope, PinnedContextNode,
+    QdrantEmbeddingRecall, StageInstruction, build_conversation_context,
+};
+#[cfg(all(
+    target_os = "linux",
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::{LinuxVideoCaptureConfig, spawn_linux_video_vector_capture};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -265,7 +310,7 @@ use serde::{Deserialize, Serialize};
         feature = "tts-piper"
     )
 ))]
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -411,7 +456,7 @@ use source::SourceCommand;
         feature = "tts-piper"
     )
 ))]
-use source::{SourceCommandExecution, execute_source_command};
+use source::SourceCommandExecution;
 #[cfg(any(
     test,
     all(
@@ -447,7 +492,7 @@ const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in
         feature = "tts-piper"
     )
 ))]
-const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text, options?), shutup(), pause(), resume(), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If speech should intentionally talk over active user speech, use say(text, { interrupt: true }); otherwise TTS waits for VAD to clear before starting. Speak sparingly: after you say something, leave room for the interlocutor to answer instead of immediately saying more. Do not narrate every clock tick, quiet moment, or idle thought aloud. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, and resume() to resume paused playback.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
+const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text, options?), shutup(), pause(), resume(), setStage(text, options?), setTopic(topic, options?), startNewTopic(previousTopic, options?), topicChangedWhen(trigger, options?), startNewEpisode(reason, options?), sleeping(reason?), goingToSleep(reason?), extractEntities(text), updateGraphNodeFields(nodeId, fields, options?), searchGraphNodes(query, options?), queryMemories(text, options?), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If speech should intentionally talk over active user speech, use say(text, { interrupt: true }); otherwise TTS waits for VAD to clear before starting. Speak sparingly: after you say something, leave room for the interlocutor to answer instead of immediately saying more. Do not narrate every clock tick, quiet moment, or idle thought aloud. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context, update memory with extractEntities, updateGraphNodeFields, setStage, setTopic, startNewTopic, startNewEpisode, queryMemories, and searchGraphNodes. Treat setStage's first argument as the current scene description; include setting, mood, physical situation, and observable action when useful. When speaking about graph nodes to the user, say my memory.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, resume() to resume paused playback, and sleeping() or goingToSleep() for clean shutdown when the user asks Pete to stop, shut down, sleep, or end the session.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
 #[cfg(any(
     test,
     all(
@@ -534,6 +579,111 @@ type ContinueLiveTrace =
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
+struct ContinueCognition {
+    context_provider: EmbeddingRecallProvider,
+    entity_extractor: Arc<dyn EntityExtractor>,
+    memory_sink: Arc<dyn MemorySink>,
+    _worker: Option<ColdMemoryWorker>,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_continue_cognition(entity_extractor: Arc<dyn EntityExtractor>) -> ContinueCognition {
+    let _ = dotenvy::dotenv();
+
+    let mut context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
+        id: DEFAULT_SELF_NODE_ID.to_string(),
+        label: DEFAULT_SELF_NODE_LABEL.to_string(),
+    })
+    .with_entity_extractor(Arc::clone(&entity_extractor));
+
+    let graph_store: Arc<dyn Neo4jStore> = Arc::new(Neo4jHttpStore::from_env());
+    let qdrant_store: Arc<dyn QdrantStore> = Arc::new(QdrantHttpStore::from_env());
+    let embeddings = match build_continue_embedding_provider() {
+        Ok(embeddings) => Some(embeddings),
+        Err(error) => {
+            tracing::warn!("continue cold-memory embeddings disabled: {error:#}");
+            None
+        }
+    };
+
+    if let Some(embeddings) = embeddings.as_ref() {
+        context_provider = context_provider.with_recall(Arc::new(QdrantEmbeddingRecall::new(
+            Arc::clone(&qdrant_store),
+            Arc::clone(embeddings),
+            DEFAULT_QDRANT_COLLECTION,
+        )));
+    }
+
+    let mut config = ColdMemoryWorkerConfig::new();
+    config.neo4j = Some(graph_store);
+    config.qdrant = Some(qdrant_store);
+    config.embeddings = embeddings;
+    let (sink, worker) = ColdMemoryWorker::spawn_channel(512, config);
+
+    ContinueCognition {
+        context_provider,
+        entity_extractor,
+        memory_sink: Arc::new(sink),
+        _worker: Some(worker),
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_continue_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
+    let model_path = resolve_text_embedding_model(None)?;
+    Ok(Arc::new(LlamaCppEmbeddingProvider::new(
+        LlamaCppEmbeddingConfig {
+            model_path,
+            ..Default::default()
+        },
+    )?))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn render_continue_memory_summary(
+    context_provider: &EmbeddingRecallProvider,
+    utterance: &str,
+) -> String {
+    let context = build_conversation_context(
+        context_provider,
+        "",
+        utterance,
+        Vec::new(),
+        ContextBudget {
+            max_chars: DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
+        },
+    );
+    format!(
+        "Working memory graph nodes:\n{}\n\nScene timeline:\n{}",
+        context.render_compact_nodes(),
+        context.render_episodic_memory()
+    )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
 fn continue_trace_session_metadata(
     session_id: SessionId,
     trace_started_at: ExactTimestamp,
@@ -552,7 +702,10 @@ fn continue_trace_session_metadata(
         "vad": format!("{:?}", command.vad),
         "mode": format!("{:?}", command.mode),
         "context_size": command.context_size,
+        "reserved_generation_tokens": command.reserved_generation_tokens,
         "verbatim_turns": command.verbatim_turns,
+        "model_profile": format!("{:?}", command.model_profile),
+        "no_backchannels": command.no_backchannels,
         "max_tokens": command.max_tokens,
         "tts_vad_pause_ms": command.tts_vad_pause_ms,
         "tts_vad_listen_ms": command.tts_vad_listen_ms,
@@ -564,6 +717,12 @@ fn continue_trace_session_metadata(
         "hifigan": command.hifigan,
         "hifigan_model": command.hifigan_model.as_ref().map(|path| path.display().to_string()),
         "skip_gan": command.skip_gan,
+        "native_video": command.native_video,
+        "video_device": command.video_device.display().to_string(),
+        "video_width": command.video_width,
+        "video_height": command.video_height,
+        "video_fps": command.video_fps,
+        "retain_video_images": command.retain_video_images,
     }))
     .expect("continue trace runtime configuration should serialize to an object");
     TraceSessionMetadata::new(session_id, trace_started_at, runtime)
@@ -802,6 +961,12 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     if let Some(max_tokens) = max_tokens {
         anyhow::ensure!(max_tokens > 0, "max_tokens must be greater than zero");
     }
+    let reserved_generation_tokens = usize::try_from(command.reserved_generation_tokens)
+        .context("reserved_generation_tokens does not fit in usize")?;
+    anyhow::ensure!(
+        reserved_generation_tokens > 0,
+        "reserved_generation_tokens must be greater than zero"
+    );
     anyhow::ensure!(
         command.context_size > 0,
         "context_size must be greater than zero"
@@ -841,7 +1006,18 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         ..Default::default()
     };
 
-    let system_prompt = build_initial_prompt(&command.prompt);
+    let mut system_prompt = build_initial_prompt(&command.prompt);
+    if command.no_backchannels {
+        system_prompt.push_str(
+            "Do not use short acknowledgement-only backchannels like mm-hmm, yeah, right, or okay unless they carry useful content.\n\n",
+        );
+    }
+    let entity_extractor: Arc<dyn EntityExtractor> = Arc::new(HeuristicEntityExtractor);
+    let mut cognition = build_continue_cognition(Arc::clone(&entity_extractor));
+    let initial_memory = Some(render_continue_memory_summary(
+        &cognition.context_provider,
+        "session start",
+    ));
     let llm = LlamaCppEngine::new(config).context("failed to initialize llama.cpp engine")?;
     let mut llm_session = ContinueLlmSession::start(
         llm,
@@ -850,6 +1026,8 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         max_tokens,
         command.context_size,
         command.verbatim_turns,
+        reserved_generation_tokens,
+        initial_memory,
     )
     .context("failed to start continued llama.cpp generation")?;
     let tts = continue_tts_for_command(&command)?;
@@ -916,6 +1094,26 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         trace_started_at,
         TeeSink(trace_writer, broadcaster),
     );
+    #[cfg(target_os = "linux")]
+    let native_video_capture = if command.native_video {
+        Some(spawn_linux_video_vector_capture(
+            LinuxVideoCaptureConfig {
+                device: command.video_device.clone(),
+                width: command.video_width,
+                height: command.video_height,
+                fps: command.video_fps,
+                retain_image: command.retain_video_images,
+                content_node_id: None,
+            },
+            Arc::clone(&cognition.memory_sink),
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    if command.native_video {
+        anyhow::bail!("--native-video is currently supported only on Linux");
+    }
     let mut live_trace_turn = 0u64;
     live_trace.emit_now(0, "capture_started", ExactTimestamp::now())?;
     let (mut mouth, mouth_rx) = ContinueMouth::start(
@@ -1068,7 +1266,12 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
                             llm_session.remember_spoken(content);
                         }
                         if let ContinueRuntimeEvent::SourceCommand { command } = &speech_event {
-                            let source_result = execute_source_command(command);
+                            let source_result = execute_source_command_with_cognition(
+                                command,
+                                &mut cognition,
+                                &mut live_trace,
+                                live_trace_turn,
+                            );
                             eprintln!("[dev continue] source result:\n{}", source_result.message);
                             if !generation_terminal {
                                 append_or_defer_live_event(
@@ -1136,6 +1339,8 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    drop(native_video_capture);
     Ok(())
 }
 
@@ -1224,7 +1429,7 @@ fn build_continue_prompt(format: ContinuePromptFormat, prompt_body: &str) -> (St
         ContinuePromptFormat::Legacy(mode) => build_prompt(mode, prompt_body),
         ContinuePromptFormat::GptOssHarmony => (
             format!(
-                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete Listenbury. Use the analysis channel for private internal monologue. Use the final channel only to emit a real-world action. Final channel content must be exactly one or more <ts>...</ts> TypeScript blocks, or empty. Never write plain conversational text in final. Never put Harmony template tokens in final channel content.\n\nTo speak to the user, write final content like <ts>say(\"Hello, I can hear you.\")</ts>. If speech should intentionally talk over active user speech, use <ts>say(\"Excuse me.\", {{ interrupt: true }})</ts>; otherwise TTS waits for VAD to clear before starting. Speak sparingly: after one say command, leave room for the interlocutor to answer before saying more. Do not use say for clock ticks, quiet moments, or idle narration. To inspect code, write final content like <ts>listFiles()</ts>. The TypeScript builders say, shutup, pause, resume, listFiles, readSourceFile, readFile, searchSource, and grepSource are already available in scope; imports from \"pete:will\" are also allowed.<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\nYou are Pete Listenbury. Use the analysis channel for private internal monologue. Use the final channel only to emit a real-world action. Final channel content must be exactly one or more <ts>...</ts> TypeScript blocks, or empty. Never write plain conversational text in final. Never put Harmony template tokens in final channel content.\n\nTo speak to the user, write final content like <ts>say(\"Hello, I can hear you.\")</ts>. If speech should intentionally talk over active user speech, use <ts>say(\"Excuse me.\", {{ interrupt: true }})</ts>; otherwise TTS waits for VAD to clear before starting. Speak sparingly: after one say command, leave room for the interlocutor to answer before saying more. Do not use say for clock ticks, quiet moments, or idle narration. To inspect code, write final content like <ts>listFiles()</ts>. To update memory or retrieve context, use setStage, setTopic, startNewTopic, startNewEpisode, extractEntities, updateGraphNodeFields, searchGraphNodes, and queryMemories. The TypeScript builders say, shutup, pause, resume, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, and grepSource are already available in scope; imports from \"pete:will\" are also allowed.<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
             ),
             harmony_continue_stops(),
         ),
@@ -1279,9 +1484,19 @@ impl ContinueLlmSession {
         max_tokens: Option<usize>,
         context_size: u32,
         verbatim_turns: usize,
+        reserved_generation_tokens: usize,
+        initial_memory: Option<String>,
     ) -> Result<Self> {
-        let rolling =
-            RollingContextManager::new(system_prompt, context_size, max_tokens, verbatim_turns);
+        let mut rolling = RollingContextManager::new(
+            system_prompt,
+            context_size,
+            max_tokens,
+            reserved_generation_tokens,
+            verbatim_turns,
+        );
+        if let Some(initial_memory) = initial_memory {
+            rolling.set_memory_summary(initial_memory);
+        }
         let (prompt, stop) = build_continue_prompt(prompt_format, &rolling.prompt_body());
         let id = llm.start(GenerationRequest {
             prompt: prompt.clone(),
@@ -1591,9 +1806,11 @@ impl RollingContextManager {
         system_prompt: String,
         context_size: u32,
         max_tokens: Option<usize>,
+        reserved_generation_tokens: usize,
         verbatim_turns: usize,
     ) -> Self {
-        let token_budget = rolling_prompt_token_budget(context_size, max_tokens);
+        let token_budget =
+            rolling_prompt_token_budget(context_size, max_tokens, reserved_generation_tokens);
         Self {
             persona: CognitivePage {
                 kind: PageKind::Persona,
@@ -1685,6 +1902,11 @@ impl RollingContextManager {
         }
         self.compact_until_within_budget();
         text
+    }
+
+    fn set_memory_summary(&mut self, summary: String) {
+        self.memory.summary = Some(compact_prompt_line(&summary, MAX_WORKING_MEMORY_CHARS));
+        self.compact_until_within_budget();
     }
 
     fn remember_spoken(&mut self, text: &str) {
@@ -1872,9 +2094,13 @@ const MAX_SCRATCH_EVENT_CHARS: usize = 1_000;
         feature = "tts-piper"
     )
 ))]
-fn rolling_prompt_token_budget(context_size: u32, max_tokens: Option<usize>) -> usize {
+fn rolling_prompt_token_budget(
+    context_size: u32,
+    max_tokens: Option<usize>,
+    reserved_generation_tokens: usize,
+) -> usize {
     let context_size = usize::try_from(context_size).unwrap_or(usize::MAX);
-    let reserved_generation = max_tokens.unwrap_or(512).max(256);
+    let reserved_generation = max_tokens.unwrap_or(reserved_generation_tokens).max(256);
     context_size
         .saturating_sub(reserved_generation)
         .saturating_mul(3)
@@ -1938,16 +2164,69 @@ fn next_char_boundary(text: &str, mut index: usize) -> usize {
         feature = "tts-piper"
     )
 ))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum TypeScriptCommand {
-    Say { text: String, interrupt: bool },
+    Say {
+        text: String,
+        interrupt: bool,
+    },
     Shutup,
     Pause,
     Resume,
+    Sleeping {
+        reason: Option<String>,
+    },
+    SetStage {
+        topic: Option<String>,
+        instruction: String,
+        summary: Option<String>,
+    },
+    StartNewTopic {
+        last_topic: String,
+        topic: Option<String>,
+        instruction: Option<String>,
+        summary: Option<String>,
+        trigger: Option<String>,
+    },
+    StartNewEpisode {
+        reason: String,
+        topic: Option<String>,
+        instruction: Option<String>,
+        summary: Option<String>,
+        trigger: Option<String>,
+    },
+    ExtractEntities {
+        text: Option<String>,
+    },
+    UpdateGraphNodeFields {
+        node_id: String,
+        label: Option<String>,
+        fields: Map<String, Value>,
+    },
+    QueryMemories {
+        text: String,
+        limit: Option<usize>,
+        min_score: Option<f32>,
+    },
+    SearchGraphNodes {
+        text: Option<String>,
+        field: Option<String>,
+        value: Option<Value>,
+        limit: Option<usize>,
+    },
     ListFiles,
-    ReadSourceFile { file: String, page: usize },
-    SearchSource { query: String, limit: usize },
-    GrepSource { pattern: String, limit: usize },
+    ReadSourceFile {
+        file: String,
+        page: usize,
+    },
+    SearchSource {
+        query: String,
+        limit: usize,
+    },
+    GrepSource {
+        pattern: String,
+        limit: usize,
+    },
 }
 
 #[cfg(any(
@@ -1970,6 +2249,66 @@ enum TypeScriptCommandPayload {
     Shutup,
     Pause,
     Resume,
+    Sleeping {
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    SetStage {
+        #[serde(default)]
+        topic: Option<String>,
+        instruction: String,
+        #[serde(default)]
+        summary: Option<String>,
+    },
+    StartNewTopic {
+        last_topic: String,
+        #[serde(default)]
+        topic: Option<String>,
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        trigger: Option<String>,
+    },
+    StartNewEpisode {
+        reason: String,
+        #[serde(default)]
+        topic: Option<String>,
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        trigger: Option<String>,
+    },
+    ExtractEntities {
+        text: Option<String>,
+    },
+    UpdateGraphNodeFields {
+        node_id: String,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default)]
+        fields: Map<String, Value>,
+    },
+    QueryMemories {
+        text: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        min_score: Option<f32>,
+    },
+    SearchGraphNodes {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        field: Option<String>,
+        #[serde(default)]
+        value: Option<Value>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
     ListFiles,
     ReadSourceFile {
         file: String,
@@ -1985,15 +2324,7 @@ enum TypeScriptCommandPayload {
     },
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 fn execute_typescript_source(script: &str) -> SourceCommandExecution {
     match execute_typescript_commands(script) {
         Ok(commands) => execute_typescript_command_results(script, &commands),
@@ -2004,15 +2335,7 @@ fn execute_typescript_source(script: &str) -> SourceCommandExecution {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 fn execute_typescript_command_results(
     script: &str,
     commands: &[TypeScriptCommand],
@@ -2067,6 +2390,63 @@ fn execute_typescript_command_results(
                 });
                 ("resume", "Synthetic playback resumed.".to_string())
             }
+            TypeScriptCommand::Sleeping { reason } => (
+                "sleeping",
+                format!(
+                    "Sleep requested{}.",
+                    reason
+                        .as_deref()
+                        .map(|reason| format!(": {}", reason.trim()))
+                        .unwrap_or_default()
+                ),
+            ),
+            TypeScriptCommand::SetStage { instruction, .. } => (
+                "set_stage",
+                format!("Stage update requested: {instruction}"),
+            ),
+            TypeScriptCommand::StartNewTopic { last_topic, .. } => (
+                "start_new_topic",
+                format!("Topic transition requested from {last_topic}."),
+            ),
+            TypeScriptCommand::StartNewEpisode { reason, .. } => (
+                "start_new_episode",
+                format!("Episode transition requested: {reason}"),
+            ),
+            TypeScriptCommand::ExtractEntities { text } => (
+                "extract_entities",
+                format!(
+                    "Entity extraction requested{}.",
+                    text.as_deref()
+                        .map(|text| format!(": {}", text.trim()))
+                        .unwrap_or_default()
+                ),
+            ),
+            TypeScriptCommand::UpdateGraphNodeFields {
+                node_id, fields, ..
+            } => (
+                "update_graph_node_fields",
+                format!(
+                    "Graph node update requested for {node_id}: {}",
+                    summarize_command_fields(fields)
+                ),
+            ),
+            TypeScriptCommand::QueryMemories { text, .. } => (
+                "query_memories",
+                format!("Memory query requested: {}", text.trim()),
+            ),
+            TypeScriptCommand::SearchGraphNodes {
+                text, field, value, ..
+            } => (
+                "search_graph_nodes",
+                format!(
+                    "Graph node search requested: {}",
+                    format_graph_node_search_query_parts(
+                        text.as_deref(),
+                        field.as_deref(),
+                        value.as_ref()
+                    )
+                ),
+            ),
             TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
             TypeScriptCommand::ReadSourceFile { file, page } => {
                 ("read_source_file", execute_view_source_file(file, *page))
@@ -2087,6 +2467,723 @@ fn execute_typescript_command_results(
         message: response,
         runtime_events,
     }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_source_command_with_cognition(
+    command: &SourceCommand,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> SourceCommandExecution {
+    match command {
+        SourceCommand::RunTypeScript { source } => match execute_typescript_commands(source) {
+            Ok(commands) => execute_typescript_command_results_with_cognition(
+                source, &commands, cognition, trace, turn_id,
+            ),
+            Err(error) => SourceCommandExecution {
+                message: format!("TypeScript failed:\n{error}"),
+                runtime_events: Vec::new(),
+            },
+        },
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_typescript_command_results_with_cognition(
+    script: &str,
+    commands: &[TypeScriptCommand],
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> SourceCommandExecution {
+    let mut response = String::from("TypeScript executed.\nSource:\n");
+    response.push_str(script.trim());
+    if commands.is_empty() {
+        response.push_str("\n\nNo commands returned.");
+        return SourceCommandExecution {
+            message: response,
+            runtime_events: Vec::new(),
+        };
+    }
+
+    response.push_str("\n\nResults:");
+    let mut runtime_events = Vec::new();
+    for command in commands {
+        let (name, output) = match command {
+            TypeScriptCommand::Say { text, interrupt } => {
+                runtime_events.push(ContinueRuntimeEvent::UtteranceCompleted {
+                    id: next_typescript_utterance_id(),
+                    content: text.trim().to_string(),
+                    interrupt: *interrupt,
+                });
+                (
+                    "say",
+                    format!(
+                        "Synthetic queued{}: {}",
+                        if *interrupt { " (interrupt)" } else { "" },
+                        text.trim()
+                    ),
+                )
+            }
+            TypeScriptCommand::Shutup => {
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Shutup,
+                });
+                (
+                    "shutup",
+                    "Synthetic playback stopped and queue cleared.".to_string(),
+                )
+            }
+            TypeScriptCommand::Pause => {
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Pause,
+                });
+                ("pause", "Synthetic playback paused.".to_string())
+            }
+            TypeScriptCommand::Resume => {
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Resume,
+                });
+                ("resume", "Synthetic playback resumed.".to_string())
+            }
+            TypeScriptCommand::Sleeping { reason } => {
+                runtime_events.push(ContinueRuntimeEvent::SyntheticControl {
+                    command: SyntheticControlCommand::Shutup,
+                });
+                (
+                    "sleeping",
+                    execute_continue_sleeping_command(reason.as_deref(), trace, turn_id),
+                )
+            }
+            TypeScriptCommand::SetStage {
+                topic,
+                instruction,
+                summary,
+            } => (
+                "set_stage",
+                execute_continue_set_stage(
+                    topic.as_deref(),
+                    instruction,
+                    summary.as_deref(),
+                    None,
+                    None,
+                    None,
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::StartNewTopic {
+                last_topic,
+                topic,
+                instruction,
+                summary,
+                trigger,
+            } => (
+                "start_new_topic",
+                execute_continue_set_stage(
+                    topic.as_deref(),
+                    instruction
+                        .as_deref()
+                        .unwrap_or_else(|| topic.as_deref().unwrap_or("a new topic has started")),
+                    summary.as_deref(),
+                    Some("scene"),
+                    Some(last_topic),
+                    trigger.as_deref(),
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::StartNewEpisode {
+                reason,
+                topic,
+                instruction,
+                summary,
+                trigger,
+            } => (
+                "start_new_episode",
+                execute_continue_set_stage(
+                    topic.as_deref(),
+                    instruction.as_deref().unwrap_or(reason),
+                    summary.as_deref(),
+                    Some("episode"),
+                    Some(reason),
+                    trigger.as_deref(),
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::ExtractEntities { text } => (
+                "extract_entities",
+                execute_continue_entity_extraction(
+                    text.as_deref().unwrap_or_default(),
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::UpdateGraphNodeFields {
+                node_id,
+                label,
+                fields,
+            } => (
+                "update_graph_node_fields",
+                execute_continue_graph_node_field_update(
+                    node_id,
+                    label.as_deref(),
+                    fields.clone(),
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::QueryMemories {
+                text,
+                limit,
+                min_score,
+            } => (
+                "query_memories",
+                execute_continue_memory_query(text, *limit, *min_score, cognition, trace, turn_id),
+            ),
+            TypeScriptCommand::SearchGraphNodes {
+                text,
+                field,
+                value,
+                limit,
+            } => (
+                "search_graph_nodes",
+                execute_continue_graph_node_search(
+                    text.clone(),
+                    field.clone(),
+                    value.clone(),
+                    *limit,
+                    cognition,
+                    trace,
+                    turn_id,
+                ),
+            ),
+            TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
+            TypeScriptCommand::ReadSourceFile { file, page } => {
+                ("read_source_file", execute_view_source_file(file, *page))
+            }
+            TypeScriptCommand::SearchSource { query, limit } => {
+                ("search_source", execute_search_source(query, *limit))
+            }
+            TypeScriptCommand::GrepSource { pattern, limit } => {
+                ("grep_source", execute_grep_source(pattern, *limit))
+            }
+        };
+        response.push_str("\n\n[");
+        response.push_str(name);
+        response.push_str("]\n");
+        response.push_str(&output);
+    }
+    SourceCommandExecution {
+        message: response,
+        runtime_events,
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_continue_sleeping_command(
+    reason: Option<&str>,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let occurred_at = ExactTimestamp::now();
+    let mut event = trace.event(turn_id, "pete_command_sleeping", occurred_at);
+    event.text = reason.map(str::to_string);
+    event.reason = Some("Pete requested clean program termination".to_string());
+    event.artifact = Some(json!({
+        "command": "sleeping",
+        "state": "going_to_sleep",
+        "reason": reason,
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!("Sleep requested, but trace emit failed: {error:#}");
+    }
+    "Sleep requested; speech queue cleared.".to_string()
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+#[allow(clippy::too_many_arguments)]
+fn execute_continue_set_stage(
+    topic: Option<&str>,
+    instruction: &str,
+    summary: Option<&str>,
+    boundary_kind: Option<&str>,
+    transition: Option<&str>,
+    trigger: Option<&str>,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let instruction = instruction.trim();
+    if instruction.is_empty() {
+        return "No stage update was applied because the instruction was empty.".to_string();
+    }
+    let summary = summary
+        .and_then(non_empty_text)
+        .or_else(|| topic.and_then(non_empty_text))
+        .unwrap_or(instruction);
+    cognition
+        .context_provider
+        .set_stage_instruction(StageInstruction {
+            text: instruction.to_string(),
+            summary: summary.to_string(),
+        });
+
+    let occurred_at = ExactTimestamp::now();
+    if let Some(boundary_kind) = boundary_kind {
+        let event_kind = if boundary_kind == "episode" {
+            "episode_cut"
+        } else {
+            "scene_cut"
+        };
+        let mut cut_event = trace.event(turn_id, event_kind, occurred_at);
+        cut_event.text = trigger
+            .map(str::to_string)
+            .or_else(|| Some(instruction.to_string()));
+        cut_event.reason = transition.map(str::to_string);
+        cut_event.artifact = Some(json!({
+            "command": if boundary_kind == "episode" { "startNewEpisode" } else { "startNewTopic" },
+            "level": boundary_kind,
+            "topic": topic,
+            "summary": summary,
+            "transition": transition,
+            "trigger": trigger,
+            "stage_instruction": instruction,
+        }));
+        if let Err(error) = trace.emit(cut_event) {
+            return format!("Stage updated, but trace emit failed: {error:#}");
+        }
+    }
+    let mut event = trace.event(turn_id, "pete_stage_updated", occurred_at);
+    event.text = Some(instruction.to_string());
+    event.reason = transition.map(str::to_string);
+    event.artifact = Some(json!({
+        "command": "setStage",
+        "topic": topic,
+        "summary": summary,
+        "transition": transition,
+        "trigger": trigger,
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!("Stage updated, but trace emit failed: {error:#}");
+    }
+    render_continue_memory_summary(&cognition.context_provider, instruction)
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_continue_memory_query(
+    text: &str,
+    limit: Option<usize>,
+    min_score: Option<f32>,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let occurred_at = ExactTimestamp::now();
+    let hits = match cognition
+        .context_provider
+        .recall_text(text.to_string(), limit, min_score)
+    {
+        Ok(hits) => hits,
+        Err(error) => return format!("queryMemories recall failed: {error:#}"),
+    };
+    let result_summary = memory_query_result_summary(text, &hits);
+    cognition.memory_sink.submit(MemoryTrace::RecallResultUsed {
+        query: text.to_string(),
+        result_summary: result_summary.clone(),
+        occurred_at,
+    });
+    for hit in &hits {
+        cognition.context_provider.pin_node(PinnedContextNode {
+            node_id: hit.node.id.clone(),
+            scope: PinScope::Temporary { remaining_turns: 2 },
+            reason: format!("queryMemories match score {:.3}", hit.score),
+        });
+    }
+    let mut event = trace.event(turn_id, "pete_command_query_memories", occurred_at);
+    event.text = Some(text.to_string());
+    event.artifact = Some(json!({
+        "command": "queryMemories",
+        "query": text,
+        "limit": limit,
+        "minScore": min_score,
+        "hitCount": hits.len(),
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!(
+            "{}\nTrace emit failed: {error:#}",
+            format_memory_query_prompt_append(text, &hits)
+        );
+    }
+    format_memory_query_prompt_append(text, &hits)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn memory_query_result_summary(text: &str, hits: &[listenbury::RecallHit]) -> String {
+    if hits.is_empty() {
+        return format!("No memories matched query: {}", text.trim());
+    }
+    hits.iter()
+        .map(|hit| {
+            format!(
+                "{} ({}) score {:.3}: {}",
+                hit.node.label,
+                hit.node.id,
+                hit.score,
+                hit.summary.as_deref().unwrap_or(hit.reason.as_str())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_memory_query_prompt_append(text: &str, hits: &[listenbury::RecallHit]) -> String {
+    let summary = memory_query_result_summary(text, hits);
+    format!(
+        "\n\n[Private memory recall result for queryMemories]\nQuery: {}\n{}\n[/Private memory recall result]\n",
+        text.trim(),
+        summary
+    )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_continue_graph_node_search(
+    text: Option<String>,
+    field: Option<String>,
+    value: Option<Value>,
+    limit: Option<usize>,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let occurred_at = ExactTimestamp::now();
+    let query = GraphNodeSearchQuery {
+        text,
+        field,
+        value,
+        limit: limit.unwrap_or(8).clamp(1, 16),
+    };
+    let hits = cognition.context_provider.search_graph_nodes(query.clone());
+    let result_summary = graph_node_search_result_summary(&query, &hits);
+    cognition.memory_sink.submit(MemoryTrace::RecallResultUsed {
+        query: format_graph_node_search_query(&query),
+        result_summary: result_summary.clone(),
+        occurred_at,
+    });
+    for hit in &hits {
+        cognition.context_provider.pin_node(PinnedContextNode {
+            node_id: hit.node.id.clone(),
+            scope: PinScope::Temporary { remaining_turns: 2 },
+            reason: format!("searchGraphNodes match score {:.3}", hit.score),
+        });
+    }
+    let mut event = trace.event(turn_id, "pete_command_search_graph_nodes", occurred_at);
+    event.text = Some(format_graph_node_search_query(&query));
+    event.artifact = Some(json!({
+        "command": "searchGraphNodes",
+        "hitCount": hits.len(),
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!(
+            "{}\nTrace emit failed: {error:#}",
+            format_graph_node_search_prompt_append(&query, &hits)
+        );
+    }
+    format_graph_node_search_prompt_append(&query, &hits)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn graph_node_search_result_summary(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    if hits.is_empty() {
+        return format!(
+            "No graph nodes matched search: {}",
+            format_graph_node_search_query(query)
+        );
+    }
+    hits.iter()
+        .map(|hit| {
+            format!(
+                "{} ({}) score {:.3}: {}; fields: {}",
+                hit.node.label,
+                hit.node.id,
+                hit.score,
+                hit.reason,
+                summarize_command_fields(&hit.fields)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_graph_node_search_prompt_append(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    let summary = graph_node_search_result_summary(query, hits);
+    format!(
+        "\n\n[Private graph node search result for searchGraphNodes]\nQuery: {}\n{}\n[/Private graph node search result]\n",
+        format_graph_node_search_query(query),
+        summary
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_graph_node_search_query(query: &GraphNodeSearchQuery) -> String {
+    format_graph_node_search_query_parts(
+        query.text.as_deref(),
+        query.field.as_deref(),
+        query.value.as_ref(),
+    )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_continue_graph_node_field_update(
+    node_id: &str,
+    label: Option<&str>,
+    mut fields: Map<String, Value>,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let occurred_at = ExactTimestamp::now();
+    ensure_command_description_field(node_id, label, &mut fields);
+    cognition
+        .context_provider
+        .update_graph_node_fields(GraphNodeFieldUpdate {
+            node_id: node_id.to_string(),
+            label: label.map(str::to_string),
+            fields: fields.clone(),
+            reason: format!("Pete updated graph node fields on turn {turn_id}"),
+            relevance: 1.0,
+        });
+    cognition.context_provider.pin_node(PinnedContextNode {
+        node_id: node_id.to_string(),
+        scope: PinScope::Session,
+        reason: format!(
+            "graph fields updated: {}",
+            summarize_command_fields(&fields)
+        ),
+    });
+    cognition
+        .memory_sink
+        .submit(MemoryTrace::GraphNodeFieldsUpdated {
+            update: MemoryGraphNodeFieldUpdate {
+                node_id: node_id.to_string(),
+                label: label.map(str::to_string),
+                fields: fields.clone(),
+                source_text: Some(format!("Pete command turn {turn_id}")),
+                confidence: 1.0,
+            },
+            occurred_at,
+        });
+    let mut event = trace.event(
+        turn_id,
+        "pete_command_update_graph_node_fields",
+        occurred_at,
+    );
+    event.text = Some(node_id.to_string());
+    event.artifact = Some(json!({
+        "command": "updateGraphNodeFields",
+        "nodeId": node_id,
+        "label": label,
+        "fields": fields,
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!("Graph node fields updated, but trace emit failed: {error:#}");
+    }
+    render_continue_memory_summary(&cognition.context_provider, node_id)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ensure_command_description_field(
+    node_id: &str,
+    label: Option<&str>,
+    fields: &mut Map<String, Value>,
+) {
+    if fields
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty())
+    {
+        return;
+    }
+    fields.insert(
+        "description".to_string(),
+        Value::String(command_node_description(node_id, label)),
+    );
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn command_node_description(node_id: &str, label: Option<&str>) -> String {
+    let kind = node_id
+        .split_once(':')
+        .map(|(kind, _)| kind.replace('_', " "))
+        .unwrap_or_else(|| "graph node".to_string());
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(|label| format!("{kind} named {label}"))
+        .unwrap_or_else(|| format!("{kind} {node_id}"))
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_continue_entity_extraction(
+    text: &str,
+    cognition: &mut ContinueCognition,
+    trace: &mut ContinueLiveTrace,
+    turn_id: u64,
+) -> String {
+    let extracted = cognition.entity_extractor.extract(text);
+    let nodes = resolve_entities(&extracted, &|_| None);
+    let occurred_at = ExactTimestamp::now();
+    let memory_mentions = extracted
+        .iter()
+        .map(|entity| MemoryEntityMention {
+            node_id: entity.provisional_node_id(),
+            label: entity.text.clone(),
+            kind: entity.kind.as_str().to_string(),
+            confidence: entity.confidence,
+            span_start: entity.span.start,
+            span_end: entity.span.end,
+        })
+        .collect::<Vec<_>>();
+    cognition
+        .memory_sink
+        .submit(MemoryTrace::EntityExtractionPerformed {
+            source_text: text.to_string(),
+            entities: memory_mentions,
+            occurred_at,
+        });
+    for node in &nodes {
+        cognition.context_provider.pin_node(PinnedContextNode {
+            node_id: node.node.id.clone(),
+            scope: PinScope::Session,
+            reason: format!(
+                "Pete explicitly extracted {} from turn {}",
+                node.summary.trim(),
+                turn_id
+            ),
+        });
+    }
+    let mut event = trace.event(turn_id, "pete_command_extract_entities", occurred_at);
+    event.text = Some(text.to_string());
+    event.artifact = Some(json!({
+        "command": "extractEntities",
+        "sourceText": text,
+        "pinnedNodeIds": nodes.iter().map(|node| node.node.id.clone()).collect::<Vec<_>>(),
+    }));
+    if let Err(error) = trace.emit(event) {
+        return format!("Entities extracted, but trace emit failed: {error:#}");
+    }
+    render_continue_memory_summary(&cognition.context_provider, text)
 }
 
 #[cfg(any(
@@ -2158,6 +3255,88 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
             TypeScriptCommandPayload::Shutup => Some(TypeScriptCommand::Shutup),
             TypeScriptCommandPayload::Pause => Some(TypeScriptCommand::Pause),
             TypeScriptCommandPayload::Resume => Some(TypeScriptCommand::Resume),
+            TypeScriptCommandPayload::Sleeping { reason } => Some(TypeScriptCommand::Sleeping {
+                reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
+            }),
+            TypeScriptCommandPayload::SetStage {
+                topic,
+                instruction,
+                summary,
+            } => non_empty_text(&instruction).map(|instruction| TypeScriptCommand::SetStage {
+                topic: topic.and_then(|topic| non_empty_text(&topic).map(str::to_string)),
+                instruction: instruction.to_string(),
+                summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+            }),
+            TypeScriptCommandPayload::StartNewTopic {
+                last_topic,
+                topic,
+                instruction,
+                summary,
+                trigger,
+            } => non_empty_text(&last_topic).map(|last_topic| TypeScriptCommand::StartNewTopic {
+                last_topic: last_topic.to_string(),
+                topic: topic.and_then(|topic| non_empty_text(&topic).map(str::to_string)),
+                instruction: instruction
+                    .and_then(|instruction| non_empty_text(&instruction).map(str::to_string)),
+                summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+                trigger: trigger.and_then(|trigger| non_empty_text(&trigger).map(str::to_string)),
+            }),
+            TypeScriptCommandPayload::StartNewEpisode {
+                reason,
+                topic,
+                instruction,
+                summary,
+                trigger,
+            } => non_empty_text(&reason).map(|reason| TypeScriptCommand::StartNewEpisode {
+                reason: reason.to_string(),
+                topic: topic.and_then(|topic| non_empty_text(&topic).map(str::to_string)),
+                instruction: instruction
+                    .and_then(|instruction| non_empty_text(&instruction).map(str::to_string)),
+                summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+                trigger: trigger.and_then(|trigger| non_empty_text(&trigger).map(str::to_string)),
+            }),
+            TypeScriptCommandPayload::ExtractEntities { text } => {
+                Some(TypeScriptCommand::ExtractEntities {
+                    text: text.and_then(|text| non_empty_text(&text).map(str::to_string)),
+                })
+            }
+            TypeScriptCommandPayload::UpdateGraphNodeFields {
+                node_id,
+                label,
+                fields,
+            } => non_empty_text(&node_id).and_then(|node_id| {
+                (!fields.is_empty()).then_some(TypeScriptCommand::UpdateGraphNodeFields {
+                    node_id: node_id.to_string(),
+                    label: label.and_then(|label| non_empty_text(&label).map(str::to_string)),
+                    fields,
+                })
+            }),
+            TypeScriptCommandPayload::QueryMemories {
+                text,
+                limit,
+                min_score,
+            } => non_empty_text(&text).map(|text| TypeScriptCommand::QueryMemories {
+                text: text.to_string(),
+                limit: limit.map(|limit| limit.clamp(1, 16)),
+                min_score,
+            }),
+            TypeScriptCommandPayload::SearchGraphNodes {
+                text,
+                field,
+                value,
+                limit,
+            } => {
+                let text = text.and_then(|text| non_empty_text(&text).map(str::to_string));
+                let field = field.and_then(|field| non_empty_text(&field).map(str::to_string));
+                (text.is_some() || field.is_some() || value.is_some()).then_some(
+                    TypeScriptCommand::SearchGraphNodes {
+                        text,
+                        field,
+                        value,
+                        limit: limit.map(|limit| limit.clamp(1, 16)),
+                    },
+                )
+            }
             TypeScriptCommandPayload::ListFiles => Some(TypeScriptCommand::ListFiles),
             TypeScriptCommandPayload::ReadSourceFile { file, page } => {
                 let file = file.trim();
@@ -2196,7 +3375,7 @@ fn typescript_source_with_default_will_imports(script: &str) -> String {
     }
 
     format!(
-        "import {{ say, shutup, pause, resume, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -2212,6 +3391,76 @@ fn typescript_source_with_default_will_imports(script: &str) -> String {
 fn non_empty_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn summarize_command_fields(fields: &Map<String, Value>) -> String {
+    let mut pairs = fields
+        .iter()
+        .map(|(key, value)| format!("{}={}", key, compact_command_value(value)))
+        .collect::<Vec<_>>();
+    pairs.sort();
+    pairs.join(", ")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn compact_command_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => "null".to_string(),
+        Value::Array(_) | Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "<value>".to_string())
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_graph_node_search_query_parts(
+    text: Option<&str>,
+    field: Option<&str>,
+    value: Option<&Value>,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
+        parts.push(format!("text={text}"));
+    }
+    if let Some(field) = field.map(str::trim).filter(|field| !field.is_empty()) {
+        parts.push(format!("field={field}"));
+    }
+    if let Some(value) = value {
+        parts.push(format!("value={}", compact_command_value(value)));
+    }
+    if parts.is_empty() {
+        "empty".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 #[cfg(any(
@@ -2267,6 +3516,33 @@ fn will_typescript_module() -> InternalModule {
         .with_function("shutup", ts_shutup, 0)
         .with_function("pause", ts_pause, 0)
         .with_function("resume", ts_resume, 0)
+        .with_function("setStage", ts_set_stage, 2)
+        .with_function("set_stage", ts_set_stage, 2)
+        .with_function("setTopic", ts_set_topic, 2)
+        .with_function("set_topic", ts_set_topic, 2)
+        .with_function("startNewTopic", ts_start_new_topic, 2)
+        .with_function("start_new_topic", ts_start_new_topic, 2)
+        .with_function("topicChangedWhen", ts_topic_changed_when, 2)
+        .with_function("topic_changed_when", ts_topic_changed_when, 2)
+        .with_function("startNewEpisode", ts_start_new_episode, 2)
+        .with_function("start_new_episode", ts_start_new_episode, 2)
+        .with_function("newEpisodeStarted", ts_start_new_episode, 2)
+        .with_function("sleeping", ts_sleeping, 1)
+        .with_function("goingToSleep", ts_sleeping, 1)
+        .with_function("going_to_sleep", ts_sleeping, 1)
+        .with_function("goToSleep", ts_sleeping, 1)
+        .with_function("go_to_sleep", ts_sleeping, 1)
+        .with_function("extractEntities", ts_extract_entities, 1)
+        .with_function("extract_entities", ts_extract_entities, 1)
+        .with_function("updateGraphNodeFields", ts_update_graph_node_fields, 3)
+        .with_function("update_graph_node_fields", ts_update_graph_node_fields, 3)
+        .with_function("updateEntityFields", ts_update_graph_node_fields, 3)
+        .with_function("searchGraphNodes", ts_search_graph_nodes, 2)
+        .with_function("search_graph_nodes", ts_search_graph_nodes, 2)
+        .with_function("searchEntities", ts_search_graph_nodes, 2)
+        .with_function("queryMemories", ts_query_memories, 2)
+        .with_function("query_memories", ts_query_memories, 2)
+        .with_function("recallMemories", ts_query_memories, 2)
         .with_function("listFiles", ts_list_files, 0)
         .with_function("readSourceFile", ts_read_source_file, 2)
         .with_function("readFile", ts_read_source_file, 2)
@@ -2354,6 +3630,82 @@ fn interrupt_arg(args: &[JsValue], index: usize) -> bool {
         feature = "tts-piper"
     )
 ))]
+fn optional_number_arg(args: &[JsValue], index: usize, property: &str) -> Option<f64> {
+    let value = args.get(index)?;
+    match value {
+        JsValue::Number(value) => value.is_finite().then_some(*value),
+        JsValue::Object(_) => match api::get_property(value, property) {
+            Ok(JsValue::Number(value)) if value.is_finite() => Some(value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<Value> {
+    let value = args.get(index)?;
+    if let JsValue::Object(_) = value {
+        return api::get_property(value, property)
+            .ok()
+            .and_then(|value| js_value_to_json(&value).ok())
+            .filter(|value| !value.is_null());
+    }
+    None
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<String> {
+    optional_json_property_arg(args, index, property).and_then(|value| match value {
+        Value::String(value) => non_empty_text(&value).map(str::to_string),
+        _ => None,
+    })
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn object_arg(args: &[JsValue], index: usize) -> Map<String, Value> {
+    let Some(value) = args.get(index) else {
+        return Map::new();
+    };
+    let Ok(Value::Object(object)) = js_value_to_json(value).map_err(tsrun_error) else {
+        return Map::new();
+    };
+    object
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn ts_say(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -2414,6 +3766,363 @@ fn ts_resume(
     _args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
     command_value(interp, json!({ "kind": "resume" }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_set_stage(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let topic = stage_string_property_arg(args, "topic");
+    let setting = stage_string_property_arg(args, "setting");
+    let action = stage_string_property_arg(args, "action");
+    let summary = stage_string_property_arg(args, "summary").or_else(|| action.clone());
+    let raw_instruction = string_arg(args, 0);
+    let instruction = non_empty_text(&raw_instruction)
+        .map(str::to_string)
+        .or_else(|| screenplay_stage_description(setting.as_deref(), action.as_deref()))
+        .unwrap_or_default();
+    command_value(
+        interp,
+        json!({
+            "kind": "set_stage",
+            "topic": topic,
+            "instruction": instruction,
+            "summary": summary,
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn stage_string_property_arg(args: &[JsValue], property: &str) -> Option<String> {
+    optional_string_property_arg(args, 1, property)
+        .or_else(|| optional_string_property_arg(args, 0, property))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn screenplay_stage_description(setting: Option<&str>, action: Option<&str>) -> Option<String> {
+    match (setting, action) {
+        (Some(setting), Some(action)) => Some(format!("Setting: {setting}. Action: {action}")),
+        (Some(setting), None) => Some(format!("Setting: {setting}")),
+        (None, Some(action)) => Some(format!("Action: {action}")),
+        (None, None) => None,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_set_topic(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let topic = string_arg(args, 0);
+    let instruction = match args.get(1) {
+        Some(JsValue::String(value)) => value.to_string(),
+        Some(JsValue::Object(_)) => optional_string_property_arg(args, 1, "instruction")
+            .unwrap_or_else(|| format!("The current topic is {}.", topic.trim())),
+        _ => format!("The current topic is {}.", topic.trim()),
+    };
+    let summary = optional_string_property_arg(args, 1, "summary");
+    command_value(
+        interp,
+        json!({
+            "kind": "set_stage",
+            "topic": topic,
+            "instruction": instruction,
+            "summary": summary,
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_start_new_topic(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "start_new_topic",
+            "last_topic": string_arg(args, 0),
+            "topic": optional_string_property_arg(args, 1, "topic"),
+            "instruction": optional_string_property_arg(args, 1, "instruction"),
+            "summary": optional_string_property_arg(args, 1, "summary"),
+            "trigger": optional_string_property_arg(args, 1, "trigger"),
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_topic_changed_when(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let trigger = string_arg(args, 0);
+    let last_topic = optional_string_property_arg(args, 1, "fromTopic")
+        .or_else(|| optional_string_property_arg(args, 1, "from_topic"))
+        .unwrap_or_else(|| "previous topic".to_string());
+    let topic = optional_string_property_arg(args, 1, "toTopic")
+        .or_else(|| optional_string_property_arg(args, 1, "to_topic"))
+        .or_else(|| optional_string_property_arg(args, 1, "topic"));
+    let instruction = optional_string_property_arg(args, 1, "instruction").or_else(|| {
+        non_empty_text(&trigger)
+            .map(|trigger| format!("The topic changed when the interlocutor said: {trigger}"))
+    });
+    let summary = optional_string_property_arg(args, 1, "summary");
+    command_value(
+        interp,
+        json!({
+            "kind": "start_new_topic",
+            "last_topic": last_topic,
+            "topic": topic,
+            "instruction": instruction,
+            "summary": summary,
+            "trigger": trigger,
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_start_new_episode(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "start_new_episode",
+            "reason": string_arg(args, 0),
+            "topic": optional_string_property_arg(args, 1, "topic"),
+            "instruction": optional_string_property_arg(args, 1, "instruction"),
+            "summary": optional_string_property_arg(args, 1, "summary"),
+            "trigger": optional_string_property_arg(args, 1, "trigger"),
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_sleeping(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let reason = match args.first() {
+        Some(JsValue::String(value)) => {
+            let value = value.to_string();
+            non_empty_text(&value).map(str::to_string)
+        }
+        Some(JsValue::Object(_)) => optional_string_property_arg(args, 0, "reason"),
+        _ => None,
+    };
+    command_value(interp, json!({ "kind": "sleeping", "reason": reason }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_extract_entities(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "extract_entities", "text": string_arg(args, 0) }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_update_graph_node_fields(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let label = args.get(2).and_then(|value| match value {
+        JsValue::String(value) => Some(value.to_string()),
+        JsValue::Object(_) => match api::get_property(value, "label") {
+            Ok(JsValue::String(value)) => Some(value.to_string()),
+            _ => None,
+        },
+        _ => None,
+    });
+    command_value(
+        interp,
+        json!({
+            "kind": "update_graph_node_fields",
+            "node_id": string_arg(args, 0),
+            "label": label,
+            "fields": object_arg(args, 1),
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_search_graph_nodes(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let mut text = None;
+    let mut field = None;
+    let mut value = None;
+    let mut limit = None;
+
+    match args.first() {
+        Some(JsValue::String(raw)) => {
+            let raw = raw.to_string();
+            text = non_empty_text(&raw).map(str::to_string);
+        }
+        Some(JsValue::Object(_)) => {
+            text = optional_string_property_arg(args, 0, "text");
+            field = optional_string_property_arg(args, 0, "field");
+            value = optional_json_property_arg(args, 0, "value");
+            limit = optional_number_arg(args, 0, "limit")
+                .map(|value| value.round().clamp(1.0, 16.0) as usize);
+        }
+        _ => {}
+    }
+
+    if let Some(options) = args.get(1)
+        && matches!(options, JsValue::Object(_))
+    {
+        text = optional_string_property_arg(args, 1, "text").or(text);
+        field = optional_string_property_arg(args, 1, "field").or(field);
+        value = optional_json_property_arg(args, 1, "value").or(value);
+        limit = optional_number_arg(args, 1, "limit")
+            .map(|value| value.round().clamp(1.0, 16.0) as usize)
+            .or(limit);
+    }
+
+    command_value(
+        interp,
+        json!({
+            "kind": "search_graph_nodes",
+            "text": text,
+            "field": field,
+            "value": value,
+            "limit": limit,
+        }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_query_memories(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let limit =
+        optional_number_arg(args, 1, "limit").map(|value| value.round().clamp(1.0, 16.0) as usize);
+    let min_score = optional_number_arg(args, 1, "minScore")
+        .or_else(|| optional_number_arg(args, 1, "min_score"))
+        .map(|value| value.clamp(0.0, 1.0) as f32);
+    command_value(
+        interp,
+        json!({
+            "kind": "query_memories",
+            "text": string_arg(args, 0),
+            "limit": limit,
+            "min_score": min_score,
+        }),
+    )
 }
 
 #[cfg(any(
@@ -6214,7 +7923,7 @@ mod tests {
     #[test]
     fn rolling_context_keeps_persona_top_and_recent_turns_verbatim() {
         let mut context =
-            RollingContextManager::new("Identity and rules.".to_string(), 4096, None, 2);
+            RollingContextManager::new("Identity and rules.".to_string(), 4096, None, 512, 2);
 
         context.record_prompt_packet(PromptPacket::listened("first heard turn".to_string()));
         context.record_prompt_packet(PromptPacket::spoken("first spoken turn".to_string()));
@@ -6237,7 +7946,7 @@ mod tests {
 
     #[test]
     fn rolling_context_tracks_clock_as_scene_not_verbatim_turn() {
-        let mut context = RollingContextManager::new("Identity.".to_string(), 4096, None, 4);
+        let mut context = RollingContextManager::new("Identity.".to_string(), 4096, None, 512, 4);
 
         context.record_prompt_packet(PromptPacket::clock(
             "The current Unix time is 42.000 seconds.".to_string(),
@@ -6384,6 +8093,50 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn duplex_typescript_executes_memory_builders() {
+        let commands = execute_typescript_commands(
+            r#"[
+                setStage("Setting: lab. Action: Pete listens.", { topic: "lab", summary: "Pete listens" }),
+                startNewTopic("setup", { topic: "memory", instruction: "Action: Pete stores a fact.", trigger: "remember this" }),
+                startNewEpisode("new session", { topic: "session" }),
+                extractEntities("My name is Travis."),
+                updateGraphNodeFields("person:travis", { favorite_color: "green" }, { label: "Travis" }),
+                searchGraphNodes({ field: "favorite_color", value: "green", limit: 3 }),
+                queryMemories("Travis favorite color", { limit: 2, minScore: 0.25 }),
+                sleeping("goodnight")
+            ]"#,
+        )
+        .expect("memory builders should execute");
+
+        assert!(matches!(commands[0], TypeScriptCommand::SetStage { .. }));
+        assert!(matches!(
+            commands[1],
+            TypeScriptCommand::StartNewTopic { .. }
+        ));
+        assert!(matches!(
+            commands[2],
+            TypeScriptCommand::StartNewEpisode { .. }
+        ));
+        assert!(matches!(
+            commands[3],
+            TypeScriptCommand::ExtractEntities { .. }
+        ));
+        assert!(matches!(
+            commands[4],
+            TypeScriptCommand::UpdateGraphNodeFields { .. }
+        ));
+        assert!(matches!(
+            commands[5],
+            TypeScriptCommand::SearchGraphNodes { .. }
+        ));
+        assert!(matches!(
+            commands[6],
+            TypeScriptCommand::QueryMemories { .. }
+        ));
+        assert!(matches!(commands[7], TypeScriptCommand::Sleeping { .. }));
     }
 
     #[test]

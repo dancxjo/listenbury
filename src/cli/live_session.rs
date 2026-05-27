@@ -176,7 +176,7 @@ impl LiveSessionConfig {
                 hifigan: command.hifigan,
                 hifigan_model: command.hifigan_model.clone(),
                 skip_gan: command.skip_gan,
-                no_backchannels: false,
+                no_backchannels: command.no_backchannels,
             },
             tracing: TraceConfig {
                 jsonl: command.jsonl.clone(),
@@ -246,7 +246,10 @@ pub(crate) fn continue_command_from_listen_command(
         mode: PromptMode::Raw,
         max_tokens: None,
         context_size: command.context_size,
+        reserved_generation_tokens: command.reserved_generation_tokens,
         verbatim_turns: DEFAULT_VERBATIM_TURNS,
+        model_profile: command.model_profile,
+        no_backchannels: command.no_backchannels,
         tts_vad_pause_ms: DEFAULT_TTS_VAD_PAUSE_MS,
         tts_vad_listen_ms: DEFAULT_TTS_VAD_LISTEN_MS,
         web: command.web,
@@ -254,6 +257,12 @@ pub(crate) fn continue_command_from_listen_command(
         web_port: command.web_port,
         duplex_trace_scenario: None,
         jsonl: command.jsonl,
+        native_video: command.native_video,
+        video_device: command.video_device,
+        video_width: command.video_width,
+        video_height: command.video_height,
+        video_fps: command.video_fps,
+        retain_video_images: command.retain_video_images,
         prompt: Vec::new(),
     }
 }

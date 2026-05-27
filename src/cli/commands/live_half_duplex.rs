@@ -1780,6 +1780,7 @@ fn stream_speech_to_tts(
     let mut prepared_audio = Vec::<AudioFrame>::new();
     let mut sleep_requested = false;
     let mut trace_state = LiveTurnTraceState::new(user_turn_id);
+    let mut last_streamed_word_text = String::new();
     let mut harmony_filter =
         (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
     let mut command_filter =
@@ -2139,6 +2140,13 @@ fn stream_speech_to_tts(
                 }
             }
         }
+        emit_streaming_read_aloud_timed_word_stream_revision(
+            &mut state.trace,
+            user_turn_id,
+            &generated_visible_response,
+            &mut last_streamed_word_text,
+            ExactTimestamp::now(),
+        )?;
         for unit in
             planner_units_from_events(&mut state.controller, &planner_events, no_backchannels)
         {
@@ -5133,6 +5141,58 @@ fn emit_read_aloud_timed_word_stream_revision(
     trace.emit(event)
 }
 
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn emit_streaming_read_aloud_timed_word_stream_revision(
+    trace: &mut LiveTrace,
+    turn_id: u64,
+    text: &str,
+    last_emitted_text: &mut String,
+    at: ExactTimestamp,
+) -> Result<()> {
+    let Some(stream) = streaming_read_aloud_timed_word_stream(turn_id, text, last_emitted_text)
+    else {
+        return Ok(());
+    };
+
+    let mut event = trace.event(turn_id, "tts_timed_word_stream_revision", at);
+    event.reason = Some("streaming".to_string());
+    event.artifact = Some(
+        serde_json::to_value(stream)
+            .context("serialize streaming TTS TimedWordStream revision artifact")?,
+    );
+    trace.emit(event)?;
+    *last_emitted_text = text.trim().to_string();
+    Ok(())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn streaming_read_aloud_timed_word_stream(
+    turn_id: u64,
+    text: &str,
+    last_emitted_text: &str,
+) -> Option<TimedWordStream> {
+    let text = text.trim();
+    if text.is_empty() || text == last_emitted_text.trim() {
+        return None;
+    }
+
+    let stream = read_aloud_timed_word_stream(turn_id, text, WordCommitment::StableText);
+    (!stream.words.is_empty()).then_some(stream)
+}
+
 #[cfg(any(
     test,
     all(
@@ -6253,7 +6313,7 @@ mod tests {
         format_memory_query_prompt_append, format_source_inspection_prompt_append,
         live_half_duplex_stops, maybe_plan_cached_backchannel, planner_units_from_events,
         prompt_format_for_model, read_aloud_timed_word_stream, simplex_turn_gap_status,
-        vad_frame_format,
+        streaming_read_aloud_timed_word_stream, vad_frame_format,
     };
     use listenbury::hearing::vad::VadBackendKind;
     use listenbury::mind::llm::LlmEvent;
@@ -7134,6 +7194,21 @@ mod tests {
                 .iter()
                 .all(|word| word.commitment == WordCommitment::Hypothetical)
         );
+    }
+
+    #[test]
+    fn streaming_read_aloud_word_stream_tracks_partial_llm_text() {
+        let stream = streaming_read_aloud_timed_word_stream(9, "I can see", "")
+            .expect("partial generated text should produce a streaming word stream");
+        assert_eq!(stream.id.0, 9);
+        assert_eq!(stream.words.len(), 3);
+        assert!(
+            stream
+                .words
+                .iter()
+                .all(|word| word.commitment == WordCommitment::StableText)
+        );
+        assert!(streaming_read_aloud_timed_word_stream(9, "I can see", "I can see").is_none());
     }
 
     #[test]
