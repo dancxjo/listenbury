@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -144,6 +145,49 @@ impl ConversationContext {
         };
         format!("self={} selected=[{}]", self.self_node.id, selected)
     }
+
+    pub fn graph_expansion_request(
+        &self,
+        max_depth: usize,
+        max_nodes: usize,
+        max_edges: usize,
+    ) -> GraphExpansionRequest {
+        let mut seen = HashSet::new();
+        let mut roots = Vec::new();
+        roots.push(self.self_node.clone());
+        seen.insert(self.self_node.id.clone());
+        for seed in self
+            .selected_nodes
+            .iter()
+            .filter(|node| node.role == ContextNodeRole::RetrievedMemory)
+            .map(|node| node.node.clone())
+        {
+            if seen.insert(seed.id.clone()) {
+                roots.push(seed);
+            }
+        }
+        GraphExpansionRequest {
+            roots,
+            max_depth,
+            max_nodes,
+            max_edges,
+        }
+    }
+
+    pub fn expand_graph(
+        &self,
+        graph: &dyn ContextGraph,
+        mut request: GraphExpansionRequest,
+    ) -> ExpandedContextGraph {
+        if request
+            .roots
+            .iter()
+            .all(|root| root.id != self.self_node.id)
+        {
+            request.roots.insert(0, self.self_node.clone());
+        }
+        expand_context_graph(graph, request)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -170,8 +214,343 @@ pub struct RecallHit {
     pub summary: Option<String>,
 }
 
+pub type GraphNodeId = String;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphTraversalEdge {
+    pub from: GraphNodeId,
+    pub to: GraphNodeId,
+    pub kind: String,
+}
+
+pub trait ContextGraph: Send + Sync {
+    fn node(&self, node_id: &str) -> Option<GraphNodeRef>;
+    fn outgoing(&self, node_id: &str) -> Vec<GraphTraversalEdge>;
+    fn incoming(&self, node_id: &str) -> Vec<GraphTraversalEdge>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphExpansionRequest {
+    pub roots: Vec<GraphNodeRef>,
+    pub max_depth: usize,
+    pub max_nodes: usize,
+    pub max_edges: usize,
+}
+
+impl Default for GraphExpansionRequest {
+    fn default() -> Self {
+        Self {
+            roots: Vec::new(),
+            max_depth: 2,
+            max_nodes: 64,
+            max_edges: 128,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraversalDirection {
+    Outgoing,
+    Incoming,
+}
+
+impl TraversalDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TraversalDirection::Outgoing => "outgoing",
+            TraversalDirection::Incoming => "incoming",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraversalPathEdge {
+    pub from: GraphNodeId,
+    pub to: GraphNodeId,
+    pub kind: String,
+    pub direction: TraversalDirection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraversalProvenance {
+    pub seed: GraphNodeRef,
+    pub depth: usize,
+    pub path: Vec<TraversalPathEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedNode {
+    pub node: GraphNodeRef,
+    pub min_depth: usize,
+    pub provenance: Vec<TraversalProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedEdge {
+    pub edge: GraphTraversalEdge,
+    pub min_depth: usize,
+    pub provenance: Vec<TraversalProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpandedContextGraph {
+    pub nodes: Vec<ExpandedNode>,
+    pub edges: Vec<ExpandedEdge>,
+}
+
+impl ExpandedContextGraph {
+    pub fn debug_view(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "nodes={} edges={}",
+            self.nodes.len(),
+            self.edges.len()
+        ));
+        for node in &self.nodes {
+            let seeds = node
+                .provenance
+                .iter()
+                .map(|entry| format!("{}@{}", entry.seed.id, entry.depth))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "node {} depth={} seeds=[{}]",
+                node.node.id, node.min_depth, seeds
+            ));
+        }
+        for edge in &self.edges {
+            let seeds = edge
+                .provenance
+                .iter()
+                .map(|entry| format!("{}@{}", entry.seed.id, entry.depth))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "edge {} -{}-> {} depth={} seeds=[{}]",
+                edge.edge.from, edge.edge.kind, edge.edge.to, edge.min_depth, seeds
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
 pub trait EmbeddingRecall: Send + Sync {
     fn recall(&self, query: RecallQuery) -> anyhow::Result<Vec<RecallHit>>;
+}
+
+pub fn expand_context_graph(
+    graph: &dyn ContextGraph,
+    request: GraphExpansionRequest,
+) -> ExpandedContextGraph {
+    let mut roots = Vec::new();
+    let mut seen_roots = HashSet::new();
+    for root in request.roots {
+        if seen_roots.insert(root.id.clone()) {
+            roots.push(root);
+        }
+    }
+    let mut nodes_by_id = HashMap::<GraphNodeId, ExpandedNode>::new();
+    let mut edges_by_key = HashMap::<(GraphNodeId, GraphNodeId, String), ExpandedEdge>::new();
+    let mut queue = VecDeque::new();
+    let mut visited_by_seed = HashMap::<GraphNodeId, HashSet<GraphNodeId>>::new();
+    let max_nodes = request.max_nodes.max(1);
+
+    for seed in roots {
+        if nodes_by_id.len() >= max_nodes {
+            break;
+        }
+        let node = graph.node(&seed.id).unwrap_or_else(|| seed.clone());
+        let provenance = TraversalProvenance {
+            seed: seed.clone(),
+            depth: 0,
+            path: Vec::new(),
+        };
+        upsert_node(&mut nodes_by_id, node.clone(), 0, provenance);
+        visited_by_seed
+            .entry(seed.id.clone())
+            .or_default()
+            .insert(seed.id.clone());
+        queue.push_back(BfsState {
+            node_id: seed.id.clone(),
+            seed: seed.clone(),
+            depth: 0,
+            path: Vec::new(),
+        });
+    }
+
+    while let Some(state) = queue.pop_front() {
+        if state.depth >= request.max_depth {
+            continue;
+        }
+        let next_depth = state.depth + 1;
+        let mut traversals = Vec::new();
+        traversals.extend(graph.outgoing(&state.node_id).into_iter().map(|edge| {
+            (
+                TraversalDirection::Outgoing,
+                edge.to.clone(),
+                TraversalPathEdge {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    kind: edge.kind.clone(),
+                    direction: TraversalDirection::Outgoing,
+                },
+                edge,
+            )
+        }));
+        traversals.extend(graph.incoming(&state.node_id).into_iter().map(|edge| {
+            (
+                TraversalDirection::Incoming,
+                edge.from.clone(),
+                TraversalPathEdge {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    kind: edge.kind.clone(),
+                    direction: TraversalDirection::Incoming,
+                },
+                edge,
+            )
+        }));
+        traversals.sort_by(|left, right| {
+            let left_key = (
+                &left.1,
+                &left.3.from,
+                &left.3.to,
+                &left.3.kind,
+                left.0.as_str(),
+            );
+            let right_key = (
+                &right.1,
+                &right.3.from,
+                &right.3.to,
+                &right.3.kind,
+                right.0.as_str(),
+            );
+            left_key.cmp(&right_key)
+        });
+
+        for (_, neighbor_id, path_edge, edge) in traversals {
+            let visited = visited_by_seed.entry(state.seed.id.clone()).or_default();
+            if visited.contains(&neighbor_id) {
+                continue;
+            }
+
+            let is_new_node = !nodes_by_id.contains_key(&neighbor_id);
+            if is_new_node && nodes_by_id.len() >= max_nodes {
+                continue;
+            }
+
+            let edge_key = (edge.from.clone(), edge.to.clone(), edge.kind.clone());
+            let is_new_edge = !edges_by_key.contains_key(&edge_key);
+            if is_new_edge && edges_by_key.len() >= request.max_edges {
+                continue;
+            }
+
+            let mut next_path = state.path.clone();
+            next_path.push(path_edge);
+            let provenance = TraversalProvenance {
+                seed: state.seed.clone(),
+                depth: next_depth,
+                path: next_path.clone(),
+            };
+
+            let neighbor = graph.node(&neighbor_id).unwrap_or_else(|| GraphNodeRef {
+                id: neighbor_id.clone(),
+                label: format!("Graph node {neighbor_id}"),
+            });
+            upsert_node(&mut nodes_by_id, neighbor, next_depth, provenance.clone());
+            upsert_edge(&mut edges_by_key, edge, next_depth, provenance);
+
+            visited.insert(neighbor_id.clone());
+            queue.push_back(BfsState {
+                node_id: neighbor_id,
+                seed: state.seed.clone(),
+                depth: next_depth,
+                path: next_path,
+            });
+        }
+    }
+
+    let mut nodes = nodes_by_id.into_values().collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.node.id.cmp(&right.node.id));
+    let mut edges = edges_by_key.into_values().collect::<Vec<_>>();
+    edges.sort_by(|left, right| {
+        (
+            &left.edge.from,
+            &left.edge.to,
+            &left.edge.kind,
+            left.min_depth,
+        )
+            .cmp(&(
+                &right.edge.from,
+                &right.edge.to,
+                &right.edge.kind,
+                right.min_depth,
+            ))
+    });
+    ExpandedContextGraph { nodes, edges }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BfsState {
+    node_id: GraphNodeId,
+    seed: GraphNodeRef,
+    depth: usize,
+    path: Vec<TraversalPathEdge>,
+}
+
+fn upsert_node(
+    nodes_by_id: &mut HashMap<GraphNodeId, ExpandedNode>,
+    node: GraphNodeRef,
+    depth: usize,
+    provenance: TraversalProvenance,
+) {
+    let entry = nodes_by_id
+        .entry(node.id.clone())
+        .or_insert_with(|| ExpandedNode {
+            node: node.clone(),
+            min_depth: depth,
+            provenance: Vec::new(),
+        });
+    if depth < entry.min_depth {
+        entry.min_depth = depth;
+    }
+    if !entry.provenance.contains(&provenance) {
+        entry.provenance.push(provenance);
+        entry.provenance.sort_by(|left, right| {
+            (left.depth, &left.seed.id, left.path.len()).cmp(&(
+                right.depth,
+                &right.seed.id,
+                right.path.len(),
+            ))
+        });
+    }
+}
+
+fn upsert_edge(
+    edges_by_key: &mut HashMap<(GraphNodeId, GraphNodeId, String), ExpandedEdge>,
+    edge: GraphTraversalEdge,
+    depth: usize,
+    provenance: TraversalProvenance,
+) {
+    let key = (edge.from.clone(), edge.to.clone(), edge.kind.clone());
+    let entry = edges_by_key.entry(key).or_insert_with(|| ExpandedEdge {
+        edge: edge.clone(),
+        min_depth: depth,
+        provenance: Vec::new(),
+    });
+    if depth < entry.min_depth {
+        entry.min_depth = depth;
+    }
+    if !entry.provenance.contains(&provenance) {
+        entry.provenance.push(provenance);
+        entry.provenance.sort_by(|left, right| {
+            (left.depth, &left.seed.id, left.path.len()).cmp(&(
+                right.depth,
+                &right.seed.id,
+                right.path.len(),
+            ))
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -446,6 +825,7 @@ pub fn build_conversation_context(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use serde_json::json;
@@ -617,6 +997,200 @@ mod tests {
         assert_eq!(only_utterance, "Utterance: hello");
     }
 
+    #[test]
+    fn graph_expansion_traverses_multiple_hops_incoming_and_outgoing() {
+        let context = ConversationContext {
+            system_prompt: "system".to_string(),
+            self_node: GraphNodeRef {
+                id: DEFAULT_SELF_NODE_ID.to_string(),
+                label: DEFAULT_SELF_NODE_LABEL.to_string(),
+            },
+            selected_nodes: vec![ContextNode {
+                node: GraphNodeRef {
+                    id: "topic:latency".to_string(),
+                    label: "Latency".to_string(),
+                },
+                role: ContextNodeRole::RetrievedMemory,
+                relevance: 0.9,
+                reason: "vector recall".to_string(),
+                summary: "Latency topic".to_string(),
+            }],
+            conversation_tail: Vec::new(),
+            budget: ContextBudget::default(),
+        };
+
+        let graph = StaticContextGraph::new(
+            vec![
+                GraphNodeRef {
+                    id: DEFAULT_SELF_NODE_ID.to_string(),
+                    label: DEFAULT_SELF_NODE_LABEL.to_string(),
+                },
+                GraphNodeRef {
+                    id: "user:dan".to_string(),
+                    label: "Dan".to_string(),
+                },
+                GraphNodeRef {
+                    id: "episode:1".to_string(),
+                    label: "Episode 1".to_string(),
+                },
+                GraphNodeRef {
+                    id: "topic:latency".to_string(),
+                    label: "Latency".to_string(),
+                },
+            ],
+            vec![
+                GraphTraversalEdge {
+                    from: DEFAULT_SELF_NODE_ID.to_string(),
+                    to: "user:dan".to_string(),
+                    kind: "KNOWS".to_string(),
+                },
+                GraphTraversalEdge {
+                    from: "user:dan".to_string(),
+                    to: "episode:1".to_string(),
+                    kind: "SPOKE_IN".to_string(),
+                },
+                GraphTraversalEdge {
+                    from: "episode:1".to_string(),
+                    to: "topic:latency".to_string(),
+                    kind: "ABOUT".to_string(),
+                },
+            ],
+        );
+
+        let expanded = context.expand_graph(
+            &graph,
+            context.graph_expansion_request(
+                2,  // multi-hop
+                32, // node budget
+                64, // edge budget
+            ),
+        );
+
+        assert!(
+            expanded
+                .nodes
+                .iter()
+                .any(|node| node.node.id == DEFAULT_SELF_NODE_ID)
+        );
+        assert!(
+            expanded
+                .nodes
+                .iter()
+                .any(|node| node.node.id == "topic:latency")
+        );
+        assert!(
+            expanded
+                .nodes
+                .iter()
+                .any(|node| node.node.id == "episode:1")
+        );
+        assert!(expanded.nodes.iter().any(|node| node.node.id == "user:dan"));
+        assert!(
+            expanded
+                .edges
+                .iter()
+                .any(|edge| edge.edge.from == "episode:1" && edge.edge.to == "topic:latency")
+        );
+
+        let user = expanded
+            .nodes
+            .iter()
+            .find(|node| node.node.id == "user:dan")
+            .expect("user should be expanded");
+        assert!(user.provenance.iter().any(|provenance| {
+            provenance.seed.id == "topic:latency"
+                && provenance.depth == 2
+                && provenance.path.len() == 2
+        }));
+    }
+
+    #[test]
+    fn graph_expansion_respects_node_and_edge_limits() {
+        let context = ConversationContext {
+            system_prompt: "system".to_string(),
+            self_node: GraphNodeRef {
+                id: DEFAULT_SELF_NODE_ID.to_string(),
+                label: DEFAULT_SELF_NODE_LABEL.to_string(),
+            },
+            selected_nodes: vec![ContextNode {
+                node: GraphNodeRef {
+                    id: "topic:seed".to_string(),
+                    label: "Seed".to_string(),
+                },
+                role: ContextNodeRole::RetrievedMemory,
+                relevance: 0.9,
+                reason: "vector recall".to_string(),
+                summary: "seed topic".to_string(),
+            }],
+            conversation_tail: Vec::new(),
+            budget: ContextBudget::default(),
+        };
+
+        let graph = StaticContextGraph::new(
+            vec![
+                GraphNodeRef {
+                    id: DEFAULT_SELF_NODE_ID.to_string(),
+                    label: DEFAULT_SELF_NODE_LABEL.to_string(),
+                },
+                GraphNodeRef {
+                    id: "topic:seed".to_string(),
+                    label: "Seed".to_string(),
+                },
+                GraphNodeRef {
+                    id: "node:a".to_string(),
+                    label: "A".to_string(),
+                },
+                GraphNodeRef {
+                    id: "node:b".to_string(),
+                    label: "B".to_string(),
+                },
+                GraphNodeRef {
+                    id: "node:c".to_string(),
+                    label: "C".to_string(),
+                },
+            ],
+            vec![
+                GraphTraversalEdge {
+                    from: "topic:seed".to_string(),
+                    to: "node:a".to_string(),
+                    kind: "REL".to_string(),
+                },
+                GraphTraversalEdge {
+                    from: "topic:seed".to_string(),
+                    to: "node:b".to_string(),
+                    kind: "REL".to_string(),
+                },
+                GraphTraversalEdge {
+                    from: "topic:seed".to_string(),
+                    to: "node:c".to_string(),
+                    kind: "REL".to_string(),
+                },
+            ],
+        );
+
+        let expanded = context.expand_graph(
+            &graph,
+            GraphExpansionRequest {
+                roots: vec![GraphNodeRef {
+                    id: "topic:seed".to_string(),
+                    label: "Seed".to_string(),
+                }],
+                max_depth: 3,
+                max_nodes: 3,
+                max_edges: 2,
+            },
+        );
+
+        assert!(expanded.nodes.len() <= 3);
+        assert!(expanded.edges.len() <= 2);
+        assert!(
+            expanded
+                .nodes
+                .iter()
+                .any(|node| node.node.id == DEFAULT_SELF_NODE_ID)
+        );
+    }
+
     #[derive(Clone)]
     struct StaticQdrantStore {
         hits: Vec<QdrantSearchHit>,
@@ -642,6 +1216,46 @@ mod tests {
     impl EmbeddingProvider for StaticEmbeddingProvider {
         fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
             Ok(vec![0.1, 0.2, 0.3])
+        }
+    }
+
+    #[derive(Clone)]
+    struct StaticContextGraph {
+        nodes: HashMap<String, GraphNodeRef>,
+        edges: Vec<GraphTraversalEdge>,
+    }
+
+    impl StaticContextGraph {
+        fn new(nodes: Vec<GraphNodeRef>, edges: Vec<GraphTraversalEdge>) -> Self {
+            Self {
+                nodes: nodes
+                    .into_iter()
+                    .map(|node| (node.id.clone(), node))
+                    .collect(),
+                edges,
+            }
+        }
+    }
+
+    impl ContextGraph for StaticContextGraph {
+        fn node(&self, node_id: &str) -> Option<GraphNodeRef> {
+            self.nodes.get(node_id).cloned()
+        }
+
+        fn outgoing(&self, node_id: &str) -> Vec<GraphTraversalEdge> {
+            self.edges
+                .iter()
+                .filter(|edge| edge.from == node_id)
+                .cloned()
+                .collect()
+        }
+
+        fn incoming(&self, node_id: &str) -> Vec<GraphTraversalEdge> {
+            self.edges
+                .iter()
+                .filter(|edge| edge.to == node_id)
+                .cloned()
+                .collect()
         }
     }
 }

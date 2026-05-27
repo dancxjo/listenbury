@@ -65,10 +65,13 @@ pub use memory::{
     KnownVoiceEmbeddingProvider, KnownVoiceMemoryStore, QdrantKnownVoiceMatcher,
 };
 pub use mind::context::{
-    ContextBudget, ContextNode, ContextNodeRole, ContextProvider, ConversationContext,
-    ConversationTurn, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
-    EmbeddingRecall, EmbeddingRecallProvider, GraphNodeRef, QdrantEmbeddingRecall, RecallHit,
-    RecallQuery, RecallSource, StubContextProvider, build_conversation_context,
+    ContextBudget, ContextGraph, ContextNode, ContextNodeRole, ContextProvider,
+    ConversationContext, ConversationTurn, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_SELF_NODE_ID,
+    DEFAULT_SELF_NODE_LABEL, EmbeddingRecall, EmbeddingRecallProvider, ExpandedContextGraph,
+    ExpandedEdge, ExpandedNode, GraphExpansionRequest, GraphNodeId, GraphNodeRef,
+    GraphTraversalEdge, QdrantEmbeddingRecall, RecallHit, RecallQuery, RecallSource,
+    StubContextProvider, TraversalDirection, TraversalPathEdge, TraversalProvenance,
+    build_conversation_context, expand_context_graph,
 };
 pub use mind::controller::{
     BackchannelId, ConversationController, ConversationMessage, ConversationRole,
