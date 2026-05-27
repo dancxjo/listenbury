@@ -67,7 +67,8 @@ pub use memory::{
 pub use mind::context::{
     ContextBudget, ContextNode, ContextNodeRole, ContextProvider, ConversationContext,
     ConversationTurn, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
-    GraphNodeRef, StubContextProvider, build_conversation_context,
+    EmbeddingRecall, EmbeddingRecallProvider, GraphNodeRef, QdrantEmbeddingRecall, RecallHit,
+    RecallQuery, RecallSource, StubContextProvider, build_conversation_context,
 };
 pub use mind::controller::{
     BackchannelId, ConversationController, ConversationMessage, ConversationRole,
