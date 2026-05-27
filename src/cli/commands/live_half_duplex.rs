@@ -4709,16 +4709,25 @@ impl HarmonyFinalFilter {
         let mut analysis = Vec::new();
         loop {
             if self.in_final {
-                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_ENDS) {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
+                {
                     visible.push_str(&self.pending[..start]);
                     self.pending.drain(..start + marker.len());
-                    self.in_final = false;
+                    if HARMONY_FINAL_ENDS.contains(&marker) {
+                        self.in_final = false;
+                    } else if HARMONY_FINAL_STARTS.contains(&marker) {
+                        self.in_final = true;
+                        self.in_analysis = false;
+                    } else {
+                        self.in_final = false;
+                        self.in_analysis = true;
+                    }
                     continue;
                 }
                 let keep_from = if completed {
                     self.pending.len()
                 } else {
-                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_ENDS)
+                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_BOUNDARIES)
                 };
                 visible.push_str(&self.pending[..keep_from]);
                 self.pending.drain(..keep_from);
@@ -4834,6 +4843,25 @@ const HARMONY_CHANNEL_STARTS: &[&str] = &[
         feature = "tts-piper"
     )
 ))]
+const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
+    "<|end|>",
+    "<|return|>",
+    "<|start|>",
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+    "<|channel|>analysis<|message|>",
+    "<|start|>assistant<|channel|>analysis<|message|>",
+];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|start|>"];
 
 #[cfg(any(
@@ -4849,7 +4877,11 @@ fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)>
     markers
         .iter()
         .filter_map(|marker| text.find(marker).map(|index| (index, *marker)))
-        .min_by_key(|(index, _)| *index)
+        .min_by(|(left_index, left_marker), (right_index, right_marker)| {
+            left_index
+                .cmp(right_index)
+                .then_with(|| right_marker.len().cmp(&left_marker.len()))
+        })
 }
 
 #[cfg(any(
@@ -6802,6 +6834,30 @@ mod tests {
         assert_eq!(
             output.analysis,
             vec!["User asks whether Pete can hear them.".to_string()]
+        );
+    }
+
+    #[test]
+    fn harmony_filter_suppresses_analysis_reopened_from_final_channel() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            token("<|channel|>final<|message|><ts>listFiles()</ts>The"),
+            token("<|channel|>analysis<|message|>We need summarize source."),
+            token("<|end|><|start|>assistant<|channel|>final<|message|> source is Rust."),
+            LlmEvent::Completed,
+        ]);
+
+        assert!(matches!(
+            output.events.as_slice(),
+            [
+                LlmEvent::Token { text: first },
+                LlmEvent::Token { text: second },
+                LlmEvent::Completed
+            ] if first == "<ts>listFiles()</ts>The" && second == " source is Rust."
+        ));
+        assert_eq!(
+            output.analysis,
+            vec!["We need summarize source.".to_string()]
         );
     }
 

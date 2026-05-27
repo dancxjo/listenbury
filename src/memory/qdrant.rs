@@ -847,8 +847,7 @@ mod tests {
         let payload = &documents
             .iter()
             .find(|document| {
-                document.payload.get("kind").and_then(Value::as_str)
-                    == Some("assistant_analysis")
+                document.payload.get("kind").and_then(Value::as_str) == Some("assistant_analysis")
             })
             .expect("assistant analysis vector document")
             .payload;
