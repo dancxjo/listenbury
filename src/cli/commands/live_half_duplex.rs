@@ -1367,6 +1367,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                     );
                 }
                 state.trace.discard_turn(turn_id);
+                println!("Listening...");
                 continue;
             }
             let mut transcript_event =
