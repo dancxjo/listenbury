@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
@@ -674,11 +675,18 @@ impl EmbeddingRecall for QdrantEmbeddingRecall {
     }
 }
 
+/// Fraction of salience retained by unmentioned topics each turn.
 const TOPIC_DECAY_PER_TURN: f32 = 0.82;
+/// Baseline boost applied whenever a topic is mentioned in the current turn.
 const TOPIC_REINFORCEMENT_BASE: f32 = 0.35;
+/// Additional boost scaled by mention relevance (0..1).
 const TOPIC_REINFORCEMENT_RELEVANCE_WEIGHT: f32 = 0.65;
+/// Drop topics once salience fades below this floor (unless pinned).
 const TOPIC_MIN_SALIENCE: f32 = 0.10;
+/// Upper bound to prevent runaway salience growth; with ~1.0 max boost/turn,
+/// this caps reinforcement to a handful of strongly repeated turns.
 const TOPIC_MAX_SALIENCE: f32 = 4.0;
+/// Pinned topics keep at least this salience and do not decay.
 const PINNED_TOPIC_SALIENCE_FLOOR: f32 = 0.75;
 
 #[derive(Debug, Clone)]
@@ -691,6 +699,7 @@ struct TopicActivationState {
 #[derive(Debug, Default)]
 struct ActiveTopicTracker {
     current_turn: u64,
+    last_turn_fingerprint: Option<u64>,
     topics: HashMap<GraphNodeId, TopicActivationState>,
 }
 
@@ -819,15 +828,23 @@ impl EmbeddingRecallProvider {
             .unwrap_or_default()
     }
 
+    fn topic_reinforcement_boost(relevance: f32) -> f32 {
+        TOPIC_REINFORCEMENT_BASE + relevance.clamp(0.0, 1.0) * TOPIC_REINFORCEMENT_RELEVANCE_WEIGHT
+    }
+
     fn update_active_topics(
         &self,
         selected_nodes: &[ContextNode],
         pinned_nodes: &[PinnedContextNode],
+        turn_fingerprint: u64,
     ) {
         let Ok(mut tracker) = self.active_topics.lock() else {
             return;
         };
-        tracker.current_turn = tracker.current_turn.saturating_add(1);
+        if tracker.last_turn_fingerprint != Some(turn_fingerprint) {
+            tracker.current_turn = tracker.current_turn.saturating_add(1);
+            tracker.last_turn_fingerprint = Some(turn_fingerprint);
+        }
         let current_turn = tracker.current_turn;
 
         let pinned_ids = pinned_nodes
@@ -843,9 +860,9 @@ impl EmbeddingRecallProvider {
             }
         }
 
-        let mut reinforced = HashSet::new();
+        let mut seen_node_ids = HashSet::new();
         for node in selected_nodes {
-            if !reinforced.insert(node.node.id.as_str()) {
+            if !seen_node_ids.insert(node.node.id.as_str()) {
                 continue;
             }
             let entry = tracker
@@ -857,8 +874,7 @@ impl EmbeddingRecallProvider {
                     last_activated_turn: current_turn,
                 });
             entry.node = node.node.clone();
-            let boost = TOPIC_REINFORCEMENT_BASE
-                + node.relevance.clamp(0.0, 1.0) * TOPIC_REINFORCEMENT_RELEVANCE_WEIGHT;
+            let boost = Self::topic_reinforcement_boost(node.relevance);
             entry.salience = (entry.salience + boost).min(TOPIC_MAX_SALIENCE);
             entry.last_activated_turn = current_turn;
         }
@@ -978,7 +994,8 @@ impl ContextProvider for EmbeddingRecallProvider {
         }
 
         let pinned_nodes = self.pinned_nodes_snapshot();
-        self.update_active_topics(&selected, &pinned_nodes);
+        let turn_fingerprint = input_turn_fingerprint(utterance, conversation_tail);
+        self.update_active_topics(&selected, &pinned_nodes, turn_fingerprint);
         let active_topic_nodes = self.active_topic_nodes_snapshot();
         for active_node in active_topic_nodes {
             if let Some(existing) = selected
@@ -987,7 +1004,6 @@ impl ContextProvider for EmbeddingRecallProvider {
             {
                 if active_node.relevance > existing.relevance {
                     existing.relevance = active_node.relevance;
-                    existing.reason = active_node.reason;
                 }
             } else {
                 selected.push(active_node);
@@ -1105,6 +1121,16 @@ fn recall_query_text(
         }
     }
     sections.join("\n\n")
+}
+
+fn input_turn_fingerprint(utterance: &str, conversation_tail: &[ConversationTurn]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    utterance.trim().hash(&mut hasher);
+    for turn in conversation_tail {
+        turn.role.label().hash(&mut hasher);
+        turn.text.trim().hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 impl StubContextProvider {
@@ -1784,7 +1810,10 @@ mod tests {
             let Some(start) = lowered.find(&self.keyword) else {
                 return Vec::new();
             };
-            let span: Range<usize> = start..start + self.keyword.len();
+            let Some(end) = start.checked_add(self.keyword.len()) else {
+                return Vec::new();
+            };
+            let span: Range<usize> = start..end;
             vec![ExtractedEntity {
                 text: self.label.clone(),
                 span,
