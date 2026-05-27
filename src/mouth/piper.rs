@@ -634,7 +634,117 @@ fn should_shutdown_after_drain(rx: &Receiver<PiperCommand>) -> bool {
 }
 
 fn plan_text(plan: MouthSyntheticPlan) -> String {
-    strip_emoji(plan.text())
+    sanitize_tts_spoken_text(&strip_emoji(plan.text()))
+}
+
+fn sanitize_tts_spoken_text(text: &str) -> String {
+    let text = strip_markdown_link_targets(text);
+    let text = strip_non_spoken_markdown_symbols(&text);
+    normalize_tts_whitespace(&text)
+}
+
+fn strip_markdown_link_targets(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(open) = rest.find('[') {
+        let after_open = &rest[open + 1..];
+        let Some(close_rel) = after_open.find(']') else {
+            break;
+        };
+        let close = open + 1 + close_rel;
+        let after_close = &rest[close + 1..];
+        if !after_close.starts_with('(') {
+            output.push_str(&rest[..open + 1]);
+            rest = &rest[open + 1..];
+            continue;
+        }
+        let Some(target_close_rel) = after_close[1..].find(')') else {
+            break;
+        };
+
+        output.push_str(&rest[..open]);
+        output.push_str(&rest[open + 1..close]);
+        rest = &after_close[target_close_rel + 2..];
+    }
+
+    output.push_str(rest);
+    output
+}
+
+fn strip_non_spoken_markdown_symbols(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut output = String::with_capacity(text.len());
+
+    for (index, ch) in chars.iter().copied().enumerate() {
+        if is_line_bullet_marker(&chars, index) || is_non_spoken_markdown_symbol(ch) {
+            if should_replace_symbol_with_space(&output, chars.get(index + 1).copied()) {
+                push_space_once(&mut output);
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+
+    output
+}
+
+fn is_line_bullet_marker(chars: &[char], index: usize) -> bool {
+    let ch = chars[index];
+    if !matches!(ch, '-' | '+') {
+        return false;
+    }
+    if chars
+        .get(index + 1)
+        .is_none_or(|next| !next.is_whitespace())
+    {
+        return false;
+    }
+    chars[..index]
+        .iter()
+        .rev()
+        .take_while(|previous| **previous != '\n')
+        .all(|previous| previous.is_whitespace())
+}
+
+fn is_non_spoken_markdown_symbol(ch: char) -> bool {
+    matches!(
+        ch,
+        '*' | '_' | '`' | '~' | '#' | '>' | '<' | '[' | ']' | '{' | '}' | '|' | '\\' | '^'
+    ) || matches!(ch, '\u{2022}' | '\u{2023}' | '\u{25E6}')
+}
+
+fn should_replace_symbol_with_space(output: &str, next: Option<char>) -> bool {
+    output
+        .chars()
+        .next_back()
+        .is_some_and(|previous| previous.is_alphanumeric())
+        && next.is_some_and(|ch| ch.is_alphanumeric())
+}
+
+fn normalize_tts_whitespace(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut pending_space = false;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            pending_space = !output.is_empty();
+            continue;
+        }
+        if pending_space && !matches!(ch, '.' | ',' | '!' | '?' | ':' | ';') {
+            output.push(' ');
+        }
+        output.push(ch);
+        pending_space = false;
+    }
+
+    output
+}
+
+fn push_space_once(output: &mut String) {
+    if !output.chars().next_back().is_some_and(char::is_whitespace) && !output.is_empty() {
+        output.push(' ');
+    }
 }
 
 fn synthesize_process(config: &PiperConfig, text: &str) -> Result<Vec<f32>> {
@@ -777,6 +887,22 @@ mod tests {
         // directly here.  The test passes as long as no panic occurs and audio
         // is produced (meaning the stripped text "Hello  world." was non-empty).
         // See `empty_text_after_emoji_strip_is_skipped` for the empty case.
+    }
+
+    #[test]
+    fn plan_text_strips_markdown_symbols_before_reaching_backend() {
+        assert_eq!(
+            plan_text(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+                "**Bold** and `code` are _not_ marked.".to_string(),
+            ))),
+            "Bold and code are not marked."
+        );
+        assert_eq!(
+            plan_text(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(
+                "* first\n> **second**\n[docs](https://example.test/path)".to_string(),
+            ))),
+            "first second docs"
+        );
     }
 
     #[test]

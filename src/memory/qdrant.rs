@@ -714,7 +714,9 @@ fn related_graph_node_ids_with_referent(existing: &[String], referent: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trace::{MemoryEntityMention, MemoryImageVector, MemoryVoiceVector};
+    use crate::memory::trace::{
+        MemoryEntityMention, MemoryImageVector, MemorySceneRef, MemoryVoiceVector,
+    };
     use crate::time::ExactTimestamp;
 
     #[test]
@@ -818,6 +820,56 @@ mod tests {
         assert_eq!(
             payload.get("vector_target").and_then(Value::as_str),
             Some("artifact")
+        );
+    }
+
+    #[test]
+    fn assistant_analysis_vectors_point_at_current_scene() {
+        let trace = MemoryTrace::AssistantAnalysisCaptured {
+            text: "Pete should use the source listing before speaking.".to_string(),
+            scene: MemorySceneRef {
+                node_id: "scene:source-review".to_string(),
+                description: "Setting: live coding session. Action: Pete reviews source files."
+                    .to_string(),
+                summary: "Pete reviews source files.".to_string(),
+            },
+            occurred_at: ExactTimestamp::now(),
+        };
+        let graph_result = Neo4jWriteResult {
+            primary_node_id: Some("neo4j::assistant_analysis:3".to_string()),
+            related_node_ids: vec![
+                "neo4j::memory_trace_event:3".to_string(),
+                "scene:source-review".to_string(),
+            ],
+        };
+
+        let documents = vector_documents_for_trace(&trace, 3, &graph_result);
+        let payload = &documents
+            .iter()
+            .find(|document| {
+                document.payload.get("kind").and_then(Value::as_str)
+                    == Some("assistant_analysis")
+            })
+            .expect("assistant analysis vector document")
+            .payload;
+
+        assert_eq!(
+            payload.get("referent_node_id").and_then(Value::as_str),
+            Some("scene:source-review")
+        );
+        assert_eq!(
+            payload.get("scene_node_id").and_then(Value::as_str),
+            Some("scene:source-review")
+        );
+        assert_eq!(
+            payload
+                .get("related_graph_node_ids")
+                .and_then(Value::as_array)
+                .expect("related ids")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["neo4j::memory_trace_event:3", "scene:source-review"]
         );
     }
 

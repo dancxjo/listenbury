@@ -228,6 +228,9 @@ impl RuntimeEvent {
         if let MemoryTrace::RecallResultUsed { query, .. } = trace {
             causality.push(format!("query:{query}"));
         }
+        if let MemoryTrace::AssistantAnalysisCaptured { scene, .. } = trace {
+            causality.push(format!("scene:{}", scene.node_id));
+        }
         if let MemoryTrace::EntityExtractionPerformed { entities, .. } = trace {
             causality.extend(
                 entities
