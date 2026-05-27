@@ -74,6 +74,8 @@ use cpal::{FromSample, Sample, SizedSample};
     feature = "tts-piper"
 ))]
 use listenbury::RuntimePacket;
+#[cfg(test)]
+use listenbury::StubContextProvider;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -138,6 +140,16 @@ use listenbury::live_trace::{
     TRACE_SESSION_AUDIO_FILE, TeeSink, TraceRuntimeMetadata, TraceSessionAudioArtifact,
     TraceSessionMetadata, add_trace_session_audio_artifact,
 };
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use listenbury::mind::entity::{EntityExtractor, HeuristicEntityExtractor, resolve_entities};
 #[cfg(any(
     test,
     all(
@@ -221,15 +233,19 @@ use listenbury::{
 ))]
 use listenbury::{
     ContextBudget, ConversationContext, ConversationController, ConversationMessage,
-    ConversationTurn, FillerContext, StubContextProvider, build_conversation_context,
+    ConversationTurn, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider,
+    FillerContext, GraphNodeRef, PinScope, PinnedContextNode, build_conversation_context,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
-use serde_json::json;
+use serde_json::{Value, json};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -264,6 +280,19 @@ use std::sync::{
     feature = "tts-piper"
 ))]
 use std::time::{Duration, Instant};
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use tsrun::{
+    Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
+    js_value_to_json,
+};
 
 #[cfg(all(
     feature = "audio-cpal",
@@ -288,7 +317,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nDo not prethink, reason aloud, or describe what you are about to do.\nRespond only with the exact text Pete should speak.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"There.\", Pete can say \"I'm here.\"";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say and extractEntities are already available in scope; imports from \"pete:will\" are also allowed.\nUse extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in the graph.\nIf the user identifies themselves by name, extract that exact sentence so the person node can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -433,6 +462,8 @@ struct LiveHalfDuplexState {
     segmenter: BreathGroupSegmenter,
     active_groups: HashMap<BreathGroupId, Vec<AudioFrame>>,
     self_hearing: SelfHearingState,
+    context_provider: EmbeddingRecallProvider,
+    entity_extractor: Arc<dyn EntityExtractor>,
     controller: ConversationController,
     trace: LiveTrace,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
@@ -459,6 +490,8 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("segmenter", &self.segmenter)
             .field("active_groups", &self.active_groups)
             .field("self_hearing", &self.self_hearing)
+            .field("context_provider", &"EmbeddingRecallProvider")
+            .field("entity_extractor", &"dyn EntityExtractor")
             .field("controller", &self.controller)
             .field("trace", &"live trace recorder")
             .field("session_audio_frames", &self.session_audio_frames.len())
@@ -908,6 +941,12 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
+    let entity_extractor: Arc<dyn EntityExtractor> = Arc::new(HeuristicEntityExtractor);
+    let context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
+        id: DEFAULT_SELF_NODE_ID.to_string(),
+        label: DEFAULT_SELF_NODE_LABEL.to_string(),
+    })
+    .with_entity_extractor(Arc::clone(&entity_extractor));
     let mut state = LiveHalfDuplexState {
         session_clock: session_clock.clone(),
         vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
@@ -917,6 +956,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             .unwrap_or_default(),
         active_groups: HashMap::new(),
         self_hearing: SelfHearingState::default(),
+        context_provider,
+        entity_extractor,
         controller: ConversationController::default(),
         trace,
         live_audio,
@@ -1283,7 +1324,8 @@ fn stream_speech_to_tts(
     user_turn_id: u64,
 ) -> Result<LiveSpeechOutcome> {
     let prompt_format = prompt_format_for_model(llm_model_path);
-    let (prompt, conversation_context) = build_prompt_and_context(
+    let (prompt, conversation_context) = build_prompt_and_context_with_provider(
+        &state.context_provider,
         transcript,
         state.controller.conversation_history(),
         prompt_format,
@@ -1323,6 +1365,7 @@ fn stream_speech_to_tts(
     let mut trace_state = LiveTurnTraceState::new(user_turn_id);
     let mut harmony_filter =
         (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
+    let mut command_filter = LiveCommandFilter::default();
     loop {
         if !playback_allowed {
             match poll_simplex_turn_gap(turn_gap, state)? {
@@ -1449,8 +1492,41 @@ fn stream_speech_to_tts(
         } else {
             events.clone()
         };
+        let command_output = command_filter.filter_events(&speech_events);
+        let mut planner_events = command_output.events;
+        for source in command_output.sources {
+            match execute_live_typescript_commands(&source) {
+                Ok(commands) => {
+                    for command in commands {
+                        match command {
+                            LiveTypeScriptCommand::Say { text, .. } => {
+                                planner_events.push(LlmEvent::Token { text });
+                            }
+                            LiveTypeScriptCommand::ExtractEntities { text } => {
+                                execute_live_entity_extraction(
+                                    text.as_deref().unwrap_or(transcript),
+                                    state,
+                                    user_turn_id,
+                                )?;
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(source, "Pete TypeScript command failed: {error:#}");
+                    let mut event = state.trace.event(
+                        user_turn_id,
+                        "pete_typescript_command_failed",
+                        ExactTimestamp::now(),
+                    );
+                    event.text = Some(source);
+                    event.reason = Some(error.to_string());
+                    state.trace.emit(event)?;
+                }
+            }
+        }
         for unit in
-            planner_units_from_events(&mut state.controller, &speech_events, no_backchannels)
+            planner_units_from_events(&mut state.controller, &planner_events, no_backchannels)
         {
             match unit {
                 ExpressiveUnit::Synthetic(plan) => {
@@ -1760,10 +1836,571 @@ fn planner_units_from_events(
             {
                 None
             }
-            ExpressiveUnit::Synthetic(plan) if is_thinking_leak(plan.text()) => None,
             _ => Some(unit),
         })
         .collect()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+struct LiveCommandFilter {
+    pending: String,
+    in_typescript: bool,
+    thought_end: Option<&'static str>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Default)]
+struct LiveCommandFilterOutput {
+    events: Vec<LlmEvent>,
+    sources: Vec<String>,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl LiveCommandFilter {
+    fn filter_events(&mut self, events: &[LlmEvent]) -> LiveCommandFilterOutput {
+        let mut output = LiveCommandFilterOutput::default();
+        for event in events {
+            match event {
+                LlmEvent::Token { text } => {
+                    let (visible, mut sources) = self.push(text);
+                    output.sources.append(&mut sources);
+                    if !visible.is_empty() {
+                        output.events.push(LlmEvent::Token { text: visible });
+                    }
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
+                    let (visible, mut sources) = self.finish();
+                    output.sources.append(&mut sources);
+                    if !visible.is_empty() {
+                        output.events.push(LlmEvent::Token { text: visible });
+                    }
+                    output.events.push(event.clone());
+                }
+            }
+        }
+        output
+    }
+
+    fn push(&mut self, text: &str) -> (String, Vec<String>) {
+        self.pending.push_str(text);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> (String, Vec<String>) {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, completed: bool) -> (String, Vec<String>) {
+        let mut visible = String::new();
+        let mut sources = Vec::new();
+
+        loop {
+            if let Some(end_marker) = self.thought_end {
+                if let Some(end) = self.pending.find(end_marker) {
+                    self.pending.drain(..end + end_marker.len());
+                    self.thought_end = None;
+                    continue;
+                }
+                if completed {
+                    self.pending.clear();
+                    self.thought_end = None;
+                }
+                break;
+            }
+
+            if self.in_typescript {
+                if let Some(end) = self.pending.find(LIVE_TYPESCRIPT_END) {
+                    let source = self.pending[..end].trim();
+                    if !source.is_empty() {
+                        sources.push(source.to_string());
+                    }
+                    self.pending.drain(..end + LIVE_TYPESCRIPT_END.len());
+                    self.in_typescript = false;
+                    continue;
+                }
+                if completed {
+                    let source = self.pending.trim();
+                    if !source.is_empty() {
+                        sources.push(source.to_string());
+                    }
+                    self.pending.clear();
+                    self.in_typescript = false;
+                }
+                break;
+            }
+
+            if let Some((start, marker)) = first_marker(&self.pending, LIVE_SUPPRESSION_STARTS) {
+                visible.push_str(&self.pending[..start]);
+                self.pending.drain(..start + marker.len());
+                if marker == LIVE_TYPESCRIPT_START {
+                    self.in_typescript = true;
+                } else {
+                    self.thought_end = thought_end_marker(marker);
+                }
+                continue;
+            }
+
+            if completed {
+                visible.push_str(&self.pending);
+                self.pending.clear();
+            } else {
+                let keep_from =
+                    possible_marker_prefix_start(&self.pending, LIVE_SUPPRESSION_STARTS);
+                visible.push_str(&self.pending[..keep_from]);
+                self.pending.drain(..keep_from);
+            }
+            break;
+        }
+
+        (visible, sources)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_TYPESCRIPT_START: &str = "<ts>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_TYPESCRIPT_END: &str = "</ts>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_THOUGHT_START: &str = "<thought>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_THINKING_START: &str = "<thinking>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_THINK_START: &str = "<think>";
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const LIVE_SUPPRESSION_STARTS: &[&str] = &[
+    LIVE_TYPESCRIPT_START,
+    LIVE_THOUGHT_START,
+    LIVE_THINKING_START,
+    LIVE_THINK_START,
+];
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn thought_end_marker(start_marker: &str) -> Option<&'static str> {
+    match start_marker {
+        LIVE_THOUGHT_START => Some("</thought>"),
+        LIVE_THINKING_START => Some("</thinking>"),
+        LIVE_THINK_START => Some("</think>"),
+        _ => None,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LiveTypeScriptCommand {
+    Say { text: String, interrupt: bool },
+    ExtractEntities { text: Option<String> },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum LiveTypeScriptCommandPayload {
+    Say {
+        text: String,
+        #[serde(default)]
+        interrupt: bool,
+    },
+    ExtractEntities {
+        text: Option<String>,
+    },
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn execute_live_typescript_commands(script: &str) -> Result<Vec<LiveTypeScriptCommand>> {
+    if script.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let script = live_typescript_source_with_default_will_imports(script);
+    let config = InterpreterConfig {
+        internal_modules: vec![live_will_typescript_module()],
+        ..Default::default()
+    };
+    let mut interp = Interpreter::with_config(config);
+    interp
+        .prepare(
+            &script,
+            Some(tsrun::ModulePath::new("/listenbury-live-will.ts")),
+        )
+        .map_err(tsrun_error)?;
+    let value = loop {
+        match interp.step().map_err(tsrun_error)? {
+            StepResult::Continue => continue,
+            StepResult::Complete(value) => break value,
+            StepResult::NeedImports(imports) => {
+                let names = imports
+                    .iter()
+                    .map(|request| request.specifier.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!("unsupported TypeScript import(s): {names}");
+            }
+            StepResult::Suspended { .. } => {
+                anyhow::bail!("TypeScript execution suspended; async host commands are not enabled")
+            }
+            StepResult::Done => return Ok(Vec::new()),
+        }
+    };
+    let command_value = js_value_to_json(value.value()).map_err(tsrun_error)?;
+    let payloads = parse_live_typescript_command_payloads(command_value)?;
+    Ok(payloads
+        .into_iter()
+        .filter_map(|payload| match payload {
+            LiveTypeScriptCommandPayload::Say { text, interrupt } => {
+                non_empty_text(&text).map(|text| LiveTypeScriptCommand::Say {
+                    text: text.to_string(),
+                    interrupt,
+                })
+            }
+            LiveTypeScriptCommandPayload::ExtractEntities { text } => {
+                Some(LiveTypeScriptCommand::ExtractEntities {
+                    text: text.and_then(|text| non_empty_text(&text).map(str::to_string)),
+                })
+            }
+        })
+        .collect())
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn live_typescript_source_with_default_will_imports(script: &str) -> String {
+    if script.contains("\"pete:will\"") || script.contains("'pete:will'") {
+        return script.to_string();
+    }
+    format!("import {{ say, extractEntities }} from \"pete:will\";\n{script}")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn parse_live_typescript_command_payloads(
+    value: Value,
+) -> Result<Vec<LiveTypeScriptCommandPayload>> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(items) => items
+            .into_iter()
+            .filter(|item| !item.is_null())
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into),
+        Value::Object(_) => Ok(vec![serde_json::from_value(value)?]),
+        other => {
+            anyhow::bail!("TypeScript must return a command object or command array, got {other}")
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn live_will_typescript_module() -> InternalModule {
+    InternalModule::native("pete:will")
+        .with_function("say", ts_say, 2)
+        .with_function("extractEntities", ts_extract_entities, 1)
+        .with_function("extract_entities", ts_extract_entities, 1)
+        .build()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn command_value(interp: &mut Interpreter, value: Value) -> std::result::Result<Guarded, JsError> {
+    let guard = api::create_guard(interp);
+    let value = api::create_from_json(interp, &guard, &value)?;
+    Ok(Guarded::with_guard(value, guard))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn string_arg(args: &[JsValue], index: usize) -> String {
+    args.get(index)
+        .and_then(JsValue::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn interrupt_arg(args: &[JsValue], index: usize) -> bool {
+    let Some(value) = args.get(index) else {
+        return false;
+    };
+    match value {
+        JsValue::Boolean(value) => *value,
+        JsValue::Object(_) => matches!(
+            api::get_property(value, "interrupt"),
+            Ok(JsValue::Boolean(true))
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn non_empty_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn tsrun_error(err: JsError) -> anyhow::Error {
+    anyhow::anyhow!("TypeScript execution failed: {err}")
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_say(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "say", "text": string_arg(args, 0), "interrupt": interrupt_arg(args, 1) }),
+    )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn ts_extract_entities(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let text = string_arg(args, 0);
+    command_value(interp, json!({ "kind": "extract_entities", "text": text }))
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_live_entity_extraction(
+    text: &str,
+    state: &mut LiveHalfDuplexState,
+    turn_id: u64,
+) -> Result<()> {
+    let extracted = state.entity_extractor.extract(text);
+    let nodes = resolve_entities(&extracted, &|_| None);
+    for node in &nodes {
+        state.context_provider.pin_node(PinnedContextNode {
+            node_id: node.node.id.clone(),
+            scope: PinScope::Session,
+            reason: format!(
+                "Pete explicitly extracted {} from turn {}",
+                node.summary.trim(),
+                turn_id
+            ),
+        });
+    }
+    let mut event = state.trace.event(
+        turn_id,
+        "pete_command_extract_entities",
+        ExactTimestamp::now(),
+    );
+    event.text = Some(text.to_string());
+    event.artifact = Some(json!({
+        "command": "extractEntities",
+        "sourceText": text,
+        "entities": extracted.iter().map(|entity| {
+            json!({
+                "text": entity.text,
+                "kind": entity.kind.as_str(),
+                "confidence": entity.confidence,
+                "span": {
+                    "start": entity.span.start,
+                    "end": entity.span.end,
+                },
+                "nodeId": entity.provisional_node_id(),
+            })
+        }).collect::<Vec<_>>(),
+        "pinnedNodeIds": nodes.iter().map(|node| node.node.id.clone()).collect::<Vec<_>>(),
+    }));
+    state.trace.emit(event)?;
+    eprintln!(
+        "[live-half-duplex] Pete executed extractEntities; pinned=[{}]",
+        nodes
+            .iter()
+            .map(|node| node.node.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(())
 }
 
 #[cfg(any(
@@ -1932,54 +2569,6 @@ fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
                 })
         })
         .unwrap_or(text.len())
-}
-
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-fn is_thinking_leak(text: &str) -> bool {
-    let text = text
-        .trim()
-        .trim_matches(['"', '\'', '`'])
-        .trim_start_matches(|ch: char| ch == '-' || ch.is_whitespace())
-        .to_ascii_lowercase();
-
-    [
-        "<think>",
-        "pete, speaking aloud through a tts system",
-        "assistant should",
-        "the assistant should",
-        "the assistant's response",
-        "the user asks",
-        "the user asked",
-        "the assistant must",
-        "they might",
-        "that seems",
-        "there's no context",
-        "there is no context",
-        "user asks",
-        "user asked",
-        "the instructions",
-        "instructions:",
-        "we should respond",
-        "we should produce",
-        "we have to output",
-        "we need to",
-        "need to answer",
-        "write only the words",
-        "let's craft",
-        "short reply:",
-        "or we can do",
-    ]
-    .iter()
-    .any(|prefix| text.starts_with(prefix))
-        || text.contains(" the instructions:")
 }
 
 #[cfg(any(
@@ -2552,15 +3141,7 @@ fn prompt_format_for_model(model_path: &Path) -> LivePromptFormat {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(test)]
 fn build_prompt<'a>(
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
@@ -2568,6 +3149,20 @@ fn build_prompt<'a>(
 ) -> String {
     let (prompt, _) = build_prompt_and_context(transcript, history, format);
     prompt
+}
+
+#[cfg(test)]
+fn build_prompt_and_context<'a>(
+    transcript: &str,
+    history: impl IntoIterator<Item = &'a ConversationMessage>,
+    format: LivePromptFormat,
+) -> (String, ConversationContext) {
+    build_prompt_and_context_with_provider(
+        &StubContextProvider::default(),
+        transcript,
+        history,
+        format,
+    )
 }
 
 #[cfg(any(
@@ -2579,12 +3174,13 @@ fn build_prompt<'a>(
         feature = "tts-piper"
     )
 ))]
-fn build_prompt_and_context<'a>(
+fn build_prompt_and_context_with_provider<'a>(
+    provider: &dyn listenbury::ContextProvider,
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
 ) -> (String, ConversationContext) {
-    let context = build_turn_conversation_context(transcript, history);
+    let context = build_turn_conversation_context_with_provider(provider, transcript, history);
     let user_content = build_user_prompt_content(transcript, &context);
     let prompt = match format {
         LivePromptFormat::Llama3Instruct => format!(
@@ -2661,7 +3257,8 @@ fn render_conversation_history<'a>(
         feature = "tts-piper"
     )
 ))]
-fn build_turn_conversation_context<'a>(
+fn build_turn_conversation_context_with_provider<'a>(
+    provider: &dyn listenbury::ContextProvider,
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
 ) -> ConversationContext {
@@ -2675,7 +3272,7 @@ fn build_turn_conversation_context<'a>(
         .collect();
 
     build_conversation_context(
-        &StubContextProvider::default(),
+        provider,
         PETE_CONVERSATION_SYSTEM_PROMPT,
         transcript,
         conversation_tail,
@@ -2942,8 +3539,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        HarmonyFinalFilter, LivePromptFormat, SimplexTurnGapStatus, build_prompt,
-        convert_frame_samples, live_half_duplex_stops, maybe_plan_cached_backchannel,
+        HarmonyFinalFilter, LiveCommandFilter, LivePromptFormat, LiveTypeScriptCommand,
+        SimplexTurnGapStatus, build_prompt, convert_frame_samples,
+        execute_live_typescript_commands, live_half_duplex_stops, maybe_plan_cached_backchannel,
         planner_units_from_events, prompt_format_for_model, read_aloud_timed_word_stream,
         simplex_turn_gap_status, vad_frame_format,
     };
@@ -3012,27 +3610,61 @@ mod tests {
     }
 
     #[test]
-    fn planner_units_drop_thinking_leaks() {
-        let mut controller = ConversationController::default();
-        let units = planner_units_from_events(
-            &mut controller,
-            &[
-                token("<thought>this should be a thought</thought> "),
-                token("<thinking>Or is it thinking</thinking> "),
-                token("Yes, I can hear you."),
-            ],
-            false,
-        );
+    fn live_command_filter_suppresses_thought_tags() {
+        let mut filter = LiveCommandFilter::default();
+        let output = filter.filter_events(&[
+            token("Hello <thought>this should be private</thought>"),
+            token("world <thinking>also private</thinking>."),
+        ]);
 
-        assert_eq!(units.len(), 1);
         assert!(matches!(
-            units.first(),
-            Some(ExpressiveUnit::Synthetic(plan)) if plan.text() == "Yes, I can hear you."
+            output.events.as_slice(),
+            [LlmEvent::Token { text: first }, LlmEvent::Token { text: second }]
+                if first == "Hello " && second == "world ."
         ));
+        assert!(output.sources.is_empty());
     }
 
     #[test]
-    fn planner_units_drop_preamble_leaks() {
+    fn live_command_filter_extracts_typescript_without_speaking_source() {
+        let mut filter = LiveCommandFilter::default();
+        let output = filter.filter_events(&[token(
+            "I can do that. <ts>extractEntities(\"My name is Travis\")</ts> Done.",
+        )]);
+
+        assert!(matches!(
+            output.events.as_slice(),
+            [LlmEvent::Token { text }] if text == "I can do that.  Done."
+        ));
+        assert_eq!(
+            output.sources,
+            vec!["extractEntities(\"My name is Travis\")".to_string()]
+        );
+    }
+
+    #[test]
+    fn live_typescript_executes_say_and_extract_entities_builders() {
+        let commands = execute_live_typescript_commands(
+            r#"[extractEntities("My name is Travis"), say("I have Travis in working memory now.")]"#,
+        )
+        .expect("typescript should execute");
+
+        assert_eq!(
+            commands,
+            vec![
+                LiveTypeScriptCommand::ExtractEntities {
+                    text: Some("My name is Travis".to_string())
+                },
+                LiveTypeScriptCommand::Say {
+                    text: "I have Travis in working memory now.".to_string(),
+                    interrupt: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn planner_units_speak_ordinary_text_even_if_it_sounds_like_preamble() {
         let mut controller = ConversationController::default();
         let units = planner_units_from_events(
             &mut controller,
@@ -3048,10 +3680,11 @@ mod tests {
             false,
         );
 
-        assert_eq!(units.len(), 1);
+        assert!(!units.is_empty());
         assert!(matches!(
             units.first(),
-            Some(ExpressiveUnit::Synthetic(plan)) if plan.text() == "Yes, I can hear you."
+            Some(ExpressiveUnit::Synthetic(plan))
+                if plan.text().starts_with("We have to output Pete's spoken response.")
         ));
     }
 
