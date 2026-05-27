@@ -689,6 +689,11 @@ impl ContextProvider for EmbeddingRecallProvider {
                     .collect::<Vec<_>>(),
                 "extracted entities from utterance"
             );
+            // `EmbeddingRecallProvider` does not have direct access to a
+            // knowledge graph, so provisional nodes (deterministic IDs derived
+            // from the entity surface form) are used here.  Callers that have a
+            // graph can resolve entities against it by calling `resolve_entities`
+            // with a real lookup closure and merging the result themselves.
             let entity_nodes = resolve_entities(&extracted, &|_| None);
             selected.extend(entity_nodes);
         }

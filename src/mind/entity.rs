@@ -48,7 +48,7 @@ pub struct ExtractedEntity {
     pub span: Range<usize>,
     /// Semantic category.
     pub kind: EntityKind,
-    /// Confidence score in \[0, 1\].
+    /// Confidence score in [0, 1].
     pub confidence: f32,
 }
 
@@ -147,6 +147,23 @@ impl EntityExtractor for HeuristicEntityExtractor {
 
 // ── Heuristic implementation details ─────────────────────────────────────
 
+/// Confidence when a context cue (verb or preposition) unambiguously signals the
+/// entity kind, e.g. "talked to <Name>".
+const CONFIDENCE_WITH_CONTEXT_CUE: f32 = 0.80;
+
+/// Confidence when no context cue is present but the entity matches a well-known
+/// pattern such as a place-name list, org suffix, or all-caps acronym.
+const CONFIDENCE_PATTERN_MATCH: f32 = 0.75;
+
+/// Confidence for a mid-sentence capitalised word with no supporting context.
+/// High enough to be useful but lower than pattern-matched candidates.
+const CONFIDENCE_MID_SENTENCE_CAPITALIZED: f32 = 0.65;
+
+/// Confidence for a sentence-opening capitalised word.  Sentence-start
+/// capitalisation provides the weakest signal because many non-entity words are
+/// capitalised there (e.g. determiners, common nouns).
+const CONFIDENCE_SENTENCE_START: f32 = 0.40;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EntityContext {
     Person,
@@ -218,6 +235,10 @@ const TASK_CUES: &[&str] = &[
 ];
 
 /// Words that are never entities on their own even when capitalised.
+///
+/// All entries are stored lower-case; `is_common_word` converts its input to
+/// lower-case before looking up, so these entries match both their lower- and
+/// upper-case surface forms (e.g. `"i"` catches both `"i"` and `"I"`).
 const COMMON_WORDS: &[&str] = &[
     "i",
     "a",
@@ -398,7 +419,10 @@ fn has_org_suffix(text: &str) -> bool {
 }
 
 fn is_acronym(text: &str) -> bool {
-    text.len() >= 2 && text.chars().all(|c| c.is_uppercase() || c.is_ascii_digit())
+    // Require at least two uppercase letters so single-letter+digit sequences
+    // like "A1" are not mistaken for acronyms.
+    let uppercase_count = text.chars().filter(|c| c.is_uppercase()).count();
+    uppercase_count >= 2 && text.chars().all(|c| c.is_uppercase() || c.is_ascii_digit())
 }
 
 fn starts_uppercase(s: &str) -> bool {
@@ -542,13 +566,13 @@ fn extract_heuristic(text: &str) -> Vec<ExtractedEntity> {
         };
 
         let confidence = if ctx != EntityContext::None {
-            0.80
+            CONFIDENCE_WITH_CONTEXT_CUE
         } else if is_place_name(&span_text) || has_org_suffix(&span_text) || is_acronym(&span_text) {
-            0.75
+            CONFIDENCE_PATTERN_MATCH
         } else if i == 0 {
-            0.40 // sentence-start capital — weakly assumed Person
+            CONFIDENCE_SENTENCE_START
         } else {
-            0.65
+            CONFIDENCE_MID_SENTENCE_CAPITALIZED
         };
 
         entities.push(ExtractedEntity {
