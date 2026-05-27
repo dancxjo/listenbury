@@ -335,7 +335,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, and queryMemories are already available in scope; imports from \"pete:will\" are also allowed.\nEvery graph node can and should have a description field. The description must be a natural language noun phrase describing what the node represents. Description text is vectorized and linked back to that graph node.\nWhen Pete knows what a graph node represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search graph nodes by text, field, value, or field/value pair.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing graph node. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in the graph.\nIf the user identifies themselves by name, extract that exact sentence so the person node can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive conversation history, retrieved memories, and working-memory nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, sleeping, and goingToSleep are already available in scope; imports from \"pete:will\" are also allowed.\nProgram initiation is waking. Clean program termination is sleeping or going to sleep.\nUse sleeping() or goingToSleep() when the user tells Pete to stop, shut down, sleep, go to sleep, or end the session. Pete may say a brief goodnight first, then call sleeping().\nEvery node in Pete's memory can and should have a description field. The description must be a natural language noun phrase describing what that memory item represents. Description text is vectorized and linked back to that memory item.\nPete should fastidiously add useful details to memory whenever the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context. Prefer precise fields over vague notes.\nWhen Pete knows what a memory item represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search Pete's memory by text, field, value, or field/value pair.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing memory item. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in memory.\nIf the user identifies themselves by name, extract that exact sentence so the person can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWhen speaking to the user, say \"my memory\" instead of \"the graph\" or \"graph nodes\".\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -794,6 +794,7 @@ struct LiveFrameProcessingResult {
 enum LiveSpeechOutcome {
     Played,
     CancelledByUserSpeech,
+    SleepRequested,
 }
 
 #[cfg(any(
@@ -1114,6 +1115,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         trace_started_at,
         TeeSink(trace_writer, broadcaster),
     );
+    trace.emit_now(0, "waking", session_clock.now())?;
     trace.emit_now(0, "capture_started", session_clock.now())?;
     let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
     let vad_backend = vad_config.backend;
@@ -1185,7 +1187,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     };
     let mut turns = 0usize;
 
-    while stop_deadline.is_none_or(|deadline| Instant::now() < deadline) {
+    'listening: while stop_deadline.is_none_or(|deadline| Instant::now() < deadline) {
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(sample) => pending.push_back(sample),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -1287,6 +1289,10 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             if outcome == LiveSpeechOutcome::CancelledByUserSpeech {
                 println!("User continued; discarded prepared reply.");
                 continue;
+            }
+            if outcome == LiveSpeechOutcome::SleepRequested {
+                println!("Pete is going to sleep.");
+                break 'listening;
             }
             println!("Listening...");
         }
@@ -1597,6 +1603,7 @@ fn stream_speech_to_tts(
     let mut played_any_audio = false;
     let mut playback_allowed = false;
     let mut prepared_audio = Vec::<AudioFrame>::new();
+    let mut sleep_requested = false;
     let mut trace_state = LiveTurnTraceState::new(user_turn_id);
     let mut harmony_filter =
         (prompt_format == LivePromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default);
@@ -1736,6 +1743,15 @@ fn stream_speech_to_tts(
                         match command {
                             LiveTypeScriptCommand::Say { text, .. } => {
                                 planner_events.push(LlmEvent::Token { text });
+                            }
+                            LiveTypeScriptCommand::Sleeping { reason } => {
+                                sleep_requested = true;
+                                execute_live_sleeping_command(
+                                    reason.as_deref(),
+                                    state,
+                                    user_turn_id,
+                                )?;
+                                let _ = llm.cancel(generation_id);
                             }
                             LiveTypeScriptCommand::ExtractEntities { text } => {
                                 execute_live_entity_extraction(
@@ -1896,6 +1912,9 @@ fn stream_speech_to_tts(
         if events.iter().any(is_terminal_llm_event) {
             break;
         }
+        if sleep_requested {
+            break;
+        }
     }
 
     if !playback_allowed {
@@ -1942,6 +1961,14 @@ fn stream_speech_to_tts(
         &mut trace_state,
     )?;
     played_any_audio |= flushed_audio;
+    if sleep_requested && !played_any_audio {
+        state.trace.emit_now(
+            user_turn_id,
+            "sleeping_without_spoken_reply",
+            ExactTimestamp::now(),
+        )?;
+        return Ok(LiveSpeechOutcome::SleepRequested);
+    }
     if !played_any_audio {
         current_spoken_text = "I heard you, but I lost my words.".to_string();
         response_fragments.push(current_spoken_text.clone());
@@ -1999,6 +2026,9 @@ fn stream_speech_to_tts(
             .output_expected_until
             .map(|t| t.unix_nanos)
     );
+    if sleep_requested {
+        return Ok(LiveSpeechOutcome::SleepRequested);
+    }
     Ok(LiveSpeechOutcome::Played)
 }
 
@@ -2364,6 +2394,9 @@ enum LiveTypeScriptCommand {
         text: String,
         interrupt: bool,
     },
+    Sleeping {
+        reason: Option<String>,
+    },
     ExtractEntities {
         text: Option<String>,
     },
@@ -2401,6 +2434,10 @@ enum LiveTypeScriptCommandPayload {
         text: String,
         #[serde(default)]
         interrupt: bool,
+    },
+    Sleeping {
+        #[serde(default)]
+        reason: Option<String>,
     },
     ExtractEntities {
         text: Option<String>,
@@ -2485,6 +2522,11 @@ fn execute_live_typescript_commands(script: &str) -> Result<Vec<LiveTypeScriptCo
                     interrupt,
                 })
             }
+            LiveTypeScriptCommandPayload::Sleeping { reason } => {
+                Some(LiveTypeScriptCommand::Sleeping {
+                    reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
+                })
+            }
             LiveTypeScriptCommandPayload::ExtractEntities { text } => {
                 Some(LiveTypeScriptCommand::ExtractEntities {
                     text: text.and_then(|text| non_empty_text(&text).map(str::to_string)),
@@ -2545,7 +2587,7 @@ fn live_typescript_source_with_default_will_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories }} from \"pete:will\";\n{script}"
+        "import {{ say, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -2588,6 +2630,11 @@ fn parse_live_typescript_command_payloads(
 fn live_will_typescript_module() -> InternalModule {
     InternalModule::native("pete:will")
         .with_function("say", ts_say, 2)
+        .with_function("sleeping", ts_sleeping, 1)
+        .with_function("goingToSleep", ts_sleeping, 1)
+        .with_function("going_to_sleep", ts_sleeping, 1)
+        .with_function("goToSleep", ts_sleeping, 1)
+        .with_function("go_to_sleep", ts_sleeping, 1)
         .with_function("extractEntities", ts_extract_entities, 1)
         .with_function("extract_entities", ts_extract_entities, 1)
         .with_function("updateGraphNodeFields", ts_update_graph_node_fields, 3)
@@ -2788,6 +2835,31 @@ fn ts_say(
         feature = "tts-piper"
     )
 ))]
+fn ts_sleeping(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let reason = match args.first() {
+        Some(JsValue::String(value)) => {
+            let value = value.to_string();
+            non_empty_text(&value).map(str::to_string)
+        }
+        Some(JsValue::Object(_)) => optional_string_property_arg(args, 0, "reason"),
+        _ => None,
+    };
+    command_value(interp, json!({ "kind": "sleeping", "reason": reason }))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
 fn ts_extract_entities(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -2918,6 +2990,33 @@ fn ts_query_memories(
             "min_score": min_score,
         }),
     )
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn execute_live_sleeping_command(
+    reason: Option<&str>,
+    state: &mut LiveHalfDuplexState,
+    turn_id: u64,
+) -> Result<()> {
+    let occurred_at = ExactTimestamp::now();
+    let mut event = state
+        .trace
+        .event(turn_id, "pete_command_sleeping", occurred_at);
+    event.text = reason.map(str::to_string);
+    event.reason = Some("Pete requested clean program termination".to_string());
+    event.artifact = Some(json!({
+        "command": "sleeping",
+        "state": "going_to_sleep",
+        "reason": reason,
+    }));
+    state.trace.emit(event)?;
+    eprintln!("[live-half-duplex] Pete executed sleeping; going to sleep");
+    Ok(())
 }
 
 #[cfg(all(
@@ -4652,7 +4751,11 @@ mod tests {
     fn pete_prompt_tells_llm_to_add_graph_node_descriptions() {
         assert!(
             super::PETE_CONVERSATION_SYSTEM_PROMPT
-                .contains("Every graph node can and should have a description field")
+                .contains("Every node in Pete's memory can and should have a description field")
+        );
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT
+                .contains("Pete should fastidiously add useful details to memory")
         );
         assert!(super::PETE_CONVERSATION_SYSTEM_PROMPT.contains(
             "Pete should add or improve its description by calling updateGraphNodeFields"
@@ -4660,6 +4763,18 @@ mod tests {
         assert!(
             super::PETE_CONVERSATION_SYSTEM_PROMPT
                 .contains(r#"updateGraphNodeFields("node:id", { description: "noun phrase" })"#)
+        );
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT
+                .contains(r#"say "my memory" instead of "the graph" or "graph nodes""#)
+        );
+        assert!(super::PETE_CONVERSATION_SYSTEM_PROMPT.contains("Program initiation is waking"));
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT
+                .contains("Clean program termination is sleeping or going to sleep")
+        );
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT.contains("Use sleeping() or goingToSleep()")
         );
     }
 
@@ -4738,6 +4853,24 @@ mod tests {
                     text: "I have Travis in working memory now.".to_string(),
                     interrupt: false
                 }
+            ]
+        );
+    }
+
+    #[test]
+    fn live_typescript_executes_sleeping_builders() {
+        let commands = execute_live_typescript_commands(
+            r#"[sleeping("user asked me to stop"), goingToSleep()]"#,
+        )
+        .expect("typescript should execute");
+
+        assert_eq!(
+            commands,
+            vec![
+                LiveTypeScriptCommand::Sleeping {
+                    reason: Some("user asked me to stop".to_string())
+                },
+                LiveTypeScriptCommand::Sleeping { reason: None }
             ]
         );
     }
