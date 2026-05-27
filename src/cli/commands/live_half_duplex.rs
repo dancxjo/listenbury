@@ -911,6 +911,14 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     if let Some(seconds) = command.seconds {
         anyhow::ensure!(seconds > 0, "--seconds must be greater than zero");
     }
+    anyhow::ensure!(
+        command.context_size > 0,
+        "--context-size must be greater than zero"
+    );
+    anyhow::ensure!(
+        command.reserved_generation_tokens > 0,
+        "--reserved-generation-tokens must be greater than zero"
+    );
 
     let session_clock = SessionClock::start_now();
     let trace_started_at = session_clock.session_started_at();
@@ -942,6 +950,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         model_path: paths.llm_model.clone(),
         gpu_layers: llm_placement.gpu_layers,
         cpu_only: llm_placement.cpu_only,
+        context_size: command.context_size,
         ..Default::default()
     })
     .with_context(|| {
@@ -1278,6 +1287,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
                 transcript,
                 command.model_profile,
                 &paths.llm_model,
+                command.context_size,
+                usize::try_from(command.reserved_generation_tokens).unwrap_or(usize::MAX),
                 command.no_backchannels,
                 &capture_enabled,
                 &mut turn_gap,
@@ -1543,6 +1554,8 @@ fn stream_speech_to_tts(
     transcript: &str,
     model_profile: ModelProfile,
     llm_model_path: &std::path::Path,
+    context_size: u32,
+    reserved_generation_tokens: usize,
     no_backchannels: bool,
     capture_enabled: &AtomicBool,
     turn_gap: &mut SimplexTurnGapMonitor<'_>,
@@ -1550,15 +1563,28 @@ fn stream_speech_to_tts(
     user_turn_id: u64,
 ) -> Result<LiveSpeechOutcome> {
     let prompt_format = prompt_format_for_model(llm_model_path);
-    let (prompt, conversation_context) = build_prompt_and_context_with_provider(
+    let generation_max_tokens = max_tokens(model_profile, prompt_format);
+    let reserved_generation_tokens = reserved_generation_tokens.max(generation_max_tokens);
+    let prompt_budget = PromptBudget::new(context_size, reserved_generation_tokens);
+    let (prompt, conversation_context, prompt_diagnostics) = build_prompt_and_context_with_provider(
         &state.context_provider,
         transcript,
         state.controller.conversation_history(),
         prompt_format,
+        prompt_budget,
     );
     eprintln!(
         "[live-half-duplex] selected context nodes for turn {user_turn_id}: {}",
         conversation_context.debug_nodes()
+    );
+    eprintln!(
+        "[live-half-duplex] prompt budget turn {user_turn_id}: estimated_total={} graph_context={} conversation_history={} reserved_generation={} prompt_budget={} truncated={}",
+        prompt_diagnostics.total_estimated_prompt_tokens,
+        prompt_diagnostics.graph_context_tokens,
+        prompt_diagnostics.conversation_history_tokens,
+        prompt_diagnostics.reserved_generation_tokens,
+        prompt_diagnostics.prompt_budget_tokens,
+        prompt_diagnostics.prompt_truncated
     );
     let mut prompt_event =
         state
@@ -1572,6 +1598,14 @@ fn stream_speech_to_tts(
         "prompt": prompt.as_str(),
         "prompt_format": format!("{prompt_format:?}"),
         "prompt_chars": prompt_chars,
+        "prompt_tokens_estimated": prompt_diagnostics.total_estimated_prompt_tokens,
+        "graph_context_tokens_estimated": prompt_diagnostics.graph_context_tokens,
+        "conversation_history_tokens_estimated": prompt_diagnostics.conversation_history_tokens,
+        "reserved_generation_tokens": prompt_diagnostics.reserved_generation_tokens,
+        "prompt_budget_tokens": prompt_diagnostics.prompt_budget_tokens,
+        "prompt_truncated": prompt_diagnostics.prompt_truncated,
+        "truncated_history_lines": prompt_diagnostics.truncated_history_lines,
+        "truncated_graph_lines": prompt_diagnostics.truncated_graph_lines,
         "selected_context_nodes": conversation_context.debug_nodes(),
     }));
     state.trace.emit(prompt_event)?;
@@ -1579,7 +1613,7 @@ fn stream_speech_to_tts(
     let generation_id = llm
         .start(GenerationRequest {
             prompt: prompt.clone(),
-            max_tokens: Some(max_tokens(model_profile, prompt_format)),
+            max_tokens: Some(generation_max_tokens),
             stop: live_half_duplex_stops(prompt_format),
         })
         .context("failed to start llama.cpp generation")?;
@@ -4308,7 +4342,7 @@ fn build_prompt<'a>(
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
 ) -> String {
-    let (prompt, _) = build_prompt_and_context(transcript, history, format);
+    let (prompt, _, _) = build_prompt_and_context(transcript, history, format);
     prompt
 }
 
@@ -4317,12 +4351,13 @@ fn build_prompt_and_context<'a>(
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
-) -> (String, ConversationContext) {
+) -> (String, ConversationContext, PromptAssemblyDiagnostics) {
     build_prompt_and_context_with_provider(
         &StubContextProvider::default(),
         transcript,
         history,
         format,
+        PromptBudget::default(),
     )
 }
 
@@ -4340,28 +4375,20 @@ fn build_prompt_and_context_with_provider<'a>(
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
     format: LivePromptFormat,
-) -> (String, ConversationContext) {
-    let context = build_turn_conversation_context_with_provider(provider, transcript, history);
-    let user_content = build_user_prompt_content(transcript, &context);
-    let prompt = match format {
-        LivePromptFormat::Llama3Instruct => format!(
-            "<|start_header_id|>system<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-            context.system_prompt
-        ),
-        LivePromptFormat::GptOssHarmony => format!(
-            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\n{}<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant",
-            context.system_prompt
-        ),
-        LivePromptFormat::Gemma3Instruct => format!(
-            "<start_of_turn>user\n{}\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n",
-            context.system_prompt
-        ),
-        LivePromptFormat::Gemma4Instruct => format!(
-            "<|turn>system\n{}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n",
-            context.system_prompt
-        ),
-    };
-    (prompt, context)
+    budget: PromptBudget,
+) -> (String, ConversationContext, PromptAssemblyDiagnostics) {
+    let context = build_turn_conversation_context_with_provider(
+        provider,
+        transcript,
+        history,
+        ContextBudget {
+            max_chars: budget.graph_context_char_budget,
+        },
+    );
+    let (user_content, mut diagnostics) =
+        build_user_prompt_content(transcript, &context, format, budget);
+    let prompt = render_live_prompt(format, &context.system_prompt, &user_content);
+    (prompt, context, diagnostics)
 }
 
 #[cfg(any(
@@ -4373,19 +4400,36 @@ fn build_prompt_and_context_with_provider<'a>(
         feature = "tts-piper"
     )
 ))]
-fn build_user_prompt_content(transcript: &str, context: &ConversationContext) -> String {
-    let history = render_conversation_history(context.conversation_tail.iter());
-    let working_memory = context.render_compact_nodes();
-    if history.is_empty() {
-        format!(
-            "Working memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
-            transcript.trim()
-        )
-    } else {
-        format!(
-            "Conversation so far:\n{history}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
-            transcript.trim()
-        )
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PromptBudget {
+    prompt_budget_tokens: usize,
+    reserved_generation_tokens: usize,
+    graph_context_char_budget: usize,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+impl PromptBudget {
+    fn new(context_size: u32, reserved_generation_tokens: usize) -> Self {
+        let context_size_tokens = usize::try_from(context_size).unwrap_or(usize::MAX);
+        let reserved_generation_tokens = reserved_generation_tokens.max(1);
+        let prompt_budget_tokens = context_size_tokens.saturating_sub(reserved_generation_tokens);
+        let graph_context_char_budget = prompt_budget_tokens
+            .saturating_mul(PROMPT_CHARS_PER_TOKEN_ESTIMATE)
+            .saturating_mul(2)
+            / 5;
+        Self {
+            prompt_budget_tokens,
+            reserved_generation_tokens,
+            graph_context_char_budget: graph_context_char_budget.max(512),
+        }
     }
 }
 
@@ -4398,15 +4442,177 @@ fn build_user_prompt_content(transcript: &str, context: &ConversationContext) ->
         feature = "tts-piper"
     )
 ))]
-fn render_conversation_history<'a>(
+impl Default for PromptBudget {
+    fn default() -> Self {
+        Self::new(8192, 512)
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PromptAssemblyDiagnostics {
+    total_estimated_prompt_tokens: usize,
+    graph_context_tokens: usize,
+    conversation_history_tokens: usize,
+    reserved_generation_tokens: usize,
+    prompt_budget_tokens: usize,
+    prompt_truncated: bool,
+    truncated_history_lines: usize,
+    truncated_graph_lines: usize,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn build_user_prompt_content(
+    transcript: &str,
+    context: &ConversationContext,
+    format: LivePromptFormat,
+    budget: PromptBudget,
+) -> (String, PromptAssemblyDiagnostics) {
+    let history_lines = render_conversation_history_lines(context.conversation_tail.iter());
+    let mut history_start = 0usize;
+    let mut graph_lines = context
+        .render_compact_nodes()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    let mut diagnostics = PromptAssemblyDiagnostics {
+        reserved_generation_tokens: budget.reserved_generation_tokens,
+        prompt_budget_tokens: budget.prompt_budget_tokens,
+        ..PromptAssemblyDiagnostics::default()
+    };
+
+    loop {
+        let history = history_lines[history_start..].join("\n");
+        let working_memory = graph_lines.join("\n");
+        diagnostics.graph_context_tokens = estimate_prompt_tokens(&working_memory);
+        diagnostics.conversation_history_tokens = estimate_prompt_tokens(&history);
+
+        let user_content = if history.is_empty() {
+            format!(
+                "Working memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
+                transcript.trim()
+            )
+        } else {
+            format!(
+                "Conversation so far:\n{history}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
+                transcript.trim()
+            )
+        };
+
+        let prompt = render_live_prompt(format, &context.system_prompt, &user_content);
+        let total_estimated_prompt_tokens = estimate_prompt_tokens(&prompt);
+        if total_estimated_prompt_tokens <= budget.prompt_budget_tokens {
+            diagnostics.total_estimated_prompt_tokens = total_estimated_prompt_tokens;
+            return (user_content, diagnostics);
+        }
+
+        diagnostics.prompt_truncated = true;
+        if history_start < history_lines.len() {
+            history_start += 1;
+            diagnostics.truncated_history_lines += 1;
+            continue;
+        }
+        if graph_lines.len() > 1 {
+            graph_lines.pop();
+            diagnostics.truncated_graph_lines += 1;
+            continue;
+        }
+
+        diagnostics.total_estimated_prompt_tokens = total_estimated_prompt_tokens;
+        return (user_content, diagnostics);
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn render_live_prompt(format: LivePromptFormat, system_prompt: &str, user_content: &str) -> String {
+    match format {
+        LivePromptFormat::Llama3Instruct => format!(
+            "<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_content}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        ),
+        LivePromptFormat::GptOssHarmony => format!(
+            "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions\n\n{system_prompt}<|end|><|start|>user<|message|>{user_content}<|end|><|start|>assistant"
+        ),
+        LivePromptFormat::Gemma3Instruct => {
+            format!(
+                "<start_of_turn>user\n{system_prompt}\n\n{user_content}<end_of_turn>\n<start_of_turn>model\n"
+            )
+        }
+        LivePromptFormat::Gemma4Instruct => {
+            format!(
+                "<|turn>system\n{system_prompt}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n"
+            )
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn estimate_prompt_tokens(text: &str) -> usize {
+    text.len()
+        .saturating_add(PROMPT_CHARS_PER_TOKEN_ESTIMATE - 1)
+        / PROMPT_CHARS_PER_TOKEN_ESTIMATE
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn render_conversation_history_lines<'a>(
     history: impl IntoIterator<Item = &'a ConversationTurn>,
-) -> String {
+) -> Vec<String> {
     history
         .into_iter()
         .map(|message| format!("{}: {}", message.role.label(), message.text.trim()))
         .filter(|line| !line.ends_with(": "))
         .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(any(
@@ -4422,6 +4628,7 @@ fn build_turn_conversation_context_with_provider<'a>(
     provider: &dyn listenbury::ContextProvider,
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
+    budget: ContextBudget,
 ) -> ConversationContext {
     let conversation_tail = history
         .into_iter()
@@ -4437,7 +4644,7 @@ fn build_turn_conversation_context_with_provider<'a>(
         PETE_CONVERSATION_SYSTEM_PROMPT,
         transcript,
         conversation_tail,
-        ContextBudget::default(),
+        budget,
     )
 }
 
@@ -4701,7 +4908,8 @@ where
 mod tests {
     use super::{
         FamiliarVoiceMemory, HarmonyFinalFilter, LiveCommandFilter, LivePromptFormat,
-        LiveTypeScriptCommand, SimplexTurnGapStatus, build_prompt, convert_frame_samples,
+        LiveTypeScriptCommand, PromptBudget, SimplexTurnGapStatus, build_prompt,
+        build_prompt_and_context_with_provider, convert_frame_samples,
         execute_live_typescript_commands, format_graph_node_search_prompt_append,
         format_memory_query_prompt_append, live_half_duplex_stops, maybe_plan_cached_backchannel,
         planner_units_from_events, prompt_format_for_model, read_aloud_timed_word_stream,
@@ -4712,9 +4920,10 @@ mod tests {
     use listenbury::mouth::planner::{ExpressiveUnit, SyntheticUnit};
     use listenbury::word::WordCommitment;
     use listenbury::{
-        ConversationController, ConversationMessage, ConversationRole, FillerPlanner,
-        FillerPlannerConfig, GraphNodeRef, GraphNodeSearchHit, GraphNodeSearchQuery, RecallHit,
-        RecallSource, RuntimePacket, SyntheticPlannerConfig,
+        ContextNode, ContextNodeRole, ContextProvider, ConversationController, ConversationMessage,
+        ConversationRole, ConversationTurn, FillerPlanner, FillerPlannerConfig, GraphNodeRef,
+        GraphNodeSearchHit, GraphNodeSearchQuery, RecallHit, RecallSource, RuntimePacket,
+        SyntheticPlannerConfig,
     };
 
     fn token(text: &str) -> LlmEvent {
@@ -4723,6 +4932,10 @@ mod tests {
         }
     }
 
+    const STRESS_TEST_SUMMARY_REPETITIONS: usize = 3;
+    const STRESS_TEST_NODE_COUNT: usize = 220;
+    const STRESS_TEST_SUMMARY: &str = "A long memory summary for stress testing prompt budgeting with graph-backed context assembly.\n";
+
     fn controller_with_fillers_enabled() -> ConversationController {
         let mut controller = ConversationController::default();
         controller.filler_planner = FillerPlanner::new(FillerPlannerConfig {
@@ -4730,6 +4943,37 @@ mod tests {
             ..FillerPlannerConfig::default()
         });
         controller
+    }
+
+    struct LargeContextProvider;
+
+    impl ContextProvider for LargeContextProvider {
+        fn self_node(&self) -> GraphNodeRef {
+            GraphNodeRef {
+                id: "pete:self".to_string(),
+                label: "Pete Listenbury".to_string(),
+            }
+        }
+
+        fn selected_nodes(
+            &self,
+            _utterance: &str,
+            _conversation_tail: &[ConversationTurn],
+            _budget: &listenbury::ContextBudget,
+        ) -> Vec<ContextNode> {
+            (0..STRESS_TEST_NODE_COUNT)
+                .map(|index| ContextNode {
+                    node: GraphNodeRef {
+                        id: format!("memory:{index}"),
+                        label: format!("Memory {index}"),
+                    },
+                    role: ContextNodeRole::RetrievedMemory,
+                    relevance: 1.0 - (index as f32 / 500.0),
+                    reason: "stress test".to_string(),
+                    summary: STRESS_TEST_SUMMARY.repeat(STRESS_TEST_SUMMARY_REPETITIONS),
+                })
+                .collect()
+        }
     }
 
     #[test]
@@ -5163,6 +5407,52 @@ mod tests {
         assert!(prompt.contains("retrieved memories"));
         assert!(prompt.contains("not a generic text-only chatbot"));
         assert!(prompt.contains("Current user message:\nUser: What did I just ask?"));
+    }
+
+    #[test]
+    fn prompt_budgeting_deterministically_truncates_large_graph_context() {
+        let history = (0..80)
+            .map(|index| ConversationMessage {
+                role: if index % 2 == 0 {
+                    ConversationRole::User
+                } else {
+                    ConversationRole::Pete
+                },
+                text: format!(
+                    "Long conversational turn {index}: {}",
+                    "extra context ".repeat(12)
+                ),
+            })
+            .collect::<Vec<_>>();
+        let budget = PromptBudget::new(1024, 384);
+
+        let (prompt_a, context_a, diagnostics_a) = build_prompt_and_context_with_provider(
+            &LargeContextProvider,
+            "Please summarize everything I asked about the project memory graph.",
+            history.iter(),
+            LivePromptFormat::Llama3Instruct,
+            budget,
+        );
+        let (prompt_b, context_b, diagnostics_b) = build_prompt_and_context_with_provider(
+            &LargeContextProvider,
+            "Please summarize everything I asked about the project memory graph.",
+            history.iter(),
+            LivePromptFormat::Llama3Instruct,
+            budget,
+        );
+
+        assert_eq!(context_a.debug_nodes(), context_b.debug_nodes());
+        assert_eq!(prompt_a, prompt_b);
+        assert_eq!(diagnostics_a, diagnostics_b);
+        assert!(diagnostics_a.prompt_truncated);
+        assert!(
+            diagnostics_a.truncated_history_lines > 0 || diagnostics_a.truncated_graph_lines > 0
+        );
+        assert!(diagnostics_a.total_estimated_prompt_tokens <= diagnostics_a.prompt_budget_tokens);
+        assert!(
+            prompt_a.contains("Working memory graph nodes:"),
+            "stress prompt should still include graph section"
+        );
     }
 
     #[test]

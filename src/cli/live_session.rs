@@ -245,7 +245,7 @@ pub(crate) fn continue_command_from_listen_command(
         vad_profile: command.vad_profile,
         mode: PromptMode::Raw,
         max_tokens: None,
-        context_size: DEFAULT_CONTEXT_SIZE,
+        context_size: command.context_size,
         verbatim_turns: DEFAULT_VERBATIM_TURNS,
         tts_vad_pause_ms: DEFAULT_TTS_VAD_PAUSE_MS,
         tts_vad_listen_ms: DEFAULT_TTS_VAD_LISTEN_MS,
