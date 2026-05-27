@@ -26,6 +26,29 @@ pub struct MemoryEntityMention {
     pub span_end: usize,
 }
 
+/// A precomputed picture vector derived from a transient camera frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryImageVector {
+    pub image_id: String,
+    pub source: String,
+    pub width: u32,
+    pub height: u32,
+    pub vector: Vec<f32>,
+    pub content_node_id: Option<String>,
+    pub retained_image: bool,
+}
+
+/// A precomputed voice vector derived from heard speech.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryVoiceVector {
+    pub voice_signature_id: String,
+    pub voice_node_id: String,
+    pub source: String,
+    pub span_id: Option<u64>,
+    pub vector: Vec<f32>,
+    pub confidence: f32,
+}
+
 /// A single runtime trace event emitted by the Listenbury engine.
 ///
 /// Traces are produced on the hot path but consumed asynchronously via a
@@ -85,6 +108,16 @@ pub enum MemoryTrace {
         entities: Vec<MemoryEntityMention>,
         occurred_at: ExactTimestamp,
     },
+    /// A camera frame was vectorized without retaining raw image bytes.
+    ImageVectorCaptured {
+        image: MemoryImageVector,
+        captured_at: ExactTimestamp,
+    },
+    /// A heard voice segment was assigned a signature ID and vector.
+    VoiceVectorCaptured {
+        voice: MemoryVoiceVector,
+        captured_at: ExactTimestamp,
+    },
 }
 
 impl MemoryTrace {
@@ -99,6 +132,8 @@ impl MemoryTrace {
             Self::OverlapDetected { .. } => "overlap_detected",
             Self::RecallResultUsed { .. } => "recall_result_used",
             Self::EntityExtractionPerformed { .. } => "entity_extraction_performed",
+            Self::ImageVectorCaptured { .. } => "image_vector_captured",
+            Self::VoiceVectorCaptured { .. } => "voice_vector_captured",
         }
     }
 
@@ -113,6 +148,8 @@ impl MemoryTrace {
             | Self::OverlapDetected { occurred_at, .. }
             | Self::RecallResultUsed { occurred_at, .. }
             | Self::EntityExtractionPerformed { occurred_at, .. } => *occurred_at,
+            Self::ImageVectorCaptured { captured_at, .. }
+            | Self::VoiceVectorCaptured { captured_at, .. } => *captured_at,
         }
     }
 }

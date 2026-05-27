@@ -48,9 +48,11 @@ pub use neo4j::{
     Neo4jNode, Neo4jRelationship, Neo4jStore, Neo4jTraceWrite, Neo4jWriteResult, trace_write_for,
 };
 pub use qdrant::{
-    DEFAULT_QDRANT_COLLECTION, QdrantPoint, QdrantSearchHit, QdrantStore, VectorDocument,
-    vector_documents_for_trace,
+    DEFAULT_QDRANT_COLLECTION, PICTURE_QDRANT_COLLECTION, QdrantPoint, QdrantSearchHit,
+    QdrantStore, VOICE_QDRANT_COLLECTION, VectorDocument, vector_documents_for_trace,
 };
 pub use sink::{ChannelMemorySink, MemorySink, NoopMemorySink};
-pub use trace::{MemoryEntityMention, MemoryTrace, SpeakerRole};
+pub use trace::{
+    MemoryEntityMention, MemoryImageVector, MemoryTrace, MemoryVoiceVector, SpeakerRole,
+};
 pub use worker::{ColdMemoryWorker, ColdMemoryWorkerConfig, ColdMemoryWorkerReport};

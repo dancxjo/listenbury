@@ -79,7 +79,7 @@ impl MemorySink for ChannelMemorySink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trace::{MemoryTrace, SpeakerRole};
+    use crate::memory::trace::{MemoryImageVector, MemoryTrace, MemoryVoiceVector, SpeakerRole};
     use crate::time::ExactTimestamp;
 
     fn sample_trace() -> MemoryTrace {
@@ -184,6 +184,29 @@ mod tests {
             result_summary: "we discussed weather".to_string(),
             occurred_at: now,
         });
+        sink.submit(MemoryTrace::ImageVectorCaptured {
+            image: MemoryImageVector {
+                image_id: "image:test".to_string(),
+                source: "test".to_string(),
+                width: 1,
+                height: 1,
+                vector: vec![1.0],
+                content_node_id: None,
+                retained_image: false,
+            },
+            captured_at: now,
+        });
+        sink.submit(MemoryTrace::VoiceVectorCaptured {
+            voice: MemoryVoiceVector {
+                voice_signature_id: "voice-sig:test".to_string(),
+                voice_node_id: "voice:test".to_string(),
+                source: "test".to_string(),
+                span_id: None,
+                vector: vec![1.0],
+                confidence: 0.7,
+            },
+            captured_at: now,
+        });
 
         assert!(matches!(
             rx.recv().unwrap(),
@@ -208,6 +231,14 @@ mod tests {
         assert!(matches!(
             rx.recv().unwrap(),
             MemoryTrace::RecallResultUsed { .. }
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            MemoryTrace::ImageVectorCaptured { .. }
+        ));
+        assert!(matches!(
+            rx.recv().unwrap(),
+            MemoryTrace::VoiceVectorCaptured { .. }
         ));
     }
 }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::live_trace::LiveTraceEvent;
 use crate::memory::trace::MemoryTrace;
@@ -190,6 +190,25 @@ impl RuntimeEvent {
                 result_summary: text,
                 ..
             } => (Some(text.clone()), None, None),
+            MemoryTrace::EntityExtractionPerformed {
+                source_text,
+                entities,
+                ..
+            } => (
+                Some(source_text.clone()),
+                Some("entity_extraction".to_string()),
+                Some(json!({ "entities": entities })),
+            ),
+            MemoryTrace::ImageVectorCaptured { image, .. } => (
+                Some(format!("image vector {}", image.image_id)),
+                Some("image_vector".to_string()),
+                Some(json!({ "image": image })),
+            ),
+            MemoryTrace::VoiceVectorCaptured { voice, .. } => (
+                Some(format!("voice vector {}", voice.voice_signature_id)),
+                Some("voice_vector".to_string()),
+                Some(json!({ "voice": voice })),
+            ),
         };
         let mut causality = Vec::new();
         if let MemoryTrace::TimedWordStreamFinalized { stream_id, .. } = trace {
@@ -202,6 +221,23 @@ impl RuntimeEvent {
         }
         if let MemoryTrace::RecallResultUsed { query, .. } = trace {
             causality.push(format!("query:{query}"));
+        }
+        if let MemoryTrace::EntityExtractionPerformed { entities, .. } = trace {
+            causality.extend(
+                entities
+                    .iter()
+                    .map(|entity| format!("entity:{}", entity.node_id)),
+            );
+        }
+        if let MemoryTrace::ImageVectorCaptured { image, .. } = trace {
+            causality.push(format!("image:{}", image.image_id));
+            if let Some(content_node_id) = &image.content_node_id {
+                causality.push(format!("visual_referent:{content_node_id}"));
+            }
+        }
+        if let MemoryTrace::VoiceVectorCaptured { voice, .. } = trace {
+            causality.push(format!("voice_signature:{}", voice.voice_signature_id));
+            causality.push(format!("voice:{}", voice.voice_node_id));
         }
         let memory_kind_correlation = format!("memory_kind:{kind_name}");
         Self {
@@ -350,6 +386,7 @@ pub(crate) fn event_used_legacy_classification(event: &LiveTraceEvent) -> bool {
 mod tests {
     use super::*;
     use crate::live_trace::{LiveTraceEvent, SessionId};
+    use crate::memory::trace::MemoryEntityMention;
 
     fn ts(ms: u64) -> ExactTimestamp {
         ExactTimestamp {
@@ -382,6 +419,43 @@ mod tests {
         assert!(json.contains("\"domain\":\"memory_ingestion\""));
         let decoded: RuntimeEvent = serde_json::from_str(&json).expect("deserialize runtime event");
         assert_eq!(decoded.kind, runtime.kind);
+    }
+
+    #[test]
+    fn entity_extraction_memory_event_keeps_entity_artifact_and_causality() {
+        let trace = MemoryTrace::EntityExtractionPerformed {
+            source_text: "My name is Travis".to_string(),
+            entities: vec![MemoryEntityMention {
+                node_id: "person:travis".to_string(),
+                label: "Travis".to_string(),
+                kind: "person".to_string(),
+                confidence: 0.97,
+                span_start: 11,
+                span_end: 17,
+            }],
+            occurred_at: ts(2_500),
+        };
+
+        let runtime = RuntimeEvent::from_memory_trace(&trace);
+
+        assert!(
+            runtime
+                .causality
+                .contains(&"entity:person:travis".to_string())
+        );
+        let RuntimeEventKind::MemoryIngestion(subtype) = runtime.kind else {
+            panic!("entity extraction should remain a memory ingestion event");
+        };
+        assert_eq!(subtype.reason.as_deref(), Some("entity_extraction"));
+        assert_eq!(subtype.text.as_deref(), Some("My name is Travis"));
+        assert!(
+            subtype
+                .artifact
+                .as_ref()
+                .and_then(|artifact| artifact.get("entities"))
+                .and_then(Value::as_array)
+                .is_some_and(|entities| entities.len() == 1)
+        );
     }
 
     fn subtype(kind: &str) -> RuntimeEventSubtype {

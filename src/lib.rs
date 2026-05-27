@@ -43,7 +43,8 @@ pub use audio::frame::AudioFrame;
 pub use audio::{
     AcousticAnalysis, AudioInput, AudioOutput, SpeechLikelihood, SpeechLikelihoodConfig,
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
-    analyze_audio_frames, analyze_mono_samples, build_speech_likelihood_stream,
+    VoiceVectorObservation, analyze_audio_frames, analyze_mono_samples,
+    build_speech_likelihood_stream, voice_vector_from_audio_frames,
 };
 pub use config::{ListenburyConfig, VadProfile};
 pub use diagnostics::{developer_diagnostics_enabled, set_developer_diagnostics_enabled};
@@ -169,6 +170,11 @@ pub use time::{
 pub use vision::{
     AvSyncConfig, EvidenceScore, PhonemeClass, VisualEvidenceStatus, VisualProvenance,
     VisualSpeechClaim, VisualSpeechClaimKind, VisualSpeechFrame, VisualSpeechTrace, VowelShape,
+};
+#[cfg(target_os = "linux")]
+pub use vision::{
+    LinuxVideoCaptureConfig, NativeVideoCaptureHandle, ffmpeg_linux_video_args,
+    spawn_linux_video_vector_capture,
 };
 pub use voice::mbrola::{
     FallbackReason, FallbackResult, JoinPoint, ManifestError, MbrolaDatabase, MbrolaPhone,

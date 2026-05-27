@@ -500,6 +500,19 @@ function InspectorPane({ projection }) {
     null,
     h("h2", null, "Inspector"),
     h(
+      "details",
+      { id: "llm-prompt-section", className: "llm-prompt-section", open: true },
+      h(
+        "summary",
+        { className: "llm-prompt-summary" },
+        h("span", null, "LLM Prompt"),
+        h("span", { className: "llm-prompt-meta" }, projection.promptSnapshot.label),
+      ),
+      projection.promptSnapshot.prompt
+        ? h("pre", { id: "llm-prompt-text", className: "llm-prompt-text" }, projection.promptSnapshot.prompt)
+        : h("p", { className: "llm-prompt-empty" }, "No prompt snapshot has arrived yet."),
+    ),
+    h(
       "div",
       { id: "selection-summary", className: "selection-summary" },
       projection.selectionBadge
@@ -594,6 +607,7 @@ function buildShellProjection() {
     selectionSummaryParts: selectionProjection.summaryParts,
     selectionRevisions: selectionProjection.revisions,
     selectionJson: selectionProjection.selectionJson,
+    promptSnapshot: promptSnapshotFromSession(liveSession),
     debugEntries: debugEntriesFromSession(liveSession),
   };
 }
@@ -661,6 +675,7 @@ function resetLiveSession() {
   liveSession.viewerEvents.length = 0;
   liveSession.viewerMarkers.length = 0;
   liveSession.debugLog.length = 0;
+  liveSession.latestPrompt = null;
   liveSession.maxElapsedMs = 0;
   liveSession.receivedOriginMs = performance.now();
   liveEvents.length = 0;
@@ -1252,6 +1267,7 @@ function createLiveSession() {
     viewerEvents: [],      // accumulated closed span events
     viewerMarkers: [],     // accumulated point markers
     debugLog: [],          // debug entries, generated exactly once per input event
+    latestPrompt: null,    // latest prompt string exactly as submitted to the LLM
     maxElapsedMs: 0,
     refinedTranscript: null,
     receivedOriginMs: performance.now(),
@@ -1546,6 +1562,22 @@ function reduceLiveEvent(session, event) {
     applyConfirmedTranscript(session, event);
     log("stable", `Confirmed transcript: "${event.text}"`);
     // Fall through to emit as a lane marker below.
+  }
+
+  if (event.kind === "llm_prompt_snapshot") {
+    const prompt = event.artifact?.prompt == null
+      ? rawTextContent(event.text)
+      : rawTextContent(event.artifact.prompt);
+    session.latestPrompt = {
+      turn,
+      elapsedMs: event.elapsed_ms ?? 0,
+      prompt,
+      promptFormat: textContent(event.artifact?.prompt_format) || "unknown",
+      promptChars: Number.isFinite(event.artifact?.prompt_chars) ? event.artifact.prompt_chars : prompt.length,
+      selectedContextNodes: textContent(event.artifact?.selected_context_nodes),
+    };
+    log("prompt", `Prompt snapshot turn ${turn}: ${session.latestPrompt.promptChars} chars`);
+    // Fall through so the prompt snapshot also appears as a timeline marker.
   }
 
   // ── transcript: commit final text for this turn
@@ -1945,6 +1977,32 @@ function debugEntriesFromSession(session) {
     time: `${(entry.elapsedMs / 1000).toFixed(3)}s`,
     message: entry.message,
   }));
+}
+
+function rawTextContent(value) {
+  return value == null ? "" : String(value);
+}
+
+function promptSnapshotFromSession(session) {
+  const snapshot = session.latestPrompt;
+  if (!snapshot?.prompt) {
+    return {
+      prompt: "",
+      label: "waiting",
+    };
+  }
+  const parts = [
+    `turn ${snapshot.turn}`,
+    `${snapshot.promptChars} chars`,
+    snapshot.promptFormat,
+  ].filter(Boolean);
+  if (snapshot.selectedContextNodes) {
+    parts.push(snapshot.selectedContextNodes);
+  }
+  return {
+    prompt: snapshot.prompt,
+    label: parts.join(" · "),
+  };
 }
 
 // ── Transcript ribbon ──────────────────────────────────────────────────────

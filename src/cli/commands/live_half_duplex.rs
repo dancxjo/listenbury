@@ -99,7 +99,7 @@ use listenbury::audio::streaming_prosody::{
     feature = "llm-llama-cpp",
     feature = "tts-piper"
 ))]
-use listenbury::audio::{analyze_audio_frames, write_wav};
+use listenbury::audio::{analyze_audio_frames, voice_vector_from_audio_frames, write_wav};
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -140,6 +140,13 @@ use listenbury::live_trace::{
     TRACE_SESSION_AUDIO_FILE, TeeSink, TraceRuntimeMetadata, TraceSessionAudioArtifact,
     TraceSessionMetadata, add_trace_session_audio_artifact,
 };
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::memory::{MemoryEntityMention, MemorySink, MemoryTrace, NoopMemorySink};
 #[cfg(any(
     test,
     all(
@@ -236,6 +243,14 @@ use listenbury::{
     ConversationTurn, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider,
     FillerContext, GraphNodeRef, PinScope, PinnedContextNode, build_conversation_context,
 };
+#[cfg(all(
+    target_os = "linux",
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+use listenbury::{LinuxVideoCaptureConfig, spawn_linux_video_vector_capture};
 #[cfg(any(
     test,
     all(
@@ -444,6 +459,12 @@ fn live_trace_session_metadata(
         "web": command.web,
         "web_host": command.web_host,
         "web_port": command.web_port,
+        "native_video": command.native_video,
+        "video_device": command.video_device.display().to_string(),
+        "video_width": command.video_width,
+        "video_height": command.video_height,
+        "video_fps": command.video_fps,
+        "retain_video_images": command.retain_video_images,
         "duplex": command.duplex,
     }))
     .expect("listen trace runtime configuration should serialize to an object");
@@ -464,6 +485,7 @@ struct LiveHalfDuplexState {
     self_hearing: SelfHearingState,
     context_provider: EmbeddingRecallProvider,
     entity_extractor: Arc<dyn EntityExtractor>,
+    memory_sink: Arc<dyn MemorySink>,
     controller: ConversationController,
     trace: LiveTrace,
     live_audio: Option<listenbury::web::LiveSessionAudioStore>,
@@ -492,6 +514,7 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("self_hearing", &self.self_hearing)
             .field("context_provider", &"EmbeddingRecallProvider")
             .field("entity_extractor", &"dyn EntityExtractor")
+            .field("memory_sink", &"dyn MemorySink")
             .field("controller", &self.controller)
             .field("trace", &"live trace recorder")
             .field("session_audio_frames", &self.session_audio_frames.len())
@@ -942,11 +965,32 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
     let entity_extractor: Arc<dyn EntityExtractor> = Arc::new(HeuristicEntityExtractor);
+    let memory_sink: Arc<dyn MemorySink> = Arc::new(NoopMemorySink);
     let context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
         id: DEFAULT_SELF_NODE_ID.to_string(),
         label: DEFAULT_SELF_NODE_LABEL.to_string(),
     })
     .with_entity_extractor(Arc::clone(&entity_extractor));
+    #[cfg(target_os = "linux")]
+    let native_video_capture = if command.native_video {
+        Some(spawn_linux_video_vector_capture(
+            LinuxVideoCaptureConfig {
+                device: command.video_device.clone(),
+                width: command.video_width,
+                height: command.video_height,
+                fps: command.video_fps,
+                retain_image: command.retain_video_images,
+                content_node_id: None,
+            },
+            Arc::clone(&memory_sink),
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    if command.native_video {
+        anyhow::bail!("--native-video is currently supported only on Linux");
+    }
     let mut state = LiveHalfDuplexState {
         session_clock: session_clock.clone(),
         vad: create_vad_backend_with_profile(vad_backend, vad_config.profile.as_ref())?,
@@ -958,6 +1002,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         self_hearing: SelfHearingState::default(),
         context_provider,
         entity_extractor,
+        memory_sink,
         controller: ConversationController::default(),
         trace,
         live_audio,
@@ -991,6 +1036,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         let turn_id = turns as u64 + 1;
         let processed = process_ring_frames(&mut ring_rx, &mut state, turn_id)?;
         for group_frames in processed.closed_groups {
+            submit_voice_vector_for_group(&group_frames, &state, turn_id);
             state
                 .trace
                 .buffer_now(turn_id, "asr_started", ExactTimestamp::now());
@@ -1075,6 +1121,8 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     }
 
     drop(stream);
+    #[cfg(target_os = "linux")]
+    drop(native_video_capture);
     state.trace.maybe_end_suppression(session_clock.now())?;
     persist_session_audio_artifact(
         command.jsonl.as_deref(),
@@ -1334,10 +1382,24 @@ fn stream_speech_to_tts(
         "[live-half-duplex] selected context nodes for turn {user_turn_id}: {}",
         conversation_context.debug_nodes()
     );
+    let mut prompt_event = state
+        .trace
+        .event(user_turn_id, "llm_prompt_snapshot", ExactTimestamp::now());
+    let prompt_chars = prompt.chars().count();
+    prompt_event.text = Some(format!(
+        "LLM prompt snapshot for turn {user_turn_id}: {prompt_chars} chars"
+    ));
+    prompt_event.artifact = Some(json!({
+        "prompt": prompt.as_str(),
+        "prompt_format": format!("{prompt_format:?}"),
+        "prompt_chars": prompt_chars,
+        "selected_context_nodes": conversation_context.debug_nodes(),
+    }));
+    state.trace.emit(prompt_event)?;
     state.controller.turn_tracker.on_pete_thinking_started();
     let generation_id = llm
         .start(GenerationRequest {
-            prompt,
+            prompt: prompt.clone(),
             max_tokens: Some(max_tokens(model_profile, prompt_format)),
             stop: live_half_duplex_stops(prompt_format),
         })
@@ -2357,6 +2419,25 @@ fn execute_live_entity_extraction(
 ) -> Result<()> {
     let extracted = state.entity_extractor.extract(text);
     let nodes = resolve_entities(&extracted, &|_| None);
+    let occurred_at = ExactTimestamp::now();
+    let memory_mentions = extracted
+        .iter()
+        .map(|entity| MemoryEntityMention {
+            node_id: entity.provisional_node_id(),
+            label: entity.text.clone(),
+            kind: entity.kind.as_str().to_string(),
+            confidence: entity.confidence,
+            span_start: entity.span.start,
+            span_end: entity.span.end,
+        })
+        .collect::<Vec<_>>();
+    state
+        .memory_sink
+        .submit(MemoryTrace::EntityExtractionPerformed {
+            source_text: text.to_string(),
+            entities: memory_mentions,
+            occurred_at,
+        });
     for node in &nodes {
         state.context_provider.pin_node(PinnedContextNode {
             node_id: node.node.id.clone(),
@@ -2368,11 +2449,9 @@ fn execute_live_entity_extraction(
             ),
         });
     }
-    let mut event = state.trace.event(
-        turn_id,
-        "pete_command_extract_entities",
-        ExactTimestamp::now(),
-    );
+    let mut event = state
+        .trace
+        .event(turn_id, "pete_command_extract_entities", occurred_at);
     event.text = Some(text.to_string());
     event.artifact = Some(json!({
         "command": "extractEntities",
@@ -2401,6 +2480,36 @@ fn execute_live_entity_extraction(
             .join(", ")
     );
     Ok(())
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn submit_voice_vector_for_group(
+    group_frames: &[AudioFrame],
+    state: &LiveHalfDuplexState,
+    turn_id: u64,
+) {
+    let Some(observation) = voice_vector_from_audio_frames(group_frames) else {
+        return;
+    };
+    state.memory_sink.submit(MemoryTrace::VoiceVectorCaptured {
+        voice: listenbury::memory::MemoryVoiceVector {
+            voice_signature_id: observation.signature_id.0.to_string(),
+            voice_node_id: observation.voice_node_id,
+            source: "native_mic".to_string(),
+            span_id: Some(turn_id),
+            vector: observation.vector,
+            confidence: observation.confidence,
+        },
+        captured_at: group_frames
+            .first()
+            .map(|frame| frame.captured_at)
+            .unwrap_or_else(ExactTimestamp::now),
+    });
 }
 
 #[cfg(any(

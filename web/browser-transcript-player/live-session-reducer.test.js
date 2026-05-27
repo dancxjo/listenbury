@@ -47,6 +47,7 @@ function createLiveSession() {
     viewerMarkers: [],
     debugLog: [],
     maxElapsedMs: 0,
+    latestPrompt: null,
   };
 }
 
@@ -327,6 +328,17 @@ function normalizeSemanticText(value) {
   return text.length > 0 ? text : null;
 }
 
+function textContent(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+
+function rawTextContent(value) {
+  return value == null ? "" : String(value);
+}
+
 function reduceLiveEvent(session, event) {
   session.maxElapsedMs = Math.max(session.maxElapsedMs, event.elapsed_ms);
   const turn = event.turn;
@@ -390,6 +402,21 @@ function reduceLiveEvent(session, event) {
   if (event.kind === "transcript" && event.text) {
     const liveTurn = sessionGetOrCreateTurn(session, turn);
     liveTurn.finalTranscript = event.text;
+  }
+
+  if (event.kind === "llm_prompt_snapshot") {
+    const prompt = event.artifact?.prompt == null
+      ? rawTextContent(event.text)
+      : rawTextContent(event.artifact.prompt);
+    session.latestPrompt = {
+      turn,
+      elapsedMs: event.elapsed_ms ?? 0,
+      prompt,
+      promptFormat: textContent(event.artifact?.prompt_format) || "unknown",
+      promptChars: Number.isFinite(event.artifact?.prompt_chars) ? event.artifact.prompt_chars : prompt.length,
+      selectedContextNodes: textContent(event.artifact?.selected_context_nodes),
+    };
+    log("prompt", `Prompt snapshot turn ${turn}: ${session.latestPrompt.promptChars} chars`);
   }
 
   if (event.text && isGeneratedSyntheticEventKind(event.kind)) {
@@ -576,6 +603,28 @@ function projectLiveViewerEvent(session, event) {
   return {
     ...event,
     label: semanticSpanLabel(session, event.kind, turn, event.label, event.metadata?.event),
+  };
+}
+
+function promptSnapshotFromSession(session) {
+  const snapshot = session.latestPrompt;
+  if (!snapshot?.prompt) {
+    return {
+      prompt: "",
+      label: "waiting",
+    };
+  }
+  const parts = [
+    `turn ${snapshot.turn}`,
+    `${snapshot.promptChars} chars`,
+    snapshot.promptFormat,
+  ].filter(Boolean);
+  if (snapshot.selectedContextNodes) {
+    parts.push(snapshot.selectedContextNodes);
+  }
+  return {
+    prompt: snapshot.prompt,
+    label: parts.join(" · "),
   };
 }
 
@@ -999,6 +1048,25 @@ console.log("\n── Scenario 11: timeline focus chooses correct scroll target 
     1100,
     "clamps scroll target to right edge",
   );
+}
+
+console.log("\n── Scenario 17: LLM prompt snapshot preserves raw prompt text ──");
+{
+  const s = createLiveSession();
+  const prompt = "<|system|>\nRead aloud unless tagged.\n\n<|assistant_thought|>silent</|assistant_thought|>\n<|typescript|>tool();</|typescript|>";
+  reduceLiveEvent(s, mkEvent("llm_prompt_snapshot", 4, 1234, {
+    artifact: {
+      prompt,
+      prompt_format: "Harmony",
+      prompt_chars: prompt.length,
+      selected_context_nodes: "self=pete:self",
+    },
+  }));
+  const projection = promptSnapshotFromSession(s);
+  assertEqual(s.latestPrompt.prompt, prompt, "latest prompt is stored without whitespace normalization");
+  assertEqual(projection.prompt, prompt, "prompt projection preserves newlines and spacing");
+  assertEqual(projection.label, `turn 4 · ${prompt.length} chars · Harmony · self=pete:self`, "prompt snapshot label includes turn, size, format, and context");
+  assertEqual(s.viewerMarkers.filter((marker) => marker.kind === "llm_prompt_snapshot").length, 1, "prompt snapshot appears as a timeline marker");
 }
 
 // ── Summary ─────────────────────────────────────────────────────────────────

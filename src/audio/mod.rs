@@ -18,6 +18,7 @@ pub mod speech_likelihood;
 pub mod streaming_prosody;
 pub mod viterbi;
 pub mod voice_signature;
+pub mod voice_vector;
 pub mod wav;
 
 pub use crate::audio::frame::AudioFrame;
@@ -51,6 +52,7 @@ pub use viterbi::{PhoneState, viterbi_align_pronunciation};
 pub use voice_signature::{
     VoiceSignature, VoiceSignatureId, VoiceSignatureLabel, VoiceSignatureSource,
 };
+pub use voice_vector::{VOICE_VECTOR_DIMS, VoiceVectorObservation, voice_vector_from_audio_frames};
 pub use wav::{
     WavExportOptions, WavSampleEncoding, read_wav_as_audio_frames,
     read_wav_as_audio_frames_with_report, read_wav_as_whisper_frames,

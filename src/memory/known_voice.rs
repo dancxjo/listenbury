@@ -14,7 +14,8 @@ use crate::memory::qdrant::{QdrantPoint, QdrantSearchHit, QdrantStore};
 use crate::soundscape::{
     EmbeddingRef, EnrollmentSource, KnownVoice, KnownVoiceRegistry, VoiceAttribution,
     VoiceAttributionAlternative, VoiceAttributionSource, VoiceEnrollmentSample,
-    VoiceEnrollmentSampleId, VoiceId, VoiceMatcher, VoiceSignatureId,
+    VoiceEnrollmentSampleId, VoiceEntityAssociation, VoiceEntityAssociationSource, VoiceId,
+    VoiceMatcher, VoiceSignatureId,
 };
 use crate::{span::SpanId, time::ExactTimestamp};
 
@@ -161,6 +162,50 @@ impl KnownVoiceMemoryStore {
         };
         registry.enrollment_samples[sample_index].embedding_ref = Some(embedding_ref.clone());
         Ok(embedding_ref)
+    }
+
+    pub fn store_heard_voice_signature_vector(
+        &self,
+        signature_id: VoiceSignatureId,
+        voice_node_id: &str,
+        vector: Vec<f32>,
+        observed_at: ExactTimestamp,
+    ) -> anyhow::Result<EmbeddingRef> {
+        let key = format!("heard_voice_signature:{}", signature_id.0);
+        let point = QdrantPoint {
+            id: key.clone(),
+            vector,
+            payload: heard_voice_signature_payload(signature_id, voice_node_id, observed_at),
+        };
+        self.qdrant
+            .upsert_points(&self.qdrant_collection, &[point])
+            .context("upsert heard voice signature point")?;
+        Ok(EmbeddingRef {
+            backend: KNOWN_VOICE_EMBEDDING_BACKEND.to_string(),
+            key,
+        })
+    }
+
+    pub fn associate_voice_with_entity(
+        &self,
+        registry: &mut KnownVoiceRegistry,
+        voice_id: VoiceId,
+        entity_node_id: impl Into<String>,
+        entity_label: Option<String>,
+        confidence: f32,
+        source: VoiceEntityAssociationSource,
+        associated_at: ExactTimestamp,
+    ) -> anyhow::Result<VoiceEntityAssociation> {
+        let association = registry.associate_voice_with_entity(
+            voice_id,
+            entity_node_id,
+            entity_label,
+            confidence,
+            source,
+            associated_at,
+        );
+        self.save_registry(registry)?;
+        Ok(association)
     }
 }
 
@@ -365,6 +410,26 @@ fn known_voice_payload(
     payload
 }
 
+fn heard_voice_signature_payload(
+    signature_id: VoiceSignatureId,
+    voice_node_id: &str,
+    observed_at: ExactTimestamp,
+) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert("kind".to_string(), json!("heard_voice_signature"));
+    payload.insert(
+        "voice_signature_id".to_string(),
+        json!(signature_id.0.to_string()),
+    );
+    payload.insert("voice_node_id".to_string(), json!(voice_node_id));
+    payload.insert(
+        "observed_at_unix_nanos".to_string(),
+        json!(observed_at.unix_nanos),
+    );
+    payload.insert("memory_scope".to_string(), json!(KNOWN_VOICE_LOCALITY));
+    payload
+}
+
 fn known_voice_point_key(voice_id: VoiceId, sample_id: VoiceEnrollmentSampleId) -> String {
     format!("known_voice_enrollment:{}:{}", voice_id.0, sample_id.0)
 }
@@ -387,7 +452,9 @@ fn seed_to_embedding(seed: String) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::soundscape::{EnrollmentQuality, EnrollmentSource, KnownVoice, VoiceKind};
+    use crate::soundscape::{
+        EnrollmentQuality, EnrollmentSource, KnownVoice, VoiceEntityAssociationSource, VoiceKind,
+    };
     use tempfile::tempdir;
 
     #[derive(Default)]
@@ -553,6 +620,61 @@ mod tests {
     }
 
     #[test]
+    fn store_heard_voice_signature_vector_upserts_direct_voice_point() {
+        let dir = tempdir().expect("create tempdir");
+        let path = dir.path().join("known_voices.json");
+        let qdrant = Arc::new(RecordingQdrantStore::default());
+        let embeddings = Arc::new(DeterministicKnownVoiceEmbeddingProvider);
+        let store = KnownVoiceMemoryStore::new(path, qdrant.clone(), embeddings);
+        let signature_id = VoiceSignatureId::new();
+
+        let embedding_ref = store
+            .store_heard_voice_signature_vector(
+                signature_id,
+                "voice:test",
+                vec![0.1, 0.2, 0.3],
+                ExactTimestamp::from_unix_nanos(20),
+            )
+            .expect("store heard signature");
+
+        assert_eq!(embedding_ref.backend, KNOWN_VOICE_EMBEDDING_BACKEND);
+        let upserts = qdrant.upserts.lock().expect("qdrant mutex poisoned");
+        assert_eq!(upserts.len(), 1);
+        assert_eq!(upserts[0].0, KNOWN_VOICE_QDRANT_COLLECTION);
+        assert_eq!(
+            upserts[0].1[0].payload.get("voice_node_id"),
+            Some(&json!("voice:test"))
+        );
+    }
+
+    #[test]
+    fn associate_voice_with_entity_persists_registry_link() {
+        let dir = tempdir().expect("create tempdir");
+        let path = dir.path().join("known_voices.json");
+        let qdrant = Arc::new(RecordingQdrantStore::default());
+        let embeddings = Arc::new(DeterministicKnownVoiceEmbeddingProvider);
+        let store = KnownVoiceMemoryStore::new(&path, qdrant, embeddings);
+        let mut registry = sample_registry();
+        let voice_id = registry.voices[0].id;
+
+        store
+            .associate_voice_with_entity(
+                &mut registry,
+                voice_id,
+                "person:travis",
+                Some("Travis".to_string()),
+                0.88,
+                VoiceEntityAssociationSource::ExplicitUserStatement,
+                ExactTimestamp::from_unix_nanos(30),
+            )
+            .expect("associate voice with entity");
+
+        let reloaded = store.load_registry().expect("reload registry");
+        assert_eq!(reloaded.voices_for_entity("person:travis").len(), 1);
+        assert_eq!(reloaded.entities_for_voice(voice_id).len(), 1);
+    }
+
+    #[test]
     fn matcher_returns_ranked_attribution_with_alternatives() {
         let qdrant = Arc::new(RecordingQdrantStore::default());
         let mut registry = sample_registry();
@@ -659,6 +781,7 @@ mod tests {
                     embedding_ref: None,
                 },
             ],
+            voice_entity_associations: Vec::new(),
         }
     }
 

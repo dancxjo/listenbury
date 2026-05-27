@@ -167,8 +167,8 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                     logical_id: entity.node_id.clone(),
                     label: entity_node_label(&entity.kind).to_string(),
                     properties: props([
-                        ("label", json!(entity.label)),
-                        ("entity_kind", json!(entity.kind)),
+                        ("label", json!(entity.label.as_str())),
+                        ("entity_kind", json!(entity.kind.as_str())),
                         ("confidence", json!(entity.confidence)),
                         ("span_start", json!(entity.span_start)),
                         ("span_end", json!(entity.span_end)),
@@ -183,6 +183,91 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                 related_nodes.push(entity_node);
             }
             extraction_node
+        }
+        MemoryTrace::ImageVectorCaptured { image, captured_at } => {
+            let observation_node = Neo4jNode {
+                logical_id: format!("image_observation:{sequence}"),
+                label: "ImageObservation".to_string(),
+                properties: props([
+                    ("image_id", json!(image.image_id.as_str())),
+                    ("source", json!(image.source.as_str())),
+                    ("width", json!(image.width)),
+                    ("height", json!(image.height)),
+                    ("retained_image", json!(image.retained_image)),
+                    ("captured_at", json!(captured_at)),
+                ]),
+            };
+            let image_node = Neo4jNode {
+                logical_id: image.image_id.clone(),
+                label: "ImageArtifact".to_string(),
+                properties: props([
+                    ("image_id", json!(image.image_id.as_str())),
+                    ("source", json!(image.source.as_str())),
+                    ("width", json!(image.width)),
+                    ("height", json!(image.height)),
+                    ("retained_image", json!(image.retained_image)),
+                    ("captured_at", json!(captured_at)),
+                ]),
+            };
+            relationships.push(Neo4jRelationship {
+                from_logical_id: observation_node.logical_id.clone(),
+                to_logical_id: image_node.logical_id.clone(),
+                kind: "OBSERVED".to_string(),
+            });
+            related_nodes.push(image_node);
+            if let Some(content_node_id) = &image.content_node_id {
+                let content_node = Neo4jNode {
+                    logical_id: content_node_id.clone(),
+                    label: "VisualReferent".to_string(),
+                    properties: props([
+                        ("referent_node_id", json!(content_node_id.as_str())),
+                        ("last_observed_at", json!(captured_at)),
+                    ]),
+                };
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: image.image_id.clone(),
+                    to_logical_id: content_node.logical_id.clone(),
+                    kind: "DEPICTS".to_string(),
+                });
+                related_nodes.push(content_node);
+            }
+            observation_node
+        }
+        MemoryTrace::VoiceVectorCaptured { voice, captured_at } => {
+            let signature_node = Neo4jNode {
+                logical_id: voice.voice_signature_id.clone(),
+                label: "VoiceSignature".to_string(),
+                properties: props([
+                    (
+                        "voice_signature_id",
+                        json!(voice.voice_signature_id.as_str()),
+                    ),
+                    ("voice_node_id", json!(voice.voice_node_id.as_str())),
+                    ("source", json!(voice.source.as_str())),
+                    ("span_id", optional_u64(voice.span_id)),
+                    ("confidence", json!(voice.confidence)),
+                    ("captured_at", json!(captured_at)),
+                ]),
+            };
+            let voice_node = Neo4jNode {
+                logical_id: voice.voice_node_id.clone(),
+                label: "Voice".to_string(),
+                properties: props([
+                    ("voice_node_id", json!(voice.voice_node_id.as_str())),
+                    (
+                        "last_signature_id",
+                        json!(voice.voice_signature_id.as_str()),
+                    ),
+                    ("last_observed_at", json!(captured_at)),
+                ]),
+            };
+            relationships.push(Neo4jRelationship {
+                from_logical_id: signature_node.logical_id.clone(),
+                to_logical_id: voice_node.logical_id.clone(),
+                kind: "SIGNATURE_OF".to_string(),
+            });
+            related_nodes.push(voice_node);
+            signature_node
         }
     };
 
@@ -257,6 +342,10 @@ fn props<const N: usize>(pairs: [(&str, Value); N]) -> Map<String, Value> {
         properties.insert(key.to_string(), value);
     }
     properties
+}
+
+fn optional_u64(value: Option<u64>) -> Value {
+    value.map_or(Value::Null, |value| json!(value))
 }
 
 #[cfg(test)]

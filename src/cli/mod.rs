@@ -765,6 +765,24 @@ pub(crate) struct LiveHalfDuplexCommand {
     /// Start the WaveDeck browser viewer alongside the listen loop (live events streamed via SSE).
     #[arg(long)]
     pub(crate) web: bool,
+    /// Capture native Linux camera frames from a V4L2 device and vectorize them.
+    #[arg(long)]
+    pub(crate) native_video: bool,
+    /// V4L2 camera device for --native-video.
+    #[arg(long, default_value = "/dev/video0")]
+    pub(crate) video_device: PathBuf,
+    /// Capture width for --native-video.
+    #[arg(long, default_value_t = 320)]
+    pub(crate) video_width: u32,
+    /// Capture height for --native-video.
+    #[arg(long, default_value_t = 240)]
+    pub(crate) video_height: u32,
+    /// Frames per second for --native-video.
+    #[arg(long, default_value_t = 2)]
+    pub(crate) video_fps: u32,
+    /// Mark native video artifacts as retained. The default is vector-only.
+    #[arg(long)]
+    pub(crate) retain_video_images: bool,
     /// Run the continuous duplex development pipeline instead of the half-duplex loop.
     #[arg(long)]
     pub(crate) duplex: bool,
@@ -2158,6 +2176,12 @@ mod tests {
         assert!(command.hifigan_model.is_none());
         assert!(!command.skip_gan);
         assert!(!command.web);
+        assert!(!command.native_video);
+        assert_eq!(command.video_device, PathBuf::from("/dev/video0"));
+        assert_eq!(command.video_width, 320);
+        assert_eq!(command.video_height, 240);
+        assert_eq!(command.video_fps, 2);
+        assert!(!command.retain_video_images);
         assert!(!command.duplex);
         assert_eq!(command.web_host, "127.0.0.1");
         assert_eq!(command.web_port, 8787);
@@ -2333,6 +2357,16 @@ mod tests {
             "--model-profile",
             "tiny",
             "--no-backchannels",
+            "--native-video",
+            "--video-device",
+            "/dev/video2",
+            "--video-width",
+            "640",
+            "--video-height",
+            "480",
+            "--video-fps",
+            "5",
+            "--retain-video-images",
         ])
         .expect("listen should parse optional flags");
 
@@ -2343,6 +2377,12 @@ mod tests {
         assert_eq!(command.jsonl, Some(PathBuf::from("out/live-trace.jsonl")));
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
+        assert!(command.native_video);
+        assert_eq!(command.video_device, PathBuf::from("/dev/video2"));
+        assert_eq!(command.video_width, 640);
+        assert_eq!(command.video_height, 480);
+        assert_eq!(command.video_fps, 5);
+        assert!(command.retain_video_images);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
     }
 

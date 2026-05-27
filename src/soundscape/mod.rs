@@ -174,10 +174,12 @@ pub struct VoiceEnrollmentSample {
     pub embedding_ref: Option<EmbeddingRef>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct KnownVoiceRegistry {
     pub voices: Vec<KnownVoice>,
     pub enrollment_samples: Vec<VoiceEnrollmentSample>,
+    #[serde(default)]
+    pub voice_entity_associations: Vec<VoiceEntityAssociation>,
 }
 
 impl KnownVoiceRegistry {
@@ -194,6 +196,67 @@ impl KnownVoiceRegistry {
         self.voices.push(pete);
         id
     }
+
+    pub fn associate_voice_with_entity(
+        &mut self,
+        voice_id: VoiceId,
+        entity_node_id: impl Into<String>,
+        entity_label: Option<String>,
+        confidence: f32,
+        source: VoiceEntityAssociationSource,
+        associated_at: ExactTimestamp,
+    ) -> VoiceEntityAssociation {
+        let association = VoiceEntityAssociation {
+            voice_id,
+            entity_node_id: entity_node_id.into(),
+            entity_label,
+            confidence: confidence.clamp(0.0, 1.0),
+            source,
+            associated_at,
+        };
+        if let Some(existing) = self.voice_entity_associations.iter_mut().find(|existing| {
+            existing.voice_id == association.voice_id
+                && existing.entity_node_id == association.entity_node_id
+        }) {
+            *existing = association.clone();
+        } else {
+            self.voice_entity_associations.push(association.clone());
+        }
+        association
+    }
+
+    pub fn entities_for_voice(&self, voice_id: VoiceId) -> Vec<&VoiceEntityAssociation> {
+        self.voice_entity_associations
+            .iter()
+            .filter(|association| association.voice_id == voice_id)
+            .collect()
+    }
+
+    pub fn voices_for_entity(&self, entity_node_id: &str) -> Vec<&VoiceEntityAssociation> {
+        self.voice_entity_associations
+            .iter()
+            .filter(|association| association.entity_node_id == entity_node_id)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceEntityAssociation {
+    pub voice_id: VoiceId,
+    pub entity_node_id: String,
+    pub entity_label: Option<String>,
+    pub confidence: f32,
+    pub source: VoiceEntityAssociationSource,
+    pub associated_at: ExactTimestamp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VoiceEntityAssociationSource {
+    Manual,
+    ExplicitUserStatement,
+    EntityExtractionCommand,
+    EnrollmentMetadata,
+    Inference,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,7 +382,7 @@ mod tests {
     use super::{
         EnrollmentQuality, EnrollmentSource, KnownVoice, KnownVoiceRegistry, VoiceAttribution,
         VoiceAttributionAlternative, VoiceAttributionSource, VoiceEnrollmentSample,
-        VoiceEnrollmentSampleId, VoiceId, VoiceKind, VoiceLabel,
+        VoiceEnrollmentSampleId, VoiceEntityAssociationSource, VoiceId, VoiceKind, VoiceLabel,
     };
     use crate::{span::SpanId, time::ExactTimestamp};
 
@@ -357,6 +420,7 @@ mod tests {
                 quality: EnrollmentQuality::High,
                 embedding_ref: None,
             }],
+            voice_entity_associations: Vec::new(),
         };
 
         let json = serde_json::to_string(&registry).expect("registry should serialize");
@@ -431,5 +495,24 @@ mod tests {
 
         assert_eq!(pete.kind, VoiceKind::Pete);
         assert_ne!(pete.id, travis.id);
+    }
+
+    #[test]
+    fn registry_associates_voice_ids_with_entity_nodes() {
+        let mut registry = KnownVoiceRegistry::default();
+        let voice_id = VoiceId::new();
+
+        let association = registry.associate_voice_with_entity(
+            voice_id,
+            "person:travis",
+            Some("Travis".to_string()),
+            0.91,
+            VoiceEntityAssociationSource::ExplicitUserStatement,
+            ExactTimestamp::from_unix_nanos(10),
+        );
+
+        assert_eq!(association.entity_node_id, "person:travis");
+        assert_eq!(registry.entities_for_voice(voice_id).len(), 1);
+        assert_eq!(registry.voices_for_entity("person:travis").len(), 1);
     }
 }

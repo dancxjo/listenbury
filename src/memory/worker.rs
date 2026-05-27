@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 
@@ -113,31 +114,49 @@ fn process_trace(
     let Some(vector_store) = config.qdrant.as_ref() else {
         return;
     };
-    let Some(embedding_provider) = config.embeddings.as_ref() else {
-        tracing::warn!("cold-memory vector write skipped: no embedding provider configured");
-        return;
-    };
 
-    let mut points = Vec::new();
+    let mut points_by_collection = BTreeMap::<String, Vec<_>>::new();
     for document in vector_documents_for_trace(trace, sequence, &graph_result) {
-        match embedding_provider.embed(&document.text) {
-            Ok(vector) => points.push(document.into_point(vector)),
-            Err(error) => {
-                report.embedding_failures += 1;
-                tracing::warn!("cold-memory embedding failed: {error:#}");
+        let collection = document
+            .collection
+            .clone()
+            .unwrap_or_else(|| config.qdrant_collection.clone());
+        if document.vector.is_some() {
+            if let Some(point) = document.into_point_with_direct_vector() {
+                points_by_collection
+                    .entry(collection)
+                    .or_default()
+                    .push(point);
+            }
+        } else {
+            let Some(embedding_provider) = config.embeddings.as_ref() else {
+                tracing::warn!("cold-memory text vector skipped: no embedding provider configured");
+                continue;
+            };
+            match embedding_provider.embed(&document.text) {
+                Ok(vector) => points_by_collection
+                    .entry(collection)
+                    .or_default()
+                    .push(document.into_point(vector)),
+                Err(error) => {
+                    report.embedding_failures += 1;
+                    tracing::warn!("cold-memory embedding failed: {error:#}");
+                }
             }
         }
     }
 
-    if points.is_empty() {
+    if points_by_collection.is_empty() {
         return;
     }
 
-    match vector_store.upsert_points(&config.qdrant_collection, &points) {
-        Ok(()) => report.vector_upserts_ok += points.len(),
-        Err(error) => {
-            report.vector_upserts_failed += points.len();
-            tracing::warn!("cold-memory vector upsert failed: {error:#}");
+    for (collection, points) in points_by_collection {
+        match vector_store.upsert_points(&collection, &points) {
+            Ok(()) => report.vector_upserts_ok += points.len(),
+            Err(error) => {
+                report.vector_upserts_failed += points.len();
+                tracing::warn!("cold-memory vector upsert failed: {error:#}");
+            }
         }
     }
 }
@@ -153,7 +172,7 @@ mod tests {
     use crate::memory::neo4j::{Neo4jTraceWrite, Neo4jWriteResult};
     use crate::memory::qdrant::{QdrantPoint, QdrantSearchHit};
     use crate::memory::sink::MemorySink as _;
-    use crate::memory::trace::SpeakerRole;
+    use crate::memory::trace::{MemoryEntityMention, MemoryImageVector, SpeakerRole};
     use crate::time::ExactTimestamp;
 
     #[derive(Default)]
@@ -293,6 +312,101 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("neo4j::conversation_turn:0")
         );
+    }
+
+    #[test]
+    fn entity_extraction_flows_to_graph_and_referent_vector() {
+        let graph = Arc::new(RecordingGraphStore::default());
+        let qdrant = Arc::new(RecordingQdrantStore::default());
+        let embeddings = Arc::new(StubEmbeddingProvider { fail: false });
+
+        let mut config = ColdMemoryWorkerConfig::new();
+        config.neo4j = Some(graph.clone());
+        config.qdrant = Some(qdrant.clone());
+        config.embeddings = Some(embeddings);
+
+        let (sink, worker) = ColdMemoryWorker::spawn_channel(8, config);
+        sink.submit(MemoryTrace::EntityExtractionPerformed {
+            source_text: "My name is Travis".to_string(),
+            entities: vec![MemoryEntityMention {
+                node_id: "person:travis".to_string(),
+                label: "Travis".to_string(),
+                kind: "person".to_string(),
+                confidence: 0.94,
+                span_start: 11,
+                span_end: 17,
+            }],
+            occurred_at: ExactTimestamp::now(),
+        });
+        drop(sink);
+
+        let report = worker.join().expect("worker should join");
+        assert_eq!(report.graph_writes_ok, 1);
+        assert_eq!(report.vector_upserts_ok, 1);
+
+        let writes = graph.writes.lock().expect("graph mutex poisoned");
+        assert_eq!(writes[0].primary_node.label, "EntityExtraction");
+        assert!(
+            writes[0]
+                .related_nodes
+                .iter()
+                .any(|node| { node.logical_id == "person:travis" && node.label == "Person" })
+        );
+
+        let upserts = qdrant.upserts.lock().expect("qdrant mutex poisoned");
+        let point = &upserts[0].1[0];
+        assert_eq!(
+            point
+                .payload
+                .get("graph_node_id")
+                .and_then(|value| value.as_str()),
+            Some("person:travis")
+        );
+        assert_eq!(
+            point
+                .payload
+                .get("artifact_node_id")
+                .and_then(|value| value.as_str()),
+            Some("neo4j::entity_extraction:0")
+        );
+    }
+
+    #[test]
+    fn direct_image_vectors_upsert_without_text_embedding() {
+        let graph = Arc::new(RecordingGraphStore::default());
+        let qdrant = Arc::new(RecordingQdrantStore::default());
+        let embeddings = Arc::new(StubEmbeddingProvider { fail: true });
+
+        let mut config = ColdMemoryWorkerConfig::new();
+        config.neo4j = Some(graph);
+        config.qdrant = Some(qdrant.clone());
+        config.embeddings = Some(embeddings);
+
+        let (sink, worker) = ColdMemoryWorker::spawn_channel(8, config);
+        sink.submit(MemoryTrace::ImageVectorCaptured {
+            image: MemoryImageVector {
+                image_id: "image:test".to_string(),
+                source: "linux_v4l2:/dev/video0".to_string(),
+                width: 2,
+                height: 2,
+                vector: vec![1.0, 0.0],
+                content_node_id: None,
+                retained_image: false,
+            },
+            captured_at: ExactTimestamp::now(),
+        });
+        drop(sink);
+
+        let report = worker.join().expect("worker should join");
+        assert_eq!(report.vector_upserts_ok, 1);
+        assert_eq!(report.embedding_failures, 0);
+
+        let upserts = qdrant.upserts.lock().expect("qdrant mutex poisoned");
+        assert_eq!(
+            upserts[0].0,
+            crate::memory::qdrant::PICTURE_QDRANT_COLLECTION
+        );
+        assert_eq!(upserts[0].1[0].vector, vec![1.0, 0.0]);
     }
 
     #[test]
