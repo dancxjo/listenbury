@@ -1,4 +1,9 @@
+use std::time::Duration;
+
+use anyhow::{Context, bail};
+use reqwest::{StatusCode, Url};
 use serde_json::{Map, Value, json};
+use uuid::Uuid;
 
 use crate::memory::neo4j::{Neo4jTraceWrite, Neo4jWriteResult, trace_write_for};
 use crate::memory::trace::MemoryTrace;
@@ -61,6 +66,266 @@ pub trait QdrantStore: Send + Sync {
         query_vector: &[f32],
         limit: usize,
     ) -> anyhow::Result<Vec<QdrantSearchHit>>;
+}
+
+const QDRANT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Qdrant REST client using the same JSON API shape Daringsby uses.
+#[derive(Debug, Clone)]
+pub struct QdrantHttpStore {
+    pub url: String,
+}
+
+impl QdrantHttpStore {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self { url: url.into() }
+    }
+
+    pub fn from_env() -> Self {
+        Self::new(std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".into()))
+    }
+
+    fn endpoint(&self, path: &str) -> anyhow::Result<Url> {
+        let base = self.url.trim_end_matches('/');
+        Url::parse(&format!("{base}/{}", path.trim_start_matches('/')))
+            .with_context(|| format!("invalid Qdrant URL {}", self.url))
+    }
+
+    fn ensure_collection(&self, collection: &str, vector_size: usize) -> anyhow::Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let url = self.endpoint(&format!("collections/{collection}"))?;
+        let response = client
+            .get(url.clone())
+            .timeout(QDRANT_REQUEST_TIMEOUT)
+            .send()
+            .with_context(|| format!("failed to inspect Qdrant collection {collection}"))?;
+
+        if response.status().is_success() {
+            let body: Value = response
+                .json()
+                .with_context(|| format!("failed to decode Qdrant collection {collection}"))?;
+            let existing_size = qdrant_collection_vector_size(&body).with_context(|| {
+                format!("Qdrant collection {collection} did not report a vector size")
+            })?;
+            if existing_size != vector_size {
+                tracing::warn!(
+                    target: "qdrant",
+                    collection,
+                    existing_size,
+                    vector_size,
+                    "recreating Qdrant collection with incompatible vector dimension"
+                );
+                self.recreate_collection(collection, vector_size)?;
+            }
+            return Ok(());
+        }
+
+        if response.status() != StatusCode::NOT_FOUND {
+            return Err(unexpected_qdrant_response(
+                response,
+                &format!("inspecting collection {collection}"),
+            ));
+        }
+
+        self.create_collection(&client, url, collection, vector_size)
+    }
+
+    fn recreate_collection(&self, collection: &str, vector_size: usize) -> anyhow::Result<()> {
+        let client = reqwest::blocking::Client::new();
+        let url = self.endpoint(&format!("collections/{collection}"))?;
+        let response = client
+            .delete(url.clone())
+            .timeout(QDRANT_REQUEST_TIMEOUT)
+            .send()
+            .with_context(|| format!("failed to delete Qdrant collection {collection}"))?;
+
+        if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
+            return Err(unexpected_qdrant_response(
+                response,
+                &format!("deleting collection {collection}"),
+            ));
+        }
+
+        self.create_collection(&client, url, collection, vector_size)
+    }
+
+    fn create_collection(
+        &self,
+        client: &reqwest::blocking::Client,
+        url: Url,
+        collection: &str,
+        vector_size: usize,
+    ) -> anyhow::Result<()> {
+        let response = client
+            .put(url)
+            .json(&json!({
+                "vectors": {
+                    "size": vector_size,
+                    "distance": "Cosine",
+                }
+            }))
+            .timeout(QDRANT_REQUEST_TIMEOUT)
+            .send()
+            .with_context(|| format!("failed to create Qdrant collection {collection}"))?;
+
+        if response.status().is_success() || response.status() == StatusCode::CONFLICT {
+            Ok(())
+        } else {
+            Err(unexpected_qdrant_response(
+                response,
+                &format!("creating collection {collection}"),
+            ))
+        }
+    }
+}
+
+impl QdrantStore for QdrantHttpStore {
+    fn upsert_points(&self, collection: &str, points: &[QdrantPoint]) -> anyhow::Result<()> {
+        if points.is_empty() {
+            return Ok(());
+        }
+        let vector_size = points
+            .first()
+            .map(|point| point.vector.len())
+            .filter(|len| *len > 0)
+            .with_context(|| format!("refusing to upsert empty vector into {collection}"))?;
+        if points.iter().any(|point| point.vector.len() != vector_size) {
+            bail!("Qdrant upsert batch for {collection} contains mixed vector sizes");
+        }
+        self.ensure_collection(collection, vector_size)?;
+
+        let qdrant_points = points
+            .iter()
+            .map(|point| {
+                let mut payload = point.payload.clone();
+                payload
+                    .entry("listenbury_point_id".to_string())
+                    .or_insert_with(|| json!(point.id.as_str()));
+                json!({
+                    "id": Uuid::new_v4().to_string(),
+                    "vector": point.vector,
+                    "payload": payload,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let response = reqwest::blocking::Client::new()
+            .put(self.endpoint(&format!("collections/{collection}/points?wait=true"))?)
+            .json(&json!({ "points": qdrant_points }))
+            .timeout(QDRANT_REQUEST_TIMEOUT)
+            .send()
+            .with_context(|| {
+                format!("failed to upsert points into Qdrant collection {collection}")
+            })?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(unexpected_qdrant_response(
+                response,
+                &format!("upserting points into collection {collection}"),
+            ))
+        }
+    }
+
+    fn search(
+        &self,
+        collection: &str,
+        query_vector: &[f32],
+        limit: usize,
+    ) -> anyhow::Result<Vec<QdrantSearchHit>> {
+        if query_vector.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let response = reqwest::blocking::Client::new()
+            .post(self.endpoint(&format!("collections/{collection}/points/search"))?)
+            .json(&json!({
+                "vector": query_vector,
+                "limit": limit.max(1),
+                "with_payload": true,
+            }))
+            .timeout(QDRANT_REQUEST_TIMEOUT)
+            .send()
+            .with_context(|| format!("failed to search Qdrant collection {collection}"))?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !response.status().is_success() {
+            return Err(unexpected_qdrant_response(
+                response,
+                &format!("searching collection {collection}"),
+            ));
+        }
+
+        let body: Value = response
+            .json()
+            .with_context(|| format!("failed to decode Qdrant search response for {collection}"))?;
+        qdrant_search_hits(&body)
+            .with_context(|| format!("Qdrant search response for {collection} was invalid"))
+    }
+}
+
+fn unexpected_qdrant_response(
+    response: reqwest::blocking::Response,
+    action: &str,
+) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    anyhow::anyhow!("Qdrant returned {status} while {action}: {body}")
+}
+
+fn qdrant_collection_vector_size(collection: &Value) -> Option<usize> {
+    let vectors = collection.pointer("/result/config/params/vectors")?;
+    if let Some(size) = vectors.get("size").and_then(Value::as_u64) {
+        return usize::try_from(size).ok();
+    }
+    vectors
+        .as_object()?
+        .values()
+        .find_map(|vector| vector.get("size").and_then(Value::as_u64))
+        .and_then(|size| usize::try_from(size).ok())
+}
+
+fn qdrant_search_hits(response: &Value) -> anyhow::Result<Vec<QdrantSearchHit>> {
+    response
+        .pointer("/result")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(qdrant_search_hit)
+        .collect()
+}
+
+fn qdrant_search_hit(value: Value) -> anyhow::Result<QdrantSearchHit> {
+    let object = value
+        .as_object()
+        .context("Qdrant search result was not an object")?;
+    let payload = object
+        .get("payload")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let id = payload
+        .get("listenbury_point_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| qdrant_point_id(object.get("id")).unwrap_or_default());
+    let score = object
+        .get("score")
+        .and_then(Value::as_f64)
+        .context("Qdrant search result is missing numeric score")? as f32;
+    Ok(QdrantSearchHit { id, score, payload })
+}
+
+fn qdrant_point_id(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(id) => Some(id.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
 }
 
 /// Convert a trace into vectorisable documents for Qdrant.

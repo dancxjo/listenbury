@@ -49,7 +49,8 @@ use crate::cli::commands::source_inspection::{
     feature = "tts-piper"
 ))]
 use crate::cli::model_paths::{
-    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_text_embedding_model,
+    resolve_whisper_model,
 };
 #[cfg(all(
     feature = "audio-cpal",
@@ -159,7 +160,9 @@ use listenbury::live_trace::{
     feature = "tts-piper"
 ))]
 use listenbury::memory::{
-    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, NoopMemorySink,
+    ColdMemoryWorker, ColdMemoryWorkerConfig, DEFAULT_QDRANT_COLLECTION, EmbeddingProvider,
+    MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, Neo4jHttpStore,
+    Neo4jStore, QdrantHttpStore, QdrantStore,
 };
 #[cfg(any(
     test,
@@ -255,8 +258,9 @@ use listenbury::{
 use listenbury::{
     ContextBudget, ConversationContext, ConversationController, ConversationMessage,
     ConversationTurn, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider,
-    FillerContext, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, PinScope,
-    PinnedContextNode, StageInstruction, build_conversation_context,
+    FillerContext, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery,
+    LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, PinScope, PinnedContextNode,
+    QdrantEmbeddingRecall, StageInstruction, build_conversation_context,
 };
 #[cfg(all(
     target_os = "linux",
@@ -708,6 +712,98 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("pending_in_flight_thought", &self.pending_in_flight_thought)
             .finish()
     }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+struct LiveMemoryRuntime {
+    context_provider: EmbeddingRecallProvider,
+    memory_sink: Arc<dyn MemorySink>,
+    _worker: Option<ColdMemoryWorker>,
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_live_memory_runtime(entity_extractor: Arc<dyn EntityExtractor>) -> LiveMemoryRuntime {
+    let _ = dotenvy::dotenv();
+
+    let mut context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
+        id: DEFAULT_SELF_NODE_ID.to_string(),
+        label: DEFAULT_SELF_NODE_LABEL.to_string(),
+    })
+    .with_entity_extractor(Arc::clone(&entity_extractor));
+
+    let graph_store: Arc<dyn Neo4jStore> = Arc::new(Neo4jHttpStore::from_env());
+    let qdrant_store: Arc<dyn QdrantStore> = Arc::new(QdrantHttpStore::from_env());
+    let embeddings = match build_live_embedding_provider() {
+        Ok(embeddings) => Some(embeddings),
+        Err(error) => {
+            tracing::warn!("cold-memory embeddings disabled: {error:#}");
+            None
+        }
+    };
+
+    if let Some(embeddings) = embeddings.as_ref() {
+        context_provider = context_provider.with_recall(Arc::new(QdrantEmbeddingRecall::new(
+            Arc::clone(&qdrant_store),
+            Arc::clone(embeddings),
+            DEFAULT_QDRANT_COLLECTION,
+        )));
+    }
+
+    let mut config = ColdMemoryWorkerConfig::new();
+    config.neo4j = Some(graph_store);
+    config.qdrant = Some(qdrant_store);
+    config.embeddings = embeddings;
+    let (sink, worker) = ColdMemoryWorker::spawn_channel(512, config);
+
+    LiveMemoryRuntime {
+        context_provider,
+        memory_sink: Arc::new(sink),
+        _worker: Some(worker),
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn build_live_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
+    let model_path = resolve_text_embedding_model(None)?;
+    let gpu_layers = std::env::var("LISTENBURY_TEXT_EMBEDDING_GPU_LAYERS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    let threads = std::env::var("LISTENBURY_TEXT_EMBEDDING_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(4)
+        });
+    let context_size = std::env::var("LISTENBURY_TEXT_EMBEDDING_CONTEXT_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(2048);
+    Ok(Arc::new(LlamaCppEmbeddingProvider::new(
+        LlamaCppEmbeddingConfig {
+            model_path,
+            gpu_layers,
+            cpu_only: gpu_layers == Some(0),
+            context_size,
+            threads,
+        },
+    )?))
 }
 
 #[cfg(any(
@@ -1175,12 +1271,9 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
     let entity_extractor: Arc<dyn EntityExtractor> = Arc::new(HeuristicEntityExtractor);
-    let memory_sink: Arc<dyn MemorySink> = Arc::new(NoopMemorySink);
-    let context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
-        id: DEFAULT_SELF_NODE_ID.to_string(),
-        label: DEFAULT_SELF_NODE_LABEL.to_string(),
-    })
-    .with_entity_extractor(Arc::clone(&entity_extractor));
+    let live_memory = build_live_memory_runtime(Arc::clone(&entity_extractor));
+    let memory_sink = Arc::clone(&live_memory.memory_sink);
+    let context_provider = live_memory.context_provider.clone();
     #[cfg(target_os = "linux")]
     let native_video_capture = if command.native_video {
         Some(spawn_linux_video_vector_capture(
@@ -1223,6 +1316,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         last_vad_state: None,
         pending_in_flight_thought: None,
     };
+    let _cold_memory_worker = live_memory._worker;
     let mut turns = 0usize;
 
     'listening: while stop_deadline.is_none_or(|deadline| Instant::now() < deadline) {

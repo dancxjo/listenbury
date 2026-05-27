@@ -1,3 +1,11 @@
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::Duration;
+
+use anyhow::{Context, bail};
+use reqwest::Url;
 use serde_json::{Map, Value, json};
 
 use crate::memory::trace::{MemoryTrace, SpeakerRole};
@@ -36,6 +44,242 @@ pub struct Neo4jWriteResult {
 /// Writes memory-derived graph documents into Neo4j or a compatible mock.
 pub trait Neo4jStore: Send + Sync {
     fn store_trace(&self, write: Neo4jTraceWrite) -> anyhow::Result<Neo4jWriteResult>;
+}
+
+const NEO4J_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Neo4j HTTP transaction client using Daringsby's `bolt://` to HTTP endpoint
+/// conversion and JSON Cypher commit path.
+#[derive(Debug, Clone)]
+pub struct Neo4jHttpStore {
+    pub uri: String,
+    pub user: String,
+    pub pass: String,
+    constraint_ensured: Arc<AtomicBool>,
+}
+
+impl Neo4jHttpStore {
+    pub fn new(uri: impl Into<String>, user: impl Into<String>, pass: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            user: user.into(),
+            pass: pass.into(),
+            constraint_ensured: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::new(
+            std::env::var("NEO4J_URI").unwrap_or_else(|_| "bolt://localhost:7687".into()),
+            std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".into()),
+            std::env::var("NEO4J_PASS")
+                .or_else(|_| std::env::var("NEO4J_PASSWORD"))
+                .unwrap_or_else(|_| "password".into()),
+        )
+    }
+
+    fn http_endpoint(&self) -> anyhow::Result<Url> {
+        let parsed =
+            Url::parse(&self.uri).with_context(|| format!("invalid Neo4j URI {}", self.uri))?;
+        let mut url = match parsed.scheme() {
+            "http" | "https" => parsed,
+            "bolt" | "neo4j" => neo4j_http_url(&parsed, "http", 7474)?,
+            "bolt+s" | "neo4j+s" => neo4j_http_url(&parsed, "https", 7473)?,
+            scheme => bail!("unsupported Neo4j URI scheme {scheme}"),
+        };
+        url.set_path("/db/neo4j/tx/commit");
+        url.set_query(None);
+        url.set_fragment(None);
+        Ok(url)
+    }
+
+    fn ensure_constraint(
+        &self,
+        client: &reqwest::blocking::Client,
+        endpoint: &Url,
+    ) -> anyhow::Result<()> {
+        if self.constraint_ensured.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        commit_neo4j_statements(
+            client,
+            endpoint,
+            &self.user,
+            &self.pass,
+            &[CypherStatement {
+                statement:
+                    "CREATE CONSTRAINT listenbury_graph_node_id IF NOT EXISTS FOR (n:GraphNode) REQUIRE n.id IS UNIQUE"
+                        .into(),
+                parameters: json!({}),
+            }],
+            "ensuring graph node constraint",
+        )?;
+        self.constraint_ensured.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl Neo4jStore for Neo4jHttpStore {
+    fn store_trace(&self, write: Neo4jTraceWrite) -> anyhow::Result<Neo4jWriteResult> {
+        let endpoint = self.http_endpoint()?;
+        let client = reqwest::blocking::Client::new();
+        self.ensure_constraint(&client, &endpoint)?;
+        let statements = trace_write_statements(&write)?;
+        commit_neo4j_statements(
+            &client,
+            &endpoint,
+            &self.user,
+            &self.pass,
+            &statements,
+            "committing Listenbury memory trace",
+        )?;
+        Ok(Neo4jWriteResult {
+            primary_node_id: Some(format!("neo4j::{}", write.primary_node.logical_id)),
+            related_node_ids: write
+                .related_nodes
+                .iter()
+                .map(|node| format!("neo4j::{}", node.logical_id))
+                .collect(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CypherStatement {
+    statement: String,
+    parameters: Value,
+}
+
+fn trace_write_statements(write: &Neo4jTraceWrite) -> anyhow::Result<Vec<CypherStatement>> {
+    let mut statements = Vec::with_capacity(
+        1usize
+            .saturating_add(write.related_nodes.len())
+            .saturating_add(write.relationships.len()),
+    );
+    statements.push(node_statement(&write.primary_node)?);
+    for node in &write.related_nodes {
+        statements.push(node_statement(node)?);
+    }
+    for relationship in &write.relationships {
+        statements.push(relationship_statement(relationship)?);
+    }
+    Ok(statements)
+}
+
+fn node_statement(node: &Neo4jNode) -> anyhow::Result<CypherStatement> {
+    validate_graph_name(&node.label, "label")?;
+    let mut props = graph_property_map(&node.properties);
+    props.insert("id".to_string(), json!(node.logical_id.as_str()));
+    props.insert("logical_id".to_string(), json!(node.logical_id.as_str()));
+    Ok(CypherStatement {
+        statement: format!(
+            "MERGE (n:GraphNode {{id: $id}}) SET n += $props SET n:`{}`",
+            node.label
+        ),
+        parameters: json!({
+            "id": node.logical_id,
+            "props": props,
+        }),
+    })
+}
+
+fn relationship_statement(relationship: &Neo4jRelationship) -> anyhow::Result<CypherStatement> {
+    validate_graph_name(&relationship.kind, "relationship type")?;
+    Ok(CypherStatement {
+        statement: format!(
+            "MATCH (from:GraphNode {{id: $from}}), (to:GraphNode {{id: $to}}) MERGE (from)-[r:`{}`]->(to)",
+            relationship.kind
+        ),
+        parameters: json!({
+            "from": relationship.from_logical_id,
+            "to": relationship.to_logical_id,
+        }),
+    })
+}
+
+fn graph_property_map(properties: &Map<String, Value>) -> Map<String, Value> {
+    properties
+        .iter()
+        .filter_map(|(key, value)| graph_property(value).map(|value| (key.clone(), value)))
+        .collect()
+}
+
+fn graph_property(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null | Value::Object(_) => None,
+        Value::Array(items) => Some(Value::Array(
+            items.iter().filter_map(graph_property).collect::<Vec<_>>(),
+        )),
+        Value::String(_) | Value::Bool(_) | Value::Number(_) => Some(value.clone()),
+    }
+}
+
+fn validate_graph_name(name: &str, kind: &str) -> anyhow::Result<()> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        bail!("empty Neo4j {kind}");
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        bail!("invalid Neo4j {kind}: {name}");
+    }
+    if chars.any(|c| !(c == '_' || c.is_ascii_alphanumeric())) {
+        bail!("invalid Neo4j {kind}: {name}");
+    }
+    Ok(())
+}
+
+fn commit_neo4j_statements(
+    client: &reqwest::blocking::Client,
+    endpoint: &Url,
+    user: &str,
+    pass: &str,
+    statements: &[CypherStatement],
+    action: &str,
+) -> anyhow::Result<()> {
+    let response = client
+        .post(endpoint.clone())
+        .basic_auth(user, Some(pass))
+        .json(&json!({
+            "statements": statements.iter().map(|statement| {
+                json!({
+                    "statement": statement.statement,
+                    "parameters": statement.parameters,
+                })
+            }).collect::<Vec<_>>()
+        }))
+        .timeout(NEO4J_REQUEST_TIMEOUT)
+        .send()
+        .with_context(|| format!("failed while {action} at {endpoint}"))?;
+    if !response.status().is_success() {
+        return Err(unexpected_neo4j_response(response, action));
+    }
+    let body: Value = response
+        .json()
+        .with_context(|| format!("failed to decode Neo4j response while {action}"))?;
+    if let Some(errors) = body.get("errors").and_then(Value::as_array) {
+        if !errors.is_empty() {
+            bail!("Neo4j returned errors while {action}: {errors:?}");
+        }
+    }
+    Ok(())
+}
+
+fn neo4j_http_url(source: &Url, scheme: &str, default_port: u16) -> anyhow::Result<Url> {
+    let host = source
+        .host_str()
+        .with_context(|| format!("Neo4j URI {} is missing a host", source.as_str()))?;
+    let port = match source.port() {
+        Some(7687) | None => default_port,
+        Some(port) => port,
+    };
+    Url::parse(&format!("{scheme}://{host}:{port}"))
+        .with_context(|| format!("failed to convert {} to {scheme}", source.as_str()))
+}
+
+fn unexpected_neo4j_response(response: reqwest::blocking::Response, action: &str) -> anyhow::Error {
+    let status = response.status();
+    let body = response.text().unwrap_or_default();
+    anyhow::anyhow!("Neo4j returned {status} while {action}: {body}")
 }
 
 /// Convert a runtime [`MemoryTrace`] into a graph-oriented write payload.

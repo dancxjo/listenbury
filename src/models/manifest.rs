@@ -42,6 +42,16 @@ pub struct ModelBundle {
 
 pub const DEFAULT_MODELS: &[ModelAsset] = &[
     ModelAsset {
+        id: "embeddinggemma-300m-q8-0",
+        filename: "embeddinggemma-300M-Q8_0.gguf",
+        relative_path: "models/text_embedding/embeddinggemma/embeddinggemma-300M-Q8_0.gguf",
+        url: "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf",
+        expected_size_bytes: None,
+        sha256: None,
+        license: Some("Gemma"),
+        source: Some("https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF"),
+    },
+    ModelAsset {
         id: "whisper-tiny-en",
         filename: "ggml-tiny.en.bin",
         relative_path: "models/whisper/ggml-tiny.en.bin",
@@ -478,8 +488,8 @@ pub const MODEL_BUNDLES: &[ModelBundle] = &[
         id: "embeddinggemma",
         display_name: "EmbeddingGemma",
         kind: ModelKind::TextEmbedding,
-        asset_ids: &[],
-        primary_asset_id: "",
+        asset_ids: &["embeddinggemma-300m-q8-0"],
+        primary_asset_id: "embeddinggemma-300m-q8-0",
         aliases: &["embedding-gemma", "embed", "embedding", "text-embedding"],
     },
     ModelBundle {

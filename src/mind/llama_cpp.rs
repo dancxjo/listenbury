@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, unbounded};
 use llama_cpp_2::context::LlamaContext;
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{LlamaAttentionType, LlamaContextParams, LlamaPoolingType};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
@@ -18,6 +18,7 @@ use llama_cpp_2::{LogOptions, send_logs_to_tracing};
 use uuid::Uuid;
 
 use crate::diagnostics::developer_diagnostics_enabled;
+use crate::memory::EmbeddingProvider;
 use crate::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
 
 static LLAMA_BACKEND: OnceLock<Arc<LlamaBackend>> = OnceLock::new();
@@ -57,6 +58,132 @@ pub struct LlamaCppEngine {
     model: Arc<LlamaModel>,
     config: LlamaCppConfig,
     active: HashMap<GenerationId, ActiveGeneration>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LlamaCppEmbeddingConfig {
+    pub model_path: PathBuf,
+    pub gpu_layers: Option<u32>,
+    pub cpu_only: bool,
+    pub context_size: u32,
+    pub threads: usize,
+}
+
+impl Default for LlamaCppEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            model_path: PathBuf::new(),
+            gpu_layers: None,
+            cpu_only: false,
+            context_size: 2048,
+            threads: std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(4),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LlamaCppEmbeddingProvider {
+    backend: Arc<LlamaBackend>,
+    model: Arc<LlamaModel>,
+    config: LlamaCppEmbeddingConfig,
+}
+
+impl LlamaCppEmbeddingProvider {
+    pub fn new(config: LlamaCppEmbeddingConfig) -> Result<Self> {
+        if config.model_path.as_os_str().is_empty() {
+            bail!("llama.cpp embedding model_path is required");
+        }
+        if config.context_size == 0 {
+            bail!("llama.cpp embedding context_size must be greater than zero");
+        }
+        if config.threads == 0 {
+            bail!("llama.cpp embedding threads must be greater than zero");
+        }
+
+        let backend = llama_backend()?;
+        let mut model_params = LlamaModelParams::default();
+        if config.cpu_only {
+            model_params = model_params.with_n_gpu_layers(0);
+        } else if let Some(gpu_layers) = config.gpu_layers {
+            model_params = model_params.with_n_gpu_layers(gpu_layers);
+        }
+        let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
+            .with_context(|| {
+                format!(
+                    "failed to load llama.cpp embedding model at {}",
+                    config.model_path.display()
+                )
+            })?;
+
+        Ok(Self {
+            backend,
+            model: Arc::new(model),
+            config,
+        })
+    }
+}
+
+impl EmbeddingProvider for LlamaCppEmbeddingProvider {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            bail!("refusing to embed empty text");
+        }
+
+        let context_size = NonZeroU32::new(self.config.context_size)
+            .context("llama.cpp embedding context_size must be greater than zero")?;
+        let thread_count =
+            i32::try_from(self.config.threads).context("threads exceeds i32::MAX")?;
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(context_size))
+            .with_n_threads(thread_count)
+            .with_n_threads_batch(thread_count)
+            .with_embeddings(true)
+            .with_pooling_type(LlamaPoolingType::Mean)
+            .with_attention_type(LlamaAttentionType::NonCausal);
+        let ctx_params = if self.config.cpu_only {
+            ctx_params
+                .with_offload_kqv(false)
+                .with_op_offload(false)
+                .with_flash_attention_policy(llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_DISABLED)
+        } else {
+            ctx_params
+        };
+        let mut ctx = self
+            .model
+            .new_context(&self.backend, ctx_params)
+            .context("failed to create llama.cpp embedding context")?;
+
+        let tokens = self
+            .model
+            .str_to_token(trimmed, AddBos::Always)
+            .context("failed to tokenize embedding text")?;
+        if tokens.is_empty() {
+            bail!("embedding text produced no tokens");
+        }
+        let n_ctx = ctx.n_ctx() as usize;
+        if tokens.len() > n_ctx {
+            bail!(
+                "embedding text needs {} tokens, but context_size is {n_ctx}",
+                tokens.len()
+            );
+        }
+
+        let mut batch = LlamaBatch::new(tokens.len(), 1);
+        batch
+            .add_sequence(&tokens, 0, false)
+            .context("failed to build llama.cpp embedding batch")?;
+        ctx.decode(&mut batch)
+            .context("failed to decode llama.cpp embedding batch")?;
+        let mut embedding = ctx
+            .embeddings_seq_ith(0)
+            .context("failed to read llama.cpp sequence embedding")?
+            .to_vec();
+        normalize_l2(&mut embedding);
+        Ok(embedding)
+    }
 }
 
 #[derive(Debug)]
@@ -621,6 +748,19 @@ fn llama_backend() -> Result<Arc<LlamaBackend>> {
     let backend = Arc::new(LlamaBackend::init().context("failed to initialize llama.cpp backend")?);
     let _ = LLAMA_BACKEND.set(Arc::clone(&backend));
     Ok(backend)
+}
+
+fn normalize_l2(values: &mut [f32]) {
+    let norm = values
+        .iter()
+        .map(|value| f64::from(*value) * f64::from(*value))
+        .sum::<f64>()
+        .sqrt();
+    if norm > f64::EPSILON && norm.is_finite() {
+        for value in values {
+            *value = (f64::from(*value) / norm) as f32;
+        }
+    }
 }
 
 fn checked_total_tokens(

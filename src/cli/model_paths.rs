@@ -38,6 +38,19 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
 }
 
 #[cfg(feature = "llm-llama-cpp")]
+pub(crate) fn resolve_text_embedding_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    resolve_model_path(
+        explicit,
+        "LISTENBURY_TEXT_EMBEDDING_MODEL",
+        "llama.cpp text embedding model",
+        "--text-embedding-model",
+        None,
+        Some(ModelKind::TextEmbedding),
+        |path| path.extension().is_some_and(|ext| ext == "gguf"),
+    )
+}
+
+#[cfg(feature = "llm-llama-cpp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LlmRuntimePlacement {
     pub(crate) gpu_layers: Option<u32>,
