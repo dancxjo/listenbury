@@ -745,6 +745,12 @@ pub(crate) struct LiveHalfDuplexCommand {
     /// Number of llama.cpp layers to offload to the GPU. Defaults lower for CUDA live mode so ASR and LLM fit together.
     #[arg(long)]
     pub(crate) llm_gpu_layers: Option<u32>,
+    /// llama.cpp context window size for live prompt plus generation.
+    #[arg(long, default_value_t = 8192)]
+    pub(crate) context_size: u32,
+    /// Tokens reserved for generation when budgeting live prompt assembly.
+    #[arg(long, default_value_t = 512)]
+    pub(crate) reserved_generation_tokens: u32,
     #[arg(long)]
     pub(crate) piper_bin: Option<PathBuf>,
     #[arg(long)]
@@ -2174,6 +2180,8 @@ mod tests {
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(!command.no_backchannels);
         assert_eq!(command.vad, VadBackendOption::WebRtc);
+        assert_eq!(command.context_size, 8192);
+        assert_eq!(command.reserved_generation_tokens, 512);
         assert!(!command.hifigan);
         assert!(command.hifigan_model.is_none());
         assert!(!command.skip_gan);
@@ -2359,6 +2367,10 @@ mod tests {
             "--model-profile",
             "tiny",
             "--no-backchannels",
+            "--context-size",
+            "16384",
+            "--reserved-generation-tokens",
+            "1024",
             "--native-video",
             "--video-device",
             "/dev/video2",
@@ -2379,6 +2391,8 @@ mod tests {
         assert_eq!(command.jsonl, Some(PathBuf::from("out/live-trace.jsonl")));
         assert_eq!(command.model_profile, ModelProfile::Tiny);
         assert!(command.no_backchannels);
+        assert_eq!(command.context_size, 16384);
+        assert_eq!(command.reserved_generation_tokens, 1024);
         assert!(command.native_video);
         assert_eq!(command.video_device, PathBuf::from("/dev/video2"));
         assert_eq!(command.video_width, 640);
