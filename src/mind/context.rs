@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::memory::{EmbeddingProvider, QdrantSearchHit, QdrantStore};
 use crate::mind::controller::ConversationRole;
+use crate::mind::entity::{EntityExtractor, resolve_entities};
 
 pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 1_024;
 pub const DEFAULT_SELF_NODE_ID: &str = "pete:self";
@@ -47,6 +48,7 @@ pub enum ContextNodeRole {
     Place,
     Object,
     Task,
+    Organization,
 }
 
 impl ContextNodeRole {
@@ -60,6 +62,7 @@ impl ContextNodeRole {
             ContextNodeRole::Place => "Place",
             ContextNodeRole::Object => "Object",
             ContextNodeRole::Task => "Task",
+            ContextNodeRole::Organization => "Organization",
         }
     }
 }
@@ -606,6 +609,7 @@ pub struct EmbeddingRecallProvider {
     recall_limit: usize,
     min_score: Option<f32>,
     conversation_tail_limit: usize,
+    entity_extractor: Option<Arc<dyn EntityExtractor>>,
 }
 
 impl EmbeddingRecallProvider {
@@ -616,6 +620,7 @@ impl EmbeddingRecallProvider {
             recall_limit: 8,
             min_score: None,
             conversation_tail_limit: 6,
+            entity_extractor: None,
         }
     }
 
@@ -636,6 +641,14 @@ impl EmbeddingRecallProvider {
 
     pub fn with_conversation_tail_limit(mut self, conversation_tail_limit: usize) -> Self {
         self.conversation_tail_limit = conversation_tail_limit;
+        self
+    }
+
+    /// Attach an entity extractor.  Extracted entities will be added to
+    /// `selected_nodes` as provisional or resolved `ContextNode`s and a
+    /// `tracing::debug!` line will log them for every turn.
+    pub fn with_entity_extractor(mut self, extractor: Arc<dyn EntityExtractor>) -> Self {
+        self.entity_extractor = Some(extractor);
         self
     }
 }
@@ -663,43 +676,66 @@ impl ContextProvider for EmbeddingRecallProvider {
         conversation_tail: &[ConversationTurn],
         _budget: &ContextBudget,
     ) -> Vec<ContextNode> {
-        let Some(recall) = self.recall.as_ref() else {
-            return Vec::new();
-        };
-        let query_text =
-            recall_query_text(utterance, conversation_tail, self.conversation_tail_limit);
-        if query_text.trim().is_empty() {
-            return Vec::new();
+        let mut selected = Vec::new();
+
+        // Entity extraction — runs regardless of whether embedding recall is
+        // configured so that entity anchors are always available.
+        if let Some(extractor) = &self.entity_extractor {
+            let extracted = extractor.extract(utterance);
+            tracing::debug!(
+                turn_entities = ?extracted
+                    .iter()
+                    .map(|e| format!("{}({:?}, {:.2})", e.text, e.kind, e.confidence))
+                    .collect::<Vec<_>>(),
+                "extracted entities from utterance"
+            );
+            // `EmbeddingRecallProvider` does not have direct access to a
+            // knowledge graph, so provisional nodes (deterministic IDs derived
+            // from the entity surface form) are used here.  Callers that have a
+            // graph can resolve entities against it by calling `resolve_entities`
+            // with a real lookup closure and merging the result themselves.
+            let entity_nodes = resolve_entities(&extracted, &|_| None);
+            selected.extend(entity_nodes);
         }
-        let recall_query = RecallQuery {
-            text: query_text,
-            limit: self.recall_limit,
-            min_score: self.min_score,
-        };
-        let hits = match recall.recall(recall_query) {
-            Ok(hits) => hits,
-            Err(error) => {
-                tracing::warn!("embedding recall failed: {error:#}");
-                return Vec::new();
+
+        // Embedding recall nodes.
+        if let Some(recall) = self.recall.as_ref() {
+            let query_text =
+                recall_query_text(utterance, conversation_tail, self.conversation_tail_limit);
+            if !query_text.trim().is_empty() {
+                let recall_query = RecallQuery {
+                    text: query_text,
+                    limit: self.recall_limit,
+                    min_score: self.min_score,
+                };
+                match recall.recall(recall_query) {
+                    Ok(hits) => {
+                        let recall_nodes: Vec<ContextNode> = hits
+                            .into_iter()
+                            .map(|hit| ContextNode {
+                                node: hit.node,
+                                role: ContextNodeRole::RetrievedMemory,
+                                relevance: hit.score,
+                                reason: hit.reason,
+                                summary: hit
+                                    .summary
+                                    .unwrap_or_else(|| "Retrieved from embedding recall".to_string()),
+                            })
+                            .collect();
+                        let seeds: Vec<String> = recall_nodes
+                            .iter()
+                            .map(|node| format!("{}:{:.3}", node.node.id, node.relevance))
+                            .collect();
+                        tracing::debug!(?seeds, "embedding recall selected context seeds");
+                        selected.extend(recall_nodes);
+                    }
+                    Err(error) => {
+                        tracing::warn!("embedding recall failed: {error:#}");
+                    }
+                }
             }
-        };
-        let selected = hits
-            .into_iter()
-            .map(|hit| ContextNode {
-                node: hit.node,
-                role: ContextNodeRole::RetrievedMemory,
-                relevance: hit.score,
-                reason: hit.reason,
-                summary: hit
-                    .summary
-                    .unwrap_or_else(|| "Retrieved from embedding recall".to_string()),
-            })
-            .collect::<Vec<_>>();
-        let seeds = selected
-            .iter()
-            .map(|node| format!("{}:{:.3}", node.node.id, node.relevance))
-            .collect::<Vec<_>>();
-        tracing::debug!(?seeds, "embedding recall selected context seeds");
+        }
+
         selected
     }
 }
