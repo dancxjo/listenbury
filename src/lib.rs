@@ -82,6 +82,9 @@ pub use mind::controller::{
     DEFAULT_FILLER_ACTIVATION_DELAY_MS, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
     FillerDecision, FillerPlanner, FillerPlannerConfig, RuntimePacket,
 };
+pub use mind::episodic::{
+    EpisodicEpisode, EpisodicMemory, EpisodicScene, EpisodicSpeaker, EpisodicTurn, StageInstruction,
+};
 #[cfg(feature = "llm-llama-cpp")]
 pub use mind::llama_cpp::{LlamaCppConfig, LlamaCppEngine};
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};

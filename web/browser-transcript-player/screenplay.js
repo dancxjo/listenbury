@@ -1,6 +1,6 @@
 import {
   assembleNarrativeManuscript,
-  buildNarrativeEpisode,
+  buildNarrativeTimeline,
   createNarrativeSession,
   reduceNarrativeEvent,
 } from "/assets/screenplay-model.mjs";
@@ -169,11 +169,11 @@ function render() {
   dotEl.className = `connection-dot ${pageState.connectionClass}`;
   renderInputChrome();
 
-  const episode = buildNarrativeEpisode(session, { id: "episode-live", episodeNumber: 1, sessionLabel: "Live screenplay" });
-  const manuscript = assembleNarrativeManuscript([episode]);
+  const episodes = buildNarrativeTimeline(session, { idPrefix: "episode-live", episodeNumber: 1, sessionLabel: "Live screenplay" });
+  const manuscript = assembleNarrativeManuscript(episodes);
 
   scriptRoot.replaceChildren();
-  if (!episode.scenes.length) {
+  if (!episodes.some((episode) => episode.scenes.length)) {
     scriptRoot.append(sceneHeading(PLACEHOLDER_SCENE_HEADING), actionLine(PLACEHOLDER_ACTION));
     appendPropositionBlock(scriptRoot);
     const empty = document.createElement("p");
@@ -184,9 +184,11 @@ function render() {
   }
 
   appendPropositionBlock(scriptRoot);
-  scriptRoot.append(episodeHeader(episode, manuscript));
-  for (const scene of episode.scenes) {
-    scriptRoot.append(sceneSection(scene));
+  for (const episode of episodes) {
+    scriptRoot.append(episodeHeader(episode, manuscript));
+    for (const scene of episode.scenes) {
+      scriptRoot.append(sceneSection(scene));
+    }
   }
 
   window.requestAnimationFrame(() => {
@@ -214,6 +216,10 @@ function episodeHeader(episode, manuscript) {
   displayPolicy.className = "soft-note";
   displayPolicy.textContent = "Display policy: committed text is plain; prospective text stays tinted; deleted/cancelled text remains traceable.";
 
+  const stage = document.createElement("p");
+  stage.className = "action current-stage-instruction";
+  stage.textContent = episode.stageInstruction?.text ?? "The current stage instruction is still forming.";
+
   const sceneList = document.createElement("ol");
   sceneList.className = "scene-list";
   for (const scene of episode.sceneList) {
@@ -227,8 +233,35 @@ function episodeHeader(episode, manuscript) {
     sceneList.append(item);
   }
 
-  section.append(title, summary, metadata, displayPolicy, sceneList);
+  const timeline = episodeTimeline(episode);
+
+  section.append(title, summary, metadata, displayPolicy, stage, timeline, sceneList);
   return section;
+}
+
+function episodeTimeline(episode) {
+  const list = document.createElement("ol");
+  list.className = "episode-timeline";
+  list.setAttribute("aria-label", `${episode.title} episodic memory timeline`);
+
+  for (const item of episode.timeline ?? []) {
+    const row = document.createElement("li");
+    const link = document.createElement("a");
+    link.setAttribute("href", `#${item.heading ? item.id.replace(/^timeline-/, "") : item.id}`);
+    link.textContent = `${formatMs(item.startedAtMs)}-${formatMs(item.endedAtMs)}`;
+    const summary = document.createElement("span");
+    summary.textContent = ` ${item.label}: ${item.summary}`;
+    row.append(link, summary);
+    if (item.stageInstruction) {
+      const stage = document.createElement("p");
+      stage.className = "soft-note";
+      stage.textContent = item.stageInstruction;
+      row.append(stage);
+    }
+    list.append(row);
+  }
+
+  return list;
 }
 
 function sceneSection(scene) {
@@ -337,6 +370,10 @@ function formatEpisodeMetadata(episode, manuscript) {
     `${episode.metadata.eventCount} events`,
     `${episode.metadata.startedAtMs}ms-${episode.metadata.endedAtMs}ms`,
   ].join(" • ");
+}
+
+function formatMs(ms) {
+  return Number.isFinite(ms) ? `${ms}ms` : "unknown";
 }
 
 function bindInputChrome() {

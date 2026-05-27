@@ -1,6 +1,7 @@
 pub mod context;
 pub mod controller;
 pub mod entity;
+pub mod episodic;
 #[cfg(feature = "llm-llama-cpp")]
 pub mod llama_cpp;
 pub mod llm;

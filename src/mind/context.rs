@@ -9,13 +9,14 @@ use serde_json::{Map, Value};
 use crate::memory::{EmbeddingProvider, QdrantSearchHit, QdrantStore};
 use crate::mind::controller::ConversationRole;
 use crate::mind::entity::{EntityExtractor, resolve_entities};
+use crate::mind::episodic::{EpisodicMemory, EpisodicSpeaker, EpisodicTurn};
 
 pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 1_024;
 pub const DEFAULT_GRAPH_SUMMARY_MAX_CHARS: usize = 768;
 pub const DEFAULT_GRAPH_SUMMARY_CHARS_PER_TOKEN: usize = 4;
 pub const DEFAULT_SELF_NODE_ID: &str = "pete:self";
 pub const DEFAULT_SELF_NODE_LABEL: &str = "Pete Listenbury";
-pub const DEFAULT_SELF_NODE_SUMMARY: &str = "Pete is the Listenbury live voice system. The user is speaking aloud; ASR transcribes that speech into the text Pete receives, and Pete speaks replies aloud through TTS. Pete may receive conversation history, retrieved memories, and working-memory graph nodes in this prompt. When asked about identity, hearing, memory, or how the prompt works, answer from these runtime facts: Pete is not just a generic text-only chatbot, and should not claim there is no speech input, no memory context, or no larger Listenbury system.";
+pub const DEFAULT_SELF_NODE_SUMMARY: &str = "Pete is the Listenbury live voice system. The user is speaking aloud; ASR transcribes that speech into the text Pete receives, and Pete speaks replies aloud through TTS. Pete may receive a concise episodic timeline of what is currently happening, conversation history, retrieved memories, and working-memory graph nodes in this prompt. When asked about identity, hearing, memory, or how the prompt works, answer from these runtime facts: Pete is not just a generic text-only chatbot, and should not claim there is no speech input, no memory context, or no larger Listenbury system.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphNodeRef {
@@ -143,6 +144,7 @@ pub struct ConversationContext {
     pub pinned_nodes: Vec<PinnedContextNode>,
     pub active_topics: Vec<TopicActivation>,
     pub selected_nodes: Vec<ContextNode>,
+    pub episodic_memory: EpisodicMemory,
     pub conversation_tail: Vec<ConversationTurn>,
     pub budget: ContextBudget,
 }
@@ -199,6 +201,10 @@ impl ConversationContext {
         }
 
         lines.join("\n")
+    }
+
+    pub fn render_episodic_memory(&self) -> String {
+        self.episodic_memory.render_prompt_summary()
     }
 
     pub fn debug_nodes(&self) -> String {
@@ -1785,6 +1791,13 @@ pub fn build_conversation_context(
 ) -> ConversationContext {
     let self_node = provider.self_node();
     let mut selected_nodes = provider.selected_nodes(utterance, &conversation_tail, &budget);
+    let episodic_memory = EpisodicMemory::from_turns(
+        conversation_tail.iter().map(|turn| EpisodicTurn {
+            speaker: EpisodicSpeaker::from(turn.role),
+            text: turn.text.clone(),
+        }),
+        utterance,
+    );
     let pinned_nodes = provider.pinned_nodes();
     let active_topics = provider.active_topics();
     if !pinned_nodes.is_empty() {
@@ -1801,6 +1814,7 @@ pub fn build_conversation_context(
         pinned_nodes,
         active_topics,
         selected_nodes,
+        episodic_memory,
         conversation_tail,
         budget,
     }
@@ -1878,6 +1892,7 @@ mod tests {
                     summary: "Low-priority memory node that should be omitted.".to_string(),
                 },
             ],
+            episodic_memory: EpisodicMemory::empty(),
             conversation_tail: Vec::new(),
             budget: ContextBudget { max_chars: 820 },
         };
@@ -2014,6 +2029,7 @@ mod tests {
                 reason: "vector recall".to_string(),
                 summary: "Latency topic".to_string(),
             }],
+            episodic_memory: EpisodicMemory::empty(),
             conversation_tail: Vec::new(),
             budget: ContextBudget::default(),
         };
@@ -2123,6 +2139,7 @@ mod tests {
                 reason: "vector recall".to_string(),
                 summary: "seed topic".to_string(),
             }],
+            episodic_memory: EpisodicMemory::empty(),
             conversation_tail: Vec::new(),
             budget: ContextBudget::default(),
         };
@@ -2372,6 +2389,7 @@ mod tests {
                 reason: "older mention".to_string(),
                 summary: "Low-priority memory node that should be omitted.".to_string(),
             }],
+            episodic_memory: EpisodicMemory::empty(),
             conversation_tail: Vec::new(),
             budget: ContextBudget { max_chars: 180 },
         };

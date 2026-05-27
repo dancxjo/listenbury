@@ -92,6 +92,15 @@ const FALLBACK_TOPIC = {
 
 const PETE_CUE = "PETE";
 const UNKNOWN_VOICE_PREFIX = "UNKNOWN VOICE #";
+const DEFAULT_EPISODE_GAP_MS = 10 * 60 * 1000;
+const STAGE_INSTRUCTION_EVENT_KINDS = new Set([
+  "stage_instruction",
+  "screenplay_stage_instruction",
+  "pericope_update",
+  "auditory_scene_observation",
+]);
+const SCENE_CUT_EVENT_KINDS = new Set(["scene_cut", "screenplay_scene_cut"]);
+const EPISODE_CUT_EVENT_KINDS = new Set(["episode_cut", "screenplay_episode_cut"]);
 
 export function createNarrativeSession() {
   return {
@@ -101,6 +110,8 @@ export function createNarrativeSession() {
     proposition: null,
     propositionDeleted: [],
     sourceEvents: [],
+    stageInstructions: [],
+    narrativeCuts: [],
     eventCount: 0,
     nextSourceSequence: 1,
   };
@@ -114,6 +125,8 @@ export function reduceNarrativeEvent(session, event) {
   session.eventCount += 1;
   const sourceEvent = normalizeSourceEvent(event, session.nextSourceSequence++);
   session.sourceEvents.push(sourceEvent);
+  captureStageInstruction(session, sourceEvent);
+  captureNarrativeCut(session, sourceEvent);
 
   const turn = getTurn(session, eventTurnKey(event), eventTurnNumber(event));
   turn.sourceEventIds.push(sourceEvent.sourceId);
@@ -187,13 +200,49 @@ export function reduceNarrativeEvent(session, event) {
   }
 }
 
-export function buildNarrativeEpisode(session, options = {}) {
-  const turns = [...session.turns.values()]
-    .filter((turn) => turnHasNarrativeMaterial(turn))
-    .sort((left, right) => left.id - right.id);
+export function buildNarrativeTimeline(session, options = {}) {
+  const turns = sortedNarrativeTurns(session);
+  if (!turns.length) {
+    return [
+      buildNarrativeEpisodeFromTurns(session, [], {
+        ...options,
+        id: options.id ?? `${options.idPrefix ?? "episode"}-1`,
+        episodeNumber: options.episodeNumber ?? 1,
+      }),
+    ];
+  }
 
+  const groups = groupTurnsIntoEpisodes(turns, session.narrativeCuts, options);
+  return groups.map((group, index) =>
+    buildNarrativeEpisodeFromTurns(session, group.turns, {
+      ...options,
+      id: options.id ?? `${options.idPrefix ?? "episode"}-${index + 1}`,
+      episodeNumber: (options.episodeNumber ?? 1) + index,
+      episodeCut: group.cut ?? null,
+    }),
+  );
+}
+
+export function buildNarrativeEpisode(session, options = {}) {
+  return buildNarrativeEpisodeFromTurns(session, sortedNarrativeTurns(session), options);
+}
+
+function buildNarrativeEpisodeFromTurns(session, turns, options = {}) {
   const locationContext = options.locationContext ?? {};
-  const scenes = buildScenes(turns, locationContext);
+  const episodeCuts = options.episodeCut ? [options.episodeCut] : [];
+  const episodeNarrativeCuts = narrativeCutsForWindow(
+    session.narrativeCuts,
+    turns[0]?.startedAtMs ?? null,
+    turns[turns.length - 1]?.endedAtMs ?? null,
+  );
+  const scenes = buildScenes(turns, locationContext, {
+    narrativeCuts: [...episodeNarrativeCuts, ...episodeCuts],
+    stageInstructions: stageInstructionsForWindow(
+      session.stageInstructions,
+      turns[0]?.startedAtMs ?? null,
+      turns[turns.length - 1]?.endedAtMs ?? null,
+    ),
+  });
   const startedAtMs = turns.length ? turns[0].startedAtMs ?? 0 : 0;
   const endedAtMs = turns.length ? turns[turns.length - 1].endedAtMs ?? startedAtMs : startedAtMs;
   const leadScene = scenes[0] ?? null;
@@ -216,10 +265,12 @@ export function buildNarrativeEpisode(session, options = {}) {
     sessionTurns: turns.length,
     eventCount: session.eventCount,
     live: options.live ?? true,
-    sessionLabel: options.sessionLabel ?? "Live session",
-    displayPolicy: {
-      committed: "Rendered as plain screenplay dialogue by default.",
-      prospective: "Rendered inline with prospective styling while still live.",
+      sessionLabel: options.sessionLabel ?? "Live session",
+      cutAuthority: options.cutAuthority ?? "explicit runtime cuts, then screenplay-model heuristics",
+      episodeCut: options.episodeCut ?? null,
+      displayPolicy: {
+        committed: "Rendered as plain screenplay dialogue by default.",
+        prospective: "Rendered inline with prospective styling while still live.",
       deleted: "Rendered inline with strike-through styling for traceability.",
       cancelled: "Rendered as action lines and deleted fragments when available.",
     },
@@ -230,12 +281,15 @@ export function buildNarrativeEpisode(session, options = {}) {
     type: "episode",
     title,
     summary,
+    progressiveSummary: summarizeProgressively(scenes),
+    stageInstruction: currentStageInstruction(scenes),
     metadata,
     sourceEventIds,
     waveDeckHref: options.waveDeckHref ?? "/",
     replayHref: options.replayHref ?? null,
     scenes,
     sceneList: scenes.map((scene) => ({ id: scene.id, heading: scene.heading, summary: scene.summary })),
+    timeline: buildEpisodeMemoryTimeline(scenes),
     children: scenes,
   };
   episode.screenplayBody = renderEpisodeScreenplay(episode);
@@ -291,13 +345,27 @@ export function renderEpisodeScreenplay(episode) {
     `Session: ${episode.metadata.sessionLabel}`,
     `Window: ${formatMs(episode.metadata.startedAtMs)} → ${formatMs(episode.metadata.endedAtMs)}`,
     `Events: ${episode.metadata.eventCount}`,
+    `Cuts: ${episode.metadata.cutAuthority}`,
     "",
   );
+  if (episode.stageInstruction?.text) {
+    lines.push(`Current stage instruction: ${episode.stageInstruction.text}`, "");
+  }
+  if (episode.timeline?.length) {
+    lines.push("Episodic memory timeline:");
+    for (const item of episode.timeline) {
+      lines.push(`${formatMs(item.startedAtMs)}–${formatMs(item.endedAtMs)} ${item.label}: ${item.summary}`);
+    }
+    lines.push("");
+  }
 
   for (const scene of episode.scenes) {
     lines.push(scene.heading);
     if (scene.topicLabel) {
       lines.push(`Soft-note: Topic: ${toTitleCase(scene.topicLabel)}.`);
+    }
+    if (scene.stageInstruction?.text) {
+      lines.push(`Stage instruction: ${scene.stageInstruction.text}`);
     }
     lines.push(scene.action, "");
     for (const beat of scene.beats) {
@@ -314,6 +382,12 @@ export function renderEpisodeScreenplay(episode) {
 
 export function turnHasNarrativeMaterial(turn) {
   return turnHasUserDialogue(turn) || turnHasLlmDialogue(turn) || turn.flags.interruption || turn.flags.cancelled;
+}
+
+function sortedNarrativeTurns(session) {
+  return [...session.turns.values()]
+    .filter((turn) => turnHasNarrativeMaterial(turn))
+    .sort((left, right) => (left.startedAtMs ?? left.id) - (right.startedAtMs ?? right.id));
 }
 
 function getTurn(session, turnKey, turnNumber) {
@@ -347,6 +421,105 @@ function getTurn(session, turnKey, turnNumber) {
     });
   }
   return session.turns.get(turnKey);
+}
+
+function captureStageInstruction(session, event) {
+  const instruction = stageInstructionFromEvent(event);
+  if (!instruction) {
+    return;
+  }
+  session.stageInstructions.push(instruction);
+}
+
+function captureNarrativeCut(session, event) {
+  const cut = narrativeCutFromEvent(event);
+  if (!cut) {
+    return;
+  }
+  session.narrativeCuts.push(cut);
+}
+
+function stageInstructionFromEvent(event) {
+  const runtimeSubtype = runtimeSubtypeFromEvent(event);
+  const eventKind = String(event.kind ?? "");
+  const runtimeKind = String(runtimeSubtype?.kind ?? "");
+  const isStageEvent =
+    STAGE_INSTRUCTION_EVENT_KINDS.has(eventKind) ||
+    STAGE_INSTRUCTION_EVENT_KINDS.has(runtimeKind) ||
+    textContent(event.artifact?.stage_instruction) ||
+    textContent(runtimeSubtype?.artifact?.stage_instruction);
+  if (!isStageEvent) {
+    return null;
+  }
+
+  const text = firstText(
+    event.artifact?.stage_instruction,
+    event.artifact?.description,
+    runtimeSubtype?.artifact?.stage_instruction,
+    runtimeSubtype?.artifact?.description,
+    runtimeSubtype?.text,
+    event.text,
+  );
+  if (!text) {
+    return null;
+  }
+  const elapsedMs = numericMs(event.elapsed_ms);
+  return {
+    id: event.sourceId,
+    type: "stage_instruction",
+    text,
+    summary: text,
+    startedAtMs: elapsedMs,
+    endedAtMs: elapsedMs,
+    source: runtimeSubtype ? "runtime_event" : "trace_event",
+    sourceEventIds: [event.sourceId],
+  };
+}
+
+function narrativeCutFromEvent(event) {
+  const runtimeSubtype = runtimeSubtypeFromEvent(event);
+  const eventKind = String(event.kind ?? "");
+  const runtimeKind = String(runtimeSubtype?.kind ?? "");
+  const explicitLevel = firstText(
+    event.level,
+    event.cut_level,
+    event.artifact?.level,
+    event.artifact?.cut_level,
+    runtimeSubtype?.artifact?.level,
+    runtimeSubtype?.artifact?.cut_level,
+  ).toLowerCase();
+  let level = null;
+  if (explicitLevel === "episode" || EPISODE_CUT_EVENT_KINDS.has(eventKind) || EPISODE_CUT_EVENT_KINDS.has(runtimeKind)) {
+    level = "episode";
+  } else if (explicitLevel === "scene" || SCENE_CUT_EVENT_KINDS.has(eventKind) || SCENE_CUT_EVENT_KINDS.has(runtimeKind)) {
+    level = "scene";
+  } else if (eventKind === "narrative_cut" || eventKind === "screenplay_cut" || runtimeKind === "narrative_cut") {
+    level = "scene";
+  }
+  if (!level) {
+    return null;
+  }
+  const atMs = numericMs(event.elapsed_ms);
+  return {
+    id: event.sourceId,
+    type: "narrative_cut",
+    level,
+    atMs,
+    reason: firstText(event.reason, event.artifact?.reason, runtimeSubtype?.reason) || `${level} cut`,
+    source: runtimeSubtype ? "runtime_event" : "trace_event",
+    sourceEventIds: [event.sourceId],
+  };
+}
+
+function runtimeSubtypeFromEvent(event) {
+  const runtimeKind = event.runtime_event?.kind;
+  if (runtimeKind?.event && typeof runtimeKind.event === "object") {
+    return runtimeKind.event;
+  }
+  if (runtimeKind?.kind || runtimeKind?.text || runtimeKind?.artifact) {
+    return runtimeKind;
+  }
+  return null;
 }
 
 function normalizeSourceEvent(event, sequence) {
@@ -550,23 +723,65 @@ function resolveTurnVoiceCue(turn) {
   return turn.userVoiceCue || `${UNKNOWN_VOICE_PREFIX}1`;
 }
 
-function buildScenes(turns, locationContext = {}) {
+function groupTurnsIntoEpisodes(turns, narrativeCuts = [], options = {}) {
+  const episodeGapMs = options.episodeGapMs ?? DEFAULT_EPISODE_GAP_MS;
+  const groups = [];
+  for (const turn of turns) {
+    const current = groups[groups.length - 1];
+    const explicitCut = current ? strongestCutBetween(narrativeCuts, current.endedAtMs, turn.startedAtMs, "episode") : null;
+    const gapCut =
+      current && !explicitCut && Number.isFinite(current.endedAtMs) && Number.isFinite(turn.startedAtMs) && turn.startedAtMs - current.endedAtMs >= episodeGapMs
+        ? {
+            id: `gap:${current.endedAtMs}:${turn.startedAtMs}`,
+            type: "narrative_cut",
+            level: "episode",
+            atMs: turn.startedAtMs,
+            reason: `silence gap ${turn.startedAtMs - current.endedAtMs}ms`,
+            source: "screenplay-model",
+            sourceEventIds: [],
+          }
+        : null;
+    const cut = explicitCut ?? gapCut;
+    if (!current || cut) {
+      groups.push({ turns: [turn], cut, endedAtMs: turn.endedAtMs });
+      continue;
+    }
+    current.turns.push(turn);
+    current.endedAtMs = maxNumber(current.endedAtMs, turn.endedAtMs);
+  }
+  return groups;
+}
+
+function buildScenes(turns, locationContext = {}, options = {}) {
+  const narrativeCuts = options.narrativeCuts ?? [];
   const grouped = [];
   for (const turn of turns) {
     const sceneKey = classifyTopic(turn);
     const current = grouped[grouped.length - 1];
-    if (!current || shouldStartNewScene(current, turn, sceneKey)) {
-      grouped.push({ key: sceneKey, turns: [turn] });
+    const explicitCut = current ? strongestCutBetween(narrativeCuts, current.endedAtMs, turn.startedAtMs, "scene") : null;
+    if (!current || explicitCut || shouldStartNewScene(current, turn, sceneKey)) {
+      grouped.push({ key: sceneKey, turns: [turn], cut: explicitCut });
     } else {
       current.turns.push(turn);
+      current.endedAtMs = maxNumber(current.endedAtMs, turn.endedAtMs);
       if (current.key === FALLBACK_TOPIC.key && sceneKey !== FALLBACK_TOPIC.key) {
         current.key = sceneKey;
       }
     }
+    grouped[grouped.length - 1].endedAtMs = maxNumber(grouped[grouped.length - 1].endedAtMs, turn.endedAtMs);
   }
 
   const merged = mergeWeakScenes(grouped);
-  return merged.map((group, index) => buildScene(group.turns, index, group.key, locationContext));
+  return merged.map((group, index) =>
+    buildScene(group.turns, index, group.key, locationContext, {
+      cut: group.cut ?? null,
+      stageInstructions: stageInstructionsForWindow(
+        options.stageInstructions ?? [],
+        group.turns[0]?.startedAtMs ?? null,
+        group.turns[group.turns.length - 1]?.endedAtMs ?? null,
+      ),
+    }),
+  );
 }
 
 function shouldStartNewScene(currentGroup, turn, nextSceneKey) {
@@ -584,7 +799,7 @@ function mergeWeakScenes(groups) {
   for (const group of groups) {
     const weak = group.turns.length <= 1 && group.key === FALLBACK_TOPIC.key;
     const previous = merged[merged.length - 1];
-    if (weak && previous) {
+    if (weak && previous && !group.cut) {
       previous.turns.push(...group.turns);
       continue;
     }
@@ -592,12 +807,12 @@ function mergeWeakScenes(groups) {
       previous.turns.push(...group.turns);
       continue;
     }
-    merged.push({ key: group.key, turns: [...group.turns] });
+    merged.push({ key: group.key, turns: [...group.turns], cut: group.cut ?? null });
   }
   return merged;
 }
 
-function buildScene(turns, index, sceneKey, locationContext = {}) {
+function buildScene(turns, index, sceneKey, locationContext = {}, options = {}) {
   const topic = topicForKey(sceneKey);
   const sceneContext = {
     ...locationContext,
@@ -607,14 +822,22 @@ function buildScene(turns, index, sceneKey, locationContext = {}) {
   const beats = consolidateConsecutiveDialogueBeats(turns.flatMap((turn) => turnToBeats(turn)));
   const sourceEventIds = unique(turns.flatMap((turn) => turn.sourceEventIds));
   const summary = summarizeScene(turns, topic, beats);
+  const startedAtMs = turns[0]?.startedAtMs ?? null;
+  const endedAtMs = turns[turns.length - 1]?.endedAtMs ?? startedAtMs;
+  const explicitStageInstruction = collapseStageInstructions(options.stageInstructions ?? [], startedAtMs, endedAtMs);
+  const stageInstruction = explicitStageInstruction ?? deriveStageInstruction(turns, topic, beats, startedAtMs, endedAtMs, sourceEventIds);
   const scene = {
     id: `scene-${index + 1}`,
     type: "scene",
     topicKey: sceneKey,
     topicLabel: topic.topicLabel,
     heading,
+    startedAtMs,
+    endedAtMs,
     action: describeSceneAction(turns, topic),
     summary,
+    stageInstruction,
+    cut: options.cut ?? null,
     sourceEventIds,
     beats,
     children: beats,
@@ -777,6 +1000,76 @@ function summarizeEpisode(scenes) {
     return scenes[0].summary;
   }
   return scenes.map((scene) => scene.topicLabel ?? shortHeading(scene.heading)).join(" → ");
+}
+
+function summarizeProgressively(scenes) {
+  if (!scenes.length) {
+    return "No episodic memory has formed yet.";
+  }
+  return scenes
+    .map((scene, index) => `Scene ${index + 1}: ${scene.summary}`)
+    .join(" ");
+}
+
+function currentStageInstruction(scenes) {
+  return scenes
+    .slice()
+    .reverse()
+    .find((scene) => scene.stageInstruction?.text)?.stageInstruction ?? null;
+}
+
+function buildEpisodeMemoryTimeline(scenes) {
+  return scenes.map((scene, index) => ({
+    id: `timeline-${scene.id}`,
+    type: "episodic_memory_scene",
+    label: `Scene ${index + 1}`,
+    heading: scene.heading,
+    startedAtMs: scene.startedAtMs,
+    endedAtMs: scene.endedAtMs,
+    topicLabel: scene.topicLabel,
+    summary: scene.summary,
+    stageInstruction: scene.stageInstruction?.text ?? "",
+    cutReason: scene.cut?.reason ?? null,
+    sourceEventIds: scene.sourceEventIds,
+  }));
+}
+
+function collapseStageInstructions(instructions, startedAtMs, endedAtMs) {
+  const scoped = stageInstructionsForWindow(instructions, startedAtMs, endedAtMs);
+  if (!scoped.length) {
+    return null;
+  }
+  const latest = scoped[scoped.length - 1];
+  const sourceEventIds = unique(scoped.flatMap((instruction) => instruction.sourceEventIds ?? []));
+  return {
+    ...latest,
+    id: latest.id ?? `stage:${startedAtMs ?? "na"}:${endedAtMs ?? "na"}`,
+    startedAtMs: scoped[0].startedAtMs ?? startedAtMs,
+    endedAtMs: latest.endedAtMs ?? endedAtMs,
+    sourceEventIds,
+  };
+}
+
+function deriveStageInstruction(turns, topic, beats, startedAtMs, endedAtMs, sourceEventIds) {
+  const leadBeat = beats.find((beat) => beat.text);
+  const lead = stripTerminalPunctuation(leadBeat?.text ?? topic.action ?? "The live session continues");
+  const activeSpeakers = unique(beats.map((beat) => beat.role).filter(Boolean));
+  const speakerText = activeSpeakers.length ? `${joinWithCommas(activeSpeakers)} carry` : "The runtime carries";
+  const topicText = topic.topicLabel ? ` through ${toTitleCase(topic.topicLabel)}` : "";
+  const revisionText = turns.some((turn) => turn.flags.prospective)
+    ? " while live text is still settling"
+    : "";
+  const text = `${speakerText} the current pericope${topicText}: ${lead}${revisionText}.`;
+  return {
+    id: `stage-derived:${startedAtMs ?? "na"}:${endedAtMs ?? "na"}`,
+    type: "stage_instruction",
+    text,
+    summary: text,
+    startedAtMs,
+    endedAtMs,
+    source: "screenplay-model",
+    sourceEventIds,
+  };
 }
 
 function describeSceneAction(turns, topic) {
@@ -971,8 +1264,65 @@ function eventTurnKey(event) {
   return `turn:${eventTurnNumber(event)}`;
 }
 
+function narrativeCutsForWindow(cuts, startedAtMs, endedAtMs) {
+  return (cuts ?? [])
+    .filter((cut) => inWindow(cut.atMs, startedAtMs, endedAtMs))
+    .sort((left, right) => (left.atMs ?? 0) - (right.atMs ?? 0));
+}
+
+function stageInstructionsForWindow(instructions, startedAtMs, endedAtMs) {
+  return (instructions ?? [])
+    .filter((instruction) => inWindow(instruction.startedAtMs, startedAtMs, endedAtMs))
+    .sort((left, right) => (left.startedAtMs ?? 0) - (right.startedAtMs ?? 0));
+}
+
+function strongestCutBetween(cuts, previousEndedAtMs, nextStartedAtMs, minimumLevel = "scene") {
+  const ordered = (cuts ?? [])
+    .filter((cut) => cutAppliesAtLevel(cut, minimumLevel))
+    .filter((cut) => afterPrevious(cut.atMs, previousEndedAtMs) && beforeNext(cut.atMs, nextStartedAtMs))
+    .sort((left, right) => levelWeight(right.level) - levelWeight(left.level) || (right.atMs ?? 0) - (left.atMs ?? 0));
+  return ordered[0] ?? null;
+}
+
+function cutAppliesAtLevel(cut, minimumLevel) {
+  return levelWeight(cut?.level) >= levelWeight(minimumLevel);
+}
+
+function levelWeight(level) {
+  if (level === "episode") return 2;
+  if (level === "scene") return 1;
+  return 0;
+}
+
+function inWindow(value, startedAtMs, endedAtMs) {
+  if (!Number.isFinite(value)) {
+    return false;
+  }
+  const afterStart = !Number.isFinite(startedAtMs) || value >= startedAtMs;
+  const beforeEnd = !Number.isFinite(endedAtMs) || value <= endedAtMs;
+  return afterStart && beforeEnd;
+}
+
+function afterPrevious(value, previousEndedAtMs) {
+  return !Number.isFinite(previousEndedAtMs) || !Number.isFinite(value) || value >= previousEndedAtMs;
+}
+
+function beforeNext(value, nextStartedAtMs) {
+  return !Number.isFinite(nextStartedAtMs) || !Number.isFinite(value) || value <= nextStartedAtMs;
+}
+
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    const text = textContent(value);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
 }
 
 function slugify(text) {
