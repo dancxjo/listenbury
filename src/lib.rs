@@ -64,6 +64,11 @@ pub use memory::{
     KNOWN_VOICE_EMBEDDING_BACKEND, KNOWN_VOICE_LOCALITY, KNOWN_VOICE_QDRANT_COLLECTION,
     KnownVoiceEmbeddingProvider, KnownVoiceMemoryStore, QdrantKnownVoiceMatcher,
 };
+pub use mind::context::{
+    ContextBudget, ContextNode, ContextNodeRole, ContextProvider, ConversationContext,
+    ConversationTurn, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
+    GraphNodeRef, StubContextProvider, build_conversation_context,
+};
 pub use mind::controller::{
     BackchannelId, ConversationController, ConversationMessage, ConversationRole,
     DEFAULT_FILLER_ACTIVATION_DELAY_MS, DEFAULT_FILLER_REPEAT_COOLDOWN_MS, FillerContext,
