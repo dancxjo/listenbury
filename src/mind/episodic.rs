@@ -63,7 +63,7 @@ impl EpisodicMemory {
     pub fn empty() -> Self {
         let stage = StageInstruction {
             text: "Pete is waiting for the next live event.".to_string(),
-            summary: "No active pericope yet.".to_string(),
+            summary: "No active screenplay beat yet.".to_string(),
         };
         Self {
             current_stage_instruction: stage,
@@ -110,25 +110,25 @@ impl EpisodicMemory {
     pub fn render_prompt_summary(&self) -> String {
         if self.episodes.is_empty() {
             return format!(
-                "Current stage instruction: {}\nTimeline: no scenes yet.",
+                "Current screenplay beat: {}\nScene timeline: no scenes yet.",
                 self.current_stage_instruction.text
             );
         }
 
         let mut lines = Vec::new();
         lines.push(format!(
-            "Current stage instruction: {}",
+            "Current screenplay beat: {}",
             self.current_stage_instruction.text
         ));
         if !self.current_stage_instruction.summary.trim().is_empty()
             && self.current_stage_instruction.summary != self.current_stage_instruction.text
         {
             lines.push(format!(
-                "Current stage summary: {}",
+                "Current action summary: {}",
                 self.current_stage_instruction.summary
             ));
         }
-        lines.push("Episodic timeline:".to_string());
+        lines.push("Scene timeline:".to_string());
         for episode in &self.episodes {
             lines.push(format!(
                 "- Episode {}: {}. {}",
@@ -136,7 +136,7 @@ impl EpisodicMemory {
             ));
             for scene in &episode.scenes {
                 lines.push(format!(
-                    "  - Scene {} [{}]: {} Stage: {}",
+                    "  - Scene {} [{}]: Action: {} Screenplay beat: {}",
                     scene.number, scene.topic, scene.summary, scene.stage_instruction.text
                 ));
             }
@@ -215,7 +215,7 @@ fn summarize_scene(_topic: &str, turns: &[EpisodicTurn]) -> String {
         .map(|turn| compact_text(&turn.text, 120))
         .unwrap_or_else(|| "the live exchange continues".to_string());
     format!(
-        "{} turn{} around {}",
+        "{} turn{} of action around {}",
         turns.len(),
         if turns.len() == 1 { "" } else { "s" },
         lead
@@ -250,17 +250,22 @@ fn stage_instruction_for_scene(topic: &str, turns: &[EpisodicTurn]) -> String {
         .last()
         .map(|turn| compact_text(&turn.text, 140))
         .unwrap_or_else(|| "the room is quiet".to_string());
-    format!("{speaker_list} {verb} in a {topic} pericope: {latest}")
+    format!(
+        "Setting: a live spoken session focused on {topic}. Action: {speaker_list} {verb} advancing the scene; latest beat: {latest}"
+    )
 }
 
 fn compact_text(text: &str, max_chars: usize) -> String {
-    let mut compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.len() <= max_chars {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
         return compact;
     }
-    compact.truncate(max_chars.saturating_sub(3));
-    compact.push_str("...");
-    compact
+    let mut truncated = compact
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 #[cfg(test)]
@@ -284,9 +289,23 @@ mod tests {
         );
 
         let rendered = memory.render_prompt_summary();
-        assert!(rendered.contains("Current stage instruction:"));
-        assert!(rendered.contains("Episodic timeline:"));
+        assert!(rendered.contains("Current screenplay beat:"));
+        assert!(rendered.contains("Current action summary:"));
+        assert!(rendered.contains("Scene timeline:"));
         assert!(rendered.contains("memory and continuity"));
+        assert!(rendered.contains("Action:"));
+        assert!(rendered.contains("Screenplay beat:"));
         assert!(rendered.contains("Scene 1"));
+    }
+
+    #[test]
+    fn compact_text_truncates_on_character_boundaries() {
+        let compact = compact_text(
+            "All right, I can summarize Unicode safely with curly quotes and ellipses: “listen…”",
+            72,
+        );
+
+        assert!(compact.ends_with("..."));
+        assert!(compact.chars().count() <= 72);
     }
 }

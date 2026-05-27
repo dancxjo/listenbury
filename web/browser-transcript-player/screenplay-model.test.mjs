@@ -233,6 +233,57 @@ test("stage instructions are retained as current pericope and scene memory", () 
   assert.match(episode.screenplayBody, /Current stage instruction: Pete and the user/);
 });
 
+test("live runtime stage updates become the current pericope", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("pete_stage_updated", 1, 90, {
+    text: "Pete and the user are naming the active pericope.",
+    artifact: { command: "setStage", topic: "screenplay memory", summary: "Naming the pericope" },
+  }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Keep this stage in view." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "I have it." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+
+  assert.equal(episode.stageInstruction.text, "Pete and the user are naming the active pericope.");
+  assert.equal(episode.stageInstruction.summary, "Naming the pericope");
+  assert.match(episode.screenplayBody, /Current stage instruction: Pete and the user are naming/);
+});
+
+test("interruptions split timed dialogue sections in screenplay order", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("speech_started", 1, 100));
+  reduceNarrativeEvent(session, mkEvent("asr_timed_word_stream", 1, 400, {
+    artifact: {
+      words: [
+        { id: 1, text: "Keep", timing: { start_ms: 100, end_ms: 180 }, commitment: "Final" },
+        { id: 2, text: "talking", timing: { start_ms: 190, end_ms: 400 }, commitment: "Final" },
+      ],
+    },
+  }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 410, { text: "Keep talking" }));
+  reduceNarrativeEvent(session, mkEvent("tts_enqueue_started", 1, 500, { text: "I can keep speaking for a bit." }));
+  reduceNarrativeEvent(session, mkEvent("playback_started", 1, 540, {
+    artifact: { start_ms: 540, end_ms: 1800 },
+  }));
+  reduceNarrativeEvent(session, mkEvent("overlap_started", 1, 900, {
+    reason: "external_speech_candidate",
+    artifact: { start_ms: 900, end_ms: 1300 },
+  }));
+  reduceNarrativeEvent(session, mkEvent("interruption_detected", 1, 980));
+  reduceNarrativeEvent(session, mkEvent("speech_started", 2, 900));
+  reduceNarrativeEvent(session, mkEvent("transcript", 2, 1200, { text: "Actually stop." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  const beats = episode.scenes[0].beats;
+
+  assert.deepEqual(
+    beats.map((beat) => beat.kind),
+    ["voice_dialogue", "llm_dialogue", "interruption", "voice_dialogue"],
+  );
+  assert.equal((episode.screenplayBody.match(/\nUNKNOWN VOICE #1\n/g) ?? []).length, 2);
+  assert.match(episode.stageInstruction.text, /interruption/i);
+});
+
 test("explicit episode cuts produce an episodic timeline", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));

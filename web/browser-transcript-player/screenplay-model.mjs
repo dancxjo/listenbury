@@ -97,6 +97,8 @@ const STAGE_INSTRUCTION_EVENT_KINDS = new Set([
   "stage_instruction",
   "screenplay_stage_instruction",
   "pericope_update",
+  "pete_stage_updated",
+  "set_stage",
   "auditory_scene_observation",
 ]);
 const SCENE_CUT_EVENT_KINDS = new Set(["scene_cut", "screenplay_scene_cut"]);
@@ -406,11 +408,18 @@ function getTurn(session, turnKey, turnNumber) {
       userCandidateText: "",
       userDeleted: [],
       userVoiceCue: null,
+      userStartedAtMs: null,
+      userEndedAtMs: null,
       llmFinal: "",
       llmProspective: "",
       llmFragments: [],
       llmWords: [],
       llmDeleted: [],
+      llmStartedAtMs: null,
+      llmEndedAtMs: null,
+      interruptionStartedAtMs: null,
+      interruptionEndedAtMs: null,
+      cancellationAtMs: null,
       flags: {
         interruption: false,
         cancelled: false,
@@ -454,9 +463,13 @@ function stageInstructionFromEvent(event) {
 
   const text = firstText(
     event.artifact?.stage_instruction,
+    event.artifact?.instruction,
     event.artifact?.description,
     runtimeSubtype?.artifact?.stage_instruction,
+    runtimeSubtype?.artifact?.instruction,
     runtimeSubtype?.artifact?.description,
+    event.instruction,
+    runtimeSubtype?.instruction,
     runtimeSubtype?.text,
     event.text,
   );
@@ -468,7 +481,13 @@ function stageInstructionFromEvent(event) {
     id: event.sourceId,
     type: "stage_instruction",
     text,
-    summary: text,
+    summary: firstText(
+      event.artifact?.summary,
+      runtimeSubtype?.artifact?.summary,
+      event.summary,
+      runtimeSubtype?.summary,
+      text,
+    ),
     startedAtMs: elapsedMs,
     endedAtMs: elapsedMs,
     source: runtimeSubtype ? "runtime_event" : "trace_event",
@@ -537,12 +556,28 @@ function normalizeSourceEvent(event, sequence) {
 
 function registerEventSignals(turn, event) {
   const text = joinSemanticText(event.text, transcriptCandidateText(event.artifact), wordStreamText(event.artifact?.words));
+  const atMs = numericMs(event.elapsed_ms);
   if (text) {
     turn.flags.prospective ||= event.kind === "transcript_candidate" || event.kind === "speculative_synthetic_unit_updated";
   }
 
+  if (isHumanDialogueEvent(event.kind) || event.kind === "speech_started" || event.kind === "speech_stopped") {
+    const range = eventWordTimingRange(event);
+    turn.userStartedAtMs = minNumber(turn.userStartedAtMs, range.startedAtMs ?? atMs);
+    turn.userEndedAtMs = maxNumber(turn.userEndedAtMs, range.endedAtMs ?? atMs);
+  }
+
+  if (isLlmTextEvent(event.kind) || event.kind === "playback_started" || event.kind === "playback_finished") {
+    const range = eventArtifactTimingRange(event);
+    turn.llmStartedAtMs = minNumber(turn.llmStartedAtMs, range.startedAtMs ?? atMs);
+    turn.llmEndedAtMs = maxNumber(turn.llmEndedAtMs, range.endedAtMs ?? atMs);
+  }
+
   if (["interruption_detected", "overlap_started", "yield_started", "yield_ended"].includes(event.kind)) {
     turn.flags.interruption = true;
+    const range = eventArtifactTimingRange(event);
+    turn.interruptionStartedAtMs = minNumber(turn.interruptionStartedAtMs, range.startedAtMs ?? atMs);
+    turn.interruptionEndedAtMs = maxNumber(turn.interruptionEndedAtMs, range.endedAtMs ?? atMs);
   }
 
   if (["synthetic_unit_cancelled", "tts_timed_word_stream_revision"].includes(event.kind)) {
@@ -551,8 +586,29 @@ function registerEventSignals(turn, event) {
       : false;
     if (event.kind === "synthetic_unit_cancelled" || cancelledWords || String(event.reason ?? "").toLowerCase().includes("cancel")) {
       turn.flags.cancelled = true;
+      turn.cancellationAtMs = minNumber(turn.cancellationAtMs, atMs);
     }
   }
+}
+
+function eventWordTimingRange(event) {
+  const words = Array.isArray(event.artifact?.words) ? event.artifact.words : [];
+  let startedAtMs = null;
+  let endedAtMs = null;
+  for (const word of words) {
+    const startMs = numericMs(word?.timing?.start_ms);
+    const endMs = numericMs(word?.timing?.end_ms);
+    startedAtMs = minNumber(startedAtMs, startMs);
+    endedAtMs = maxNumber(endedAtMs, endMs);
+  }
+  return { startedAtMs, endedAtMs };
+}
+
+function eventArtifactTimingRange(event) {
+  return {
+    startedAtMs: numericMs(event.artifact?.start_ms ?? event.artifact?.clip_start_ms),
+    endedAtMs: numericMs(event.artifact?.end_ms ?? event.artifact?.clip_end_ms),
+  };
 }
 
 function maybeCaptureVoiceCue(session, turn, event) {
@@ -819,7 +875,7 @@ function buildScene(turns, index, sceneKey, locationContext = {}, options = {}) 
     timestampMs: turns[0]?.startedAtMs ?? locationContext.timestampMs ?? null,
   };
   const heading = resolveSlugline(sceneContext);
-  const beats = consolidateConsecutiveDialogueBeats(turns.flatMap((turn) => turnToBeats(turn)));
+  const beats = consolidateConsecutiveDialogueBeats(sortBeatsForScreenplay(turns.flatMap((turn) => turnToBeats(turn))));
   const sourceEventIds = unique(turns.flatMap((turn) => turn.sourceEventIds));
   const summary = summarizeScene(turns, topic, beats);
   const startedAtMs = turns[0]?.startedAtMs ?? null;
@@ -863,20 +919,8 @@ function turnToBeats(turn) {
       sourceEventIds,
       topicKey,
       turnId: turn.id,
-      children: [],
-    });
-  }
-
-  if (turn.flags.interruption) {
-    beats.push({
-      id: `beat-turn-${turn.id}-interruption`,
-      type: "beat",
-      kind: "interruption",
-      role: null,
-      text: "The runtime catches an interruption and briefly yields before the exchange can settle.",
-      sourceEventIds,
-      topicKey: "interruption-handoff",
-      turnId: turn.id,
+      startedAtMs: turn.userStartedAtMs ?? turn.startedAtMs,
+      endedAtMs: turn.userEndedAtMs ?? turn.startedAtMs,
       children: [],
     });
   }
@@ -892,6 +936,24 @@ function turnToBeats(turn) {
       sourceEventIds,
       topicKey,
       turnId: turn.id,
+      startedAtMs: turn.llmStartedAtMs ?? turn.startedAtMs,
+      endedAtMs: turn.llmEndedAtMs ?? turn.endedAtMs,
+      children: [],
+    });
+  }
+
+  if (turn.flags.interruption) {
+    beats.push({
+      id: `beat-turn-${turn.id}-interruption`,
+      type: "beat",
+      kind: "interruption",
+      role: null,
+      text: "The runtime catches an interruption and briefly yields before the exchange can settle.",
+      sourceEventIds,
+      topicKey: "interruption-handoff",
+      turnId: turn.id,
+      startedAtMs: turn.interruptionStartedAtMs ?? turn.endedAtMs,
+      endedAtMs: turn.interruptionEndedAtMs ?? turn.endedAtMs,
       children: [],
     });
   }
@@ -906,11 +968,32 @@ function turnToBeats(turn) {
       sourceEventIds,
       topicKey: "interruption-handoff",
       turnId: turn.id,
+      startedAtMs: turn.cancellationAtMs ?? turn.endedAtMs,
+      endedAtMs: turn.cancellationAtMs ?? turn.endedAtMs,
       children: [],
     });
   }
 
   return beats;
+}
+
+function sortBeatsForScreenplay(beats) {
+  return beats
+    .map((beat, index) => ({ ...beat, screenplayOrder: index }))
+    .sort(
+      (left, right) =>
+        (left.startedAtMs ?? Number.POSITIVE_INFINITY) - (right.startedAtMs ?? Number.POSITIVE_INFINITY) ||
+        beatTimingWeight(left) - beatTimingWeight(right) ||
+        left.screenplayOrder - right.screenplayOrder,
+    )
+    .map(({ screenplayOrder, ...beat }) => beat);
+}
+
+function beatTimingWeight(beat) {
+  if (beat.kind === "interruption" || beat.kind === "cancellation") {
+    return 0;
+  }
+  return 1;
 }
 
 function consolidateConsecutiveDialogueBeats(beats) {
@@ -932,6 +1015,8 @@ function consolidateConsecutiveDialogueBeats(beats) {
         ...(beat.sourceEventIds ?? []),
       ]);
       previous.turnId ??= beat.turnId;
+      previous.startedAtMs = minNumber(previous.startedAtMs, beat.startedAtMs);
+      previous.endedAtMs = maxNumber(previous.endedAtMs, beat.endedAtMs);
       previous.children = [...(previous.children ?? []), ...(beat.children ?? [])];
       continue;
     }
@@ -1051,7 +1136,7 @@ function collapseStageInstructions(instructions, startedAtMs, endedAtMs) {
 }
 
 function deriveStageInstruction(turns, topic, beats, startedAtMs, endedAtMs, sourceEventIds) {
-  const leadBeat = beats.find((beat) => beat.text);
+  const leadBeat = stageInstructionLeadBeat(beats);
   const lead = stripTerminalPunctuation(leadBeat?.text ?? topic.action ?? "The live session continues");
   const activeSpeakers = unique(beats.map((beat) => beat.role).filter(Boolean));
   const speakerText = activeSpeakers.length ? `${joinWithCommas(activeSpeakers)} carry` : "The runtime carries";
@@ -1070,6 +1155,20 @@ function deriveStageInstruction(turns, topic, beats, startedAtMs, endedAtMs, sou
     source: "screenplay-model",
     sourceEventIds,
   };
+}
+
+function stageInstructionLeadBeat(beats) {
+  const interruptionBeat = beats
+    .slice()
+    .reverse()
+    .find((beat) => beat.kind === "interruption" || beat.kind === "cancellation");
+  if (interruptionBeat) {
+    return interruptionBeat;
+  }
+  return beats
+    .slice()
+    .reverse()
+    .find((beat) => beat.text);
 }
 
 function describeSceneAction(turns, topic) {

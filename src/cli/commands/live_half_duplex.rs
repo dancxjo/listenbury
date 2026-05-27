@@ -351,7 +351,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive a concise episodic timeline of what is currently happening, conversation history, retrieved memories, and working-memory nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, listFiles, readSourceFile, readFile, searchSource, grepSource, sleeping, and goingToSleep are already available in scope; imports from \"pete:will\" are also allowed.\nProgram initiation is waking. Clean program termination is sleeping or going to sleep.\nUse sleeping() or goingToSleep() when the user tells Pete to stop, shut down, sleep, go to sleep, or end the session. Pete may say a brief goodnight first, then call sleeping().\nEvery node in Pete's memory can and should have a description field. The description must be a natural language noun phrase describing what that memory item represents. Description text is vectorized and linked back to that memory item.\nPete should fastidiously add useful details to memory whenever the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context. Prefer precise fields over vague notes. Regularly keep the current pericope fresh by calling setStage(\"what is happening now\", { topic: \"short topic\", summary: \"one-line scene summary\" }) when the topic, task, mood, or situation changes; use setTopic(\"short topic\") for a lightweight topic-only update. Use startNewTopic(\"previous topic\", { topic: \"new topic\", instruction: \"what to do now\", summary: \"scene summary\" }) when the topic changes. Use topicChangedWhen(\"words that caused the change\", { fromTopic: \"previous topic\", toTopic: \"new topic\" }) when a phrase marks the change. Use startNewEpisode(\"why the new episode started\", { topic: \"new topic\", instruction: \"what to do now\", summary: \"episode summary\" }) for larger scene resets.\nWhen Pete knows what a memory item represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search Pete's memory by text, field, value, or field/value pair.\nUse listFiles() to see available Listenbury source files. Use readSourceFile(path, page?) or readFile(path, page?) to inspect one source file page. Use searchSource(query, limit?) for source text search. Use grepSource(pattern, limit?) for grep-like source line search. Source inspection results are appended privately to the active turn.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing memory item. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in memory.\nIf the user identifies themselves by name, extract that exact sentence so the person can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWhen speaking to the user, say \"my memory\" instead of \"the graph\" or \"graph nodes\".\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive a concise screenplay-like timeline of what is currently happening, conversation history, retrieved memories, and working-memory nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, listFiles, readSourceFile, readFile, searchSource, grepSource, sleeping, and goingToSleep are already available in scope; imports from \"pete:will\" are also allowed.\nProgram initiation is waking. Clean program termination is sleeping or going to sleep.\nUse sleeping() or goingToSleep() when the user tells Pete to stop, shut down, sleep, go to sleep, or end the session. Pete may say a brief goodnight first, then call sleeping().\nEvery node in Pete's memory can and should have a description field. The description must be a natural language noun phrase describing what that memory item represents. Description text is vectorized and linked back to that memory item.\nPete should fastidiously add useful details to memory whenever the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context. Prefer precise fields over vague notes. Manage the current screenplay beat continuously, not just the topic. Treat setStage's first argument as the scene description: include setting, mood, physical situation, and what is happening now in screenplay-style prose. Make observable action at least as prominent as speech. Prefer setStage(\"Setting: ... Action: ...\", { topic: \"short index label\", summary: \"action-first one-line scene beat\", setting: \"screenplay setting\", action: \"observable action\" }) when the setting, task, mood, action, or situation changes; use setTopic(\"short topic\") only for a lightweight index label, not as a substitute for the stage. Use startNewTopic(\"previous topic\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"action-first scene summary\" }) when the scene changes. Use topicChangedWhen(\"words that caused the change\", { fromTopic: \"previous topic\", toTopic: \"new topic\", instruction: \"screenplay-style setting and action now\" }) when a phrase marks the change. Use startNewEpisode(\"why the new episode started\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"episode action summary\" }) for larger scene resets.\nWhen Pete knows what a memory item represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search Pete's memory by text, field, value, or field/value pair.\nUse listFiles() to see available Listenbury source files. Use readSourceFile(path, page?) or readFile(path, page?) to inspect one source file page. Use searchSource(query, limit?) for source text search. Use grepSource(pattern, limit?) for grep-like source line search. Source inspection results are appended privately to the active turn.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing memory item. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in memory.\nIf the user identifies themselves by name, extract that exact sentence so the person can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWhen speaking to the user, say \"my memory\" instead of \"the graph\" or \"graph nodes\".\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -2586,10 +2586,6 @@ impl LiveCommandFilter {
                     continue;
                 }
                 if completed {
-                    let source = self.pending.trim();
-                    if !source.is_empty() {
-                        sources.push(source.to_string());
-                    }
                     self.pending.clear();
                     self.in_typescript = false;
                 }
@@ -3325,9 +3321,15 @@ fn ts_set_stage(
     _this: JsValue,
     args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
-    let instruction = string_arg(args, 0);
-    let topic = optional_string_property_arg(args, 1, "topic");
-    let summary = optional_string_property_arg(args, 1, "summary");
+    let topic = stage_string_property_arg(args, "topic");
+    let setting = stage_string_property_arg(args, "setting");
+    let action = stage_string_property_arg(args, "action");
+    let summary = stage_string_property_arg(args, "summary").or_else(|| action.clone());
+    let raw_instruction = string_arg(args, 0);
+    let instruction = non_empty_text(&raw_instruction)
+        .map(str::to_string)
+        .or_else(|| screenplay_stage_description(setting.as_deref(), action.as_deref()))
+        .unwrap_or_default();
     command_value(
         interp,
         json!({
@@ -3337,6 +3339,38 @@ fn ts_set_stage(
             "summary": summary,
         }),
     )
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn stage_string_property_arg(args: &[JsValue], property: &str) -> Option<String> {
+    optional_string_property_arg(args, 1, property)
+        .or_else(|| optional_string_property_arg(args, 0, property))
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn screenplay_stage_description(setting: Option<&str>, action: Option<&str>) -> Option<String> {
+    match (setting, action) {
+        (Some(setting), Some(action)) => Some(format!("Setting: {setting}. Action: {action}")),
+        (Some(setting), None) => Some(format!("Setting: {setting}")),
+        (None, Some(action)) => Some(format!("Action: {action}")),
+        (None, None) => None,
+    }
 }
 
 #[cfg(any(
@@ -5931,7 +5965,15 @@ mod tests {
         );
         assert!(
             super::PETE_CONVERSATION_SYSTEM_PROMPT
-                .contains("Regularly keep the current pericope fresh")
+                .contains("Manage the current screenplay beat continuously")
+        );
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT
+                .contains("Make observable action at least as prominent as speech")
+        );
+        assert!(
+            super::PETE_CONVERSATION_SYSTEM_PROMPT
+                .contains("setting: \"screenplay setting\", action: \"observable action\"")
         );
         assert!(
             super::PETE_CONVERSATION_SYSTEM_PROMPT.contains("startNewTopic(\"previous topic\"")
@@ -6021,6 +6063,21 @@ mod tests {
     }
 
     #[test]
+    fn live_command_filter_drops_unclosed_typescript_at_completion() {
+        let mut filter = LiveCommandFilter::default();
+        let output = filter.filter_events(&[
+            token("I will update that. <ts>setStage(\"description\", { topic: \"source\", summary: \"review\" })</\n\n- `<ts"),
+            LlmEvent::Completed,
+        ]);
+
+        assert!(matches!(
+            output.events.as_slice(),
+            [LlmEvent::Token { text }, LlmEvent::Completed] if text == "I will update that. "
+        ));
+        assert!(output.sources.is_empty());
+    }
+
+    #[test]
     fn live_typescript_executes_say_and_extract_entities_builders() {
         let commands = execute_live_typescript_commands(
             r#"[extractEntities("My name is Travis"), say("I have Travis in working memory now.")]"#,
@@ -6081,6 +6138,7 @@ mod tests {
         let commands = execute_live_typescript_commands(
             r#"[
                 setStage("Pete and the interlocutor are designing episodic memory.", { topic: "episodic memory", summary: "Designing pericopes" }),
+                setStage({ topic: "source exploration", setting: "A live coding session inside the Listenbury repo", action: "Pete reads source files and maps behavior before answering" }),
                 setTopic("screenplay memory"),
                 startNewTopic("screenplay view", { topic: "core episodic memory", instruction: "The implementation moved into core prompt context.", trigger: "This needs to be core." }),
                 topicChangedWhen("we'll need to do this retroactively", { fromTopic: "live topic labels", toTopic: "retroactive cuts" }),
@@ -6096,6 +6154,11 @@ mod tests {
                     topic: Some("episodic memory".to_string()),
                     instruction: "Pete and the interlocutor are designing episodic memory.".to_string(),
                     summary: Some("Designing pericopes".to_string()),
+                },
+                LiveTypeScriptCommand::SetStage {
+                    topic: Some("source exploration".to_string()),
+                    instruction: "Setting: A live coding session inside the Listenbury repo. Action: Pete reads source files and maps behavior before answering".to_string(),
+                    summary: Some("Pete reads source files and maps behavior before answering".to_string()),
                 },
                 LiveTypeScriptCommand::SetStage {
                     topic: Some("screenplay memory".to_string()),
@@ -6437,8 +6500,9 @@ mod tests {
                 "Working memory graph nodes:\n- [SelfIdentity] Pete Listenbury (pete:self)"
             )
         );
-        assert!(prompt.contains("Here's what's going on:\nCurrent stage instruction:"));
-        assert!(prompt.contains("Episodic timeline:"));
+        assert!(prompt.contains("Here's what's going on:\nCurrent screenplay beat:"));
+        assert!(prompt.contains("Current action summary:"));
+        assert!(prompt.contains("Scene timeline:"));
         assert!(prompt.contains("hearing and voice"));
         assert!(prompt.contains("ASR transcribes that speech"));
         assert!(prompt.contains("retrieved memories"));
