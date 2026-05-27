@@ -17,6 +17,16 @@ mod prosody_plan;
 mod round_trip;
 mod sing_demo;
 mod soundscape_debug;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+mod source_inspection;
 mod synthetic_cache;
 mod think_say;
 mod trace_viewer_export;

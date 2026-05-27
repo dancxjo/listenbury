@@ -10,6 +10,7 @@ out
 /data/mbrola/
 
 # Optional cold-memory Docker volumes
+.env
 qdrant_data
 neo4j_data
 

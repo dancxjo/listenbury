@@ -9,7 +9,7 @@ use serde_json::{Map, Value};
 use crate::memory::{EmbeddingProvider, QdrantSearchHit, QdrantStore};
 use crate::mind::controller::ConversationRole;
 use crate::mind::entity::{EntityExtractor, resolve_entities};
-use crate::mind::episodic::{EpisodicMemory, EpisodicSpeaker, EpisodicTurn};
+use crate::mind::episodic::{EpisodicMemory, EpisodicSpeaker, EpisodicTurn, StageInstruction};
 
 pub const DEFAULT_CONTEXT_MAX_CHARS: usize = 1_024;
 pub const DEFAULT_GRAPH_SUMMARY_MAX_CHARS: usize = 768;
@@ -1087,6 +1087,7 @@ pub struct EmbeddingRecallProvider {
     pinned_nodes: Arc<Mutex<Vec<PinnedContextNode>>>,
     active_topics: Arc<Mutex<ActiveTopicTracker>>,
     graph_node_fields: Arc<Mutex<HashMap<GraphNodeId, GraphNodeFieldOverlay>>>,
+    stage_instruction: Arc<Mutex<Option<StageInstruction>>>,
 }
 
 impl EmbeddingRecallProvider {
@@ -1101,6 +1102,7 @@ impl EmbeddingRecallProvider {
             pinned_nodes: Arc::new(Mutex::new(Vec::new())),
             active_topics: Arc::new(Mutex::new(ActiveTopicTracker::default())),
             graph_node_fields: Arc::new(Mutex::new(HashMap::new())),
+            stage_instruction: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1244,6 +1246,19 @@ impl EmbeddingRecallProvider {
         });
         hits.truncate(query.limit.max(1));
         hits
+    }
+
+    pub fn set_stage_instruction(&self, instruction: StageInstruction) {
+        if let Ok(mut stage_instruction) = self.stage_instruction.lock() {
+            *stage_instruction = Some(instruction);
+        }
+    }
+
+    pub fn stage_instruction_snapshot(&self) -> Option<StageInstruction> {
+        self.stage_instruction
+            .lock()
+            .ok()
+            .and_then(|instruction| instruction.clone())
     }
 
     fn field_overlay(&self, node_id: &str) -> Option<GraphNodeFieldOverlay> {
@@ -1422,6 +1437,10 @@ pub trait ContextProvider {
         Vec::new()
     }
 
+    fn stage_instruction(&self) -> Option<StageInstruction> {
+        None
+    }
+
     fn advance_pins(&self) {}
 }
 
@@ -1544,6 +1563,10 @@ impl ContextProvider for EmbeddingRecallProvider {
 
     fn active_topics(&self) -> Vec<TopicActivation> {
         self.active_topics_snapshot()
+    }
+
+    fn stage_instruction(&self) -> Option<StageInstruction> {
+        self.stage_instruction_snapshot()
     }
 }
 
@@ -1791,13 +1814,23 @@ pub fn build_conversation_context(
 ) -> ConversationContext {
     let self_node = provider.self_node();
     let mut selected_nodes = provider.selected_nodes(utterance, &conversation_tail, &budget);
-    let episodic_memory = EpisodicMemory::from_turns(
+    let mut episodic_memory = EpisodicMemory::from_turns(
         conversation_tail.iter().map(|turn| EpisodicTurn {
             speaker: EpisodicSpeaker::from(turn.role),
             text: turn.text.clone(),
         }),
         utterance,
     );
+    if let Some(stage_instruction) = provider.stage_instruction() {
+        episodic_memory.current_stage_instruction = stage_instruction.clone();
+        if let Some(scene) = episodic_memory
+            .episodes
+            .last_mut()
+            .and_then(|episode| episode.scenes.last_mut())
+        {
+            scene.stage_instruction = stage_instruction;
+        }
+    }
     let pinned_nodes = provider.pinned_nodes();
     let active_topics = provider.active_topics();
     if !pinned_nodes.is_empty() {
@@ -1919,6 +1952,38 @@ mod tests {
             &ContextBudget::default(),
         );
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn authored_stage_instruction_overrides_heuristic_pericope() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        });
+        provider.set_stage_instruction(StageInstruction {
+            text: "The current topic changed when the interlocutor asked for retroactive cuts."
+                .to_string(),
+            summary: "Retroactive topic cuts".to_string(),
+        });
+
+        let context = build_conversation_context(
+            &provider,
+            "system",
+            "Can you hear me?",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+
+        assert!(
+            context
+                .render_episodic_memory()
+                .contains("retroactive cuts")
+        );
+        assert!(
+            context
+                .render_episodic_memory()
+                .contains("Retroactive topic cuts")
+        );
     }
 
     #[test]

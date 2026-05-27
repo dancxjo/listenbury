@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   assembleNarrativeManuscript,
   buildNarrativeEpisode,
+  buildNarrativeTimeline,
   createNarrativeSession,
   reduceNarrativeEvent,
 } from "./screenplay-model.mjs";
@@ -212,6 +213,39 @@ test("dialogue segments optionally carry span metadata", () => {
   const llmBeat = episode.scenes[0].beats.find((beat) => beat.kind === "llm_dialogue");
   assert.ok(voiceBeat.segments[0].spanMetadata?.length, "voice segment should include optional span metadata");
   assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
+});
+
+test("stage instructions are retained as current pericope and scene memory", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("stage_instruction", 1, 90, {
+    text: "Pete and the user are deciding how episodic memory should work.",
+  }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "This needs to be core memory." }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "I will put it in the prompt context." }));
+
+  const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+
+  assert.equal(
+    episode.stageInstruction.text,
+    "Pete and the user are deciding how episodic memory should work.",
+  );
+  assert.equal(episode.timeline[0].stageInstruction, episode.stageInstruction.text);
+  assert.match(episode.screenplayBody, /Current stage instruction: Pete and the user/);
+});
+
+test("explicit episode cuts produce an episodic timeline", () => {
+  const session = createNarrativeSession();
+  reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you hear me?" }));
+  reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "Yes." }));
+  reduceNarrativeEvent(session, mkEvent("episode_cut", 1, 200, { reason: "the first exchange has settled" }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 2, 260, { text: "Now remember this as a new episode." }));
+
+  const episodes = buildNarrativeTimeline(session, { episodeNumber: 1 });
+
+  assert.equal(episodes.length, 2);
+  assert.equal(episodes[1].metadata.episodeCut.reason, "the first exchange has settled");
+  assert.equal(episodes[1].timeline[0].label, "Scene 1");
+  assert.match(episodes[1].summary, /MEMORY, DECOUPAGE, AND MANUSCRIPT|memory/i);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

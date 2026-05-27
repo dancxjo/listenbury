@@ -120,6 +120,14 @@ impl EpisodicMemory {
             "Current stage instruction: {}",
             self.current_stage_instruction.text
         ));
+        if !self.current_stage_instruction.summary.trim().is_empty()
+            && self.current_stage_instruction.summary != self.current_stage_instruction.text
+        {
+            lines.push(format!(
+                "Current stage summary: {}",
+                self.current_stage_instruction.summary
+            ));
+        }
         lines.push("Episodic timeline:".to_string());
         for episode in &self.episodes {
             lines.push(format!(
@@ -226,18 +234,23 @@ fn summarize_episode(scenes: &[EpisodicScene]) -> String {
 }
 
 fn stage_instruction_for_scene(topic: &str, turns: &[EpisodicTurn]) -> String {
-    let speakers = turns
+    let speaker_list = turns
         .iter()
         .map(|turn| turn.speaker.label())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
         .join(" and ");
+    let verb = if speaker_list.contains(" and ") {
+        "are"
+    } else {
+        "is"
+    };
     let latest = turns
         .last()
         .map(|turn| compact_text(&turn.text, 140))
         .unwrap_or_else(|| "the room is quiet".to_string());
-    format!("{} are in a {} pericope: {}", speakers, topic, latest)
+    format!("{speaker_list} {verb} in a {topic} pericope: {latest}")
 }
 
 fn compact_text(text: &str, max_chars: usize) -> String {

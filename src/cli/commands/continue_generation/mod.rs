@@ -296,16 +296,6 @@ use std::path::PathBuf;
         feature = "tts-piper"
     )
 ))]
-use std::sync::OnceLock;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(all(
     feature = "audio-cpal",
@@ -351,6 +341,18 @@ mod prompt;
 mod source;
 mod trace;
 
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+use crate::cli::commands::source_inspection::{
+    execute_grep_source, execute_list_source_files, execute_search_source, execute_view_source_file,
+};
 #[cfg(any(
     test,
     all(
@@ -409,10 +411,7 @@ use source::SourceCommand;
         feature = "tts-piper"
     )
 ))]
-use source::{
-    SourceCommandExecution, execute_grep_source, execute_list_source_files, execute_search_source,
-    execute_source_command, execute_view_source_file,
-};
+use source::{SourceCommandExecution, execute_source_command};
 #[cfg(any(
     test,
     all(
@@ -469,16 +468,6 @@ const SOURCE_TYPESCRIPT_START: &str = "<ts>";
     )
 ))]
 const SOURCE_TYPESCRIPT_END: &str = "</ts>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
-const SOURCE_PAGE_LINES: usize = 50;
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
