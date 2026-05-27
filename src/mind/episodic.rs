@@ -136,8 +136,8 @@ impl EpisodicMemory {
             ));
             for scene in &episode.scenes {
                 lines.push(format!(
-                    "  - Scene {} [{}]: Action: {} Screenplay beat: {}",
-                    scene.number, scene.topic, scene.summary, scene.stage_instruction.text
+                    "  - Scene {}: Action: {} Screenplay beat: {}",
+                    scene.number, scene.summary, scene.stage_instruction.text
                 ));
             }
         }
@@ -146,64 +146,19 @@ impl EpisodicMemory {
 }
 
 fn build_scenes(turns: Vec<EpisodicTurn>) -> Vec<EpisodicScene> {
-    let mut groups: Vec<(String, Vec<EpisodicTurn>)> = Vec::new();
-    for turn in turns {
-        let topic = classify_topic(&turn.text);
-        let current = groups.last_mut();
-        match current {
-            Some((current_topic, current_turns))
-                if *current_topic == topic
-                    || (current_turns.len() < 3 && topic == "live session") =>
-            {
-                if *current_topic == "live session" && topic != "live session" {
-                    *current_topic = topic;
-                }
-                current_turns.push(turn);
-            }
-            _ => groups.push((topic, vec![turn])),
-        }
-    }
-
-    groups
-        .into_iter()
-        .enumerate()
-        .map(|(index, (topic, turns))| {
-            let summary = summarize_scene(&topic, &turns);
-            let stage_instruction = StageInstruction {
-                text: stage_instruction_for_scene(&topic, &turns),
-                summary: summary.clone(),
-            };
-            EpisodicScene {
-                number: index + 1,
-                topic,
-                summary,
-                stage_instruction,
-                turns,
-            }
-        })
-        .collect()
-}
-
-fn classify_topic(text: &str) -> String {
-    let lower = text.to_ascii_lowercase();
-    if contains_any(
-        &lower,
-        &[
-            "memory", "remember", "episode", "scene", "timeline", "summar",
-        ],
-    ) {
-        "memory and continuity".to_string()
-    } else if contains_any(&lower, &["hear", "listening", "microphone", "asr", "voice"]) {
-        "hearing and voice".to_string()
-    } else if contains_any(&lower, &["stop", "sleep", "shutdown", "goodnight"]) {
-        "session shutdown".to_string()
-    } else {
-        "live session".to_string()
-    }
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
+    let topic = "active scene".to_string();
+    let summary = summarize_scene(&topic, &turns);
+    let stage_instruction = StageInstruction {
+        text: stage_instruction_for_scene(&topic, &turns),
+        summary: summary.clone(),
+    };
+    vec![EpisodicScene {
+        number: 1,
+        topic,
+        summary,
+        stage_instruction,
+        turns,
+    }]
 }
 
 fn summarize_scene(_topic: &str, turns: &[EpisodicTurn]) -> String {
@@ -226,14 +181,14 @@ fn summarize_episode(scenes: &[EpisodicScene]) -> String {
     if scenes.is_empty() {
         return "No scenes yet.".to_string();
     }
-    scenes
-        .iter()
-        .map(|scene| scene.topic.as_str())
-        .collect::<Vec<_>>()
-        .join(" -> ")
+    format!(
+        "{} active scene{}",
+        scenes.len(),
+        if scenes.len() == 1 { "" } else { "s" }
+    )
 }
 
-fn stage_instruction_for_scene(topic: &str, turns: &[EpisodicTurn]) -> String {
+fn stage_instruction_for_scene(_topic: &str, turns: &[EpisodicTurn]) -> String {
     let speaker_list = turns
         .iter()
         .map(|turn| turn.speaker.label())
@@ -251,7 +206,7 @@ fn stage_instruction_for_scene(topic: &str, turns: &[EpisodicTurn]) -> String {
         .map(|turn| compact_text(&turn.text, 140))
         .unwrap_or_else(|| "the room is quiet".to_string());
     format!(
-        "Setting: a live spoken session focused on {topic}. Action: {speaker_list} {verb} advancing the scene; latest beat: {latest}"
+        "Setting: a live spoken session. Action: {speaker_list} {verb} advancing the current scene; latest beat: {latest}"
     )
 }
 
@@ -292,10 +247,11 @@ mod tests {
         assert!(rendered.contains("Current screenplay beat:"));
         assert!(rendered.contains("Current action summary:"));
         assert!(rendered.contains("Scene timeline:"));
-        assert!(rendered.contains("memory and continuity"));
         assert!(rendered.contains("Action:"));
         assert!(rendered.contains("Screenplay beat:"));
         assert!(rendered.contains("Scene 1"));
+        assert!(!rendered.contains("memory and continuity"));
+        assert!(!rendered.contains("hearing and voice"));
     }
 
     #[test]

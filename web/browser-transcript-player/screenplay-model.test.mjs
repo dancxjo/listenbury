@@ -67,19 +67,16 @@ function buildWaveDeckEpisode(number = 1) {
   return buildNarrativeEpisode(buildWaveDeckFixtureSession(), { episodeNumber: number });
 }
 
-test("narrative model segments beats and scenes with revisions, cancellation, and topic shift", () => {
+test("narrative model keeps topic shifts in one scene without an explicit cut", () => {
   const session = buildWaveDeckFixtureSession();
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
 
-  assert.equal(episode.scenes.length, 2, "topic shift should split into two scenes");
+  assert.equal(episode.scenes.length, 1, "topic shifts should not split scenes by themselves");
 
   // Headings are now proper screenplay sluglines, not runtime labels
   assert.match(episode.scenes[0].heading, /^INT\. UNKNOWN ROOM - DAY$/);
-  assert.match(episode.scenes[1].heading, /^INT\. UNKNOWN ROOM - DAY$/);
 
-  // Topic labels are preserved separately for metadata/soft notes
-  assert.equal(episode.scenes[0].topicLabel, "WAVEDECK INSPECTION");
-  assert.equal(episode.scenes[1].topicLabel, "QUIET GRIEF");
+  assert.equal(episode.scenes[0].topicLabel, null);
 
   assert.ok(!episode.scenes[0].beats.some((beat) => beat.kind === "transcript_revision"));
   assert.ok(episode.scenes[0].beats.some((beat) => beat.kind === "interruption"));
@@ -92,9 +89,12 @@ test("narrative model segments beats and scenes with revisions, cancellation, an
   assert.ok(!episode.screenplayBody.includes("\nASSISTANT\n"), "legacy ASSISTANT cue must never render");
   assert.ok(!episode.screenplayBody.includes("The transcript revises itself"));
   assert.ok(!episode.screenplayBody.includes("Source trace IDs:"));
+  assert.ok(!episode.screenplayBody.includes("PHONOLOGY WORKBENCH"));
+  assert.ok(!episode.screenplayBody.includes("WAVEDECK INSPECTION"));
+  assert.ok(!episode.screenplayBody.includes("QUIET GRIEF"));
 });
 
-test("scene boundaries revise retroactively as more context arrives", () => {
+test("scene boundaries require explicit runtime scene cuts", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Can you explain overlap routing?" }));
   reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 160, { text: "Yes. It decides when Pete yields." }));
@@ -105,9 +105,15 @@ test("scene boundaries revise retroactively as more context arrives", () => {
   reduceNarrativeEvent(session, mkEvent("transcript", 2, 300, { text: "I miss how he used to sound." }));
   reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 2, 340, { text: "I do too." }));
 
+  const noCutEpisode = buildNarrativeEpisode(session, { episodeNumber: 1 });
+  assert.equal(noCutEpisode.scenes.length, 1, "later topic shift should still remain in the active scene");
+
+  reduceNarrativeEvent(session, mkEvent("scene_cut", 2, 360, { reason: "the LLM opened a new scene" }));
+  reduceNarrativeEvent(session, mkEvent("transcript", 3, 400, { text: "Now this is a new scene." }));
+
   const revisedEpisode = buildNarrativeEpisode(session, { episodeNumber: 1 });
-  assert.equal(revisedEpisode.scenes.length, 2, "later topic shift should retroactively split the episode");
-  assert.match(revisedEpisode.summary, /WAVEDECK INSPECTION → QUIET GRIEF/);
+  assert.equal(revisedEpisode.scenes.length, 2, "explicit scene cuts should split the episode");
+  assert.match(revisedEpisode.summary, /2 explicit scenes with/);
 });
 
 test("transcript propositions stay available without becoming screenplay beats", () => {
@@ -215,7 +221,7 @@ test("dialogue segments optionally carry span metadata", () => {
   assert.ok(llmBeat.segments[0].spanMetadata?.length, "llm segment should include optional span metadata");
 });
 
-test("stage instructions are retained as current pericope and scene memory", () => {
+test("stage instructions are retained as current screenplay beat and scene memory", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("stage_instruction", 1, 90, {
     text: "Pete and the user are deciding how episodic memory should work.",
@@ -230,23 +236,23 @@ test("stage instructions are retained as current pericope and scene memory", () 
     "Pete and the user are deciding how episodic memory should work.",
   );
   assert.equal(episode.timeline[0].stageInstruction, episode.stageInstruction.text);
-  assert.match(episode.screenplayBody, /Current stage instruction: Pete and the user/);
+  assert.match(episode.screenplayBody, /Current screenplay beat: Pete and the user/);
 });
 
-test("live runtime stage updates become the current pericope", () => {
+test("live runtime stage updates become the current screenplay beat", () => {
   const session = createNarrativeSession();
   reduceNarrativeEvent(session, mkEvent("pete_stage_updated", 1, 90, {
-    text: "Pete and the user are naming the active pericope.",
-    artifact: { command: "setStage", topic: "screenplay memory", summary: "Naming the pericope" },
+    text: "Pete and the user are naming the active screenplay beat.",
+    artifact: { command: "setStage", topic: "screenplay memory", summary: "Naming the beat" },
   }));
   reduceNarrativeEvent(session, mkEvent("transcript", 1, 100, { text: "Keep this stage in view." }));
   reduceNarrativeEvent(session, mkEvent("synthetic_unit_committed", 1, 140, { text: "I have it." }));
 
   const episode = buildNarrativeEpisode(session, { episodeNumber: 1 });
 
-  assert.equal(episode.stageInstruction.text, "Pete and the user are naming the active pericope.");
-  assert.equal(episode.stageInstruction.summary, "Naming the pericope");
-  assert.match(episode.screenplayBody, /Current stage instruction: Pete and the user are naming/);
+  assert.equal(episode.stageInstruction.text, "Pete and the user are naming the active screenplay beat.");
+  assert.equal(episode.stageInstruction.summary, "Naming the beat");
+  assert.match(episode.screenplayBody, /Current screenplay beat: Pete and the user are naming/);
 });
 
 test("interruptions split timed dialogue sections in screenplay order", () => {
@@ -296,7 +302,7 @@ test("explicit episode cuts produce an episodic timeline", () => {
   assert.equal(episodes.length, 2);
   assert.equal(episodes[1].metadata.episodeCut.reason, "the first exchange has settled");
   assert.equal(episodes[1].timeline[0].label, "Scene 1");
-  assert.match(episodes[1].summary, /MEMORY, DECOUPAGE, AND MANUSCRIPT|memory/i);
+  assert.match(episodes[1].summary, /1 beat around Now remember this as a new episode/i);
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -319,17 +325,14 @@ test("scene heading is a proper screenplay slugline, not a runtime label", () =>
   }
 });
 
-test("topic label is preserved as scene metadata, not used as location", () => {
+test("topic labels are not inferred as scene metadata or locations", () => {
   const episode = buildWaveDeckEpisode(1);
-  const [sceneA, sceneB] = episode.scenes;
-  // Topic labels preserved separately
-  assert.equal(sceneA.topicLabel, "WAVEDECK INSPECTION");
-  assert.equal(sceneB.topicLabel, "QUIET GRIEF");
-  // Topic labels appear in action as soft note, not in the slugline
-  assert.ok(sceneA.action.includes("Topic:"), "topic soft note should appear in action text");
+  const [sceneA] = episode.scenes;
+  assert.equal(episode.scenes.length, 1);
+  assert.equal(sceneA.topicLabel, null);
+  assert.ok(!sceneA.action.includes("Topic:"), "topic soft notes should not be inferred");
   // Sluglines are proper physical locations
   assert.match(sceneA.heading, /^INT\. UNKNOWN ROOM - DAY$/);
-  assert.match(sceneB.heading, /^INT\. UNKNOWN ROOM - DAY$/);
 });
 
 test("emotional/mood label is not used as slugline location", () => {
@@ -344,8 +347,7 @@ test("emotional/mood label is not used as slugline location", () => {
   assert.match(scene.heading, /^INT\. UNKNOWN ROOM - DAY$/);
   // Mood label "QUIET GRIEF" should not appear in the heading
   assert.ok(!scene.heading.includes("GRIEF"), `mood label must not appear in slugline: ${scene.heading}`);
-  // But the topic label is preserved in topicLabel
-  assert.equal(scene.topicLabel, "QUIET GRIEF");
+  assert.equal(scene.topicLabel, null);
 });
 
 test("unknown room fallback is used when no location context is available", () => {
@@ -398,11 +400,12 @@ test("scene-list headings match scene headings", () => {
   }
 });
 
-test("rendered screenplay body includes topic as soft note, not in slugline", () => {
+test("rendered screenplay body omits inferred topic soft notes", () => {
   const episode = buildWaveDeckEpisode(1);
-  // The screenplay body should include the topic as a soft note
-  assert.match(episode.screenplayBody, /Soft-note: Topic: Wavedeck Inspection\./);
-  assert.match(episode.screenplayBody, /Soft-note: Topic: Quiet Grief\./);
+  assert.ok(!episode.screenplayBody.includes("Soft-note: Topic:"));
+  assert.ok(!episode.screenplayBody.includes("PHONOLOGY WORKBENCH"));
+  assert.ok(!episode.screenplayBody.includes("WAVEDECK INSPECTION"));
+  assert.ok(!episode.screenplayBody.includes("QUIET GRIEF"));
   // The sluglines should be physical locations
   assert.match(episode.screenplayBody, /INT\. UNKNOWN ROOM - DAY/);
   // Runtime labels should NOT appear as sluglines

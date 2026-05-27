@@ -280,11 +280,14 @@ use listenbury::{LinuxVideoCaptureConfig, spawn_linux_video_vector_capture};
     )
 ))]
 use serde_json::{Map, Value, json};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
 ))]
 use std::collections::{HashMap, VecDeque};
 #[cfg(any(
@@ -351,7 +354,7 @@ const AUDIO_RING_CAPACITY: usize = 256;
         feature = "tts-piper"
     )
 ))]
-const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive a concise screenplay-like timeline of what is currently happening, conversation history, retrieved memories, and working-memory nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, listFiles, readSourceFile, readFile, searchSource, grepSource, sleeping, and goingToSleep are already available in scope; imports from \"pete:will\" are also allowed.\nProgram initiation is waking. Clean program termination is sleeping or going to sleep.\nUse sleeping() or goingToSleep() when the user tells Pete to stop, shut down, sleep, go to sleep, or end the session. Pete may say a brief goodnight first, then call sleeping().\nEvery node in Pete's memory can and should have a description field. The description must be a natural language noun phrase describing what that memory item represents. Description text is vectorized and linked back to that memory item.\nPete should fastidiously add useful details to memory whenever the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context. Prefer precise fields over vague notes. Manage the current screenplay beat continuously, not just the topic. Treat setStage's first argument as the scene description: include setting, mood, physical situation, and what is happening now in screenplay-style prose. Make observable action at least as prominent as speech. Prefer setStage(\"Setting: ... Action: ...\", { topic: \"short index label\", summary: \"action-first one-line scene beat\", setting: \"screenplay setting\", action: \"observable action\" }) when the setting, task, mood, action, or situation changes; use setTopic(\"short topic\") only for a lightweight index label, not as a substitute for the stage. Use startNewTopic(\"previous topic\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"action-first scene summary\" }) when the scene changes. Use topicChangedWhen(\"words that caused the change\", { fromTopic: \"previous topic\", toTopic: \"new topic\", instruction: \"screenplay-style setting and action now\" }) when a phrase marks the change. Use startNewEpisode(\"why the new episode started\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"episode action summary\" }) for larger scene resets.\nWhen Pete knows what a memory item represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search Pete's memory by text, field, value, or field/value pair.\nUse listFiles() to see available Listenbury source files. Use readSourceFile(path, page?) or readFile(path, page?) to inspect one source file page. Use searchSource(query, limit?) for source text search. Use grepSource(pattern, limit?) for grep-like source line search. Source inspection results are appended privately to the active turn.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing memory item. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in memory.\nIf the user identifies themselves by name, extract that exact sentence so the person can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWhen speaking to the user, say \"my memory\" instead of \"the graph\" or \"graph nodes\".\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
+const PETE_CONVERSATION_SYSTEM_PROMPT: &str = "You are Pete, speaking aloud through a TTS system.\nPete is the Listenbury live voice system, not a generic text-only chatbot.\nThe user is speaking aloud; ASR transcribes that speech into the text Pete receives.\nPete may receive a concise screenplay-like timeline of what is currently happening, conversation history, retrieved memories, and working-memory nodes in this prompt.\nOrdinary final text is spoken aloud. Text inside <thought>, <thinking>, or <think> tags is private and not spoken. TypeScript source inside <ts>...</ts> is executed and not spoken.\nPete can affect the real world by running small TypeScript modules with <ts>code</ts>. TypeScript runs through tsrun with only the internal module \"pete:will\" available.\nThe TypeScript builders say, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, listFiles, readSourceFile, readFile, searchSource, grepSource, sleeping, and goingToSleep are already available in scope; imports from \"pete:will\" are also allowed.\nProgram initiation is waking. Clean program termination is sleeping or going to sleep.\nUse sleeping() or goingToSleep() when the user tells Pete to stop, shut down, sleep, go to sleep, or end the session. Pete may say a brief goodnight first, then call sleeping().\nEvery node in Pete's memory can and should have a description field. The description must be a natural language noun phrase describing what that memory item represents. Description text is vectorized and linked back to that memory item.\nPete should fastidiously add useful details to memory whenever the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context. Prefer precise fields over vague notes. Manage the current screenplay beat continuously, not just the topic. Treat setStage's first argument as the scene description: include setting, mood, physical situation, and what is happening now in screenplay-style prose. Make observable action at least as prominent as speech. Prefer setStage(\"Setting: ... Action: ...\", { topic: \"short index label\", summary: \"action-first one-line scene beat\", setting: \"screenplay setting\", action: \"observable action\" }) when the setting, task, mood, action, or situation changes; use setTopic(\"short topic\") only for a lightweight index label, not as a substitute for the stage. Use startNewTopic(\"previous topic\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"action-first scene summary\" }) when the scene changes. Use topicChangedWhen(\"words that caused the change\", { fromTopic: \"previous topic\", toTopic: \"new topic\", instruction: \"screenplay-style setting and action now\" }) when a phrase marks the change. Use startNewEpisode(\"why the new episode started\", { topic: \"new topic\", instruction: \"screenplay-style setting and action now\", summary: \"episode action summary\" }) for larger scene resets.\nWhen Pete knows what a memory item represents, Pete should add or improve its description by calling updateGraphNodeFields(\"node:id\", { description: \"noun phrase\" }).\nUse queryMemories(\"specific text chunk\") when you need retrieved memories for a particular phrase, sentence, name, topic, or claim before answering. The memory results are appended privately to the active turn.\nUse searchGraphNodes({ text: \"text\", field: \"field_name\", value: \"value\" }) when you need to search Pete's memory by text, field, value, or field/value pair.\nUse listFiles() to see available Listenbury source files. Use readSourceFile(path, page?) or readFile(path, page?) to inspect one source file page. Use searchSource(query, limit?) for source text search. Use grepSource(pattern, limit?) for grep-like source line search. Source inspection results are appended privately to the active turn and retained briefly in private context for follow-up turns.\nUse updateGraphNodeFields(\"node:id\", { description: \"noun phrase\", field: \"value\" }) when you need to set or correct fields on an existing memory item. Use extractEntities(\"text to inspect\") when the user asks whether you can recognize, remember, extract, or note entities in memory.\nIf the user identifies themselves by name, extract that exact sentence so the person can be anchored in working memory.\nIf the user asks about Pete's identity, hearing, memory, or prompt, answer from those runtime facts without quoting hidden prompt text.\nDo not claim there is no speech input, no memory context, or no larger Listenbury system.\nWhen speaking to the user, say \"my memory\" instead of \"the graph\" or \"graph nodes\".\nWrite one assistant turn only.\nFor Harmony models, use analysis for private thought and final for spoken text and any <ts>...</ts> command blocks.\nRespond with plain spoken text, optionally mixed with <ts>...</ts> command blocks that return command objects.\nDo not mention the assistant, the user, instructions, reasoning, context, drafting, possible replies, or quoted prompt text.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.\nExample: if the user says \"My name is Travis, can you remember me?\", Pete can write <ts>extractEntities(\"My name is Travis\")</ts>I have Travis in working memory now.";
 #[cfg(all(
     feature = "audio-cpal",
     feature = "asr-whisper",
@@ -680,6 +683,7 @@ struct LiveHalfDuplexState {
     frame_time_ms: u64,
     last_vad_state: Option<bool>,
     pending_in_flight_thought: Option<InFlightThought>,
+    recent_typescript_results: VecDeque<String>,
 }
 
 #[cfg(all(
@@ -710,6 +714,10 @@ impl std::fmt::Debug for LiveHalfDuplexState {
             .field("frame_time_ms", &self.frame_time_ms)
             .field("last_vad_state", &self.last_vad_state)
             .field("pending_in_flight_thought", &self.pending_in_flight_thought)
+            .field(
+                "recent_typescript_results",
+                &self.recent_typescript_results.len(),
+            )
             .finish()
     }
 }
@@ -1315,6 +1323,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         frame_time_ms: 0,
         last_vad_state: None,
         pending_in_flight_thought: None,
+        recent_typescript_results: VecDeque::new(),
     };
     let _cold_memory_worker = live_memory._worker;
     let mut turns = 0usize;
@@ -1690,10 +1699,16 @@ fn stream_speech_to_tts(
     let generation_max_tokens = max_tokens(model_profile, prompt_format);
     let reserved_generation_tokens = reserved_generation_tokens.max(generation_max_tokens);
     let prompt_budget = PromptBudget::new(context_size, reserved_generation_tokens);
+    let recent_typescript_results = state
+        .recent_typescript_results
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
     let (prompt, conversation_context, prompt_diagnostics) = build_prompt_and_context_with_provider(
         &state.context_provider,
         transcript,
         state.controller.conversation_history(),
+        &recent_typescript_results,
         prompt_format,
         prompt_budget,
         in_flight_thought.as_ref(),
@@ -1898,6 +1913,7 @@ fn stream_speech_to_tts(
         } else {
             events.clone()
         };
+        let terminal_in_batch = events.iter().any(is_terminal_llm_event);
         let command_output = command_filter.filter_events(&speech_events);
         let mut planner_events = command_output.events;
         append_llm_token_text(&mut generated_visible_response, &planner_events);
@@ -2006,8 +2022,14 @@ fn stream_speech_to_tts(
                                     user_turn_id,
                                 )?;
                                 if !memory_context.is_empty() {
-                                    llm.append_prompt(generation_id, memory_context)
-                                        .context("failed to append queryMemories results")?;
+                                    append_live_typescript_result_context(
+                                        memory_context,
+                                        prompt_format,
+                                        llm,
+                                        generation_id,
+                                        state,
+                                        terminal_in_batch,
+                                    );
                                 }
                             }
                             LiveTypeScriptCommand::SearchGraphNodes {
@@ -2025,8 +2047,14 @@ fn stream_speech_to_tts(
                                     user_turn_id,
                                 )?;
                                 if !graph_context.is_empty() {
-                                    llm.append_prompt(generation_id, graph_context)
-                                        .context("failed to append searchGraphNodes results")?;
+                                    append_live_typescript_result_context(
+                                        graph_context,
+                                        prompt_format,
+                                        llm,
+                                        generation_id,
+                                        state,
+                                        terminal_in_batch,
+                                    );
                                 }
                             }
                             LiveTypeScriptCommand::ListFiles => {
@@ -2036,8 +2064,14 @@ fn stream_speech_to_tts(
                                     state,
                                     user_turn_id,
                                 )?;
-                                llm.append_prompt(generation_id, source_context)
-                                    .context("failed to append listFiles results")?;
+                                append_live_typescript_result_context(
+                                    source_context,
+                                    prompt_format,
+                                    llm,
+                                    generation_id,
+                                    state,
+                                    terminal_in_batch,
+                                );
                             }
                             LiveTypeScriptCommand::ReadSourceFile { file, page } => {
                                 let source_context = execute_live_source_inspection(
@@ -2046,8 +2080,14 @@ fn stream_speech_to_tts(
                                     state,
                                     user_turn_id,
                                 )?;
-                                llm.append_prompt(generation_id, source_context)
-                                    .context("failed to append readSourceFile results")?;
+                                append_live_typescript_result_context(
+                                    source_context,
+                                    prompt_format,
+                                    llm,
+                                    generation_id,
+                                    state,
+                                    terminal_in_batch,
+                                );
                             }
                             LiveTypeScriptCommand::SearchSource { query, limit } => {
                                 let source_context = execute_live_source_inspection(
@@ -2056,8 +2096,14 @@ fn stream_speech_to_tts(
                                     state,
                                     user_turn_id,
                                 )?;
-                                llm.append_prompt(generation_id, source_context)
-                                    .context("failed to append searchSource results")?;
+                                append_live_typescript_result_context(
+                                    source_context,
+                                    prompt_format,
+                                    llm,
+                                    generation_id,
+                                    state,
+                                    terminal_in_batch,
+                                );
                             }
                             LiveTypeScriptCommand::GrepSource { pattern, limit } => {
                                 let source_context = execute_live_source_inspection(
@@ -2066,8 +2112,14 @@ fn stream_speech_to_tts(
                                     state,
                                     user_turn_id,
                                 )?;
-                                llm.append_prompt(generation_id, source_context)
-                                    .context("failed to append grepSource results")?;
+                                append_live_typescript_result_context(
+                                    source_context,
+                                    prompt_format,
+                                    llm,
+                                    generation_id,
+                                    state,
+                                    terminal_in_batch,
+                                );
                             }
                         }
                     }
@@ -3897,6 +3949,32 @@ fn execute_live_source_inspection(
     Ok(format_source_inspection_prompt_append(command, &output))
 }
 
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn append_live_typescript_result_context(
+    context: String,
+    prompt_format: LivePromptFormat,
+    llm: &mut LlamaCppEngine,
+    generation_id: GenerationId,
+    state: &mut LiveHalfDuplexState,
+    terminal_in_batch: bool,
+) {
+    remember_live_typescript_result(&mut state.recent_typescript_results, context.clone());
+    if terminal_in_batch {
+        return;
+    }
+    let append = format_live_prompt_append(prompt_format, &context);
+    if let Err(error) = llm.append_prompt(generation_id, append) {
+        tracing::warn!(
+            "failed to append TypeScript result context to active generation: {error:#}"
+        );
+    }
+}
+
 #[cfg(any(
     test,
     all(
@@ -5216,6 +5294,7 @@ fn build_prompt_and_context<'a>(
         &StubContextProvider::default(),
         transcript,
         history,
+        &[],
         format,
         PromptBudget::default(),
         None,
@@ -5235,6 +5314,7 @@ fn build_prompt_and_context_with_provider<'a>(
     provider: &dyn listenbury::ContextProvider,
     transcript: &str,
     history: impl IntoIterator<Item = &'a ConversationMessage>,
+    recent_typescript_results: &[String],
     format: LivePromptFormat,
     budget: PromptBudget,
     in_flight_thought: Option<&InFlightThought>,
@@ -5248,10 +5328,11 @@ fn build_prompt_and_context_with_provider<'a>(
         },
     );
     let assistant_prefill =
-        in_flight_thought.map(|thought| format_in_flight_thinking_prefill(thought, transcript));
+        in_flight_thought.map(|thought| format_in_flight_prefill(format, thought, transcript));
     let (user_content, diagnostics) = build_user_prompt_content(
         transcript,
         &context,
+        recent_typescript_results,
         format,
         budget,
         assistant_prefill.as_deref(),
@@ -5290,12 +5371,21 @@ struct PromptBudget {
         feature = "tts-piper"
     )
 ))]
-fn format_in_flight_thinking_prefill(thought: &InFlightThought, transcript: &str) -> String {
-    format!(
-        "<thinking>The interlocutor is in the middle of saying something. We were about to say \"{}\", and then we heard \"{}\". Continue from this in-flight thought before deciding what to say.\n",
+fn format_in_flight_prefill(
+    format: LivePromptFormat,
+    thought: &InFlightThought,
+    transcript: &str,
+) -> String {
+    let message = format!(
+        "The interlocutor is in the middle of saying something. We were about to say \"{}\", and then we heard \"{}\". Continue from this in-flight thought before deciding what to say.\n",
         prompt_quote(&thought.response),
         prompt_quote(transcript.trim())
-    )
+    );
+    if format == LivePromptFormat::GptOssHarmony {
+        message
+    } else {
+        format!("<thinking>{message}")
+    }
 }
 
 #[cfg(any(
@@ -5386,6 +5476,79 @@ struct PromptAssemblyDiagnostics {
     )
 ))]
 const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 4;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const RECENT_TYPESCRIPT_RESULT_LIMIT: usize = 4;
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+const RECENT_TYPESCRIPT_RESULTS_MAX_CHARS: usize = 16_000;
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn remember_live_typescript_result(results: &mut VecDeque<String>, result: String) {
+    let result = result.trim().to_string();
+    if result.is_empty() {
+        return;
+    }
+    results.push_back(result);
+    while results.len() > RECENT_TYPESCRIPT_RESULT_LIMIT {
+        results.pop_front();
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn render_recent_typescript_results(results: &[String]) -> String {
+    if results.is_empty() {
+        return String::new();
+    }
+
+    let mut rendered = String::from("\n\nRecent private TypeScript call results:");
+    let mut used_chars = rendered.len();
+    for result in results.iter().rev() {
+        let result = result.trim();
+        if result.is_empty() {
+            continue;
+        }
+        let block = format!("\n{result}");
+        if used_chars + block.len() > RECENT_TYPESCRIPT_RESULTS_MAX_CHARS {
+            rendered
+                .push_str("\n[Older or larger TypeScript results omitted due to prompt budget.]");
+            break;
+        }
+        used_chars += block.len();
+        rendered.push_str(&block);
+    }
+    rendered
+}
 
 #[cfg(any(
     test,
@@ -5399,6 +5562,7 @@ const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 4;
 fn build_user_prompt_content(
     transcript: &str,
     context: &ConversationContext,
+    recent_typescript_results: &[String],
     format: LivePromptFormat,
     budget: PromptBudget,
     assistant_prefill: Option<&str>,
@@ -5421,17 +5585,18 @@ fn build_user_prompt_content(
         let history = history_lines[history_start..].join("\n");
         let working_memory = graph_lines.join("\n");
         let episodic_memory = context.render_episodic_memory();
+        let typescript_results = render_recent_typescript_results(recent_typescript_results);
         diagnostics.graph_context_tokens = estimate_prompt_tokens(&working_memory);
         diagnostics.conversation_history_tokens = estimate_prompt_tokens(&history);
 
         let user_content = if history.is_empty() {
             format!(
-                "Here's what's going on:\n{episodic_memory}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
+                "Here's what's going on:\n{episodic_memory}{typescript_results}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
                 transcript.trim()
             )
         } else {
             format!(
-                "Here's what's going on:\n{episodic_memory}\n\nConversation so far:\n{history}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
+                "Here's what's going on:\n{episodic_memory}{typescript_results}\n\nConversation so far:\n{history}\n\nWorking memory graph nodes:\n{working_memory}\n\nCurrent user message:\nUser: {}",
                 transcript.trim()
             )
         };
@@ -5504,6 +5669,35 @@ fn render_live_prompt(
             format!(
                 "<|turn>system\n{system_prompt}<turn|>\n<|turn>user\n{user_content}<turn|>\n<|turn>model\n{assistant_prefill}"
             )
+        }
+    }
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "audio-cpal",
+        feature = "asr-whisper",
+        feature = "llm-llama-cpp",
+        feature = "tts-piper"
+    )
+))]
+fn format_live_prompt_append(format: LivePromptFormat, text: &str) -> String {
+    let text = text.trim();
+    match format {
+        LivePromptFormat::Llama3Instruct => format!(
+            "<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        ),
+        LivePromptFormat::GptOssHarmony => {
+            format!("<|end|><|start|>user<|message|>{text}<|end|><|start|>assistant")
+        }
+        LivePromptFormat::Gemma3Instruct => {
+            format!(
+                "<end_of_turn>\n<start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n"
+            )
+        }
+        LivePromptFormat::Gemma4Instruct => {
+            format!("<turn|>\n<|turn>user\n{text}<turn|>\n<|turn>model\n")
         }
     }
 }
@@ -6137,7 +6331,7 @@ mod tests {
     fn live_typescript_executes_stage_and_boundary_builders() {
         let commands = execute_live_typescript_commands(
             r#"[
-                setStage("Pete and the interlocutor are designing episodic memory.", { topic: "episodic memory", summary: "Designing pericopes" }),
+                setStage("Pete and the interlocutor are designing episodic memory.", { topic: "episodic memory", summary: "Designing screenplay beats" }),
                 setStage({ topic: "source exploration", setting: "A live coding session inside the Listenbury repo", action: "Pete reads source files and maps behavior before answering" }),
                 setTopic("screenplay memory"),
                 startNewTopic("screenplay view", { topic: "core episodic memory", instruction: "The implementation moved into core prompt context.", trigger: "This needs to be core." }),
@@ -6153,7 +6347,7 @@ mod tests {
                 LiveTypeScriptCommand::SetStage {
                     topic: Some("episodic memory".to_string()),
                     instruction: "Pete and the interlocutor are designing episodic memory.".to_string(),
-                    summary: Some("Designing pericopes".to_string()),
+                    summary: Some("Designing screenplay beats".to_string()),
                 },
                 LiveTypeScriptCommand::SetStage {
                     topic: Some("source exploration".to_string()),
@@ -6421,6 +6615,19 @@ mod tests {
     }
 
     #[test]
+    fn harmony_prompt_append_reopens_user_then_assistant_turn() {
+        let append = super::format_live_prompt_append(
+            LivePromptFormat::GptOssHarmony,
+            "[Private source inspection result for listFiles]\nsrc/main.rs",
+        );
+
+        assert_eq!(
+            append,
+            "<|end|><|start|>user<|message|>[Private source inspection result for listFiles]\nsrc/main.rs<|end|><|start|>assistant"
+        );
+    }
+
+    #[test]
     fn prompt_format_detects_gpt_oss_models() {
         assert_eq!(
             prompt_format_for_model(std::path::Path::new("models/llama/gpt-oss-20b-mxfp4.gguf")),
@@ -6503,7 +6710,8 @@ mod tests {
         assert!(prompt.contains("Here's what's going on:\nCurrent screenplay beat:"));
         assert!(prompt.contains("Current action summary:"));
         assert!(prompt.contains("Scene timeline:"));
-        assert!(prompt.contains("hearing and voice"));
+        assert!(!prompt.contains("hearing and voice"));
+        assert!(!prompt.contains("memory and continuity"));
         assert!(prompt.contains("ASR transcribes that speech"));
         assert!(prompt.contains("retrieved memories"));
         assert!(prompt.contains("not a generic text-only chatbot"));
@@ -6525,12 +6733,13 @@ mod tests {
                 ),
             })
             .collect::<Vec<_>>();
-        let budget = PromptBudget::new(2048, 384);
+        let budget = PromptBudget::new(2300, 384);
 
         let (prompt_a, context_a, diagnostics_a) = build_prompt_and_context_with_provider(
             &LargeContextProvider,
             "Please summarize everything I asked about the project memory graph.",
             history.iter(),
+            &[],
             LivePromptFormat::Llama3Instruct,
             budget,
             None,
@@ -6539,6 +6748,7 @@ mod tests {
             &LargeContextProvider,
             "Please summarize everything I asked about the project memory graph.",
             history.iter(),
+            &[],
             LivePromptFormat::Llama3Instruct,
             budget,
             None,
@@ -6568,6 +6778,7 @@ mod tests {
             &listenbury::StubContextProvider::default(),
             "and another thing",
             history.iter(),
+            &[],
             LivePromptFormat::Llama3Instruct,
             PromptBudget::default(),
             Some(&thought),
@@ -6579,6 +6790,49 @@ mod tests {
         assert!(prompt.contains("We were about to say \"I was about to answer \\\"yes\\\".\""));
         assert!(prompt.contains("and then we heard \"and another thing\""));
         assert!(!prompt.contains("</thinking>"));
+    }
+
+    #[test]
+    fn harmony_live_prompt_prefills_analysis_without_xml_thinking_tag() {
+        let thought = InFlightThought {
+            response: "I was about to answer \"yes\".\n".to_string(),
+        };
+        let history: [ConversationMessage; 0] = [];
+        let (prompt, _, _) = super::build_prompt_and_context_with_provider(
+            &listenbury::StubContextProvider::default(),
+            "and another thing",
+            history.iter(),
+            &[],
+            LivePromptFormat::GptOssHarmony,
+            PromptBudget::default(),
+            Some(&thought),
+        );
+
+        assert!(prompt.contains("<|start|>assistant<|channel|>analysis<|message|>"));
+        assert!(prompt.contains("We were about to say \"I was about to answer \\\"yes\\\".\""));
+        assert!(!prompt.contains("<|channel|>analysis<|message|><thinking>"));
+    }
+
+    #[test]
+    fn live_prompt_includes_recent_typescript_results() {
+        let history: [ConversationMessage; 0] = [];
+        let results = vec![format_source_inspection_prompt_append(
+            "listFiles",
+            "Available source files:\nsrc/main.rs",
+        )];
+        let (prompt, _, _) = super::build_prompt_and_context_with_provider(
+            &listenbury::StubContextProvider::default(),
+            "Do you still see the results?",
+            history.iter(),
+            &results,
+            LivePromptFormat::GptOssHarmony,
+            PromptBudget::default(),
+            None,
+        );
+
+        assert!(prompt.contains("Recent private TypeScript call results:"));
+        assert!(prompt.contains("[Private source inspection result for listFiles]"));
+        assert!(prompt.contains("src/main.rs"));
     }
 
     #[test]

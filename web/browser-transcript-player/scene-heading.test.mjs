@@ -43,21 +43,21 @@ test("resolveTimeOfDay returns DAY for small elapsed-time values", () => {
 });
 
 test("resolveTimeOfDay returns DAY for a real morning timestamp", () => {
-  // 2024-01-01T09:00:00Z
-  const ms = new Date("2024-01-01T09:00:00Z").getTime();
+  // Local 9 AM.
+  const ms = new Date(2024, 0, 1, 9, 0, 0).getTime();
   assert.equal(resolveTimeOfDay(ms), "DAY");
 });
 
 test("resolveTimeOfDay returns AFTERNOON for a real afternoon timestamp", () => {
-  // 2024-01-01T14:00:00Z — local time depends on timezone, but UTC+0 gives 14h
-  const ms = new Date("2024-01-01T14:00:00Z").getTime();
+  // Local 2 PM.
+  const ms = new Date(2024, 0, 1, 14, 0, 0).getTime();
   const result = resolveTimeOfDay(ms);
   assert.ok(["AFTERNOON", "DAY", "EVENING"].includes(result), `unexpected: ${result}`);
 });
 
 test("resolveTimeOfDay returns NIGHT for a real night timestamp", () => {
-  // Pick a time that is clearly late at night in UTC
-  const ms = new Date("2024-01-01T23:00:00Z").getTime();
+  // Local 11 PM.
+  const ms = new Date(2024, 0, 1, 23, 0, 0).getTime();
   const result = resolveTimeOfDay(ms);
   assert.ok(["NIGHT", "EVENING"].includes(result), `unexpected: ${result}`);
 });
@@ -148,7 +148,7 @@ test("resolveLocation falls back to UNKNOWN ROOM when no context available", () 
 });
 
 test("resolveLocation falls back when vision observations do not match any rule", () => {
-  const result = resolveLocation({ vision: ["runtime", "phonology workbench", "quiet grief"] });
+  const result = resolveLocation({ vision: ["runtime", "abstract topic label", "quiet mood"] });
   assert.equal(result.place, "UNKNOWN ROOM");
   assert.equal(result.confidence, "fallback");
 });
@@ -184,9 +184,9 @@ test("resolveSlugline resolves vision to INT. BEDROOM - NIGHT", () => {
 
 test("resolveSlugline does not use mood or topic labels as location", () => {
   // Topic and mood labels should not appear in sluglines
-  const result = resolveSlugline({ vision: ["quiet grief", "phonology workbench"] });
-  assert.ok(!result.includes("GRIEF"), `mood label leaked into slugline: ${result}`);
-  assert.ok(!result.includes("PHONOLOGY"), `topic label leaked into slugline: ${result}`);
+  const result = resolveSlugline({ vision: ["quiet mood", "abstract topic label"] });
+  assert.ok(!result.includes("MOOD"), `mood label leaked into slugline: ${result}`);
+  assert.ok(!result.includes("TOPIC"), `topic label leaked into slugline: ${result}`);
   assert.ok(!result.includes("RUNTIME"), `runtime label leaked into slugline: ${result}`);
   assert.match(result, /^INT\.\s+UNKNOWN ROOM - DAY$/);
 });

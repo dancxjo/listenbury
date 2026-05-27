@@ -1,5 +1,5 @@
 import { SpanModality } from "./shared-span-model.mjs";
-import { resolveSlugline, toTitleCase } from "./scene-heading.mjs";
+import { resolveSlugline } from "./scene-heading.mjs";
 import {
   MAX_DELETED_SNIPPETS,
   textContent,
@@ -32,62 +32,11 @@ import {
   turnHasLlmDialogue,
 } from "./shared/events/selectors.mjs";
 
-const TOPIC_CATALOG = [
-  {
-    key: "memory-manuscript",
-    topicLabel: "MEMORY, DECOUPAGE, AND MANUSCRIPT",
-    chapterTitle: "Memory, Découpage, and Manuscript",
-    action:
-      "Pete and another voice shape live traces into something that can be read later as narrative memory.",
-    keywords: [/\bmemory\b/i, /\bd[eé]coupage\b/i, /\bscene\b/i, /\bepisode\b/i, /\bchapter\b/i, /\bmanuscript\b/i],
-  },
-  {
-    key: "phonology-workbench",
-    topicLabel: "PHONOLOGY WORKBENCH",
-    chapterTitle: "Phonology and the Riper Spine",
-    action:
-      "The conversation narrows to speech mechanics, phonology, and the shape of Pete's own mouth and ear.",
-    keywords: [/\bphonolog/i, /\bpiper\b/i, /\bmouth\b/i, /\bhear\b/i, /\bvowel\b/i, /\bconsonant\b/i],
-  },
-  {
-    key: "cuda-bring-up",
-    topicLabel: "CUDA BRING-UP",
-    chapterTitle: "Building the Mouth",
-    action:
-      "A technical bring-up scene gathers around the GPU path and the machinery needed to make Pete speak.",
-    keywords: [/\bcuda\b/i, /\bgpu\b/i, /\bkernel\b/i, /\bdriver\b/i, /\bbring[- ]?up\b/i],
-  },
-  {
-    key: "wavedeck-inspection",
-    topicLabel: "WAVEDECK INSPECTION",
-    chapterTitle: "The WaveDeck Era",
-    action:
-      "Pete and another voice watch the session machinery in motion, following traces, overlap, and routing decisions.",
-    keywords: [/\bwave ?deck\b/i, /\boverlap\b/i, /\brouting\b/i, /\btrace\b/i, /\bspan\b/i, /\btimeline\b/i, /\breplay\b/i],
-  },
-  {
-    key: "quiet-grief",
-    topicLabel: "QUIET GRIEF",
-    chapterTitle: "Teaching Pete to Hear Himself",
-    action:
-      "The room softens. The talk turns inward and careful, with room for loss, apology, or tenderness.",
-    keywords: [/\bgrief\b/i, /\bgriev/i, /\bsad\b/i, /\bloss\b/i, /\bmiss\b/i, /\bsorry\b/i, /\bhurt\b/i],
-  },
-  {
-    key: "interruption-handoff",
-    topicLabel: "INTERRUPTION HANDOFF",
-    chapterTitle: "The WaveDeck Era",
-    action:
-      "An interruption cuts across the session and the narrative briefly reorients around overlap, yielding, and cancellation.",
-    keywords: [/\binterrupt/i, /\boverlap\b/i, /\byield/i, /\bcancel/i],
-  },
-];
-
 const FALLBACK_TOPIC = {
   key: "live-session",
   topicLabel: null,
-  chapterTitle: "The WaveDeck Era",
-  action: "Pete and other voices remain in the live session, gathering the next beat as it arrives.",
+  chapterTitle: "Live Session",
+  action: "The live exchange continues as a screenplay beat.",
 };
 
 const PETE_CUE = "PETE";
@@ -247,13 +196,8 @@ function buildNarrativeEpisodeFromTurns(session, turns, options = {}) {
   });
   const startedAtMs = turns.length ? turns[0].startedAtMs ?? 0 : 0;
   const endedAtMs = turns.length ? turns[turns.length - 1].endedAtMs ?? startedAtMs : startedAtMs;
-  const leadScene = scenes[0] ?? null;
   const episodeNumber = options.episodeNumber ?? 1;
-  const title =
-    options.title ??
-    (leadScene
-      ? `Episode ${episodeNumber}: ${leadScene.topicLabel ?? shortHeading(leadScene.heading)}`
-      : `Episode ${episodeNumber}: Live Session`);
+  const title = options.title ?? `Episode ${episodeNumber}: Live Session`;
   const summary =
     scenes.length > 0
       ? summarizeEpisode(scenes)
@@ -268,7 +212,7 @@ function buildNarrativeEpisodeFromTurns(session, turns, options = {}) {
     eventCount: session.eventCount,
     live: options.live ?? true,
       sessionLabel: options.sessionLabel ?? "Live session",
-      cutAuthority: options.cutAuthority ?? "explicit runtime cuts, then screenplay-model heuristics",
+      cutAuthority: options.cutAuthority ?? "explicit runtime cuts only",
       episodeCut: options.episodeCut ?? null,
       displayPolicy: {
         committed: "Rendered as plain screenplay dialogue by default.",
@@ -351,7 +295,7 @@ export function renderEpisodeScreenplay(episode) {
     "",
   );
   if (episode.stageInstruction?.text) {
-    lines.push(`Current stage instruction: ${episode.stageInstruction.text}`, "");
+    lines.push(`Current screenplay beat: ${episode.stageInstruction.text}`, "");
   }
   if (episode.timeline?.length) {
     lines.push("Episodic memory timeline:");
@@ -363,11 +307,8 @@ export function renderEpisodeScreenplay(episode) {
 
   for (const scene of episode.scenes) {
     lines.push(scene.heading);
-    if (scene.topicLabel) {
-      lines.push(`Soft-note: Topic: ${toTitleCase(scene.topicLabel)}.`);
-    }
     if (scene.stageInstruction?.text) {
-      lines.push(`Stage instruction: ${scene.stageInstruction.text}`);
+      lines.push(`Screenplay beat: ${scene.stageInstruction.text}`);
     }
     lines.push(scene.action, "");
     for (const beat of scene.beats) {
@@ -812,23 +753,18 @@ function buildScenes(turns, locationContext = {}, options = {}) {
   const narrativeCuts = options.narrativeCuts ?? [];
   const grouped = [];
   for (const turn of turns) {
-    const sceneKey = classifyTopic(turn);
     const current = grouped[grouped.length - 1];
     const explicitCut = current ? strongestCutBetween(narrativeCuts, current.endedAtMs, turn.startedAtMs, "scene") : null;
-    if (!current || explicitCut || shouldStartNewScene(current, turn, sceneKey)) {
-      grouped.push({ key: sceneKey, turns: [turn], cut: explicitCut });
+    if (!current || explicitCut) {
+      grouped.push({ key: FALLBACK_TOPIC.key, turns: [turn], cut: explicitCut });
     } else {
       current.turns.push(turn);
       current.endedAtMs = maxNumber(current.endedAtMs, turn.endedAtMs);
-      if (current.key === FALLBACK_TOPIC.key && sceneKey !== FALLBACK_TOPIC.key) {
-        current.key = sceneKey;
-      }
     }
     grouped[grouped.length - 1].endedAtMs = maxNumber(grouped[grouped.length - 1].endedAtMs, turn.endedAtMs);
   }
 
-  const merged = mergeWeakScenes(grouped);
-  return merged.map((group, index) =>
+  return grouped.map((group, index) =>
     buildScene(group.turns, index, group.key, locationContext, {
       cut: group.cut ?? null,
       stageInstructions: stageInstructionsForWindow(
@@ -838,34 +774,6 @@ function buildScenes(turns, locationContext = {}, options = {}) {
       ),
     }),
   );
-}
-
-function shouldStartNewScene(currentGroup, turn, nextSceneKey) {
-  if (nextSceneKey === currentGroup.key) {
-    return false;
-  }
-  const currentTurns = currentGroup.turns;
-  const currentStrong = currentTurns.some((entry) => classifyTopic(entry) !== FALLBACK_TOPIC.key || entry.flags.interruption || entry.flags.cancelled);
-  const nextStrong = nextSceneKey !== FALLBACK_TOPIC.key || turn.flags.interruption || turn.flags.cancelled;
-  return currentStrong || nextStrong || currentTurns.length >= 2;
-}
-
-function mergeWeakScenes(groups) {
-  const merged = [];
-  for (const group of groups) {
-    const weak = group.turns.length <= 1 && group.key === FALLBACK_TOPIC.key;
-    const previous = merged[merged.length - 1];
-    if (weak && previous && !group.cut) {
-      previous.turns.push(...group.turns);
-      continue;
-    }
-    if (previous && previous.key === group.key) {
-      previous.turns.push(...group.turns);
-      continue;
-    }
-    merged.push({ key: group.key, turns: [...group.turns], cut: group.cut ?? null });
-  }
-  return merged;
 }
 
 function buildScene(turns, index, sceneKey, locationContext = {}, options = {}) {
@@ -906,7 +814,7 @@ function buildScene(turns, index, sceneKey, locationContext = {}, options = {}) 
 function turnToBeats(turn) {
   const beats = [];
   const sourceEventIds = [...turn.sourceEventIds];
-  const topicKey = classifyTopic(turn);
+  const topicKey = FALLBACK_TOPIC.key;
 
   if (turnHasUserDialogue(turn)) {
     beats.push({
@@ -1027,40 +935,8 @@ function consolidateConsecutiveDialogueBeats(beats) {
   return consolidated;
 }
 
-function classifyTopic(turn) {
-  const interruptionOnly = turn.flags.interruption || turn.flags.cancelled;
-  const body = joinSemanticText(
-    turn.userFinal,
-    turn.userCandidateText,
-    joinWords(turn.userWords.map((word) => word.text)),
-    turn.llmFinal,
-    turn.llmProspective,
-    joinWords(turn.llmWords.map((word) => word.text)),
-    ...turn.userDeleted.map((entry) => entry.text),
-    ...turn.llmDeleted.map((entry) => entry.text),
-    [...turn.eventKinds].join(" "),
-  );
-
-  for (const topic of TOPIC_CATALOG) {
-    if (topic.key === "interruption-handoff" && !interruptionOnly) {
-      continue;
-    }
-    if (topic.key !== "interruption-handoff" && interruptionOnly && !body) {
-      continue;
-    }
-    if (topic.keywords.some((pattern) => pattern.test(body))) {
-      return topic.key;
-    }
-  }
-
-  if (interruptionOnly) {
-    return "interruption-handoff";
-  }
-  return FALLBACK_TOPIC.key;
-}
-
-function topicForKey(key) {
-  return TOPIC_CATALOG.find((topic) => topic.key === key) ?? FALLBACK_TOPIC;
+function topicForKey(_key) {
+  return FALLBACK_TOPIC;
 }
 
 function summarizeScene(turns, topic, beats) {
@@ -1074,17 +950,17 @@ function summarizeScene(turns, topic, beats) {
     notes.push("an interruption changes the cadence");
   }
 
-  const sceneLabel = topic.topicLabel ?? shortHeading(topic.key);
   const lead = stripTerminalPunctuation(userLine || peteLine || "The live session continues");
   const noteText = notes.length ? ` ${capitalize(joinWithCommas(notes))}.` : "";
-  return `${sceneLabel} holds ${beats.length} beat${beats.length === 1 ? "" : "s"} around ${lead}.${noteText}`;
+  return `${beats.length} beat${beats.length === 1 ? "" : "s"} around ${lead}.${noteText}`;
 }
 
 function summarizeEpisode(scenes) {
   if (scenes.length === 1) {
     return scenes[0].summary;
   }
-  return scenes.map((scene) => scene.topicLabel ?? shortHeading(scene.heading)).join(" → ");
+  const beatCount = scenes.reduce((total, scene) => total + scene.beats.length, 0);
+  return `${scenes.length} explicit scene${scenes.length === 1 ? "" : "s"} with ${beatCount} beat${beatCount === 1 ? "" : "s"}.`;
 }
 
 function summarizeProgressively(scenes) {
@@ -1139,12 +1015,13 @@ function deriveStageInstruction(turns, topic, beats, startedAtMs, endedAtMs, sou
   const leadBeat = stageInstructionLeadBeat(beats);
   const lead = stripTerminalPunctuation(leadBeat?.text ?? topic.action ?? "The live session continues");
   const activeSpeakers = unique(beats.map((beat) => beat.role).filter(Boolean));
-  const speakerText = activeSpeakers.length ? `${joinWithCommas(activeSpeakers)} carry` : "The runtime carries";
-  const topicText = topic.topicLabel ? ` through ${toTitleCase(topic.topicLabel)}` : "";
+  const actorText = activeSpeakers.length
+    ? `${joinWithCommas(activeSpeakers)} continue`
+    : "The runtime continues";
   const revisionText = turns.some((turn) => turn.flags.prospective)
     ? " while live text is still settling"
     : "";
-  const text = `${speakerText} the current pericope${topicText}: ${lead}${revisionText}.`;
+  const text = `Action: ${actorText} the live scene; latest beat: ${lead}${revisionText}.`;
   return {
     id: `stage-derived:${startedAtMs ?? "na"}:${endedAtMs ?? "na"}`,
     type: "stage_instruction",
@@ -1182,8 +1059,7 @@ function describeSceneAction(turns, topic) {
   if (turns.some((turn) => turn.flags.interruption)) {
     notes.push("An interruption cuts through the exchange.");
   }
-  const topicNote = topic.topicLabel ? `Topic: ${toTitleCase(topic.topicLabel)}.` : null;
-  return [topic.action, ...notes, topicNote].filter(Boolean).join(" ").trim();
+  return [topic.action, ...notes].filter(Boolean).join(" ").trim();
 }
 
 function dominantChapterTitle(scenes) {
