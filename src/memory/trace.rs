@@ -12,6 +12,20 @@ pub enum SpeakerRole {
     Environment,
 }
 
+/// A semantic referent explicitly extracted from text.
+///
+/// `node_id` is a stable graph referent ID such as `person:travis`; source
+/// artifacts should link to it instead of becoming the referent themselves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryEntityMention {
+    pub node_id: String,
+    pub label: String,
+    pub kind: String,
+    pub confidence: f32,
+    pub span_start: usize,
+    pub span_end: usize,
+}
+
 /// A single runtime trace event emitted by the Listenbury engine.
 ///
 /// Traces are produced on the hot path but consumed asynchronously via a
@@ -65,6 +79,12 @@ pub enum MemoryTrace {
         result_summary: String,
         occurred_at: ExactTimestamp,
     },
+    /// Pete explicitly ran entity extraction over text.
+    EntityExtractionPerformed {
+        source_text: String,
+        entities: Vec<MemoryEntityMention>,
+        occurred_at: ExactTimestamp,
+    },
 }
 
 impl MemoryTrace {
@@ -78,6 +98,7 @@ impl MemoryTrace {
             Self::AuditorySceneObservation { .. } => "auditory_scene_observation",
             Self::OverlapDetected { .. } => "overlap_detected",
             Self::RecallResultUsed { .. } => "recall_result_used",
+            Self::EntityExtractionPerformed { .. } => "entity_extraction_performed",
         }
     }
 
@@ -90,7 +111,8 @@ impl MemoryTrace {
             | Self::MouthPlaybackCompleted { occurred_at, .. }
             | Self::AuditorySceneObservation { occurred_at, .. }
             | Self::OverlapDetected { occurred_at, .. }
-            | Self::RecallResultUsed { occurred_at, .. } => *occurred_at,
+            | Self::RecallResultUsed { occurred_at, .. }
+            | Self::EntityExtractionPerformed { occurred_at, .. } => *occurred_at,
         }
     }
 }

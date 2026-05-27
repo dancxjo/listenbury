@@ -148,6 +148,42 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                 ("occurred_at", json!(occurred_at)),
             ]),
         },
+        MemoryTrace::EntityExtractionPerformed {
+            source_text,
+            entities,
+            occurred_at,
+        } => {
+            let extraction_node = Neo4jNode {
+                logical_id: format!("entity_extraction:{sequence}"),
+                label: "EntityExtraction".to_string(),
+                properties: props([
+                    ("source_text", json!(source_text)),
+                    ("entity_count", json!(entities.len())),
+                    ("occurred_at", json!(occurred_at)),
+                ]),
+            };
+            for entity in entities {
+                let entity_node = Neo4jNode {
+                    logical_id: entity.node_id.clone(),
+                    label: entity_node_label(&entity.kind).to_string(),
+                    properties: props([
+                        ("label", json!(entity.label)),
+                        ("entity_kind", json!(entity.kind)),
+                        ("confidence", json!(entity.confidence)),
+                        ("span_start", json!(entity.span_start)),
+                        ("span_end", json!(entity.span_end)),
+                        ("last_observed_at", json!(occurred_at)),
+                    ]),
+                };
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: extraction_node.logical_id.clone(),
+                    to_logical_id: entity_node.logical_id.clone(),
+                    kind: "EXTRACTED_ENTITY".to_string(),
+                });
+                related_nodes.push(entity_node);
+            }
+            extraction_node
+        }
     };
 
     relationships.push(Neo4jRelationship {
@@ -203,10 +239,65 @@ fn voice_label_name(role: &SpeakerRole) -> String {
     }
 }
 
+fn entity_node_label(kind: &str) -> &'static str {
+    match kind {
+        "person" => "Person",
+        "place" => "Place",
+        "topic" => "Topic",
+        "org" | "organization" => "Organization",
+        "object" => "Object",
+        "task" => "Task",
+        _ => "Entity",
+    }
+}
+
 fn props<const N: usize>(pairs: [(&str, Value); N]) -> Map<String, Value> {
     let mut properties = Map::with_capacity(N);
     for (key, value) in pairs {
         properties.insert(key.to_string(), value);
     }
     properties
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::trace::MemoryEntityMention;
+    use crate::time::ExactTimestamp;
+
+    #[test]
+    fn entity_extraction_write_uses_central_referent_nodes() {
+        let trace = MemoryTrace::EntityExtractionPerformed {
+            source_text: "My name is Travis".to_string(),
+            entities: vec![MemoryEntityMention {
+                node_id: "person:travis".to_string(),
+                label: "Travis".to_string(),
+                kind: "person".to_string(),
+                confidence: 0.92,
+                span_start: 11,
+                span_end: 17,
+            }],
+            occurred_at: ExactTimestamp::now(),
+        };
+
+        let write = trace_write_for(&trace, 7);
+
+        assert_eq!(write.primary_node.logical_id, "entity_extraction:7");
+        assert_eq!(write.primary_node.label, "EntityExtraction");
+        let travis = write
+            .related_nodes
+            .iter()
+            .find(|node| node.logical_id == "person:travis")
+            .expect("central person node should be related");
+        assert_eq!(travis.label, "Person");
+        assert_eq!(
+            travis.properties.get("label").and_then(Value::as_str),
+            Some("Travis")
+        );
+        assert!(write.relationships.iter().any(|relationship| {
+            relationship.from_logical_id == "entity_extraction:7"
+                && relationship.to_logical_id == "person:travis"
+                && relationship.kind == "EXTRACTED_ENTITY"
+        }));
+    }
 }

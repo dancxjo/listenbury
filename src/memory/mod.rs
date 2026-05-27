@@ -52,5 +52,5 @@ pub use qdrant::{
     vector_documents_for_trace,
 };
 pub use sink::{ChannelMemorySink, MemorySink, NoopMemorySink};
-pub use trace::{MemoryTrace, SpeakerRole};
+pub use trace::{MemoryEntityMention, MemoryTrace, SpeakerRole};
 pub use worker::{ColdMemoryWorker, ColdMemoryWorkerConfig, ColdMemoryWorkerReport};
