@@ -123,7 +123,8 @@ mod trace;
 
 #[cfg(any(test, feature = "asr-whisper"))]
 use crate::cli::commands::source_inspection::{
-    execute_grep_source, execute_list_source_files, execute_search_source, execute_view_source_file,
+    execute_grep_source, execute_list_source_files_page, execute_search_source,
+    execute_view_source_file,
 };
 #[cfg(any(test, feature = "asr-whisper"))]
 use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
@@ -1452,11 +1453,11 @@ impl RollingContextManager {
     }
 
     fn push_scratch(&mut self, message: String) {
-        let line = compact_prompt_line(&message, MAX_SCRATCH_EVENT_CHARS);
-        if line.is_empty() {
+        let text = compact_prompt_text_preserving_lines(&message, MAX_SOURCE_SCRATCH_EVENT_CHARS);
+        if text.is_empty() {
             return;
         }
-        self.scratch.events.push(format!("Source: {line}"));
+        self.scratch.events.push(format!("Source:\n{text}"));
         while self.scratch.events.len() > MAX_SCRATCH_EVENTS {
             self.scratch.events.remove(0);
         }
@@ -1523,6 +1524,8 @@ const MIN_WORKING_MEMORY_CHARS: usize = 1_200;
 const MAX_SCRATCH_EVENTS: usize = 3;
 #[cfg(any(test, feature = "asr-whisper"))]
 const MAX_SCRATCH_EVENT_CHARS: usize = 1_000;
+#[cfg(any(test, feature = "asr-whisper"))]
+const MAX_SOURCE_SCRATCH_EVENT_CHARS: usize = 4_000;
 
 #[cfg(any(test, feature = "asr-whisper"))]
 fn rolling_prompt_token_budget(
@@ -1552,6 +1555,20 @@ fn compact_prompt_line(text: &str, max_chars: usize) -> String {
     line = line.chars().take(max_chars.saturating_sub(3)).collect();
     line.push_str("...");
     line
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+fn compact_prompt_text_preserving_lines(text: &str, max_chars: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut compact = text
+        .chars()
+        .take(max_chars.saturating_sub(16))
+        .collect::<String>();
+    compact.push_str("\n[truncated]");
+    compact
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
@@ -1613,7 +1630,10 @@ enum TypeScriptCommand {
         value: Option<Value>,
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        page: usize,
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         page: usize,
@@ -1700,7 +1720,12 @@ enum TypeScriptCommandPayload {
         #[serde(default)]
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        #[serde(default)]
+        page: Option<usize>,
+        #[serde(default)]
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         page: Option<usize>,
@@ -1838,7 +1863,9 @@ fn execute_typescript_command_results(
                     )
                 ),
             ),
-            TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
+            TypeScriptCommand::ListFiles { page, page_size } => {
+                ("list_files", execute_list_source_files_page(*page, *page_size))
+            }
             TypeScriptCommand::ReadSourceFile { file, page } => {
                 ("read_source_file", execute_view_source_file(file, *page))
             }
@@ -2056,7 +2083,9 @@ fn execute_typescript_command_results_with_cognition(
                     turn_id,
                 ),
             ),
-            TypeScriptCommand::ListFiles => ("list_files", execute_list_source_files()),
+            TypeScriptCommand::ListFiles { page, page_size } => {
+                ("list_files", execute_list_source_files_page(*page, *page_size))
+            }
             TypeScriptCommand::ReadSourceFile { file, page } => {
                 ("read_source_file", execute_view_source_file(file, *page))
             }
@@ -2616,7 +2645,12 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
                     },
                 )
             }
-            TypeScriptCommandPayload::ListFiles => Some(TypeScriptCommand::ListFiles),
+            TypeScriptCommandPayload::ListFiles { page, page_size } => {
+                Some(TypeScriptCommand::ListFiles {
+                    page: page.unwrap_or(1).max(1),
+                    page_size,
+                })
+            }
             TypeScriptCommandPayload::ReadSourceFile { file, page } => {
                 let file = file.trim();
                 (!file.is_empty()).then(|| TypeScriptCommand::ReadSourceFile {
@@ -2758,7 +2792,7 @@ fn will_typescript_module() -> InternalModule {
         .with_function("queryMemories", ts_query_memories, 2)
         .with_function("query_memories", ts_query_memories, 2)
         .with_function("recallMemories", ts_query_memories, 2)
-        .with_function("listFiles", ts_list_files, 0)
+        .with_function("listFiles", ts_list_files, 1)
         .with_function("readSourceFile", ts_read_source_file, 2)
         .with_function("readFile", ts_read_source_file, 2)
         .with_function("searchSource", ts_search_source, 2)
@@ -2787,6 +2821,21 @@ fn optional_positive_integer_arg(args: &[JsValue], index: usize) -> Option<usize
         .and_then(JsValue::as_number)
         .filter(|number| number.is_finite() && *number > 0.0)
         .map(|number| number.floor() as usize)
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+fn list_source_page_arg(args: &[JsValue]) -> Option<usize> {
+    match args.first() {
+        Some(JsValue::Number(value)) if value.is_finite() => Some(value.floor().max(1.0) as usize),
+        _ => optional_number_arg(args, 0, "page").map(|value| value.floor().max(1.0) as usize),
+    }
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+fn list_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
+    optional_number_arg(args, 0, "pageSize")
+        .or_else(|| optional_number_arg(args, 0, "page_size"))
+        .map(|value| value.floor().max(1.0) as usize)
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
@@ -3152,9 +3201,16 @@ fn ts_query_memories(
 fn ts_list_files(
     interp: &mut Interpreter,
     _this: JsValue,
-    _args: &[JsValue],
+    args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
-    command_value(interp, json!({ "kind": "list_files" }))
+    let mut value = json!({ "kind": "list_files" });
+    if let Some(page) = list_source_page_arg(args) {
+        value["page"] = json!(page);
+    }
+    if let Some(page_size) = list_source_page_size_arg(args) {
+        value["page_size"] = json!(page_size);
+    }
+    command_value(interp, value)
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
@@ -5952,7 +6008,7 @@ mod tests {
         RollingContextManager, SourceCommand, SpeechEventDetector, SyntheticControlCommand,
         TIME_EVENT_INTERVAL_BASE_MS, TIME_EVENT_INTERVAL_JITTER_MS, TranscriptSpeculativePlanner,
         TypeScriptCommand, build_continue_prompt, build_initial_prompt, clean_spoken_content,
-        continue_prompt_format_for_model, current_time_message, execute_list_source_files,
+        continue_prompt_format_for_model, current_time_message, execute_list_source_files_page,
         execute_typescript_commands, execute_typescript_source, execute_view_source_file,
         mouth_command_for_runtime_event, next_time_event_interval, padded_environmental_asr_frames,
         render_continue_memory_summary, vad_observation_message, wrap_ear_event, wrap_live_input,
@@ -6545,7 +6601,10 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                TypeScriptCommand::ListFiles,
+                TypeScriptCommand::ListFiles {
+                    page: 1,
+                    page_size: None,
+                },
                 TypeScriptCommand::ReadSourceFile {
                     file: "src/main.rs".to_string(),
                     page: 2
@@ -6575,7 +6634,10 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                TypeScriptCommand::ListFiles,
+                TypeScriptCommand::ListFiles {
+                    page: 1,
+                    page_size: None,
+                },
                 TypeScriptCommand::ReadSourceFile {
                     file: "src/main.rs".to_string(),
                     page: 1
@@ -6728,7 +6790,7 @@ grepSource("build_initial_prompt", 1)"#,
 
     #[test]
     fn source_bundle_lists_and_views_files() {
-        let files = execute_list_source_files();
+        let files = execute_list_source_files_page(1, None);
         assert!(files.contains("src/cli/commands/continue_generation/mod.rs"));
 
         let page = execute_view_source_file("src/cli/commands/continue_generation/mod.rs", 1);

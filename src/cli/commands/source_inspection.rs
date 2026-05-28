@@ -3,15 +3,55 @@ use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "asr-whisper"))]
 const SOURCE_PAGE_LINES: usize = 120;
+#[cfg(any(test, feature = "asr-whisper"))]
+const SOURCE_LIST_PAGE_SIZE: usize = 80;
+#[cfg(any(test, feature = "asr-whisper"))]
+const MIN_SOURCE_LIST_PAGE_SIZE: usize = 20;
+#[cfg(any(test, feature = "asr-whisper"))]
+const MAX_SOURCE_LIST_PAGE_SIZE: usize = 200;
 
 #[cfg(any(test, feature = "asr-whisper"))]
-pub(in crate::cli::commands) fn execute_list_source_files() -> String {
+pub(in crate::cli::commands) fn execute_list_source_files_page(
+    page: usize,
+    page_size: Option<usize>,
+) -> String {
     let mut files: Vec<_> = source_bundle().keys().cloned().collect();
     files.sort();
-    let mut response = String::from("Available source files:\n");
-    for file in files {
+    let page = page.max(1);
+    let page_size = page_size
+        .unwrap_or(SOURCE_LIST_PAGE_SIZE)
+        .clamp(MIN_SOURCE_LIST_PAGE_SIZE, MAX_SOURCE_LIST_PAGE_SIZE);
+    let total = files.len();
+    let page_count = total.max(1).div_ceil(page_size);
+    let start = (page - 1) * page_size;
+    if start >= total {
+        return format!(
+            "Available source files page {page} is past the end ({page_count} page(s), {total} file(s), {page_size} files/page). Use listFiles({page_count}) to see the last page."
+        );
+    }
+    let end = (start + page_size).min(total);
+    let mut response = format!(
+        "Available source files page {page}/{page_count} (files {} to {} of {total}, {page_size} files/page):\n",
+        start + 1,
+        end,
+    );
+    if page < page_count {
+        response.push_str(&format!(
+            "Use listFiles({}) to continue after this page.\n",
+            page + 1
+        ));
+    }
+    for file in &files[start..end] {
         response.push_str(&file);
         response.push('\n');
+    }
+    if page < page_count {
+        response.push_str(&format!(
+            "More source files are available. Use listFiles({}) to continue.\n",
+            page + 1
+        ));
+    } else {
+        response.push_str("End of source file list. Use readSourceFile(path, page?) to inspect a file.\n");
     }
     response
 }

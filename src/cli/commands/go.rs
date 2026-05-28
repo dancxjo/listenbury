@@ -3,7 +3,7 @@ use anyhow::Result;
 
 use crate::cli::commands::cpal_diag::play_audio_frames;
 use crate::cli::commands::source_inspection::{
-    execute_grep_source, execute_list_source_files, execute_search_source,
+    execute_grep_source, execute_list_source_files_page, execute_search_source,
     execute_view_source_file_line, execute_view_source_file_page,
 };
 use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model, resolve_piper_voice};
@@ -59,7 +59,7 @@ Available functions:\n\
 - updateGraphNodeFields(nodeId, fields, options?): request memory field updates, especially description: \"natural language noun phrase\".\n\
 - searchGraphNodes(query, options?): search memory by text, field, value, or combinations. query may be a string or object with text, field, value, and limit.\n\
 - queryMemories(text, options?): retrieve memories for a phrase, sentence, name, topic, or claim. options may include limit and minScore.\n\
-- listFiles(): list bundled Listenbury source files.\n\
+- listFiles(pageOrOptions?): list bundled Listenbury source files. Use listFiles(2) or listFiles({ page: 2, pageSize: 80 }) for later pages.\n\
 - readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. pageOrOptions may be a page number or { page, line, pageSize }. A line number opens the page containing that line.\n\
 - searchSource(query, limit?): source text search.\n\
 - grepSource(pattern, limit?): grep-like source line search.\n\
@@ -73,7 +73,7 @@ Available functions:\n\
 - cancelItem(idOrTitle, reason?): cancel a goal/task/checklist.\n\
 - selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), tasks/checklists, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
 
@@ -103,11 +103,11 @@ const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
 const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 3;
 const ACTION_RESULT_MAX_CHARS: usize = 1_000;
 const SOURCE_ACTION_RESULT_MAX_CHARS: usize = 32_000;
-const DEFAULT_SOURCE_PAGE_LINES: usize = 120;
+const DEFAULT_SOURCE_PAGE_LINES: usize = 20;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage persisted executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal/task, inspect relevant context, or take a small useful action. Regularly summarize recent context and source discoveries, and store durable facts or next steps in memory, stage, tasks, or checklists. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage persisted executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal/task, inspect relevant context, or take a small useful action. Regularly summarize recent context and source discoveries, and store durable facts or next steps in memory, stage, tasks, or checklists. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -727,9 +727,12 @@ impl StreamOfConsciousness {
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
-                TypeScriptAction::ListFiles => {
-                    let output = execute_list_source_files();
-                    self.timeline("action_result", "Listed Listenbury source files.");
+                TypeScriptAction::ListFiles { page, page_size } => {
+                    let output = execute_list_source_files_page(page, page_size);
+                    self.timeline(
+                        "action_result",
+                        &format!("Listed Listenbury source files page {page}."),
+                    );
                     self.append_observation(StreamObservation::ActionResult(output))?;
                 }
                 TypeScriptAction::ReadSourceFile {
@@ -2270,7 +2273,10 @@ enum TypeScriptAction {
         value: Option<Value>,
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        page: usize,
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         page: usize,
@@ -2394,7 +2400,12 @@ enum TypeScriptActionPayload {
         #[serde(default)]
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        #[serde(default)]
+        page: Option<usize>,
+        #[serde(default)]
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         #[serde(default)]
@@ -2638,7 +2649,10 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 },
             )
         }
-        TypeScriptActionPayload::ListFiles => Some(TypeScriptAction::ListFiles),
+        TypeScriptActionPayload::ListFiles { page, page_size } => Some(TypeScriptAction::ListFiles {
+            page: page.unwrap_or(1).max(1),
+            page_size,
+        }),
         TypeScriptActionPayload::ReadSourceFile {
             file,
             page,
@@ -2818,8 +2832,8 @@ fn go_typescript_module() -> InternalModule {
         .with_function("queryMemories", ts_query_memories, 2)
         .with_function("query_memories", ts_query_memories, 2)
         .with_function("recallMemories", ts_query_memories, 2)
-        .with_function("listFiles", ts_list_files, 0)
-        .with_function("list_files", ts_list_files, 0)
+        .with_function("listFiles", ts_list_files, 1)
+        .with_function("list_files", ts_list_files, 1)
         .with_function("readSourceFile", ts_read_source_file, 2)
         .with_function("read_source_file", ts_read_source_file, 2)
         .with_function("readFile", ts_read_source_file, 2)
@@ -3135,9 +3149,16 @@ fn ts_query_memories(
 fn ts_list_files(
     interp: &mut Interpreter,
     _this: JsValue,
-    _args: &[JsValue],
+    args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
-    command_value(interp, json!({ "kind": "list_files" }))
+    let mut value = json!({ "kind": "list_files" });
+    if let Some(page) = list_source_page_arg(args) {
+        value["page"] = json!(page);
+    }
+    if let Some(page_size) = list_source_page_size_arg(args) {
+        value["page_size"] = json!(page_size);
+    }
+    command_value(interp, value)
 }
 
 fn ts_read_source_file(
@@ -3376,6 +3397,18 @@ fn read_source_page_arg(args: &[JsValue]) -> Option<usize> {
     .or_else(|| optional_positive_integer_arg(args, 2, "page"))
 }
 
+fn list_source_page_arg(args: &[JsValue]) -> Option<usize> {
+    match args.first() {
+        Some(JsValue::Number(value)) if value.is_finite() => Some(value.floor().max(1.0) as usize),
+        _ => optional_positive_integer_arg(args, 0, "page"),
+    }
+}
+
+fn list_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
+    optional_positive_integer_arg(args, 0, "pageSize")
+        .or_else(|| optional_positive_integer_arg(args, 0, "page_size"))
+}
+
 fn read_source_line_arg(args: &[JsValue]) -> Option<usize> {
     optional_positive_integer_arg(args, 1, "line")
         .or_else(|| optional_positive_integer_arg(args, 1, "lineNumber"))
@@ -3612,7 +3645,7 @@ fn render_action_result_for_prompt(text: &str) -> String {
 }
 
 fn is_source_inspection_result(text: &str) -> bool {
-    text.starts_with("Available source files:\n")
+    text.starts_with("Available source files")
         || text.starts_with("Source matches for ")
         || text.starts_with("No source matches for ")
         || (text.starts_with("--- ") && text.contains(" lines/page) ---\n"))
@@ -3938,7 +3971,7 @@ mod tests {
                 updateGraphNodeFields("node:1", { description: "test node" }),
                 searchGraphNodes({ text: "Travis", limit: 2 }),
                 queryMemories("Travis", { limit: 2, minScore: 0.2 }),
-                listFiles(),
+                listFiles(2),
                 readSourceFile("src/main.rs", 1),
                 readFile("src/main.rs"),
                 searchSource("GoCommand", 2),
@@ -3967,7 +4000,10 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(action, TypeScriptAction::ListFiles))
+                .any(|action| matches!(
+                    action,
+                    TypeScriptAction::ListFiles { page: 2, .. }
+                ))
         );
         assert!(
             actions

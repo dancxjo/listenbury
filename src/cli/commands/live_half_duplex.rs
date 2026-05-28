@@ -12,7 +12,8 @@ use crate::cli::commands::cpal_diag::{play_audio_frames, prepare_audio_playback}
 use crate::cli::commands::mic_transcribe::transcribe_group;
 #[cfg(any(test, feature = "asr-whisper"))]
 use crate::cli::commands::source_inspection::{
-    execute_grep_source, execute_list_source_files, execute_search_source, execute_view_source_file,
+    execute_grep_source, execute_list_source_files_page, execute_search_source,
+    execute_view_source_file,
 };
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::{
@@ -1628,10 +1629,10 @@ fn stream_speech_to_tts(
                                     );
                                 }
                             }
-                            LiveTypeScriptCommand::ListFiles => {
+                            LiveTypeScriptCommand::ListFiles { page, page_size } => {
                                 let source_context = execute_live_source_inspection(
                                     "listFiles",
-                                    execute_list_source_files(),
+                                    execute_list_source_files_page(page, page_size),
                                     state,
                                     user_turn_id,
                                 )?;
@@ -2304,7 +2305,10 @@ enum LiveTypeScriptCommand {
         value: Option<Value>,
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        page: usize,
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         page: usize,
@@ -2388,7 +2392,12 @@ enum LiveTypeScriptCommandPayload {
         #[serde(default)]
         limit: Option<usize>,
     },
-    ListFiles,
+    ListFiles {
+        #[serde(default)]
+        page: Option<usize>,
+        #[serde(default)]
+        page_size: Option<usize>,
+    },
     ReadSourceFile {
         file: String,
         #[serde(default)]
@@ -2540,7 +2549,12 @@ fn execute_live_typescript_commands(script: &str) -> Result<Vec<LiveTypeScriptCo
                     },
                 )
             }
-            LiveTypeScriptCommandPayload::ListFiles => Some(LiveTypeScriptCommand::ListFiles),
+            LiveTypeScriptCommandPayload::ListFiles { page, page_size } => {
+                Some(LiveTypeScriptCommand::ListFiles {
+                    page: page.unwrap_or(1).max(1),
+                    page_size,
+                })
+            }
             LiveTypeScriptCommandPayload::ReadSourceFile { file, page } => {
                 let file = file.trim();
                 (!file.is_empty()).then(|| LiveTypeScriptCommand::ReadSourceFile {
@@ -2622,8 +2636,8 @@ fn live_will_typescript_module() -> InternalModule {
         .with_function("queryMemories", ts_query_memories, 2)
         .with_function("query_memories", ts_query_memories, 2)
         .with_function("recallMemories", ts_query_memories, 2)
-        .with_function("listFiles", ts_list_files, 0)
-        .with_function("list_files", ts_list_files, 0)
+        .with_function("listFiles", ts_list_files, 1)
+        .with_function("list_files", ts_list_files, 1)
         .with_function("readSourceFile", ts_read_source_file, 2)
         .with_function("read_source_file", ts_read_source_file, 2)
         .with_function("readFile", ts_read_source_file, 2)
@@ -3010,12 +3024,33 @@ fn optional_positive_integer_arg(args: &[JsValue], index: usize, property: &str)
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
+fn list_source_page_arg(args: &[JsValue]) -> Option<usize> {
+    match args.first() {
+        Some(JsValue::Number(value)) if value.is_finite() => Some(value.floor().max(1.0) as usize),
+        _ => optional_positive_integer_arg(args, 0, "page"),
+    }
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+fn list_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
+    optional_positive_integer_arg(args, 0, "pageSize")
+        .or_else(|| optional_positive_integer_arg(args, 0, "page_size"))
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_list_files(
     interp: &mut Interpreter,
     _this: JsValue,
-    _args: &[JsValue],
+    args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
-    command_value(interp, json!({ "kind": "list_files" }))
+    let mut value = json!({ "kind": "list_files" });
+    if let Some(page) = list_source_page_arg(args) {
+        value["page"] = json!(page);
+    }
+    if let Some(page_size) = list_source_page_size_arg(args) {
+        value["page_size"] = json!(page_size);
+    }
+    command_value(interp, value)
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
@@ -5614,7 +5649,10 @@ mod tests {
         assert_eq!(
             commands,
             vec![
-                LiveTypeScriptCommand::ListFiles,
+                LiveTypeScriptCommand::ListFiles {
+                    page: 1,
+                    page_size: None,
+                },
                 LiveTypeScriptCommand::ReadSourceFile {
                     file: "src/runtime_event.rs".to_string(),
                     page: 2,
