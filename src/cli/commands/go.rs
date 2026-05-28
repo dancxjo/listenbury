@@ -4591,9 +4591,24 @@ fn stream_rag_query(
     work_summary: Option<&str>,
     recent_events: &VecDeque<String>,
 ) -> String {
-    let mut parts = vec![seed.trim(), startup_context.trim()];
+    let mut parts = Vec::new();
+    let live_seed = seed
+        .split_once("Initial live seed:")
+        .map(|(_, live_seed)| live_seed.trim())
+        .filter(|live_seed| !live_seed.is_empty());
+    if let Some(live_seed) = live_seed {
+        parts.push(format!("Initial live seed: {live_seed}"));
+    } else {
+        parts.push(
+            "Pete Listenbury current go session: autonomous first-person runtime, live timeline, memory, source context, world, people, being, and inner workings."
+                .to_string(),
+        );
+    }
+    if !startup_context.trim().is_empty() {
+        parts.push(startup_context.trim().to_string());
+    }
     if let Some(work_summary) = work_summary.map(str::trim).filter(|text| !text.is_empty()) {
-        parts.push(work_summary);
+        parts.push(work_summary.to_string());
     }
     let recent = recent_events
         .iter()
@@ -4603,11 +4618,11 @@ fn stream_rag_query(
         .collect::<Vec<_>>();
     let recent = recent.into_iter().rev().collect::<Vec<_>>().join("\n");
     if !recent.trim().is_empty() {
-        parts.push(recent.trim());
+        parts.push(recent.trim().to_string());
     }
     parts
         .into_iter()
-        .filter(|part| !part.is_empty())
+        .filter(|part| !part.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
 }
