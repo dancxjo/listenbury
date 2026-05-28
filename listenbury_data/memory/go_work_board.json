@@ -10,8 +10,85 @@
       "tags": [],
       "checklist": [],
       "status": "open"
+    },
+    {
+      "id": "task-2",
+      "kind": "task",
+      "title": "Read src/acoustic/mod.rs page 1",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-3",
+      "kind": "task",
+      "title": "Read src/mind/mod.rs page 1",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-4",
+      "kind": "task",
+      "title": "Read src/mind/context.rs",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-5",
+      "kind": "task",
+      "title": "Read src/mind/controller.rs page 1",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-6",
+      "kind": "task",
+      "title": "Read src/mind/entity.rs page 1",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-7",
+      "kind": "task",
+      "title": "Read src/mind/episodic.rs page 1",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    },
+    {
+      "id": "task-8",
+      "kind": "task",
+      "title": "Read src/acoustic/mod.rs page 2",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
     }
   ],
   "selected_id": "goal-1",
-  "next_id": 2
+  "next_id": 9
 }
