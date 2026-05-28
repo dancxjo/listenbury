@@ -1208,7 +1208,7 @@
     {
       "id": "goal-13",
       "title": "Explore neural acoustic model implementation",
-      "summary": "We have read pages 1-4 of src/acoustic/neural.rs, covering enums, structs, config, and runtime definitions for neural acoustic models. The file defines the structure for neural model enums, struct definitions for tensor names, track contract, config, runtime, etc. Next step: read page 3. This is synthesis of current understanding.",
+      "summary": "Conversion functions for input types to ONNX tensors; token ids, durations, f0 extraction, validation errors; next step: examine runtime prediction logic (pages 10 onwards).",
       "parent": null,
       "priority": null,
       "tags": [],
@@ -1597,6 +1597,18 @@
         {
           "text": "Read page 5: extraction of mel, optional f0 and voiced outputs, fallback logic; session contract validation for inputs/outputs.",
           "at": "2026-05-28T15:13:20-07:00"
+        },
+        {
+          "text": "Read page 8, validated session contract functions and input/output validation logic.",
+          "at": "2026-05-28T15:19:50-07:00"
+        },
+        {
+          "text": "Read page 9: implemented functions converting AcousticInput into token IDs, frame durations, and f0 vectors. Includes validation against phone ID maps and handling of phone-timed, token IDs, singing, and source filter track inputs. Next, read page 10 to see how these inputs are fed into the ONNX runtime.",
+          "at": "2026-05-28T15:19:53-07:00"
+        },
+        {
+          "text": "Synthesis of page 9 content. Plan to read page 10 next.",
+          "at": "2026-05-28T15:19:54-07:00"
         }
       ],
       "status": "open"
