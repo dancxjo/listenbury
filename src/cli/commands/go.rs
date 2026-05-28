@@ -1394,17 +1394,18 @@ fn strip_bare_channel_label_prefix(text: &str) -> Option<&str> {
         .find_map(|marker| {
             text.strip_prefix(marker).and_then(|rest| {
                 let should_strip = rest.is_empty()
-                    || rest
-                        .chars()
-                        .next()
-                        .is_some_and(|ch| ch.is_whitespace() || ch.is_ascii_uppercase() || ch == ':');
+                    || rest.chars().next().is_some_and(|ch| {
+                        ch.is_whitespace() || ch.is_ascii_uppercase() || ch == ':'
+                    });
                 should_strip.then_some(rest.trim_start_matches([' ', ':']))
             })
         })
 }
 
 fn next_typescript_start(text: &str) -> Option<(usize, usize)> {
-    let normal = text.find(TYPESCRIPT_START).map(|start| (start, TYPESCRIPT_START.len()));
+    let normal = text
+        .find(TYPESCRIPT_START)
+        .map(|start| (start, TYPESCRIPT_START.len()));
     let recovered = text
         .match_indices(TYPESCRIPT_START_MISSING_LESS_THAN)
         .find(|(start, _)| is_recoverable_missing_typescript_opener(text, *start))
@@ -2649,10 +2650,12 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 },
             )
         }
-        TypeScriptActionPayload::ListFiles { page, page_size } => Some(TypeScriptAction::ListFiles {
-            page: page.unwrap_or(1).max(1),
-            page_size,
-        }),
+        TypeScriptActionPayload::ListFiles { page, page_size } => {
+            Some(TypeScriptAction::ListFiles {
+                page: page.unwrap_or(1).max(1),
+                page_size,
+            })
+        }
         TypeScriptActionPayload::ReadSourceFile {
             file,
             page,
@@ -3820,7 +3823,8 @@ mod tests {
     #[test]
     fn parser_recovers_missing_less_than_typescript_opener() {
         let mut parser = StreamOutputParser::new(400);
-        let parsed = parser.push("Let's inspect the repo.ts>listFiles()</ts>commentary This will list files.");
+        let parsed = parser
+            .push("Let's inspect the repo.ts>listFiles()</ts>commentary This will list files.");
         assert_eq!(
             parsed.outputs,
             vec![
@@ -4000,10 +4004,7 @@ mod tests {
         assert!(
             actions
                 .iter()
-                .any(|action| matches!(
-                    action,
-                    TypeScriptAction::ListFiles { page: 2, .. }
-                ))
+                .any(|action| matches!(action, TypeScriptAction::ListFiles { page: 2, .. }))
         );
         assert!(
             actions

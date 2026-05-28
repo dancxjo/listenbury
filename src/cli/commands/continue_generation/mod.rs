@@ -1863,9 +1863,10 @@ fn execute_typescript_command_results(
                     )
                 ),
             ),
-            TypeScriptCommand::ListFiles { page, page_size } => {
-                ("list_files", execute_list_source_files_page(*page, *page_size))
-            }
+            TypeScriptCommand::ListFiles { page, page_size } => (
+                "list_files",
+                execute_list_source_files_page(*page, *page_size),
+            ),
             TypeScriptCommand::ReadSourceFile { file, page } => {
                 ("read_source_file", execute_view_source_file(file, *page))
             }
@@ -2083,9 +2084,10 @@ fn execute_typescript_command_results_with_cognition(
                     turn_id,
                 ),
             ),
-            TypeScriptCommand::ListFiles { page, page_size } => {
-                ("list_files", execute_list_source_files_page(*page, *page_size))
-            }
+            TypeScriptCommand::ListFiles { page, page_size } => (
+                "list_files",
+                execute_list_source_files_page(*page, *page_size),
+            ),
             TypeScriptCommand::ReadSourceFile { file, page } => {
                 ("read_source_file", execute_view_source_file(file, *page))
             }

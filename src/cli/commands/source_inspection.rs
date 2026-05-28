@@ -51,7 +51,9 @@ pub(in crate::cli::commands) fn execute_list_source_files_page(
             page + 1
         ));
     } else {
-        response.push_str("End of source file list. Use readSourceFile(path, page?) to inspect a file.\n");
+        response.push_str(
+            "End of source file list. Use readSourceFile(path, page?) to inspect a file.\n",
+        );
     }
     response
 }
