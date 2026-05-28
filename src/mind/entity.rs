@@ -280,6 +280,55 @@ const COMMON_WORDS: &[&str] = &[
     "your",
     "our",
     "their",
+    "am",
+    "are",
+    "be",
+    "been",
+    "being",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "had",
+    "has",
+    "have",
+    "may",
+    "might",
+    "must",
+    "should",
+    "was",
+    "were",
+    "will",
+    "would",
+    "can't",
+    "couldn't",
+    "didn't",
+    "doesn't",
+    "don't",
+    "hadn't",
+    "hasn't",
+    "haven't",
+    "isn't",
+    "shouldn't",
+    "wasn't",
+    "weren't",
+    "won't",
+    "wouldn't",
+    "i'd",
+    "i'll",
+    "i'm",
+    "i've",
+    "it'd",
+    "it'll",
+    "it's",
+    "that's",
+    "there's",
+    "they're",
+    "we're",
+    "you're",
+    "he's",
+    "she's",
     "who",
     "what",
     "where",
@@ -288,8 +337,27 @@ const COMMON_WORDS: &[&str] = &[
     "how",
     "which",
     "ok",
+    "okay",
     "yes",
     "no",
+    "hello",
+    "hi",
+    "hey",
+    "hmm",
+    "hm",
+    "mmm",
+    "mm",
+    "uh",
+    "um",
+    "uhh",
+    "umm",
+    "ah",
+    "oh",
+    "alright",
+    "right",
+    "thanks",
+    "thank",
+    "please",
     "so",
     "but",
     "and",
@@ -297,6 +365,8 @@ const COMMON_WORDS: &[&str] = &[
     "if",
     "to",
     "of",
+    "think",
+    "hink",
     "monday",
     "tuesday",
     "wednesday",
@@ -485,7 +555,6 @@ fn context_from_preceding(words_before: &[&str]) -> EntityContext {
 }
 
 struct WordToken<'a> {
-    raw: &'a str,
     stripped: &'a str,
     byte_start: usize,
     byte_end: usize,
@@ -500,7 +569,6 @@ fn tokenize(text: &str) -> Vec<WordToken<'_>> {
             if let Some(s) = start.take() {
                 let raw = &text[s..i];
                 tokens.push(WordToken {
-                    raw,
                     stripped: strip_punct(raw),
                     byte_start: s,
                     byte_end: i,
@@ -513,7 +581,6 @@ fn tokenize(text: &str) -> Vec<WordToken<'_>> {
     if let Some(s) = start {
         let raw = &text[s..];
         tokens.push(WordToken {
-            raw,
             stripped: strip_punct(raw),
             byte_start: s,
             byte_end: text.len(),
@@ -760,6 +827,35 @@ mod tests {
     fn all_lowercase_text_returns_no_entities() {
         let entities = extractor().extract("i talked to someone about something");
         assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn spoken_fillers_and_auxiliaries_do_not_become_people() {
+        let entities = extractor()
+            .extract("Hello. Hmm. That's interesting. Can you do that? Do you know? Alright. Mmm.");
+
+        assert!(
+            entities.is_empty(),
+            "spoken fillers and auxiliary verbs should not produce provisional people: {entities:?}"
+        );
+    }
+
+    #[test]
+    fn contraction_opener_does_not_join_following_name() {
+        let entities = extractor().extract("It's Reed R-E-E-D");
+
+        assert!(
+            entities
+                .iter()
+                .all(|entity| !entity.text.starts_with("It's")),
+            "contraction opener should not be included in extracted entity: {entities:?}"
+        );
+        let reed = entities
+            .iter()
+            .find(|entity| entity.text == "Reed R-E-E-D")
+            .expect("spelled name should still be extracted");
+        assert_eq!(reed.kind, EntityKind::Person);
+        assert_eq!(reed.provisional_node_id(), "person:reed_r-e-e-d");
     }
 
     #[test]

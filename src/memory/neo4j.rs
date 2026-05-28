@@ -173,7 +173,7 @@ fn node_statement(node: &Neo4jNode) -> anyhow::Result<CypherStatement> {
     props.insert("logical_id".to_string(), json!(node.logical_id.as_str()));
     Ok(CypherStatement {
         statement: format!(
-            "MERGE (n:GraphNode {{id: $id}}) SET n += $props SET n:`{}`",
+            "MERGE (n {{id: $id}}) SET n:GraphNode SET n += $props SET n:`{}`",
             node.label
         ),
         parameters: json!({
@@ -797,6 +797,27 @@ mod tests {
                 node.logical_id
             );
         }
+    }
+
+    #[test]
+    fn entity_node_statement_merges_existing_node_by_id_before_labeling() {
+        let node = Neo4jNode {
+            logical_id: "person:travis".to_string(),
+            label: "Person".to_string(),
+            properties: props([("label", json!("Travis"))]),
+        };
+
+        let statement = node_statement(&node).expect("entity node should produce Cypher");
+
+        assert!(statement.statement.starts_with("MERGE (n {id: $id})"));
+        assert!(statement.statement.contains("SET n:GraphNode"));
+        assert!(statement.statement.contains("SET n:`Person`"));
+        assert!(!statement.statement.contains("CREATE (n"));
+        assert!(!statement.statement.contains("MERGE (n:GraphNode"));
+        assert_eq!(
+            statement.parameters.get("id").and_then(Value::as_str),
+            Some("person:travis")
+        );
     }
 
     #[test]
