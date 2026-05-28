@@ -3861,13 +3861,14 @@ mod tests {
         assert!(prompt.contains("Frequently summarize what is going on"));
         assert!(prompt.contains("After source inspection results arrive"));
         assert!(prompt.contains("Do not silently chain source reads"));
-        assert!(prompt.contains("store durable user, project, and task context"));
+        assert!(prompt.contains("store durable user, project, and work context"));
+        assert!(prompt.contains("goal running-log notes"));
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
         assert!(prompt.contains("runtime automatically imports the action functions"));
         assert!(prompt.contains("<ts>note(\"still observing\")</ts>"));
         assert!(!prompt.contains("peteWillBuilder"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("Regularly summarize recent context"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("Keep running logs on goals"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
     }
 
