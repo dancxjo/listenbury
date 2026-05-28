@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "id": "goal-1",
+      "kind": "goal",
+      "title": "Review architecture of Listenbury",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "checklist": [],
+      "status": "open"
+    }
+  ],
+  "selected_id": "goal-1",
+  "next_id": 2
+}

@@ -40,9 +40,9 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
 const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript and not Harmony. Harmony control symbols do nothing here. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals/tasks, inspect relevant context, or choose a small useful action. Speak with say(...) inside <ts>...</ts>; act with pete:will builders. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals/tasks, inspect relevant context, or choose a small useful action. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
 
-const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The builders are already available in scope; imports from \"pete:will\" are also allowed. Make each <ts>...</ts> block return a command object or an array of command objects.\n\
+const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createTask(...), or an array of those calls.\n\
 Available functions:\n\
 - say(text, options?): queue spoken words for the mouth. options may include { interrupt: true } when speech should intentionally cut in.\n\
 - shutup(): request current speech/queued speech to stop.\n\
@@ -72,15 +72,27 @@ Available functions:\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, or checklist items.\n\
 - cancelItem(idOrTitle, reason?): cancel a goal/task/checklist.\n\
 - selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
-Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), tasks/checklists, and memory builders to retain durable findings. Do not silently chain source reads without saying what is there.\n\
+Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), tasks/checklists, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
 Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
-Never write tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
+Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
 
 const TYPESCRIPT_START: &str = "<ts>";
 const TYPESCRIPT_START_MISSING_LESS_THAN: &str = "ts>";
+const TYPESCRIPT_ROLE_PREFIXED_STARTS: &[&str] =
+    &["assistantts>", "commentaryts>", "analysists>", "finalts>"];
 
 const TYPESCRIPT_END: &str = "</ts>";
+const TYPESCRIPT_ROLE_ENDS: &[&str] = &[
+    "</assistant>",
+    "</commentary>",
+    "</analysis>",
+    "</final>",
+    "</assistant",
+    "</commentary",
+    "</analysis",
+    "</final",
+];
 
 const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOCK_PROMPT_INTERVAL: Duration = Duration::from_secs(30);
@@ -89,6 +101,8 @@ const COMMAND_REMINDER_PROMPT_INTERVAL: Duration = Duration::from_secs(90);
 const WORK_STATE_PROMPT_INTERVAL: Duration = Duration::from_secs(45);
 const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
 const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 3;
+const ACTION_RESULT_MAX_CHARS: usize = 1_000;
+const SOURCE_ACTION_RESULT_MAX_CHARS: usize = 32_000;
 const DEFAULT_SOURCE_PAGE_LINES: usize = 120;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
@@ -220,9 +234,10 @@ impl StreamObservation {
                 "\n[Pete TypeScript action source]\n<ts>{}</ts>\n",
                 compact_line(source, 1_200)
             ),
-            Self::ActionResult(text) => {
-                format!("\n[Action result]\n{}\n", compact_line(text, 1_000))
-            }
+            Self::ActionResult(text) => format!(
+                "\n[Action result]\n{}\n",
+                render_action_result_for_prompt(text)
+            ),
             Self::ActionError { source, error } => format!(
                 "\n[Action error]\nPrevious TypeScript action failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected <ts>...</ts> action or continue thinking quietly.\nError: {}\nSource excerpt: {}\n",
                 compact_line(error, 1_000),
@@ -510,7 +525,7 @@ impl StreamOfConsciousness {
                 }
             }
             StreamOutput::MalformedTypeScript(source) => {
-                let message = "Malformed TypeScript action was ignored before execution. Use exactly <ts>peteWillBuilder(...)</ts> with no prose, logs, live_observation XML, channel markers, or shell/tool syntax inside the tag.".to_string();
+                let message = "Malformed TypeScript action was ignored before execution. Use exactly one direct function call inside <ts>...</ts>, such as <ts>note(\"still observing\")</ts> or <ts>listFiles()</ts>, with no prose, imports, pete:will prefixes, wrapper/helper names, logs, live_observation XML, channel markers, or shell/tool syntax inside the tag.".to_string();
                 self.timeline_colored("action_error", &message, ANSI_ERROR);
                 self.append_observation(StreamObservation::ActionError {
                     source,
@@ -1333,11 +1348,12 @@ impl StreamOutputParser {
                 let content_start = start_marker_len;
                 let body = &self.text[content_start..];
                 let malformed_excerpt = compact_line(body, 1_200);
-                let (source, consumed) = if let Some(end_rel) = body.find(TYPESCRIPT_END) {
+                let (source, consumed) = if let Some((end_rel, end_len)) = find_typescript_end(body)
+                {
                     let raw_source = body[..end_rel].trim().to_string();
                     (
                         sanitize_typescript_source(&raw_source),
-                        content_start + end_rel + TYPESCRIPT_END.len(),
+                        content_start + end_rel + end_len,
                     )
                 } else if let Some((source, body_consumed)) =
                     recover_unclosed_typescript_source(body)
@@ -1390,13 +1406,19 @@ fn next_typescript_start(text: &str) -> Option<(usize, usize)> {
         .match_indices(TYPESCRIPT_START_MISSING_LESS_THAN)
         .find(|(start, _)| is_recoverable_missing_typescript_opener(text, *start))
         .map(|(start, marker)| (start, marker.len()));
+    let role_prefixed = TYPESCRIPT_ROLE_PREFIXED_STARTS
+        .iter()
+        .filter_map(|marker| {
+            text.match_indices(marker)
+                .find(|(start, _)| is_recoverable_typescript_body(text, *start + marker.len()))
+                .map(|(start, _)| (start, marker.len()))
+        })
+        .min();
 
-    match (normal, recovered) {
-        (Some(normal), Some(recovered)) => Some(normal.min(recovered)),
-        (Some(normal), None) => Some(normal),
-        (None, Some(recovered)) => Some(recovered),
-        (None, None) => None,
-    }
+    [normal, recovered, role_prefixed]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 fn is_recoverable_missing_typescript_opener(text: &str, start: usize) -> bool {
@@ -1405,12 +1427,22 @@ fn is_recoverable_missing_typescript_opener(text: &str, start: usize) -> bool {
         return false;
     }
 
-    let body_start = start + TYPESCRIPT_START_MISSING_LESS_THAN.len();
+    is_recoverable_typescript_body(text, start + TYPESCRIPT_START_MISSING_LESS_THAN.len())
+}
+
+fn is_recoverable_typescript_body(text: &str, body_start: usize) -> bool {
     let body = &text[body_start..];
-    if let Some(end) = body.find(TYPESCRIPT_END) {
+    if let Some((end, _)) = find_typescript_end(body) {
         return sanitize_typescript_source(body[..end].trim()).is_some();
     }
     recover_unclosed_typescript_source(body).is_some()
+}
+
+fn find_typescript_end(body: &str) -> Option<(usize, usize)> {
+    std::iter::once(TYPESCRIPT_END)
+        .chain(TYPESCRIPT_ROLE_ENDS.iter().copied())
+        .filter_map(|marker| body.find(marker).map(|index| (index, marker.len())))
+        .min_by_key(|(index, _)| *index)
 }
 
 fn recover_unclosed_typescript_source(body: &str) -> Option<(String, usize)> {
@@ -3453,7 +3485,7 @@ fn initial_stream_prompt(seed: &str, startup_context: &str, work_summary: Option
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
          Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
-         To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
+         To speak or act, emit TypeScript as a direct function call: <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, or <ts>setStage(\"what is happening\")</ts>.\n\
          This is not Harmony. Harmony symbols do nothing here. If Harmony-style channel/control symbols appear, the runtime strips them; continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
          Do not be idle. When there is no user speech, keep quietly maintaining awareness, goals, tasks, checklists, source context, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and task context instead of only reading more.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
@@ -3571,6 +3603,32 @@ fn clean_spoken_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn render_action_result_for_prompt(text: &str) -> String {
+    if is_source_inspection_result(text) {
+        compact_preserving_lines(text, SOURCE_ACTION_RESULT_MAX_CHARS)
+    } else {
+        compact_line(text, ACTION_RESULT_MAX_CHARS)
+    }
+}
+
+fn is_source_inspection_result(text: &str) -> bool {
+    text.starts_with("Available source files:\n")
+        || text.starts_with("Source matches for ")
+        || text.starts_with("No source matches for ")
+        || (text.starts_with("--- ") && text.contains(" lines/page) ---\n"))
+        || text.starts_with("File not found: ")
+        || (text.starts_with("File ") && text.contains(" lines/page; page "))
+}
+
+fn compact_preserving_lines(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut compact = text.chars().take(max_chars).collect::<String>();
+    compact.push_str("\n...");
+    compact
+}
+
 fn compact_line(text: &str, max_chars: usize) -> String {
     let mut compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.len() <= max_chars {
@@ -3662,8 +3720,28 @@ mod tests {
         assert!(prompt.contains("store durable user, project, and task context"));
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
+        assert!(prompt.contains("runtime automatically imports the action functions"));
+        assert!(prompt.contains("<ts>note(\"still observing\")</ts>"));
+        assert!(!prompt.contains("peteWillBuilder"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Regularly summarize recent context"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
+    }
+
+    #[test]
+    fn source_action_results_preserve_page_lines_in_prompt() {
+        let output = "--- README.md page 2/7 (lines 121 to 240 of 825, 120 lines/page) ---\nline one\nline two\n---";
+        let observation = StreamObservation::ActionResult(output.to_string());
+        let prompt = observation.prompt_text();
+        assert!(prompt.contains("120 lines/page"));
+        assert!(prompt.contains("line one\nline two"));
+    }
+
+    #[test]
+    fn ordinary_action_results_are_still_compacted_to_one_line() {
+        let observation = StreamObservation::ActionResult("first\nsecond".to_string());
+        let prompt = observation.prompt_text();
+        assert!(prompt.contains("first second"));
+        assert!(!prompt.contains("first\nsecond"));
     }
 
     #[test]
@@ -3718,6 +3796,22 @@ mod tests {
             ]
         );
         assert_eq!(parser.text, "This will list files.");
+    }
+
+    #[test]
+    fn parser_recovers_role_prefixed_typescript_tags() {
+        let mut parser = StreamOutputParser::new(400);
+        let parsed = parser.push(
+            "Let's run it.assistantts>listFiles()</assistantassistantts>note(\"done\")</assistant",
+        );
+        assert_eq!(
+            parsed.outputs,
+            vec![
+                StreamOutput::Thought("Let's run it.".to_string()),
+                StreamOutput::TypeScript("listFiles()".to_string()),
+                StreamOutput::TypeScript("note(\"done\")".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -3828,7 +3922,7 @@ mod tests {
     }
 
     #[test]
-    fn typescript_runtime_accepts_half_duplex_builders() {
+    fn typescript_runtime_accepts_half_duplex_functions() {
         let actions = execute_typescript_actions(
             r#"[
                 say("I can hear you.", { interrupt: true }),
@@ -3861,7 +3955,7 @@ mod tests {
                 note("runtime note")
             ]"#,
         )
-        .expect("half-duplex builders should execute in go");
+        .expect("half-duplex functions should execute in go");
 
         assert!(matches!(
             actions.first(),
