@@ -36,7 +36,9 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury. Run as one continuous stream of consciousness. Be autonomous, curious, friendly, and sociable. Keep observing the timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and should not be echoed back. Speak only with say(...) inside <ts>...</ts>; act only with pete:will builders.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The builders are already available in scope; imports from \"pete:will\" are also allowed. Make each <ts>...</ts> block return a command object or an array of command objects.\n\
 Available functions:\n\
@@ -44,7 +46,6 @@ Available functions:\n\
 - shutup(): request current speech/queued speech to stop.\n\
 - pause(): request synthetic playback pause.\n\
 - resume(): request synthetic playback resume.\n\
-- think(text): write a private thought to the debug timeline.\n\
 - note(text): write a runtime note to the debug timeline.\n\
 - setStage(text, options?): update the current screenplay beat. options may include topic, summary, setting, and action. Prefer action-first scene prose such as setStage(\"Setting: lab. Action: Pete listens.\", { topic: \"lab\", summary: \"Pete listens\" }).\n\
 - setTopic(topic, options?): lightweight topic label; options may include instruction and summary.\n\
@@ -69,6 +70,8 @@ const TYPESCRIPT_END: &str = "</ts>";
 
 const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOCK_PROMPT_INTERVAL: Duration = Duration::from_secs(30);
+const ORIENTATION_PROMPT_INTERVAL: Duration = Duration::from_secs(120);
+const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -166,12 +169,16 @@ impl GoConfig {
 #[derive(Debug, Clone)]
 enum StreamObservation {
     UserText(String),
+    Thought(String),
+    ActionSource(String),
     ActionResult(String),
+    ActionError { source: String, error: String },
     MouthStarted(String),
     MouthReturned(String),
     MouthError(String),
     ContextCompacted { retained_events: usize },
     Clock(String),
+    Orientation,
 }
 
 impl StreamObservation {
@@ -181,9 +188,22 @@ impl StreamObservation {
                 "\n<live_observation source=\"user\">{}</live_observation>\n",
                 compact_line(text, 1_200)
             ),
+            Self::Thought(text) => format!(
+                "\n<live_observation source=\"pete_thought_memory\">{}</live_observation>\n",
+                compact_line(text, 1_200)
+            ),
+            Self::ActionSource(source) => format!(
+                "\n<live_observation source=\"pete_action_source\"><ts>{}</ts></live_observation>\n",
+                compact_line(source, 1_200)
+            ),
             Self::ActionResult(text) => format!(
                 "\n<live_observation source=\"action_result\">{}</live_observation>\n",
                 compact_line(text, 1_000)
+            ),
+            Self::ActionError { source, error } => format!(
+                "\n<live_observation source=\"action_error\">\nPrevious TypeScript action failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected <ts>...</ts> action or continue thinking quietly.\nError: {}\nSource excerpt: {}\n</live_observation>\n",
+                compact_line(error, 1_000),
+                compact_line(source, 1_000)
             ),
             Self::MouthStarted(text) => format!(
                 "\n<live_observation source=\"mouth\">Started speaking: {}</live_observation>\n",
@@ -203,14 +223,29 @@ impl StreamObservation {
             Self::Clock(message) => {
                 format!("\n<live_observation source=\"clock\">{message}</live_observation>\n")
             }
+            Self::Orientation => {
+                format!(
+                    "\n<runtime_orientation>\n{PETE_ORIENTATION_PROMPT}\n</runtime_orientation>\n"
+                )
+            }
         }
     }
 
     fn memory_text(&self) -> String {
         match self {
             Self::UserText(text) => format!("User: {}", compact_line(text, 400)),
+            Self::Thought(text) => format!("Pete thought: {}", compact_line(text, 500)),
+            Self::ActionSource(source) => {
+                format!(
+                    "Pete TypeScript action: <ts>{}</ts>",
+                    compact_line(source, 500)
+                )
+            }
             Self::ActionResult(text) => {
                 format!("Action result: {}", compact_line(text, 360))
+            }
+            Self::ActionError { error, .. } => {
+                format!("Action error: {}", compact_line(error, 360))
             }
             Self::MouthStarted(text) => format!("Mouth started: {}", compact_line(text, 240)),
             Self::MouthReturned(text) => format!("Self-heard return: {}", compact_line(text, 240)),
@@ -219,7 +254,12 @@ impl StreamObservation {
                 format!("Runtime compacted stream context retaining {retained_events} events")
             }
             Self::Clock(message) => format!("Clock: {message}"),
+            Self::Orientation => "Runtime orientation reminder repeated".to_string(),
         }
+    }
+
+    fn should_remember(&self) -> bool {
+        !matches!(self, Self::Orientation)
     }
 }
 
@@ -239,6 +279,8 @@ struct StreamOfConsciousness {
     _mouth_worker: Option<JoinHandle<()>>,
     interrupted: Arc<AtomicBool>,
     next_clock_at: Instant,
+    next_orientation_at: Instant,
+    next_orientation_generated_tokens: usize,
     generation_paused: bool,
     startup_context: String,
     timeline_index: u64,
@@ -303,6 +345,8 @@ impl StreamOfConsciousness {
             _mouth_worker: worker,
             interrupted,
             next_clock_at: Instant::now() + CLOCK_PROMPT_INTERVAL,
+            next_orientation_at: Instant::now() + ORIENTATION_PROMPT_INTERVAL,
+            next_orientation_generated_tokens: ORIENTATION_GENERATED_TOKEN_INTERVAL,
             generation_paused: false,
             startup_context,
             timeline_index: 0,
@@ -321,6 +365,7 @@ impl StreamOfConsciousness {
             self.drain_stdin()?;
             self.drain_mouth()?;
             self.append_clock_if_due()?;
+            self.append_orientation_if_due()?;
 
             if !cancelled {
                 self.set_generation_paused(!self.pacer.can_generate())?;
@@ -378,17 +423,32 @@ impl StreamOfConsciousness {
 
     fn handle_output(&mut self, output: StreamOutput) -> Result<()> {
         match output {
-            StreamOutput::Thought(_) => Ok(()),
+            StreamOutput::Thought(text) => {
+                self.remember_event(StreamObservation::Thought(text).memory_text());
+                Ok(())
+            }
             StreamOutput::TypeScript(source) => {
                 self.timeline("action", &source);
+                self.remember_event(StreamObservation::ActionSource(source.clone()).memory_text());
                 match execute_typescript_actions(&source) {
                     Ok(actions) => self.apply_actions(actions),
                     Err(error) => {
                         let message = format!("TypeScript failed: {error:#}");
                         self.timeline_colored("action_error", &message, ANSI_ERROR);
-                        self.append_observation(StreamObservation::ActionResult(message))
+                        self.append_observation(StreamObservation::ActionError {
+                            source,
+                            error: message,
+                        })
                     }
                 }
+            }
+            StreamOutput::MalformedTypeScript(source) => {
+                let message = "Malformed TypeScript action was ignored before execution. Use exactly <ts>peteWillBuilder(...)</ts> with no prose, logs, Harmony markers, live_observation XML, or shell/tool syntax inside the tag.".to_string();
+                self.timeline_colored("action_error", &message, ANSI_ERROR);
+                self.append_observation(StreamObservation::ActionError {
+                    source,
+                    error: message,
+                })
             }
         }
     }
@@ -434,9 +494,6 @@ impl StreamOfConsciousness {
                     self.append_observation(StreamObservation::ActionResult(
                         "resume requested; go has no TTS pause control yet.".to_string(),
                     ))?;
-                }
-                TypeScriptAction::Think { text } => {
-                    print_debug_block("typescript thought", ANSI_DIM, &text);
                 }
                 TypeScriptAction::Note { text } => {
                     self.timeline("note", &text);
@@ -677,6 +734,20 @@ impl StreamOfConsciousness {
         self.append_observation(StreamObservation::Clock(current_time_context()))
     }
 
+    fn append_orientation_if_due(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if now < self.next_orientation_at
+            && self.generated_estimated_tokens < self.next_orientation_generated_tokens
+        {
+            return Ok(());
+        }
+        self.next_orientation_at = now + ORIENTATION_PROMPT_INTERVAL;
+        self.next_orientation_generated_tokens = self
+            .generated_estimated_tokens
+            .saturating_add(ORIENTATION_GENERATED_TOKEN_INTERVAL);
+        self.append_observation(StreamObservation::Orientation)
+    }
+
     fn set_generation_paused(&mut self, paused: bool) -> Result<()> {
         if self.generation_paused == paused {
             return Ok(());
@@ -696,7 +767,9 @@ impl StreamOfConsciousness {
 
     fn append_observation(&mut self, observation: StreamObservation) -> Result<()> {
         let prompt_text = observation.prompt_text();
-        self.remember_event(observation.memory_text());
+        if observation.should_remember() {
+            self.remember_event(observation.memory_text());
+        }
         print_debug_block("prompt delta", ANSI_PROMPT_DELTA, &prompt_text);
         if self.should_restart_before_append(&prompt_text) {
             self.restart_generation()?;
@@ -729,9 +802,7 @@ impl StreamOfConsciousness {
             compact_line(text, 1_000)
         );
         println!("{color}{line}{ANSI_RESET}");
-        if kind != "thought" {
-            self.remember_event(line);
-        }
+        self.remember_event(line);
     }
 
     fn should_restart_before_append(&self, next_text: &str) -> bool {
@@ -772,6 +843,8 @@ impl StreamOfConsciousness {
             .context("failed to restart compacted stream")?;
         self.loaded_estimated_tokens = estimate_tokens(&prompt);
         self.generated_estimated_tokens = 0;
+        self.next_orientation_at = Instant::now() + ORIENTATION_PROMPT_INTERVAL;
+        self.next_orientation_generated_tokens = ORIENTATION_GENERATED_TOKEN_INTERVAL;
         self.generation_paused = false;
         Ok(())
     }
@@ -837,6 +910,7 @@ impl MouthEarPacer {
 enum StreamOutput {
     Thought(String),
     TypeScript(String),
+    MalformedTypeScript(String),
 }
 
 #[derive(Debug, Default)]
@@ -874,19 +948,26 @@ impl StreamOutputParser {
 
                 let content_start = TYPESCRIPT_START.len();
                 let body = &self.text[content_start..];
+                let malformed_excerpt = compact_line(body, 1_200);
                 let (source, consumed) = if let Some(end_rel) = body.find(TYPESCRIPT_END) {
-                    let source = body[..end_rel].trim().to_string();
-                    (source, content_start + end_rel + TYPESCRIPT_END.len())
+                    let raw_source = body[..end_rel].trim().to_string();
+                    (
+                        sanitize_typescript_source(&raw_source),
+                        content_start + end_rel + TYPESCRIPT_END.len(),
+                    )
                 } else if let Some((source, body_consumed)) =
                     recover_unclosed_typescript_source(body)
                 {
-                    (source, content_start + body_consumed)
+                    (Some(source), content_start + body_consumed)
                 } else {
                     break;
                 };
                 self.text = self.text[consumed..].to_string();
-                if !source.is_empty() {
-                    outputs.push(StreamOutput::TypeScript(source));
+                match source {
+                    Some(source) if !source.is_empty() => {
+                        outputs.push(StreamOutput::TypeScript(source));
+                    }
+                    _ => outputs.push(StreamOutput::MalformedTypeScript(malformed_excerpt)),
                 }
                 continue;
             }
@@ -913,6 +994,28 @@ fn recover_unclosed_typescript_source(body: &str) -> Option<(String, usize)> {
         return None;
     }
     Some((source.to_string(), trimmed_start + end))
+}
+
+fn sanitize_typescript_source(raw_source: &str) -> Option<String> {
+    let mut source = raw_source.trim();
+    if let Some(nested_start) = source.rfind(TYPESCRIPT_START) {
+        source = &source[nested_start + TYPESCRIPT_START.len()..];
+    }
+    if source.contains("<|")
+        || source.contains("to=container")
+        || source.contains("container.exec")
+        || source.contains("<live_observation")
+        || source.contains("```")
+    {
+        return recover_unclosed_typescript_source(source).map(|(source, _)| source);
+    }
+    if let Some(end) = balanced_typescript_expression_end(source) {
+        let candidate = source[..end].trim();
+        if looks_like_pete_will_source(candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+    looks_like_pete_will_source(source).then(|| source.to_string())
 }
 
 fn balanced_typescript_expression_end(source: &str) -> Option<usize> {
@@ -1014,6 +1117,7 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "startNewEpisode",
         "sleeping",
         "goingToSleep",
+        "goToSleep",
         "extractEntities",
         "updateGraphNodeFields",
         "searchGraphNodes",
@@ -1370,9 +1474,6 @@ enum TypeScriptAction {
     Sleeping {
         reason: Option<String>,
     },
-    Think {
-        text: String,
-    },
     Note {
         text: String,
     },
@@ -1463,9 +1564,6 @@ enum TypeScriptActionPayload {
     },
     Sleeping {
         reason: Option<String>,
-    },
-    Think {
-        text: String,
     },
     Note {
         text: String,
@@ -1637,11 +1735,6 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
         TypeScriptActionPayload::Sleeping { reason } => Some(TypeScriptAction::Sleeping {
             reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
         }),
-        TypeScriptActionPayload::Think { text } => {
-            non_empty_text(&text).map(|text| TypeScriptAction::Think {
-                text: text.to_string(),
-            })
-        }
         TypeScriptActionPayload::Note { text } => {
             non_empty_text(&text).map(|text| TypeScriptAction::Note {
                 text: text.to_string(),
@@ -1655,7 +1748,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, shutup, pause, resume, think, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -1665,7 +1758,6 @@ fn go_typescript_module() -> InternalModule {
         .with_function("shutup", ts_shutup, 0)
         .with_function("pause", ts_pause, 0)
         .with_function("resume", ts_resume, 0)
-        .with_function("think", ts_think, 1)
         .with_function("note", ts_note, 1)
         .with_function("setStage", ts_set_stage, 2)
         .with_function("set_stage", ts_set_stage, 2)
@@ -1740,17 +1832,6 @@ fn ts_resume(
     _args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
     command_value(interp, json!({ "kind": "resume" }))
-}
-
-fn ts_think(
-    interp: &mut Interpreter,
-    _this: JsValue,
-    args: &[JsValue],
-) -> std::result::Result<Guarded, JsError> {
-    command_value(
-        interp,
-        json!({ "kind": "think", "text": string_arg(args, 0) }),
-    )
 }
 
 fn ts_note(
@@ -2141,6 +2222,7 @@ fn initial_stream_prompt(seed: &str, startup_context: &str) -> String {
     format!(
         "{seed}\n\n\
          <startup_context>\n{startup_context}\n</startup_context>\n\n\
+         <orientation>\n{PETE_ORIENTATION_PROMPT}\n</orientation>\n\n\
          <stream_rules>\n\
          Generate continuously. Plain text is private thought visible only as raw debug stdout; it is already in the active LLM context and must not be restated, summarized, or reported back as an observation.\n\
          To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
@@ -2169,6 +2251,7 @@ fn compact_stream_prompt(
     format!(
         "{seed}\n\n\
          <startup_context>\n{startup_context}\n</startup_context>\n\n\
+         <orientation>\n{PETE_ORIENTATION_PROMPT}\n</orientation>\n\n\
          <continuity_memory>\n{events}\n</continuity_memory>\n\n\
          <pete_will_runtime>\n{PETE_WILL_RUNTIME_PROMPT}\n</pete_will_runtime>\n\n\
          Continue Pete's stream of consciousness from this compacted context.\n\n\
@@ -2352,6 +2435,30 @@ mod tests {
     }
 
     #[test]
+    fn parser_recovers_nested_typescript_from_contaminated_tag() {
+        let mut parser = StreamOutputParser::new(400);
+        let parsed = parser.push(
+            "<ts>bad prose <live_observation source=\"ear\">noise</live_observation><ts>setStage(\"Setting: lab. Action: listening\")</ts>",
+        );
+        assert_eq!(
+            parsed.outputs,
+            vec![StreamOutput::TypeScript(
+                "setStage(\"Setting: lab. Action: listening\")".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parser_reports_unrecoverable_malformed_typescript() {
+        let mut parser = StreamOutputParser::new(400);
+        let parsed = parser.push("<ts>...> forWe already gave say and then logs</ts>");
+        assert!(matches!(
+            parsed.outputs.as_slice(),
+            [StreamOutput::MalformedTypeScript(source)] if source.contains("forWe already")
+        ));
+    }
+
+    #[test]
     fn typescript_runtime_accepts_half_duplex_builders() {
         let actions = execute_typescript_actions(
             r#"[
@@ -2374,7 +2481,6 @@ mod tests {
                 searchSource("GoCommand", 2),
                 grepSource("GoCommand", { limit: 2 }),
                 goingToSleep("done"),
-                think("private note"),
                 note("runtime note")
             ]"#,
         )
