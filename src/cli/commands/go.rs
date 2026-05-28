@@ -26,7 +26,7 @@ use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji}
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{
     ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID,
-    DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, ExactTimestamp, GenerationId,
+    DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId,
     GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig,
     LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
     PinnedContextNode, PiperTextToSpeech, QdrantEmbeddingRecall, StageInstruction,
@@ -673,9 +673,15 @@ impl StreamOfConsciousness {
                 }
                 TypeScriptAction::Note { text } => {
                     self.timeline("note", &text);
+                    self.submit_note_memory(&text);
+                    let memory_context = self.memory_context_for_text(&text);
                     self.append_observation(StreamObservation::ActionResult(format!(
-                        "Noted: {}",
-                        compact_line(&text, 500)
+                        "Noted and stored in vector memory: {}{}",
+                        compact_line(&text, 500),
+                        memory_context
+                            .as_deref()
+                            .map(|context| format!("\n{context}"))
+                            .unwrap_or_default()
                     )))?;
                 }
                 TypeScriptAction::SetStage {
@@ -683,6 +689,7 @@ impl StreamOfConsciousness {
                     instruction,
                     summary,
                 } => {
+                    self.set_memory_stage(&instruction, summary.as_deref().or(topic.as_deref()));
                     self.timeline("stage", &instruction);
                     self.append_observation(StreamObservation::ActionResult(format!(
                         "Stage set: {}{}{}",
@@ -704,6 +711,9 @@ impl StreamOfConsciousness {
                     summary,
                     trigger,
                 } => {
+                    if let Some(instruction) = instruction.as_deref() {
+                        self.set_memory_stage(instruction, summary.as_deref().or(topic.as_deref()));
+                    }
                     let message = format!(
                         "Topic transition from {}{}{}{}{}.",
                         last_topic,
@@ -734,6 +744,9 @@ impl StreamOfConsciousness {
                     summary,
                     trigger,
                 } => {
+                    if let Some(instruction) = instruction.as_deref() {
+                        self.set_memory_stage(instruction, summary.as_deref().or(topic.as_deref()));
+                    }
                     let message = format!(
                         "Episode transition: {}{}{}{}{}.",
                         reason,
@@ -758,12 +771,7 @@ impl StreamOfConsciousness {
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
                 TypeScriptAction::ExtractEntities { text } => {
-                    let message = format!(
-                        "Entity extraction requested{}.",
-                        text.as_deref()
-                            .map(|text| format!(": {}", compact_line(text, 500)))
-                            .unwrap_or_default()
-                    );
+                    let message = self.execute_entity_extraction(text.as_deref());
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
@@ -772,14 +780,8 @@ impl StreamOfConsciousness {
                     label,
                     fields,
                 } => {
-                    let message = format!(
-                        "Graph node update requested for {node_id}{}: {}",
-                        label
-                            .as_deref()
-                            .map(|label| format!(" label={label}"))
-                            .unwrap_or_default(),
-                        summarize_command_fields(&fields)
-                    );
+                    let message =
+                        self.execute_graph_node_field_update(&node_id, label.as_deref(), fields);
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
@@ -788,16 +790,7 @@ impl StreamOfConsciousness {
                     limit,
                     min_score,
                 } => {
-                    let message = format!(
-                        "Memory query requested: {}{}{}",
-                        compact_line(&text, 500),
-                        limit
-                            .map(|limit| format!(" limit={limit}"))
-                            .unwrap_or_default(),
-                        min_score
-                            .map(|min_score| format!(" min_score={min_score:.3}"))
-                            .unwrap_or_default()
-                    );
+                    let message = self.execute_memory_query(&text, limit, min_score);
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
@@ -807,17 +800,7 @@ impl StreamOfConsciousness {
                     value,
                     limit,
                 } => {
-                    let message = format!(
-                        "Graph node search requested: {}{}",
-                        format_graph_node_search_query_parts(
-                            text.as_deref(),
-                            field.as_deref(),
-                            value.as_ref()
-                        ),
-                        limit
-                            .map(|limit| format!(" limit={limit}"))
-                            .unwrap_or_default()
-                    );
+                    let message = self.execute_graph_node_search(text, field, value, limit);
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
@@ -977,6 +960,209 @@ impl StreamOfConsciousness {
             .context("failed to persist go work board")
     }
 
+    fn submit_user_text_memory(&self, text: &str) {
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::ConversationTurnFinalized {
+                speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
+                text: text.to_string(),
+                occurred_at: ExactTimestamp::now(),
+            });
+    }
+
+    fn submit_note_memory(&self, text: &str) {
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::AssistantAnalysisCaptured {
+                text: text.to_string(),
+                scene: current_go_memory_scene_ref(&self.memory.context_provider),
+                occurred_at: ExactTimestamp::now(),
+            });
+    }
+
+    fn set_memory_stage(&self, instruction: &str, summary: Option<&str>) {
+        let instruction = instruction.trim();
+        if instruction.is_empty() {
+            return;
+        }
+        let summary = summary
+            .and_then(non_empty_text)
+            .unwrap_or(instruction)
+            .to_string();
+        self.memory
+            .context_provider
+            .set_stage_instruction(StageInstruction {
+                text: instruction.to_string(),
+                summary,
+            });
+    }
+
+    fn memory_context_for_text(&self, text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let summary = render_go_memory_summary(&self.memory.context_provider, trimmed);
+        is_useful_memory_summary(&summary).then_some(format!(
+            "\n[Private memory context]\n{}\n[/Private memory context]",
+            summary.trim()
+        ))
+    }
+
+    fn execute_entity_extraction(&mut self, text: Option<&str>) -> String {
+        let Some(text) = text.and_then(non_empty_text) else {
+            return "No entity extraction was performed because the text was empty.".to_string();
+        };
+        let extracted = self.memory.entity_extractor.extract(text);
+        let nodes = resolve_entities(&extracted, &|_| None);
+        let occurred_at = ExactTimestamp::now();
+        let memory_mentions = extracted
+            .iter()
+            .map(|entity| MemoryEntityMention {
+                node_id: entity.provisional_node_id(),
+                label: entity.text.clone(),
+                kind: entity.kind.as_str().to_string(),
+                confidence: entity.confidence,
+                span_start: entity.span.start,
+                span_end: entity.span.end,
+            })
+            .collect::<Vec<_>>();
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::EntityExtractionPerformed {
+                source_text: text.to_string(),
+                entities: memory_mentions,
+                occurred_at,
+            });
+        for node in &nodes {
+            self.memory.context_provider.pin_node(PinnedContextNode {
+                node_id: node.node.id.clone(),
+                scope: PinScope::Session,
+                reason: format!("Pete explicitly extracted {}", node.summary.trim()),
+            });
+        }
+        format!(
+            "Entities extracted and pinned: {}.\n{}",
+            if nodes.is_empty() {
+                "none".to_string()
+            } else {
+                nodes
+                    .iter()
+                    .map(|node| format!("{} ({})", node.node.label, node.node.id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+            render_go_memory_summary(&self.memory.context_provider, text)
+        )
+    }
+
+    fn execute_graph_node_field_update(
+        &mut self,
+        node_id: &str,
+        label: Option<&str>,
+        mut fields: Map<String, Value>,
+    ) -> String {
+        ensure_command_description_field(node_id, label, &mut fields);
+        self.memory
+            .context_provider
+            .update_graph_node_fields(GraphNodeFieldUpdate {
+                node_id: node_id.to_string(),
+                label: label.map(str::to_string),
+                fields: fields.clone(),
+                reason: "Pete updated graph node fields from go".to_string(),
+                relevance: 1.0,
+            });
+        self.memory.context_provider.pin_node(PinnedContextNode {
+            node_id: node_id.to_string(),
+            scope: PinScope::Session,
+            reason: format!(
+                "graph fields updated: {}",
+                summarize_command_fields(&fields)
+            ),
+        });
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::GraphNodeFieldsUpdated {
+                update: MemoryGraphNodeFieldUpdate {
+                    node_id: node_id.to_string(),
+                    label: label.map(str::to_string),
+                    fields: fields.clone(),
+                    source_text: Some("Pete go command".to_string()),
+                    confidence: 1.0,
+                },
+                occurred_at: ExactTimestamp::now(),
+            });
+        format!(
+            "Graph node fields updated for {node_id}: {}.\n{}",
+            summarize_command_fields(&fields),
+            render_go_memory_summary(&self.memory.context_provider, node_id)
+        )
+    }
+
+    fn execute_memory_query(
+        &mut self,
+        text: &str,
+        limit: Option<usize>,
+        min_score: Option<f32>,
+    ) -> String {
+        let hits = match self
+            .memory
+            .context_provider
+            .recall_text(text.to_string(), limit, min_score)
+        {
+            Ok(hits) => hits,
+            Err(error) => return format!("queryMemories recall failed: {error:#}"),
+        };
+        let result_summary = memory_query_result_summary(text, &hits);
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::RecallResultUsed {
+                query: text.to_string(),
+                result_summary: result_summary.clone(),
+                occurred_at: ExactTimestamp::now(),
+            });
+        for hit in &hits {
+            self.memory.context_provider.pin_node(PinnedContextNode {
+                node_id: hit.node.id.clone(),
+                scope: PinScope::Temporary { remaining_turns: 2 },
+                reason: format!("queryMemories match score {:.3}", hit.score),
+            });
+        }
+        format_memory_query_prompt_append(text, &hits)
+    }
+
+    fn execute_graph_node_search(
+        &mut self,
+        text: Option<String>,
+        field: Option<String>,
+        value: Option<Value>,
+        limit: Option<usize>,
+    ) -> String {
+        let query = GraphNodeSearchQuery {
+            text,
+            field,
+            value,
+            limit: limit.unwrap_or(8).clamp(1, 16),
+        };
+        let hits = self.memory.context_provider.search_graph_nodes(query.clone());
+        let result_summary = graph_node_search_result_summary(&query, &hits);
+        self.memory
+            .memory_sink
+            .submit(MemoryTrace::RecallResultUsed {
+                query: format_graph_node_search_query(&query),
+                result_summary: result_summary.clone(),
+                occurred_at: ExactTimestamp::now(),
+            });
+        for hit in &hits {
+            self.memory.context_provider.pin_node(PinnedContextNode {
+                node_id: hit.node.id.clone(),
+                scope: PinScope::Temporary { remaining_turns: 2 },
+                reason: format!("searchGraphNodes match score {:.3}", hit.score),
+            });
+        }
+        format_graph_node_search_prompt_append(&query, &hits)
+    }
+
     fn enqueue_speech(&mut self, text: String) -> Result<()> {
         let text = clean_spoken_text(&text);
         if text.is_empty() {
@@ -992,7 +1178,13 @@ impl StreamOfConsciousness {
                 Ok(text) => {
                     let trimmed = text.trim();
                     if !trimmed.is_empty() {
+                        self.submit_user_text_memory(trimmed);
                         self.append_observation(StreamObservation::UserText(trimmed.to_string()))?;
+                        if let Some(memory_context) = self.memory_context_for_text(trimmed) {
+                            self.append_observation(StreamObservation::ActionResult(
+                                memory_context,
+                            ))?;
+                        }
                     }
                 }
                 Err(message) => anyhow::bail!("failed to read stdin: {message}"),
