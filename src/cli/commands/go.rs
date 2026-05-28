@@ -74,9 +74,11 @@ Available functions:\n\
 - selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), tasks/checklists, and memory builders to retain durable findings. Do not silently chain source reads without saying what is there.\n\
 Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
 
 const TYPESCRIPT_START: &str = "<ts>";
+const TYPESCRIPT_START_MISSING_LESS_THAN: &str = "ts>";
 
 const TYPESCRIPT_END: &str = "</ts>";
 
@@ -1313,7 +1315,12 @@ impl StreamOutputParser {
         self.text.push_str(token);
         let mut outputs = Vec::new();
         loop {
-            if let Some(start) = self.text.find(TYPESCRIPT_START) {
+            if let Some(stripped) = strip_bare_channel_label_prefix(&self.text) {
+                self.text = stripped.to_string();
+                continue;
+            }
+
+            if let Some((start, start_marker_len)) = next_typescript_start(&self.text) {
                 if start > 0 {
                     let thought = self.text[..start].to_string();
                     self.text = self.text[start..].to_string();
@@ -1323,7 +1330,7 @@ impl StreamOutputParser {
                     continue;
                 }
 
-                let content_start = TYPESCRIPT_START.len();
+                let content_start = start_marker_len;
                 let body = &self.text[content_start..];
                 let malformed_excerpt = compact_line(body, 1_200);
                 let (source, consumed) = if let Some(end_rel) = body.find(TYPESCRIPT_END) {
@@ -1360,6 +1367,50 @@ impl StreamOutputParser {
         }
         ParsedStreamOutput { outputs }
     }
+}
+
+fn strip_bare_channel_label_prefix(text: &str) -> Option<&str> {
+    ["commentary", "analysis", "final"]
+        .iter()
+        .find_map(|marker| {
+            text.strip_prefix(marker).and_then(|rest| {
+                let should_strip = rest.is_empty()
+                    || rest
+                        .chars()
+                        .next()
+                        .is_some_and(|ch| ch.is_whitespace() || ch.is_ascii_uppercase() || ch == ':');
+                should_strip.then_some(rest.trim_start_matches([' ', ':']))
+            })
+        })
+}
+
+fn next_typescript_start(text: &str) -> Option<(usize, usize)> {
+    let normal = text.find(TYPESCRIPT_START).map(|start| (start, TYPESCRIPT_START.len()));
+    let recovered = text
+        .match_indices(TYPESCRIPT_START_MISSING_LESS_THAN)
+        .find(|(start, _)| is_recoverable_missing_typescript_opener(text, *start))
+        .map(|(start, marker)| (start, marker.len()));
+
+    match (normal, recovered) {
+        (Some(normal), Some(recovered)) => Some(normal.min(recovered)),
+        (Some(normal), None) => Some(normal),
+        (None, Some(recovered)) => Some(recovered),
+        (None, None) => None,
+    }
+}
+
+fn is_recoverable_missing_typescript_opener(text: &str, start: usize) -> bool {
+    let before = text[..start].chars().next_back();
+    if before.is_some_and(|ch| ch == '<' || ch.is_ascii_alphanumeric() || ch == '_') {
+        return false;
+    }
+
+    let body_start = start + TYPESCRIPT_START_MISSING_LESS_THAN.len();
+    let body = &text[body_start..];
+    if let Some(end) = body.find(TYPESCRIPT_END) {
+        return sanitize_typescript_source(body[..end].trim()).is_some();
+    }
+    recover_unclosed_typescript_source(body).is_some()
 }
 
 fn recover_unclosed_typescript_source(body: &str) -> Option<(String, usize)> {
@@ -3603,6 +3654,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn go_prompt_encourages_source_summaries_and_memory_updates() {
+        let prompt = initial_stream_prompt("seed", "startup", None);
+        assert!(prompt.contains("Frequently summarize what is going on"));
+        assert!(prompt.contains("After source inspection results arrive"));
+        assert!(prompt.contains("Do not silently chain source reads"));
+        assert!(prompt.contains("store durable user, project, and task context"));
+        assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
+        assert!(prompt.contains("\\<tr\\>"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("Regularly summarize recent context"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
+    }
+
+    #[test]
     fn speakable_buffer_flushes_on_sentence_boundary() {
         let mut buffer = SpeakableBuffer::new(80);
         assert!(buffer.push("Hello").is_empty());
@@ -3640,6 +3704,39 @@ mod tests {
                 StreamOutput::Thought(" This is a follow-up thought.".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn parser_recovers_missing_less_than_typescript_opener() {
+        let mut parser = StreamOutputParser::new(400);
+        let parsed = parser.push("Let's inspect the repo.ts>listFiles()</ts>commentary This will list files.");
+        assert_eq!(
+            parsed.outputs,
+            vec![
+                StreamOutput::Thought("Let's inspect the repo.".to_string()),
+                StreamOutput::TypeScript("listFiles()".to_string()),
+            ]
+        );
+        assert_eq!(parser.text, "This will list files.");
+    }
+
+    #[test]
+    fn parser_does_not_recover_missing_less_than_inside_words() {
+        let mut parser = StreamOutputParser::new(80);
+        let parsed = parser.push("Plain text mentions outputs> without a command.");
+        assert!(
+            parsed
+                .outputs
+                .iter()
+                .all(|output| !matches!(output, StreamOutput::TypeScript(_)))
+        );
+    }
+
+    #[test]
+    fn parser_strips_bare_channel_label_prefixes() {
+        let mut parser = StreamOutputParser::new(80);
+        assert!(parser.push("commentaryHmm.").outputs.is_empty());
+        assert_eq!(parser.text, "Hmm.");
     }
 
     #[test]

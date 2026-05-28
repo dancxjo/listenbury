@@ -6296,6 +6296,10 @@ mod tests {
         assert!(prompt.contains("do not speak just to fill silence"));
         assert!(prompt.contains("If you are bored, alone, or waiting"));
         assert!(prompt.contains("explore Pete's own source code"));
+        assert!(prompt.contains("Frequently summarize what is going on"));
+        assert!(prompt.contains("After source inspection results arrive"));
+        assert!(prompt.contains("summarize what the code appears to do"));
+        assert!(prompt.contains("store durable user, project, or task context"));
         assert!(prompt.contains("say(text, options?), shutup(), pause(), resume()"));
         assert!(prompt.contains("say(text, { interrupt: true })"));
         assert!(prompt.contains("run small TypeScript modules with <ts>code</ts>"));
