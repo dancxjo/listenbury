@@ -74,7 +74,7 @@ Available functions:\n\
 - searchGraphNodes(query, options?): search memory by text, field, value, or combinations. query may be a string or object with text, field, value, and limit.\n\
 - queryMemories(text, options?) or recallMemories(text, options?): retrieve memories for a phrase, sentence, name, topic, or claim. options may include limit and minScore. Results are appended privately to the active stream.\n\
 - listFiles(pageOrOptions?): list bundled Listenbury source files. Use listFiles(2) or listFiles({ page: 2, pageSize: 80 }) for later pages.\n\
-- readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. pageOrOptions may be a page number or { page, line, pageSize }. A line number opens the page containing that line.\n\
+- readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. Use readSourceFile(\"src/lib.rs\", 2) for page 2, or readSourceFile(\"src/lib.rs\", { line: 42 }) for the page containing line 42. pageOrOptions may be a page number or { page, line, pageSize }.\n\
 - searchSource(query, limit?): source text search.\n\
 - grepSource(pattern, limit?): grep-like source line search.\n\
 - setSourcePageSize(lines): set the default readSourceFile page size for future source reads.\n\
@@ -2318,6 +2318,7 @@ impl WorkBoard {
         {
             self.selected_id = None;
         }
+        self.ensure_open_selection();
     }
 
     fn create(&mut self, mut goal: Goal, select: bool) -> String {
@@ -2330,6 +2331,9 @@ impl WorkBoard {
             self.selected_id = Some(id.clone());
         }
         self.items.push(goal);
+        if !select {
+            self.ensure_open_selection();
+        }
         format!(
             "Created goal {id}: {title}{}",
             if select { " (selected)" } else { "" }
@@ -2337,19 +2341,23 @@ impl WorkBoard {
     }
 
     fn complete(&mut self, target: &str, note: Option<&str>) -> String {
-        let Some(goal) = self.find_mut(target) else {
-            return format!("No goal matched {target}.");
+        let message = {
+            let Some(goal) = self.find_mut(target) else {
+                return format!("No goal matched {target}.");
+            };
+            goal.status = WorkItemStatus::Complete;
+            if let Some(note) = note {
+                goal.add_log(format!("Completed: {note}"));
+            }
+            format!(
+                "Checked off goal {}: {}{}",
+                goal.id,
+                goal.title,
+                note.map(|note| format!(" note={note}")).unwrap_or_default()
+            )
         };
-        goal.status = WorkItemStatus::Complete;
-        if let Some(note) = note {
-            goal.add_log(format!("Completed: {note}"));
-        }
-        format!(
-            "Checked off goal {}: {}{}",
-            goal.id,
-            goal.title,
-            note.map(|note| format!(" note={note}")).unwrap_or_default()
-        )
+        self.ensure_open_selection();
+        message
     }
 
     fn check_goal_step(&mut self, target: &str, entry: &str, note: Option<&str>) -> String {
@@ -2374,12 +2382,14 @@ impl WorkBoard {
             goal.status = WorkItemStatus::Complete;
             goal.add_log("All steps complete.");
         }
-        format!(
+        let message = format!(
             "Checked goal step in {}: {}{}",
             goal.id,
             checked_text,
             note.map(|note| format!(" note={note}")).unwrap_or_default()
-        )
+        );
+        self.ensure_open_selection();
+        message
     }
 
     fn update(&mut self, target: &str, fields: Map<String, Value>) -> String {
@@ -2420,21 +2430,25 @@ impl WorkBoard {
     }
 
     fn cancel(&mut self, target: &str, reason: Option<&str>) -> String {
-        let Some(goal) = self.find_mut(target) else {
-            return format!("No goal matched {target}.");
+        let message = {
+            let Some(goal) = self.find_mut(target) else {
+                return format!("No goal matched {target}.");
+            };
+            goal.status = WorkItemStatus::Cancelled;
+            if let Some(reason) = reason {
+                goal.add_log(format!("Cancelled: {reason}"));
+            }
+            format!(
+                "Cancelled goal {}: {}{}",
+                goal.id,
+                goal.title,
+                reason
+                    .map(|reason| format!(" reason={reason}"))
+                    .unwrap_or_default()
+            )
         };
-        goal.status = WorkItemStatus::Cancelled;
-        if let Some(reason) = reason {
-            goal.add_log(format!("Cancelled: {reason}"));
-        }
-        format!(
-            "Cancelled goal {}: {}{}",
-            goal.id,
-            goal.title,
-            reason
-                .map(|reason| format!(" reason={reason}"))
-                .unwrap_or_default()
-        )
+        self.ensure_open_selection();
+        message
     }
 
     fn select(&mut self, target: &str) -> String {
@@ -2448,15 +2462,19 @@ impl WorkBoard {
     }
 
     fn add_note(&mut self, target: &str, text: &str) -> String {
-        let Some(goal) = self.find_mut(target) else {
-            return format!("No goal matched {target}.");
+        let message = {
+            let Some(goal) = self.find_mut(target) else {
+                return format!("No goal matched {target}.");
+            };
+            goal.add_log(text);
+            format!(
+                "Added goal note to {}: {}",
+                goal.id,
+                compact_line(text, 500)
+            )
         };
-        goal.add_log(text);
-        format!(
-            "Added goal note to {}: {}",
-            goal.id,
-            compact_line(text, 500)
-        )
+        self.ensure_open_selection();
+        message
     }
 
     fn prompt_summary(&self) -> Option<String> {
@@ -2526,6 +2544,19 @@ impl WorkBoard {
         self.selected_id
             .clone()
             .unwrap_or_else(|| "current-goal-id".to_string())
+    }
+
+    fn ensure_open_selection(&mut self) {
+        if let Some(selected) = self.selected_item()
+            && matches!(selected.status, WorkItemStatus::Open)
+        {
+            return;
+        }
+        self.selected_id = self
+            .items
+            .iter()
+            .find(|item| matches!(item.status, WorkItemStatus::Open))
+            .map(|item| item.id.clone());
     }
 
     fn selected_item(&self) -> Option<&Goal> {
@@ -3920,21 +3951,27 @@ fn list_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
 }
 
 fn read_source_line_arg(args: &[JsValue]) -> Option<usize> {
-    optional_positive_integer_arg(args, 1, "line")
-        .or_else(|| optional_positive_integer_arg(args, 1, "lineNumber"))
-        .or_else(|| optional_positive_integer_arg(args, 1, "line_number"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "line"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "lineNumber"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "line_number"))
+    optional_positive_integer_property_arg(args, 1, "line")
+        .or_else(|| optional_positive_integer_property_arg(args, 1, "lineNumber"))
+        .or_else(|| optional_positive_integer_property_arg(args, 1, "line_number"))
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "line"))
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "lineNumber"))
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "line_number"))
 }
 
 fn read_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
-    optional_positive_integer_arg(args, 1, "pageSize")
-        .or_else(|| optional_positive_integer_arg(args, 1, "page_size"))
-        .or_else(|| optional_positive_integer_arg(args, 1, "lines"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "pageSize"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "page_size"))
-        .or_else(|| optional_positive_integer_arg(args, 2, "lines"))
+    optional_positive_integer_property_arg(args, 1, "pageSize")
+        .or_else(|| optional_positive_integer_property_arg(args, 1, "page_size"))
+        .or_else(|| optional_positive_integer_property_arg(args, 1, "lines"))
+        .or_else(|| match args.get(2) {
+            Some(JsValue::Number(value)) if value.is_finite() => {
+                Some(value.floor().max(1.0) as usize)
+            }
+            _ => None,
+        })
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "pageSize"))
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "page_size"))
+        .or_else(|| optional_positive_integer_property_arg(args, 2, "lines"))
         .map(|lines| lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES))
 }
 
@@ -3947,6 +3984,18 @@ fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) ->
             .filter(|value| !value.is_null());
     }
     None
+}
+
+fn optional_positive_integer_property_arg(
+    args: &[JsValue],
+    index: usize,
+    property: &str,
+) -> Option<usize> {
+    let value = args.get(index)?;
+    match api::get_property(value, property) {
+        Ok(JsValue::Number(value)) if value.is_finite() => Some(value.floor().max(1.0) as usize),
+        _ => None,
+    }
 }
 
 fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<String> {
@@ -4470,6 +4519,36 @@ mod tests {
             fields,
         };
         assert!(update.records_progress_note());
+    }
+
+    #[test]
+    fn read_source_file_bare_number_means_page_not_line() {
+        let actions = execute_typescript_actions(r#"readSourceFile("src/acoustic/model.rs", 2)"#)
+            .expect("readSourceFile action should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::ReadSourceFile {
+                file: "src/acoustic/model.rs".to_string(),
+                page: 2,
+                line: None,
+                page_size: None,
+            }]
+        );
+
+        let actions =
+            execute_typescript_actions(r#"readSourceFile("src/acoustic/model.rs", { line: 2 })"#)
+                .expect("readSourceFile line action should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::ReadSourceFile {
+                file: "src/acoustic/model.rs".to_string(),
+                page: 1,
+                line: Some(2),
+                page_size: None,
+            }]
+        );
     }
 
     #[test]
