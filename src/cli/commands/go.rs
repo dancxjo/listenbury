@@ -18,7 +18,7 @@ use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{GenerationId, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::{
     Arc,
@@ -36,9 +36,9 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript and not Harmony. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and should not be echoed back. Speak only with say(...) inside <ts>...</ts>; act only with pete:will builders.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Speak only with say(...) inside <ts>...</ts>; act only with pete:will builders. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The builders are already available in scope; imports from \"pete:will\" are also allowed. Make each <ts>...</ts> block return a command object or an array of command objects.\n\
 Available functions:\n\
@@ -61,8 +61,16 @@ Available functions:\n\
 - readSourceFile(path, page?) or readFile(path, page?): inspect one source file page.\n\
 - searchSource(query, limit?): source text search.\n\
 - grepSource(pattern, limit?): grep-like source line search.\n\
+- createGoal(title, options?): create a goal. options may include id, summary, priority, tags, and select.\n\
+- createTask(title, options?): create a task. options may include id, summary, parent, priority, tags, and select.\n\
+- createChecklist(title, items?, options?): create a checklist with string items. options may include id, summary, parent, tags, and select.\n\
+- checkOff(idOrTitle, options?) or completeItem(idOrTitle, options?): mark a goal/task/checklist complete. options may include note.\n\
+- checkChecklistItem(checklistIdOrTitle, item, options?): mark one checklist item complete. options may include note.\n\
+- updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, or checklist items.\n\
+- cancelItem(idOrTitle, reason?): cancel a goal/task/checklist.\n\
+- selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
 Use source inspection when bored, alone, or waiting. Do not use say for clock ticks, quiet moments, idle narration, or every thought. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
-This runtime is not Harmony and not a tool-calling chat template. Never write <|start|>, <|end|>, channel names, assistant/user/system message markers, to=container.exec, JSON tool calls, shell commands, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
+Never write tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
 
 const TYPESCRIPT_START: &str = "<ts>";
 
@@ -71,7 +79,10 @@ const TYPESCRIPT_END: &str = "</ts>";
 const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
 const CLOCK_PROMPT_INTERVAL: Duration = Duration::from_secs(30);
 const ORIENTATION_PROMPT_INTERVAL: Duration = Duration::from_secs(120);
+const COMMAND_REMINDER_PROMPT_INTERVAL: Duration = Duration::from_secs(90);
+const WORK_STATE_PROMPT_INTERVAL: Duration = Duration::from_secs(45);
 const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Use these commands when they help Pete keep track of what is happening; do not call commands just to fill quiet time.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -179,6 +190,8 @@ enum StreamObservation {
     ContextCompacted { retained_events: usize },
     Clock(String),
     Orientation,
+    CommandReminder,
+    WorkState(String),
 }
 
 impl StreamObservation {
@@ -228,6 +241,15 @@ impl StreamObservation {
                     "\n<runtime_orientation>\n{PETE_ORIENTATION_PROMPT}\n</runtime_orientation>\n"
                 )
             }
+            Self::CommandReminder => {
+                format!("\n<command_reminder>\n{COMMAND_REMINDER_PROMPT}\n</command_reminder>\n")
+            }
+            Self::WorkState(text) => {
+                format!(
+                    "\n<current_work_state>\n{}\n</current_work_state>\n",
+                    compact_line(text, 2_000)
+                )
+            }
         }
     }
 
@@ -255,11 +277,16 @@ impl StreamObservation {
             }
             Self::Clock(message) => format!("Clock: {message}"),
             Self::Orientation => "Runtime orientation reminder repeated".to_string(),
+            Self::CommandReminder => "Runtime command reminder repeated".to_string(),
+            Self::WorkState(text) => format!("Work state: {}", compact_line(text, 500)),
         }
     }
 
     fn should_remember(&self) -> bool {
-        !matches!(self, Self::Orientation)
+        !matches!(
+            self,
+            Self::Orientation | Self::CommandReminder | Self::WorkState(_)
+        )
     }
 }
 
@@ -274,12 +301,15 @@ struct StreamOfConsciousness {
     output_parser: StreamOutputParser,
     pacer: MouthEarPacer,
     mouth: MouthRuntime,
+    work_board: WorkBoard,
     stdin_rx: Receiver<std::result::Result<String, String>>,
     mouth_rx: Receiver<MouthEvent>,
     _mouth_worker: Option<JoinHandle<()>>,
     interrupted: Arc<AtomicBool>,
     next_clock_at: Instant,
     next_orientation_at: Instant,
+    next_command_reminder_at: Instant,
+    next_work_state_at: Instant,
     next_orientation_generated_tokens: usize,
     generation_paused: bool,
     startup_context: String,
@@ -340,12 +370,15 @@ impl StreamOfConsciousness {
             llm,
             generation,
             mouth,
+            work_board: WorkBoard::new(),
             stdin_rx,
             mouth_rx,
             _mouth_worker: worker,
             interrupted,
             next_clock_at: Instant::now() + CLOCK_PROMPT_INTERVAL,
             next_orientation_at: Instant::now() + ORIENTATION_PROMPT_INTERVAL,
+            next_command_reminder_at: Instant::now() + COMMAND_REMINDER_PROMPT_INTERVAL,
+            next_work_state_at: Instant::now() + WORK_STATE_PROMPT_INTERVAL,
             next_orientation_generated_tokens: ORIENTATION_GENERATED_TOKEN_INTERVAL,
             generation_paused: false,
             startup_context,
@@ -366,6 +399,8 @@ impl StreamOfConsciousness {
             self.drain_mouth()?;
             self.append_clock_if_due()?;
             self.append_orientation_if_due()?;
+            self.append_command_reminder_if_due()?;
+            self.append_work_state_if_due()?;
 
             if !cancelled {
                 self.set_generation_paused(!self.pacer.can_generate())?;
@@ -443,7 +478,7 @@ impl StreamOfConsciousness {
                 }
             }
             StreamOutput::MalformedTypeScript(source) => {
-                let message = "Malformed TypeScript action was ignored before execution. Use exactly <ts>peteWillBuilder(...)</ts> with no prose, logs, Harmony markers, live_observation XML, or shell/tool syntax inside the tag.".to_string();
+                let message = "Malformed TypeScript action was ignored before execution. Use exactly <ts>peteWillBuilder(...)</ts> with no prose, logs, live_observation XML, channel markers, or shell/tool syntax inside the tag.".to_string();
                 self.timeline_colored("action_error", &message, ANSI_ERROR);
                 self.append_observation(StreamObservation::ActionError {
                     source,
@@ -668,6 +703,70 @@ impl StreamOfConsciousness {
                     self.timeline("action_result", &format!("Grepped source for {pattern}."));
                     self.append_observation(StreamObservation::ActionResult(output))?;
                 }
+                TypeScriptAction::CreateWorkItem {
+                    kind,
+                    id,
+                    title,
+                    summary,
+                    parent,
+                    priority,
+                    tags,
+                    checklist,
+                    select,
+                } => {
+                    let message = self.work_board.create(
+                        WorkItem {
+                            id: id.unwrap_or_default(),
+                            kind,
+                            title,
+                            summary,
+                            parent,
+                            priority,
+                            tags: tags.into_iter().collect(),
+                            checklist: checklist
+                                .into_iter()
+                                .map(|text| ChecklistEntry { text, done: false })
+                                .collect(),
+                            status: WorkItemStatus::Open,
+                        },
+                        select,
+                    );
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
+                TypeScriptAction::CompleteWorkItem { target, note } => {
+                    let message = self.work_board.complete(&target, note.as_deref());
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
+                TypeScriptAction::CheckChecklistItem { target, item, note } => {
+                    let message =
+                        self.work_board
+                            .check_checklist_item(&target, &item, note.as_deref());
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
+                TypeScriptAction::UpdateWorkItem { target, fields } => {
+                    let message = self.work_board.update(&target, fields);
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
+                TypeScriptAction::CancelWorkItem { target, reason } => {
+                    let message = self.work_board.cancel(&target, reason.as_deref());
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
+                TypeScriptAction::SelectWorkItem { target } => {
+                    let message = self.work_board.select(&target);
+                    self.timeline("work", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                    self.append_current_work_state()?;
+                }
                 TypeScriptAction::Sleeping { reason } => {
                     let message = reason
                         .map(|reason| format!("Sleep requested: {reason}"))
@@ -679,6 +778,14 @@ impl StreamOfConsciousness {
             }
         }
         Ok(())
+    }
+
+    fn append_current_work_state(&mut self) -> Result<()> {
+        self.next_work_state_at = Instant::now() + WORK_STATE_PROMPT_INTERVAL;
+        let Some(summary) = self.work_board.prompt_summary() else {
+            return Ok(());
+        };
+        self.append_observation(StreamObservation::WorkState(summary))
     }
 
     fn enqueue_speech(&mut self, text: String) -> Result<()> {
@@ -746,6 +853,27 @@ impl StreamOfConsciousness {
             .generated_estimated_tokens
             .saturating_add(ORIENTATION_GENERATED_TOKEN_INTERVAL);
         self.append_observation(StreamObservation::Orientation)
+    }
+
+    fn append_command_reminder_if_due(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if now < self.next_command_reminder_at {
+            return Ok(());
+        }
+        self.next_command_reminder_at = now + COMMAND_REMINDER_PROMPT_INTERVAL;
+        self.append_observation(StreamObservation::CommandReminder)
+    }
+
+    fn append_work_state_if_due(&mut self) -> Result<()> {
+        let now = Instant::now();
+        if now < self.next_work_state_at {
+            return Ok(());
+        }
+        self.next_work_state_at = now + WORK_STATE_PROMPT_INTERVAL;
+        let Some(summary) = self.work_board.prompt_summary() else {
+            return Ok(());
+        };
+        self.append_observation(StreamObservation::WorkState(summary))
     }
 
     fn set_generation_paused(&mut self, paused: bool) -> Result<()> {
@@ -1108,7 +1236,6 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "shutup",
         "pause",
         "resume",
-        "think",
         "note",
         "setStage",
         "setTopic",
@@ -1127,6 +1254,15 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "readFile",
         "searchSource",
         "grepSource",
+        "createGoal",
+        "createTask",
+        "createChecklist",
+        "checkOff",
+        "completeItem",
+        "checkChecklistItem",
+        "updateItem",
+        "cancelItem",
+        "selectItem",
     ]
     .iter()
     .any(|name| trimmed.starts_with(&format!("{name}(")))
@@ -1375,6 +1511,291 @@ struct IpLocation {
     timezone: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkItemKind {
+    Goal,
+    Task,
+    Checklist,
+}
+
+impl WorkItemKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Goal => "goal",
+            Self::Task => "task",
+            Self::Checklist => "checklist",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkItemStatus {
+    Open,
+    Complete,
+    Cancelled,
+}
+
+impl WorkItemStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Complete => "complete",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChecklistEntry {
+    text: String,
+    done: bool,
+}
+
+#[derive(Debug, Clone)]
+struct WorkItem {
+    id: String,
+    kind: WorkItemKind,
+    title: String,
+    summary: Option<String>,
+    parent: Option<String>,
+    priority: Option<String>,
+    tags: BTreeSet<String>,
+    checklist: Vec<ChecklistEntry>,
+    status: WorkItemStatus,
+}
+
+#[derive(Debug, Default)]
+struct WorkBoard {
+    items: Vec<WorkItem>,
+    selected_id: Option<String>,
+    next_id: u64,
+}
+
+impl WorkBoard {
+    fn new() -> Self {
+        Self {
+            next_id: 1,
+            ..Default::default()
+        }
+    }
+
+    fn create(&mut self, mut item: WorkItem, select: bool) -> String {
+        if item.id.trim().is_empty() {
+            item.id = self.allocate_id(item.kind.as_str());
+        }
+        let id = item.id.clone();
+        let kind = item.kind.as_str();
+        let title = item.title.clone();
+        if select {
+            self.selected_id = Some(id.clone());
+        }
+        self.items.push(item);
+        format!(
+            "Created {kind} {id}: {title}{}",
+            if select { " (selected)" } else { "" }
+        )
+    }
+
+    fn complete(&mut self, target: &str, note: Option<&str>) -> String {
+        let Some(item) = self.find_mut(target) else {
+            return format!("No goal/task/checklist matched {target}.");
+        };
+        item.status = WorkItemStatus::Complete;
+        format!(
+            "Checked off {} {}: {}{}",
+            item.kind.as_str(),
+            item.id,
+            item.title,
+            note.map(|note| format!(" note={note}")).unwrap_or_default()
+        )
+    }
+
+    fn check_checklist_item(&mut self, target: &str, entry: &str, note: Option<&str>) -> String {
+        let Some(item) = self.find_mut(target) else {
+            return format!("No checklist matched {target}.");
+        };
+        if !matches!(item.kind, WorkItemKind::Checklist) {
+            return format!("{} is not a checklist.", item.id);
+        }
+        let Some(index) = item
+            .checklist
+            .iter()
+            .position(|check| ids_match(&check.text, entry))
+        else {
+            return format!("No checklist item matched {entry} in {}.", item.id);
+        };
+        item.checklist[index].done = true;
+        let checked_text = item.checklist[index].text.clone();
+        if item.checklist.iter().all(|check| check.done) {
+            item.status = WorkItemStatus::Complete;
+        }
+        format!(
+            "Checked checklist item in {}: {}{}",
+            item.id,
+            checked_text,
+            note.map(|note| format!(" note={note}")).unwrap_or_default()
+        )
+    }
+
+    fn update(&mut self, target: &str, fields: Map<String, Value>) -> String {
+        let Some(item) = self.find_mut(target) else {
+            return format!("No goal/task/checklist matched {target}.");
+        };
+        if let Some(title) = string_field(&fields, "title") {
+            item.title = title;
+        }
+        if fields.contains_key("summary") {
+            item.summary = string_field(&fields, "summary");
+        }
+        if fields.contains_key("parent") {
+            item.parent = string_field(&fields, "parent");
+        }
+        if fields.contains_key("priority") {
+            item.priority = string_field(&fields, "priority");
+        }
+        if let Some(tags) = string_list_field(&fields, "tags") {
+            item.tags = tags.into_iter().collect();
+        }
+        if let Some(checklist) =
+            string_list_field(&fields, "items").or_else(|| string_list_field(&fields, "checklist"))
+        {
+            item.checklist = checklist
+                .into_iter()
+                .map(|text| ChecklistEntry { text, done: false })
+                .collect();
+            item.kind = WorkItemKind::Checklist;
+        }
+        format!("Updated {} {}: {}", item.kind.as_str(), item.id, item.title)
+    }
+
+    fn cancel(&mut self, target: &str, reason: Option<&str>) -> String {
+        let Some(item) = self.find_mut(target) else {
+            return format!("No goal/task/checklist matched {target}.");
+        };
+        item.status = WorkItemStatus::Cancelled;
+        format!(
+            "Cancelled {} {}: {}{}",
+            item.kind.as_str(),
+            item.id,
+            item.title,
+            reason
+                .map(|reason| format!(" reason={reason}"))
+                .unwrap_or_default()
+        )
+    }
+
+    fn select(&mut self, target: &str) -> String {
+        let Some(item) = self.find(target) else {
+            return format!("No goal/task/checklist matched {target}.");
+        };
+        let id = item.id.clone();
+        let kind = item.kind.as_str();
+        let title = item.title.clone();
+        self.selected_id = Some(id.clone());
+        format!("Selected {kind} {id}: {title}")
+    }
+
+    fn prompt_summary(&self) -> Option<String> {
+        if self.items.is_empty() {
+            return None;
+        }
+        let mut lines = Vec::new();
+        if let Some(selected) = self.selected_item() {
+            lines.push(format!(
+                "Selected {} {} [{}]: {}{}",
+                selected.kind.as_str(),
+                selected.id,
+                selected.status.as_str(),
+                selected.title,
+                selected
+                    .summary
+                    .as_deref()
+                    .map(|summary| format!(" -- {summary}"))
+                    .unwrap_or_default()
+            ));
+        } else {
+            lines.push("No selected goal/task/checklist.".to_string());
+        }
+        for item in self
+            .items
+            .iter()
+            .filter(|item| matches!(item.status, WorkItemStatus::Open))
+            .take(8)
+        {
+            lines.push(format!(
+                "- {} {} [{}]: {}{}",
+                item.kind.as_str(),
+                item.id,
+                item.status.as_str(),
+                item.title,
+                checklist_progress(item)
+            ));
+        }
+        Some(lines.join("\n"))
+    }
+
+    fn selected_item(&self) -> Option<&WorkItem> {
+        let id = self.selected_id.as_deref()?;
+        self.items.iter().find(|item| item.id == id)
+    }
+
+    fn find(&self, target: &str) -> Option<&WorkItem> {
+        self.items
+            .iter()
+            .find(|item| ids_match(&item.id, target) || ids_match(&item.title, target))
+    }
+
+    fn find_mut(&mut self, target: &str) -> Option<&mut WorkItem> {
+        self.items
+            .iter_mut()
+            .find(|item| ids_match(&item.id, target) || ids_match(&item.title, target))
+    }
+
+    fn allocate_id(&mut self, prefix: &str) -> String {
+        loop {
+            let id = format!("{}-{}", prefix, self.next_id);
+            self.next_id = self.next_id.saturating_add(1);
+            if self.items.iter().all(|item| item.id != id) {
+                return id;
+            }
+        }
+    }
+}
+
+fn checklist_progress(item: &WorkItem) -> String {
+    if item.checklist.is_empty() {
+        return String::new();
+    }
+    let done = item.checklist.iter().filter(|entry| entry.done).count();
+    format!(" ({done}/{})", item.checklist.len())
+}
+
+fn ids_match(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
+fn string_field(fields: &Map<String, Value>, key: &str) -> Option<String> {
+    fields
+        .get(key)
+        .and_then(Value::as_str)
+        .and_then(|value| non_empty_text(value).map(str::to_string))
+}
+
+fn string_list_field(fields: &Map<String, Value>, key: &str) -> Option<Vec<String>> {
+    let value = fields.get(key)?;
+    match value {
+        Value::Array(values) => Some(
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|value| non_empty_text(value).map(str::to_string))
+                .collect(),
+        ),
+        Value::String(value) => non_empty_text(value).map(|value| vec![value.to_string()]),
+        _ => None,
+    }
+}
+
 fn best_effort_ip_location() -> Option<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(900))
@@ -1471,6 +1892,37 @@ enum TypeScriptAction {
         pattern: String,
         limit: usize,
     },
+    CreateWorkItem {
+        kind: WorkItemKind,
+        id: Option<String>,
+        title: String,
+        summary: Option<String>,
+        parent: Option<String>,
+        priority: Option<String>,
+        tags: Vec<String>,
+        checklist: Vec<String>,
+        select: bool,
+    },
+    CompleteWorkItem {
+        target: String,
+        note: Option<String>,
+    },
+    CheckChecklistItem {
+        target: String,
+        item: String,
+        note: Option<String>,
+    },
+    UpdateWorkItem {
+        target: String,
+        fields: Map<String, Value>,
+    },
+    CancelWorkItem {
+        target: String,
+        reason: Option<String>,
+    },
+    SelectWorkItem {
+        target: String,
+    },
     Sleeping {
         reason: Option<String>,
     },
@@ -1561,6 +2013,77 @@ enum TypeScriptActionPayload {
         pattern: String,
         #[serde(default)]
         limit: Option<usize>,
+    },
+    CreateGoal {
+        title: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        select: bool,
+    },
+    CreateTask {
+        title: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        select: bool,
+    },
+    CreateChecklist {
+        title: String,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+        #[serde(default)]
+        items: Vec<String>,
+        #[serde(default)]
+        select: bool,
+    },
+    CompleteWorkItem {
+        target: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    CheckChecklistItem {
+        target: String,
+        item: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    UpdateWorkItem {
+        target: String,
+        #[serde(default)]
+        fields: Map<String, Value>,
+    },
+    CancelWorkItem {
+        target: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    SelectWorkItem {
+        target: String,
     },
     Sleeping {
         reason: Option<String>,
@@ -1732,6 +2255,99 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 limit: limit.unwrap_or(12).max(1),
             })
         }
+        TypeScriptActionPayload::CreateGoal {
+            title,
+            id,
+            summary,
+            parent,
+            priority,
+            tags,
+            select,
+        } => non_empty_text(&title).map(|title| TypeScriptAction::CreateWorkItem {
+            kind: WorkItemKind::Goal,
+            id: id.and_then(|id| non_empty_text(&id).map(str::to_string)),
+            title: title.to_string(),
+            summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+            parent: parent.and_then(|parent| non_empty_text(&parent).map(str::to_string)),
+            priority: priority.and_then(|priority| non_empty_text(&priority).map(str::to_string)),
+            tags,
+            checklist: Vec::new(),
+            select,
+        }),
+        TypeScriptActionPayload::CreateTask {
+            title,
+            id,
+            summary,
+            parent,
+            priority,
+            tags,
+            select,
+        } => non_empty_text(&title).map(|title| TypeScriptAction::CreateWorkItem {
+            kind: WorkItemKind::Task,
+            id: id.and_then(|id| non_empty_text(&id).map(str::to_string)),
+            title: title.to_string(),
+            summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+            parent: parent.and_then(|parent| non_empty_text(&parent).map(str::to_string)),
+            priority: priority.and_then(|priority| non_empty_text(&priority).map(str::to_string)),
+            tags,
+            checklist: Vec::new(),
+            select,
+        }),
+        TypeScriptActionPayload::CreateChecklist {
+            title,
+            id,
+            summary,
+            parent,
+            priority,
+            tags,
+            items,
+            select,
+        } => non_empty_text(&title).map(|title| TypeScriptAction::CreateWorkItem {
+            kind: WorkItemKind::Checklist,
+            id: id.and_then(|id| non_empty_text(&id).map(str::to_string)),
+            title: title.to_string(),
+            summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+            parent: parent.and_then(|parent| non_empty_text(&parent).map(str::to_string)),
+            priority: priority.and_then(|priority| non_empty_text(&priority).map(str::to_string)),
+            tags,
+            checklist: items
+                .into_iter()
+                .filter_map(|item| non_empty_text(&item).map(str::to_string))
+                .collect(),
+            select,
+        }),
+        TypeScriptActionPayload::CompleteWorkItem { target, note } => {
+            non_empty_text(&target).map(|target| TypeScriptAction::CompleteWorkItem {
+                target: target.to_string(),
+                note: note.and_then(|note| non_empty_text(&note).map(str::to_string)),
+            })
+        }
+        TypeScriptActionPayload::CheckChecklistItem { target, item, note } => {
+            non_empty_text(&target).and_then(|target| {
+                non_empty_text(&item).map(|item| TypeScriptAction::CheckChecklistItem {
+                    target: target.to_string(),
+                    item: item.to_string(),
+                    note: note.and_then(|note| non_empty_text(&note).map(str::to_string)),
+                })
+            })
+        }
+        TypeScriptActionPayload::UpdateWorkItem { target, fields } => {
+            non_empty_text(&target).map(|target| TypeScriptAction::UpdateWorkItem {
+                target: target.to_string(),
+                fields,
+            })
+        }
+        TypeScriptActionPayload::CancelWorkItem { target, reason } => {
+            non_empty_text(&target).map(|target| TypeScriptAction::CancelWorkItem {
+                target: target.to_string(),
+                reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
+            })
+        }
+        TypeScriptActionPayload::SelectWorkItem { target } => {
+            non_empty_text(&target).map(|target| TypeScriptAction::SelectWorkItem {
+                target: target.to_string(),
+            })
+        }
         TypeScriptActionPayload::Sleeping { reason } => Some(TypeScriptAction::Sleeping {
             reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
         }),
@@ -1748,7 +2364,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, createGoal, createTask, createChecklist, checkOff, completeItem, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -1796,6 +2412,24 @@ fn go_typescript_module() -> InternalModule {
         .with_function("search_source", ts_search_source, 2)
         .with_function("grepSource", ts_grep_source, 2)
         .with_function("grep_source", ts_grep_source, 2)
+        .with_function("createGoal", ts_create_goal, 2)
+        .with_function("create_goal", ts_create_goal, 2)
+        .with_function("createTask", ts_create_task, 2)
+        .with_function("create_task", ts_create_task, 2)
+        .with_function("createChecklist", ts_create_checklist, 3)
+        .with_function("create_checklist", ts_create_checklist, 3)
+        .with_function("checkOff", ts_complete_work_item, 2)
+        .with_function("check_off", ts_complete_work_item, 2)
+        .with_function("completeItem", ts_complete_work_item, 2)
+        .with_function("complete_item", ts_complete_work_item, 2)
+        .with_function("checkChecklistItem", ts_check_checklist_item, 3)
+        .with_function("check_checklist_item", ts_check_checklist_item, 3)
+        .with_function("updateItem", ts_update_work_item, 2)
+        .with_function("update_item", ts_update_work_item, 2)
+        .with_function("cancelItem", ts_cancel_work_item, 2)
+        .with_function("cancel_item", ts_cancel_work_item, 2)
+        .with_function("selectItem", ts_select_work_item, 1)
+        .with_function("select_item", ts_select_work_item, 1)
         .build()
 }
 
@@ -2124,6 +2758,136 @@ fn ts_grep_source(
     command_value(interp, value)
 }
 
+fn ts_create_goal(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    create_work_item_command(interp, "create_goal", args, Vec::new())
+}
+
+fn ts_create_task(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    create_work_item_command(interp, "create_task", args, Vec::new())
+}
+
+fn ts_create_checklist(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let items = match args.get(1) {
+        Some(value) => js_value_to_json(value)
+            .ok()
+            .and_then(|value| strings_from_json_value(&value))
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    create_work_item_command(interp, "create_checklist", args, items)
+}
+
+fn create_work_item_command(
+    interp: &mut Interpreter,
+    kind: &str,
+    args: &[JsValue],
+    items: Vec<String>,
+) -> std::result::Result<Guarded, JsError> {
+    let options_index = if kind == "create_checklist" { 2 } else { 1 };
+    command_value(
+        interp,
+        json!({
+            "kind": kind,
+            "title": string_arg(args, 0),
+            "id": optional_string_property_arg(args, options_index, "id"),
+            "summary": optional_string_property_arg(args, options_index, "summary"),
+            "parent": optional_string_property_arg(args, options_index, "parent"),
+            "priority": optional_string_property_arg(args, options_index, "priority"),
+            "tags": optional_string_list_property_arg(args, options_index, "tags").unwrap_or_default(),
+            "items": items,
+            "select": optional_bool_property_arg(args, options_index, "select").unwrap_or(false),
+        }),
+    )
+}
+
+fn ts_complete_work_item(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "complete_work_item",
+            "target": string_arg(args, 0),
+            "note": optional_string_property_arg(args, 1, "note"),
+        }),
+    )
+}
+
+fn ts_check_checklist_item(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "check_checklist_item",
+            "target": string_arg(args, 0),
+            "item": string_arg(args, 1),
+            "note": optional_string_property_arg(args, 2, "note"),
+        }),
+    )
+}
+
+fn ts_update_work_item(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "update_work_item",
+            "target": string_arg(args, 0),
+            "fields": object_arg(args, 1),
+        }),
+    )
+}
+
+fn ts_cancel_work_item(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let reason = match args.get(1) {
+        Some(JsValue::String(value)) => {
+            let value = value.to_string();
+            non_empty_text(&value).map(str::to_string)
+        }
+        Some(JsValue::Object(_)) => optional_string_property_arg(args, 1, "reason"),
+        _ => None,
+    };
+    command_value(
+        interp,
+        json!({ "kind": "cancel_work_item", "target": string_arg(args, 0), "reason": reason }),
+    )
+}
+
+fn ts_select_work_item(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "select_work_item", "target": string_arg(args, 0) }),
+    )
+}
+
 fn command_value(interp: &mut Interpreter, value: Value) -> std::result::Result<Guarded, JsError> {
     let guard = api::create_guard(interp);
     let value = api::create_from_json(interp, &guard, &value)?;
@@ -2185,6 +2949,36 @@ fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) 
     })
 }
 
+fn optional_bool_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<bool> {
+    optional_json_property_arg(args, index, property).and_then(|value| match value {
+        Value::Bool(value) => Some(value),
+        _ => None,
+    })
+}
+
+fn optional_string_list_property_arg(
+    args: &[JsValue],
+    index: usize,
+    property: &str,
+) -> Option<Vec<String>> {
+    optional_json_property_arg(args, index, property)
+        .and_then(|value| strings_from_json_value(&value))
+}
+
+fn strings_from_json_value(value: &Value) -> Option<Vec<String>> {
+    match value {
+        Value::Array(values) => Some(
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|value| non_empty_text(value).map(str::to_string))
+                .collect(),
+        ),
+        Value::String(value) => non_empty_text(value).map(|value| vec![value.to_string()]),
+        _ => None,
+    }
+}
+
 fn object_arg(args: &[JsValue], index: usize) -> Map<String, Value> {
     let Some(value) = args.get(index) else {
         return Map::new();
@@ -2224,9 +3018,9 @@ fn initial_stream_prompt(seed: &str, startup_context: &str) -> String {
          <startup_context>\n{startup_context}\n</startup_context>\n\n\
          <orientation>\n{PETE_ORIENTATION_PROMPT}\n</orientation>\n\n\
          <stream_rules>\n\
-         Generate continuously. Plain text is private thought visible only as raw debug stdout; it is already in the active LLM context and must not be restated, summarized, or reported back as an observation.\n\
+         Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
          To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
-         This is not Harmony syntax. Do not emit assistant/user/system/channel markers, <|start|>, <|end|>, tool-call JSON, to=container.exec, shell commands, or markdown code fences.\n\
+         This is not Harmony. If Harmony-style channel/control symbols appear, treat them as stray artifacts and continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable, but do not chatter just to fill time.\n\
          </stream_rules>\n\n\
          <pete_will_runtime>\n{PETE_WILL_RUNTIME_PROMPT}\n</pete_will_runtime>\n\n\
@@ -2422,7 +3216,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_does_not_execute_harmony_tail_as_typescript() {
+    fn parser_does_not_execute_control_tail_as_typescript() {
         let mut parser = StreamOutputParser::new(400);
         let parsed = parser.push(
             "<ts>say(\"Hello.\")\nThen I continue.<|end|><|start|>assistant<|channel|>analysis to=container.exec code",
@@ -2480,6 +3274,14 @@ mod tests {
                 readFile("src/main.rs"),
                 searchSource("GoCommand", 2),
                 grepSource("GoCommand", { limit: 2 }),
+                createGoal("Keep Pete oriented", { select: true, tags: ["go"] }),
+                createTask("Inspect source", { parent: "Keep Pete oriented" }),
+                createChecklist("Go checklist", ["read prompt", "watch actions"], { select: true }),
+                checkChecklistItem("Go checklist", "read prompt"),
+                updateItem("Inspect source", { summary: "look for runtime shape" }),
+                selectItem("Inspect source"),
+                checkOff("Inspect source"),
+                cancelItem("Keep Pete oriented", "test complete"),
                 goingToSleep("done"),
                 note("runtime note")
             ]"#,
@@ -2507,6 +3309,16 @@ mod tests {
             actions
                 .iter()
                 .any(|action| matches!(action, TypeScriptAction::Sleeping { .. }))
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, TypeScriptAction::CreateWorkItem { .. }))
+        );
+        assert!(
+            actions
+                .iter()
+                .any(|action| matches!(action, TypeScriptAction::SelectWorkItem { .. }))
         );
     }
 
