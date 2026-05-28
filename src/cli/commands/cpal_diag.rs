@@ -11,6 +11,7 @@ use listenbury::audio::normalize::{
 use listenbury::audio::{read_wav_frames, write_wav};
 use listenbury::time::ExactTimestamp;
 use std::collections::VecDeque;
+use std::process::Command;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -18,6 +19,12 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 const CALLBACK_CHANNEL_CAPACITY: usize = 16_384;
+const AUDIO_OUTPUT_DEVICE_ENV: &str = "LISTENBURY_AUDIO_OUTPUT_DEVICE";
+const AUDIO_OUTPUT_SINK_ENV: &str = "LISTENBURY_AUDIO_OUTPUT_SINK";
+const AUDIO_STABILIZE_ENV: &str = "LISTENBURY_AUDIO_STABILIZE";
+const FOREBRAIN_ANALOG_OUTPUT_SINK: &str =
+    "alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.pro-output-0";
+const BUILTIN_PREFERRED_OUTPUT_SINKS: &[&str] = &[FOREBRAIN_ANALOG_OUTPUT_SINK];
 
 pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
     anyhow::ensure!(
@@ -447,13 +454,9 @@ pub(crate) fn prepare_audio_playback(
         audio_samples.extend_from_slice(&frame.samples);
     }
 
+    stabilize_linux_output_sink();
     let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no default output device available"))?;
-    let device_name = device
-        .name()
-        .unwrap_or_else(|_| "<unknown output device>".to_string());
+    let (device, device_name) = select_output_device(&host)?;
     let output_config = select_output_config(&device, sample_rate, channels)?;
     let output_sample_rate = output_config.sample_rate_hz;
     let output_channels = output_config.channels;
@@ -620,6 +623,136 @@ pub(crate) fn play_audio_frame_stream(
     Ok(())
 }
 
+fn select_output_device(host: &cpal::Host) -> Result<(cpal::Device, String)> {
+    if let Some(pattern) = env_nonempty(AUDIO_OUTPUT_DEVICE_ENV) {
+        let devices = host
+            .output_devices()
+            .context("failed to list output devices")?
+            .collect::<Vec<_>>();
+        let mut available_names = Vec::new();
+        for device in devices {
+            let device_name = device
+                .name()
+                .unwrap_or_else(|_| "<unknown output device>".to_string());
+            if output_device_name_matches(&device_name, &pattern) {
+                return Ok((device, device_name));
+            }
+            available_names.push(device_name);
+        }
+        anyhow::bail!(
+            "{AUDIO_OUTPUT_DEVICE_ENV}={pattern:?} did not match any output device; available: {}",
+            available_names.join(", ")
+        );
+    }
+
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device available"))?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "<unknown output device>".to_string());
+    Ok((device, device_name))
+}
+
+fn output_device_name_matches(device_name: &str, pattern: &str) -> bool {
+    device_name == pattern
+        || device_name
+            .to_ascii_lowercase()
+            .contains(&pattern.to_ascii_lowercase())
+}
+
+fn stabilize_linux_output_sink() {
+    #[cfg(target_os = "linux")]
+    {
+        if env_flag_disabled(AUDIO_STABILIZE_ENV) {
+            return;
+        }
+
+        let Ok(sinks) = command_stdout("pactl", &["list", "short", "sinks"]) else {
+            return;
+        };
+        let candidates = preferred_output_sink_candidates();
+        let Some(sink) = first_available_preferred_sink(&sinks, &candidates) else {
+            return;
+        };
+
+        let current_sink = command_stdout("pactl", &["get-default-sink"])
+            .ok()
+            .map(|value| value.trim().to_string());
+        if current_sink.as_deref() != Some(sink.as_str()) {
+            let _ = Command::new("pactl")
+                .args(["set-default-sink", sink.as_str()])
+                .status();
+        }
+        let _ = Command::new("pactl")
+            .args(["set-sink-mute", sink.as_str(), "0"])
+            .status();
+    }
+}
+
+fn preferred_output_sink_candidates() -> Vec<String> {
+    let mut candidates = env_nonempty(AUDIO_OUTPUT_SINK_ENV)
+        .into_iter()
+        .collect::<Vec<_>>();
+    if linux_hostname().as_deref() == Some("forebrain") {
+        candidates.extend(
+            BUILTIN_PREFERRED_OUTPUT_SINKS
+                .iter()
+                .map(|sink| sink.to_string()),
+        );
+    }
+    candidates
+}
+
+fn first_available_preferred_sink(sinks: &str, candidates: &[String]) -> Option<String> {
+    candidates
+        .iter()
+        .find(|candidate| sink_list_has_name(sinks, candidate))
+        .cloned()
+}
+
+fn sink_list_has_name(sinks: &str, sink_name: &str) -> bool {
+    sinks.lines().any(|line| {
+        let mut fields = line.split_whitespace();
+        let _id = fields.next();
+        fields.next() == Some(sink_name)
+    })
+}
+
+fn command_stdout(program: &str, args: &[&str]) -> Result<String> {
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .with_context(|| format!("failed to run {program}"))?;
+    anyhow::ensure!(output.status.success(), "{program} failed");
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_flag_disabled(name: &str) -> bool {
+    env_nonempty(name)
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn linux_hostname() -> Option<String> {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 struct OutputConfig {
     sample_format: cpal::SampleFormat,
     sample_rate_hz: u32,
@@ -699,11 +832,56 @@ fn playback_duration(total_samples: usize, sample_rate: u32, channels: u16) -> D
 
 #[cfg(test)]
 mod tests {
-    use super::playback_duration;
+    use super::{
+        first_available_preferred_sink, output_device_name_matches, playback_duration,
+        sink_list_has_name,
+    };
     use std::time::Duration;
 
     #[test]
     fn playback_duration_uses_channels_and_rate() {
         assert_eq!(playback_duration(96_000, 48_000, 2), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sink_list_has_name_uses_stable_sink_name_not_runtime_id() {
+        let sinks = "\
+58\talsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.pro-output-0\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n\
+59\talsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.pro-output-3\tPipeWire\ts24-32le 2ch 48000Hz\tSUSPENDED\n";
+
+        assert!(sink_list_has_name(
+            sinks,
+            "alsa_output.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.pro-output-0"
+        ));
+        assert!(!sink_list_has_name(sinks, "58"));
+    }
+
+    #[test]
+    fn first_available_preferred_sink_preserves_candidate_priority() {
+        let sinks = "\
+60\talsa_output.second\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n\
+61\talsa_output.first\tPipeWire\ts32le 2ch 48000Hz\tSUSPENDED\n";
+        let candidates = vec![
+            "alsa_output.first".to_string(),
+            "alsa_output.second".to_string(),
+        ];
+
+        assert_eq!(
+            first_available_preferred_sink(sinks, &candidates).as_deref(),
+            Some("alsa_output.first")
+        );
+    }
+
+    #[test]
+    fn output_device_name_match_accepts_exact_or_case_insensitive_fragment() {
+        assert!(output_device_name_matches(
+            "PipeWire Default Output",
+            "PipeWire Default Output"
+        ));
+        assert!(output_device_name_matches(
+            "PipeWire Default Output",
+            "default output"
+        ));
+        assert!(!output_device_name_matches("HDA NVidia", "sof-hda-dsp"));
     }
 }

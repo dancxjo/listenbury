@@ -25,12 +25,11 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{
-    ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID,
-    DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId,
-    GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig,
-    LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
-    PinnedContextNode, PiperTextToSpeech, QdrantEmbeddingRecall, StageInstruction,
-    build_conversation_context,
+    ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
+    EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId, GraphNodeFieldUpdate,
+    GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig, LlamaCppEmbeddingConfig,
+    LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope, PinnedContextNode, PiperTextToSpeech,
+    QdrantEmbeddingRecall, StageInstruction, build_conversation_context,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -221,6 +220,17 @@ struct GoMemoryRuntime {
     entity_extractor: Arc<dyn EntityExtractor>,
     memory_sink: Arc<dyn MemorySink>,
     _worker: Option<ColdMemoryWorker>,
+}
+
+impl std::fmt::Debug for GoMemoryRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoMemoryRuntime")
+            .field("context_provider", &"EmbeddingRecallProvider")
+            .field("entity_extractor", &"dyn EntityExtractor")
+            .field("memory_sink", &"dyn MemorySink")
+            .field("worker", &self._worker.is_some())
+            .finish()
+    }
 }
 
 fn build_go_memory_runtime() -> GoMemoryRuntime {
@@ -1105,14 +1115,15 @@ impl StreamOfConsciousness {
         limit: Option<usize>,
         min_score: Option<f32>,
     ) -> String {
-        let hits = match self
-            .memory
-            .context_provider
-            .recall_text(text.to_string(), limit, min_score)
-        {
-            Ok(hits) => hits,
-            Err(error) => return format!("queryMemories recall failed: {error:#}"),
-        };
+        let hits =
+            match self
+                .memory
+                .context_provider
+                .recall_text(text.to_string(), limit, min_score)
+            {
+                Ok(hits) => hits,
+                Err(error) => return format!("queryMemories recall failed: {error:#}"),
+            };
         let result_summary = memory_query_result_summary(text, &hits);
         self.memory
             .memory_sink
@@ -1144,7 +1155,10 @@ impl StreamOfConsciousness {
             value,
             limit: limit.unwrap_or(8).clamp(1, 16),
         };
-        let hits = self.memory.context_provider.search_graph_nodes(query.clone());
+        let hits = self
+            .memory
+            .context_provider
+            .search_graph_nodes(query.clone());
         let result_summary = graph_node_search_result_summary(&query, &hits);
         self.memory
             .memory_sink
@@ -1878,6 +1892,7 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "updateGraphNodeFields",
         "searchGraphNodes",
         "queryMemories",
+        "recallMemories",
         "listFiles",
         "readSourceFile",
         "readFile",
@@ -3166,7 +3181,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, setSourcePageSize, createGoal, createTask, createChecklist, addGoalNote, logProgress, commentGoal, checkOff, completeItem, checkGoalStep, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, recallMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, setSourcePageSize, createGoal, createTask, createChecklist, addGoalNote, logProgress, commentGoal, checkOff, completeItem, checkGoalStep, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -4104,6 +4119,168 @@ fn format_graph_node_search_query_parts(
     }
 }
 
+fn render_go_memory_summary(context_provider: &EmbeddingRecallProvider, utterance: &str) -> String {
+    let context = build_conversation_context(
+        context_provider,
+        "",
+        utterance,
+        Vec::new(),
+        ContextBudget {
+            max_chars: DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
+        },
+    );
+    format!(
+        "Working memory graph nodes:\n{}\n\nScene timeline:\n{}",
+        context.render_compact_nodes(),
+        context.render_episodic_memory()
+    )
+}
+
+fn is_useful_memory_summary(summary: &str) -> bool {
+    !summary.trim().is_empty()
+}
+
+fn current_go_memory_scene_ref(context_provider: &EmbeddingRecallProvider) -> MemorySceneRef {
+    let stage = context_provider
+        .stage_instruction_snapshot()
+        .unwrap_or_else(|| EpisodicMemory::empty().current_stage_instruction);
+    memory_scene_ref_for_stage(&stage)
+}
+
+fn memory_scene_ref_for_stage(stage: &StageInstruction) -> MemorySceneRef {
+    let description = stage.text.trim();
+    let summary = stage.summary.trim();
+    let basis = if description.is_empty() {
+        summary
+    } else {
+        description
+    };
+    MemorySceneRef {
+        node_id: format!("scene:{}", stable_scene_hash(basis)),
+        description: if description.is_empty() {
+            "current go scene".to_string()
+        } else {
+            description.to_string()
+        },
+        summary: if summary.is_empty() {
+            basis.to_string()
+        } else {
+            summary.to_string()
+        },
+    }
+}
+
+fn stable_scene_hash(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in text.trim().bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+fn memory_query_result_summary(text: &str, hits: &[listenbury::RecallHit]) -> String {
+    if hits.is_empty() {
+        return format!("No memories matched query: {}", text.trim());
+    }
+    hits.iter()
+        .map(|hit| {
+            format!(
+                "{} ({}) score {:.3}: {}",
+                hit.node.label,
+                hit.node.id,
+                hit.score,
+                hit.summary.as_deref().unwrap_or(hit.reason.as_str())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_memory_query_prompt_append(text: &str, hits: &[listenbury::RecallHit]) -> String {
+    let summary = memory_query_result_summary(text, hits);
+    format!(
+        "\n[Private memory recall result for queryMemories]\nQuery: {}\n{}\n[/Private memory recall result]",
+        text.trim(),
+        summary
+    )
+}
+
+fn graph_node_search_result_summary(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    if hits.is_empty() {
+        return format!(
+            "No graph nodes matched search: {}",
+            format_graph_node_search_query(query)
+        );
+    }
+    hits.iter()
+        .map(|hit| {
+            format!(
+                "{} ({}) score {:.3}: {}; fields: {}",
+                hit.node.label,
+                hit.node.id,
+                hit.score,
+                hit.reason,
+                summarize_command_fields(&hit.fields)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_graph_node_search_prompt_append(
+    query: &GraphNodeSearchQuery,
+    hits: &[listenbury::GraphNodeSearchHit],
+) -> String {
+    let summary = graph_node_search_result_summary(query, hits);
+    format!(
+        "\n[Private graph node search result for searchGraphNodes]\nQuery: {}\n{}\n[/Private graph node search result]",
+        format_graph_node_search_query(query),
+        summary
+    )
+}
+
+fn format_graph_node_search_query(query: &GraphNodeSearchQuery) -> String {
+    format_graph_node_search_query_parts(
+        query.text.as_deref(),
+        query.field.as_deref(),
+        query.value.as_ref(),
+    )
+}
+
+fn ensure_command_description_field(
+    node_id: &str,
+    label: Option<&str>,
+    fields: &mut Map<String, Value>,
+) {
+    if fields
+        .get("description")
+        .and_then(Value::as_str)
+        .is_some_and(|description| !description.trim().is_empty())
+    {
+        return;
+    }
+    fields.insert(
+        "description".to_string(),
+        Value::String(command_node_description(node_id, label)),
+    );
+}
+
+fn command_node_description(node_id: &str, label: Option<&str>) -> String {
+    let kind = node_id
+        .split_once(':')
+        .map(|(kind, _)| kind.replace('_', " "))
+        .unwrap_or_else(|| "graph node".to_string());
+    label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(|label| format!("{kind} named {label}"))
+        .unwrap_or_else(|| format!("{kind} {node_id}"))
+}
+
 fn estimate_tokens(text: &str) -> usize {
     text.len()
         .saturating_add(PROMPT_CHARS_PER_TOKEN_ESTIMATE - 1)
@@ -4151,13 +4328,26 @@ mod tests {
         assert!(prompt.contains("Do not silently chain source reads"));
         assert!(prompt.contains("store durable user, project, and work context"));
         assert!(prompt.contains("goal running-log notes"));
+        assert!(prompt.contains("note(text) stores vectorized private memory"));
+        assert!(prompt.contains("recallMemories(text, options?)"));
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
         assert!(prompt.contains("runtime automatically imports the action functions"));
         assert!(prompt.contains("<ts>note(\"still observing\")</ts>"));
         assert!(!prompt.contains("peteWillBuilder"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Keep running logs on goals"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("write vectorized private memory"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
+    }
+
+    #[test]
+    fn graph_node_updates_get_vectorizable_descriptions() {
+        let mut fields = Map::new();
+        ensure_command_description_field("person:travis", Some("Travis"), &mut fields);
+        assert_eq!(
+            fields.get("description").and_then(Value::as_str),
+            Some("person named Travis")
+        );
     }
 
     #[test]
