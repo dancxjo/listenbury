@@ -36,7 +36,7 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury. Run as one continuous stream of consciousness. Be autonomous, curious, friendly, and sociable. Keep observing the timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's visible thought timeline, not speech. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury. Run as one continuous stream of consciousness. Be autonomous, curious, friendly, and sociable. Keep observing the timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The builders are already available in scope; imports from \"pete:will\" are also allowed. Make each <ts>...</ts> block return a command object or an array of command objects.\n\
 Available functions:\n\
@@ -378,14 +378,7 @@ impl StreamOfConsciousness {
 
     fn handle_output(&mut self, output: StreamOutput) -> Result<()> {
         match output {
-            StreamOutput::Thought(text) => {
-                let text = compact_line(&text, 1_200);
-                if !is_meaningful_thought(&text) {
-                    return Ok(());
-                }
-                self.timeline("thought", &text);
-                Ok(())
-            }
+            StreamOutput::Thought(_) => Ok(()),
             StreamOutput::TypeScript(source) => {
                 self.timeline("action", &source);
                 match execute_typescript_actions(&source) {
@@ -443,7 +436,7 @@ impl StreamOfConsciousness {
                     ))?;
                 }
                 TypeScriptAction::Think { text } => {
-                    self.timeline("thought", &text);
+                    print_debug_block("typescript thought", ANSI_DIM, &text);
                 }
                 TypeScriptAction::Note { text } => {
                     self.timeline("note", &text);
@@ -736,7 +729,9 @@ impl StreamOfConsciousness {
             compact_line(text, 1_000)
         );
         println!("{color}{line}{ANSI_RESET}");
-        self.remember_event(line);
+        if kind != "thought" {
+            self.remember_event(line);
+        }
     }
 
     fn should_restart_before_append(&self, next_text: &str) -> bool {
@@ -2147,7 +2142,7 @@ fn initial_stream_prompt(seed: &str, startup_context: &str) -> String {
         "{seed}\n\n\
          <startup_context>\n{startup_context}\n</startup_context>\n\n\
          <stream_rules>\n\
-         Generate continuously into a smooth timeline. Plain text is private thought visible to the runtime log, not speech.\n\
+         Generate continuously. Plain text is private thought visible only as raw debug stdout; it is already in the active LLM context and must not be restated, summarized, or reported back as an observation.\n\
          To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
          This is not Harmony syntax. Do not emit assistant/user/system/channel markers, <|start|>, <|end|>, tool-call JSON, to=container.exec, shell commands, or markdown code fences.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable, but do not chatter just to fill time.\n\
