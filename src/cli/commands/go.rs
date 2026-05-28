@@ -3,7 +3,8 @@ use anyhow::Result;
 
 use crate::cli::commands::cpal_diag::play_audio_frames;
 use crate::cli::commands::source_inspection::{
-    execute_grep_source, execute_list_source_files, execute_search_source, execute_view_source_file,
+    execute_grep_source, execute_list_source_files, execute_search_source,
+    execute_view_source_file_line, execute_view_source_file_page,
 };
 use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model, resolve_piper_voice};
 use crate::cli::piper::{
@@ -58,9 +59,10 @@ Available functions:\n\
 - searchGraphNodes(query, options?): search memory by text, field, value, or combinations. query may be a string or object with text, field, value, and limit.\n\
 - queryMemories(text, options?): retrieve memories for a phrase, sentence, name, topic, or claim. options may include limit and minScore.\n\
 - listFiles(): list bundled Listenbury source files.\n\
-- readSourceFile(path, page?) or readFile(path, page?): inspect one source file page.\n\
+- readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. pageOrOptions may be a page number or { page, line, pageSize }. A line number opens the page containing that line.\n\
 - searchSource(query, limit?): source text search.\n\
 - grepSource(pattern, limit?): grep-like source line search.\n\
+- setSourcePageSize(lines): set the default readSourceFile page size for future source reads.\n\
 - createGoal(title, options?): create a goal. options may include id, summary, priority, tags, and select.\n\
 - createTask(title, options?): create a task. options may include id, summary, parent, priority, tags, and select.\n\
 - createChecklist(title, items?, options?): create a checklist with string items. options may include id, summary, parent, tags, and select.\n\
@@ -82,7 +84,10 @@ const ORIENTATION_PROMPT_INTERVAL: Duration = Duration::from_secs(120);
 const COMMAND_REMINDER_PROMPT_INTERVAL: Duration = Duration::from_secs(90);
 const WORK_STATE_PROMPT_INTERVAL: Duration = Duration::from_secs(45);
 const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const DEFAULT_SOURCE_PAGE_LINES: usize = 80;
+const MIN_SOURCE_PAGE_LINES: usize = 20;
+const MAX_SOURCE_PAGE_LINES: usize = 240;
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -309,6 +314,7 @@ struct StreamOfConsciousness {
     startup_context: String,
     timeline_index: u64,
     generated_text_cleaner: GeneratedTextCleaner,
+    source_page_lines: usize,
 }
 
 impl StreamOfConsciousness {
@@ -379,6 +385,7 @@ impl StreamOfConsciousness {
             startup_context,
             timeline_index: 0,
             generated_text_cleaner: GeneratedTextCleaner::new(),
+            source_page_lines: DEFAULT_SOURCE_PAGE_LINES,
         })
     }
 
@@ -686,13 +693,39 @@ impl StreamOfConsciousness {
                     self.timeline("action_result", "Listed Listenbury source files.");
                     self.append_observation(StreamObservation::ActionResult(output))?;
                 }
-                TypeScriptAction::ReadSourceFile { file, page } => {
-                    let output = execute_view_source_file(&file, page);
+                TypeScriptAction::ReadSourceFile {
+                    file,
+                    page,
+                    line,
+                    page_size,
+                } => {
+                    let page_lines = page_size
+                        .unwrap_or(self.source_page_lines)
+                        .clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES);
+                    let output = if let Some(line) = line {
+                        execute_view_source_file_line(&file, line, page_lines)
+                    } else {
+                        execute_view_source_file_page(&file, page, page_lines)
+                    };
                     self.timeline(
                         "action_result",
-                        &format!("Read source file {file} page {page}."),
+                        &format!(
+                            "Read source file {file} {} at {page_lines} lines/page.",
+                            line.map(|line| format!("around line {line}"))
+                                .unwrap_or_else(|| format!("page {page}"))
+                        ),
                     );
                     self.append_observation(StreamObservation::ActionResult(output))?;
+                }
+                TypeScriptAction::SetSourcePageSize { lines } => {
+                    self.source_page_lines =
+                        lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES);
+                    let message = format!(
+                        "Source page size set to {} lines/page.",
+                        self.source_page_lines
+                    );
+                    self.timeline("action_result", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
                 }
                 TypeScriptAction::SearchSource { query, limit } => {
                     let output = execute_search_source(&query, limit);
@@ -1393,6 +1426,7 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "listFiles",
         "readSourceFile",
         "readFile",
+        "setSourcePageSize",
         "searchSource",
         "grepSource",
         "createGoal",
@@ -2024,6 +2058,11 @@ enum TypeScriptAction {
     ReadSourceFile {
         file: String,
         page: usize,
+        line: Option<usize>,
+        page_size: Option<usize>,
+    },
+    SetSourcePageSize {
+        lines: usize,
     },
     SearchSource {
         query: String,
@@ -2144,6 +2183,13 @@ enum TypeScriptActionPayload {
         file: String,
         #[serde(default)]
         page: Option<usize>,
+        #[serde(default)]
+        line: Option<usize>,
+        #[serde(default)]
+        page_size: Option<usize>,
+    },
+    SetSourcePageSize {
+        lines: usize,
     },
     SearchSource {
         query: String,
@@ -2377,11 +2423,24 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
             )
         }
         TypeScriptActionPayload::ListFiles => Some(TypeScriptAction::ListFiles),
-        TypeScriptActionPayload::ReadSourceFile { file, page } => {
+        TypeScriptActionPayload::ReadSourceFile {
+            file,
+            page,
+            line,
+            page_size,
+        } => {
             let file = file.trim();
             (!file.is_empty()).then(|| TypeScriptAction::ReadSourceFile {
                 file: file.to_string(),
                 page: page.unwrap_or(1).max(1),
+                line: line.map(|line| line.max(1)),
+                page_size: page_size
+                    .map(|lines| lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES)),
+            })
+        }
+        TypeScriptActionPayload::SetSourcePageSize { lines } => {
+            Some(TypeScriptAction::SetSourcePageSize {
+                lines: lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES),
             })
         }
         TypeScriptActionPayload::SearchSource { query, limit } => {
@@ -2505,7 +2564,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, createGoal, createTask, createChecklist, checkOff, completeItem, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, setSourcePageSize, createGoal, createTask, createChecklist, checkOff, completeItem, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -2549,6 +2608,8 @@ fn go_typescript_module() -> InternalModule {
         .with_function("read_source_file", ts_read_source_file, 2)
         .with_function("readFile", ts_read_source_file, 2)
         .with_function("read_file", ts_read_source_file, 2)
+        .with_function("setSourcePageSize", ts_set_source_page_size, 1)
+        .with_function("set_source_page_size", ts_set_source_page_size, 1)
         .with_function("searchSource", ts_search_source, 2)
         .with_function("search_source", ts_search_source, 2)
         .with_function("grepSource", ts_grep_source, 2)
@@ -2869,10 +2930,29 @@ fn ts_read_source_file(
     args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
     let mut value = json!({ "kind": "read_source_file", "file": string_arg(args, 0) });
-    if let Some(page) = optional_positive_integer_arg(args, 1, "page") {
+    if let Some(page) = read_source_page_arg(args) {
         value["page"] = json!(page);
     }
+    if let Some(line) = read_source_line_arg(args) {
+        value["line"] = json!(line);
+    }
+    if let Some(page_size) = read_source_page_size_arg(args) {
+        value["page_size"] = json!(page_size);
+    }
     command_value(interp, value)
+}
+
+fn ts_set_source_page_size(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let lines =
+        optional_positive_integer_arg(args, 0, "lines").unwrap_or(DEFAULT_SOURCE_PAGE_LINES);
+    command_value(
+        interp,
+        json!({ "kind": "set_source_page_size", "lines": lines }),
+    )
 }
 
 fn ts_search_source(
@@ -3070,6 +3150,33 @@ fn optional_number_arg(args: &[JsValue], index: usize, property: &str) -> Option
 
 fn optional_positive_integer_arg(args: &[JsValue], index: usize, property: &str) -> Option<usize> {
     optional_number_arg(args, index, property).map(|value| value.floor().max(1.0) as usize)
+}
+
+fn read_source_page_arg(args: &[JsValue]) -> Option<usize> {
+    match args.get(1) {
+        Some(JsValue::Number(value)) if value.is_finite() => Some(value.floor().max(1.0) as usize),
+        _ => optional_positive_integer_arg(args, 1, "page"),
+    }
+    .or_else(|| optional_positive_integer_arg(args, 2, "page"))
+}
+
+fn read_source_line_arg(args: &[JsValue]) -> Option<usize> {
+    optional_positive_integer_arg(args, 1, "line")
+        .or_else(|| optional_positive_integer_arg(args, 1, "lineNumber"))
+        .or_else(|| optional_positive_integer_arg(args, 1, "line_number"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "line"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "lineNumber"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "line_number"))
+}
+
+fn read_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
+    optional_positive_integer_arg(args, 1, "pageSize")
+        .or_else(|| optional_positive_integer_arg(args, 1, "page_size"))
+        .or_else(|| optional_positive_integer_arg(args, 1, "lines"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "pageSize"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "page_size"))
+        .or_else(|| optional_positive_integer_arg(args, 2, "lines"))
+        .map(|lines| lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES))
 }
 
 fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<Value> {

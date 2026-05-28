@@ -2,7 +2,7 @@
 use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "asr-whisper"))]
-const SOURCE_PAGE_LINES: usize = 50;
+const SOURCE_PAGE_LINES: usize = 80;
 
 #[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_list_source_files() -> String {
@@ -18,27 +18,50 @@ pub(in crate::cli::commands) fn execute_list_source_files() -> String {
 
 #[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_view_source_file(path: &str, page: usize) -> String {
+    execute_view_source_file_page(path, page, SOURCE_PAGE_LINES)
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+pub(in crate::cli::commands) fn execute_view_source_file_page(
+    path: &str,
+    page: usize,
+    page_lines: usize,
+) -> String {
     let normalized = path.trim().trim_start_matches("./");
     let page = page.max(1);
+    let page_lines = page_lines.clamp(20, 240);
     let Some(content) = source_bundle().get(normalized) else {
         return format!("File not found: {normalized}");
     };
     let lines: Vec<_> = content.lines().collect();
-    let start = (page - 1) * SOURCE_PAGE_LINES;
+    let page_count = lines.len().max(1).div_ceil(page_lines);
+    let start = (page - 1) * page_lines;
     if start >= lines.len() {
         return format!(
-            "File {normalized} has only {} lines (page {page} is past EOF).",
-            lines.len()
+            "File {normalized} has only {} lines ({page_count} page(s) at {page_lines} lines/page; page {page} is past EOF).",
+            lines.len(),
         );
     }
-    let end = (start + SOURCE_PAGE_LINES).min(lines.len());
+    let end = (start + page_lines).min(lines.len());
     format!(
-        "--- {normalized} (lines {} to {} of {}) ---\n{}\n---",
+        "--- {normalized} page {page}/{page_count} (lines {} to {} of {}, {page_lines} lines/page) ---\n{}\n---",
         start + 1,
         end,
         lines.len(),
         lines[start..end].join("\n")
     )
+}
+
+#[cfg(any(test, feature = "asr-whisper"))]
+pub(in crate::cli::commands) fn execute_view_source_file_line(
+    path: &str,
+    line: usize,
+    page_lines: usize,
+) -> String {
+    let line = line.max(1);
+    let page_lines = page_lines.clamp(20, 240);
+    let page = (line - 1) / page_lines + 1;
+    execute_view_source_file_page(path, page, page_lines)
 }
 
 #[cfg(any(test, feature = "asr-whisper"))]
