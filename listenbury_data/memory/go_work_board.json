@@ -1208,7 +1208,7 @@
     {
       "id": "goal-13",
       "title": "Explore neural acoustic model implementation",
-      "summary": "Conversion functions for input types to ONNX tensors; token ids, durations, f0 extraction, validation errors; next step: examine runtime prediction logic (pages 10 onwards).",
+      "summary": "What is now understood",
       "parent": null,
       "priority": null,
       "tags": [],
@@ -1609,11 +1609,640 @@
         {
           "text": "Synthesis of page 9 content. Plan to read page 10 next.",
           "at": "2026-05-28T15:19:54-07:00"
+        },
+        {
+          "text": "Checking for acoustic related source files",
+          "at": "2026-05-28T15:21:02-07:00"
+        },
+        {
+          "text": "Inspecting model.rs page 1",
+          "at": "2026-05-28T15:21:02-07:00"
+        },
+        {
+          "text": "Inspecting neural.rs page 1",
+          "at": "2026-05-28T15:21:03-07:00"
+        },
+        {
+          "text": "Inspecting neural.rs page 2",
+          "at": "2026-05-28T15:21:04-07:00"
+        },
+        {
+          "text": "Inspecting neural.rs page 3",
+          "at": "2026-05-28T15:21:04-07:00"
+        },
+        {
+          "text": "Synthesis: we saw enums for neural model kinds, output layout, and tensor names. Need to inspect further for input conversion and runtime inference logic.",
+          "at": "2026-05-28T15:21:06-07:00"
+        },
+        {
+          "text": "grepSource predict returned a match in source_filter.rs, unrelated. Need to search for inference function.",
+          "at": "2026-05-28T15:21:07-07:00"
+        },
+        {
+          "text": "After grepSource Session, plan to list files to locate acoustic model implementation.",
+          "at": "2026-05-28T15:21:11-07:00"
+        },
+        {
+          "text": "Reading neural model implementation",
+          "at": "2026-05-28T15:21:12-07:00"
+        },
+        {
+          "text": "Observed from neural.rs page 1: start of file, with imports and module structure. Next: continue reading further.",
+          "at": "2026-05-28T15:21:13-07:00"
+        },
+        {
+          "text": "Continuing to page 2",
+          "at": "2026-05-28T15:21:14-07:00"
+        },
+        {
+          "text": "Observed from neural.rs page 2: enums for model kinds. Next: continue reading further.",
+          "at": "2026-05-28T15:21:15-07:00"
+        },
+        {
+          "text": "Read first page of src/neural.rs to see enums and structs for acoustic models.",
+          "at": "2026-05-28T15:22:51-07:00"
+        },
+        {
+          "text": "Ready to read src/neural.rs again after updating summary and note.",
+          "at": "2026-05-28T15:22:52-07:00"
+        },
+        {
+          "text": "Now reading first page of src/neural.rs after synthesis.",
+          "at": "2026-05-28T15:22:53-07:00"
+        },
+        {
+          "text": "Attempted to read src/neural.rs but file not found. Need to list files to locate correct path.",
+          "at": "2026-05-28T15:22:54-07:00"
+        },
+        {
+          "text": "Reading src/acoustic/neural.rs first page to inspect enums and structs.",
+          "at": "2026-05-28T15:22:56-07:00"
+        },
+        {
+          "text": "Continue reading next page to see enums.",
+          "at": "2026-05-28T15:22:57-07:00"
+        },
+        {
+          "text": "Explored enums in src/acoustic/neural.rs page 2. Next: read page 3.",
+          "at": "2026-05-28T15:23:06-07:00"
+        },
+        {
+          "text": "Continue reading next page.",
+          "at": "2026-05-28T15:23:08-07:00"
+        },
+        {
+          "text": "Continue reading.",
+          "at": "2026-05-28T15:23:10-07:00"
+        },
+        {
+          "text": "text",
+          "at": "2026-05-28T15:23:25-07:00"
+        },
+        {
+          "text": "Progress: Completed synthesis of neural acoustic model implementation understanding; enumerated model kinds, acoustic input struct, and ONNX runtime integration. Next step: Identify missing components, plan to read source files for ONNX integration details.",
+          "at": "2026-05-28T15:23:37-07:00"
+        },
+        {
+          "text": "Synthesis completed; ready for further source inspection.",
+          "at": "2026-05-28T15:23:47-07:00"
+        },
+        {
+          "text": "Inspect ONNX setup",
+          "at": "2026-05-28T15:23:53-07:00"
+        },
+        {
+          "text": "Continue ONNX session creation",
+          "at": "2026-05-28T15:23:54-07:00"
+        },
+        {
+          "text": "ONNX Session usage",
+          "at": "2026-05-28T15:23:55-07:00"
+        },
+        {
+          "text": "session variable",
+          "at": "2026-05-28T15:23:56-07:00"
+        },
+        {
+          "text": "ort session import",
+          "at": "2026-05-28T15:23:57-07:00"
+        },
+        {
+          "text": "ONNX session creation region",
+          "at": "2026-05-28T15:23:58-07:00"
+        },
+        {
+          "text": "Synthesis: key findings and next decision.",
+          "at": "2026-05-28T15:24:01-07:00"
+        },
+        {
+          "text": "Proceeding to inspect lines 540-560.",
+          "at": "2026-05-28T15:24:11-07:00"
+        },
+        {
+          "text": "Need to list files.",
+          "at": "2026-05-28T15:25:18-07:00"
+        },
+        {
+          "text": "Synthesis: Need to inspect src/acoustic/neural.rs for ONNX integration, session setup, and inference path.",
+          "at": "2026-05-28T15:27:10-07:00"
+        },
+        {
+          "text": "Synthesis checkpoint",
+          "at": "2026-05-28T15:27:21-07:00"
+        },
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:28:03-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "current-goal-id",
+      "title": "Open goal: Inspect source files",
+      "summary": "We listed first 60 source files; key modules include audio, cli, acoustic, etc. Next, target audio and cli to inspect their main functionalities.",
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
+      "log": [
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:28:44-07:00"
+        },
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:28:56-07:00"
+        },
+        {
+          "text": "Synthesis checkpoint: summarizing findings and decision before continuing source inspection",
+          "at": "2026-05-28T15:29:01-07:00"
+        },
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:29:13-07:00"
+        },
+        {
+          "text": "Completed synthesis of current source findings. Ready to proceed to next page.",
+          "at": "2026-05-28T15:29:16-07:00"
+        },
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:29:21-07:00"
+        },
+        {
+          "text": "Observed previous result; next...",
+          "at": "2026-05-28T15:29:24-07:00"
+        },
+        {
+          "text": "Reading Cargo.toml",
+          "at": "2026-05-28T15:30:03-07:00"
+        },
+        {
+          "text": "Reading src/lib.rs",
+          "at": "2026-05-28T15:30:08-07:00"
+        },
+        {
+          "text": "Synthesis: first 60 files reviewed. Next step: read src/audio/mod.rs and src/cli/commands/mod.rs.",
+          "at": "2026-05-28T15:31:03-07:00"
+        },
+        {
+          "text": "Reading audio module",
+          "at": "2026-05-28T15:32:37-07:00"
+        },
+        {
+          "text": "Reading cli commands module page 4",
+          "at": "2026-05-28T15:33:08-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/commands/mod.rs page 4: command imports. Next: listFiles page 2",
+          "at": "2026-05-28T15:33:16-07:00"
+        },
+        {
+          "text": "Synthesis: The first page of source files shows modules like audio, cli, acoustic. Next, we will list page 3 to continue.",
+          "at": "2026-05-28T15:33:35-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 3: ... Next: inspect src/cli/commands/mod.rs.",
+          "at": "2026-05-28T15:34:40-07:00"
+        },
+        {
+          "text": "Reading src/cli/commands/mod.rs page 1: start examining command definitions and subcommand implementations.",
+          "at": "2026-05-28T15:34:43-07:00"
+        },
+        {
+          "text": "Observed src/cli/commands/mod.rs page 1: top-level module structure.",
+          "at": "2026-05-28T15:34:46-07:00"
+        },
+        {
+          "text": "Observed first 20 of 64 lines in src/cli/commands/mod.rs. Next: continue to page 2.",
+          "at": "2026-05-28T15:34:48-07:00"
+        },
+        {
+          "text": "Observed src/cli/commands/mod.rs page 2: additional module declarations.",
+          "at": "2026-05-28T15:34:49-07:00"
+        },
+        {
+          "text": "Observed lines 21-40; includes use declarations. Next: page 3.",
+          "at": "2026-05-28T15:34:50-07:00"
+        },
+        {
+          "text": "Observed src/cli/commands/mod.rs page 3: more use and function exports.",
+          "at": "2026-05-28T15:34:52-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/commands/mod.rs page 3: exported run_live_half_duplex, run_llama_turn, etc. Next: list files page 3.",
+          "at": "2026-05-28T15:34:59-07:00"
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "current-goal-id",
+      "title": "Open goal",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
+      "log": [],
+      "status": "open"
+    },
+    {
+      "id": "current-goal-id",
+      "title": "Open goal: Inspect source files",
+      "summary": "Open goal to inspect source files",
+      "parent": null,
+      "priority": null,
+      "tags": [
+        "inspect",
+        "source"
+      ],
+      "steps": [],
+      "log": [],
+      "status": "open"
+    },
+    {
+      "id": "goal-14",
+      "title": "Inspect source files",
+      "summary": "Six source files inspected, no major changes yet.",
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
+      "log": [
+        {
+          "text": "Synthesis: need to read remaining files.",
+          "at": "2026-05-28T15:30:00-07:00"
+        },
+        {
+          "text": "Cargo.toml lists listenbury as package, dependencies include clap, chrono, tracing, etc.",
+          "at": "2026-05-28T15:30:06-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 1: ... Next: list files to inspect other modules.",
+          "at": "2026-05-28T15:30:49-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 1: ... Next: list files to inspect other modules.",
+          "at": "2026-05-28T15:30:52-07:00"
+        },
+        {
+          "text": "Observed source file list page 1: 20 files. Next: list page 2.",
+          "at": "2026-05-28T15:30:55-07:00"
+        },
+        {
+          "text": "Observed source file list page 2: 20 files. Next: list page 3.",
+          "at": "2026-05-28T15:30:57-07:00"
+        },
+        {
+          "text": "Observed page 3 of file list: [brief summary]. Next tasks: [maybe list page 4 or inspect files].",
+          "at": "2026-05-28T15:45:00-07:00"
+        }
+      ],
+      "status": "open"
+    },
+    {
+      "id": "goal-15",
+      "title": "Inspect audio and cli modules",
+      "summary": "Started inspecting audio and cli modules. Ran through audio submodules and CLI command list. Began exploring run_live_half_duplex function body.",
+      "parent": null,
+      "priority": "high",
+      "tags": [],
+      "steps": [],
+      "log": [
+        {
+          "text": "Preparing to inspect audio module files; moving to list files under src/audio",
+          "at": "2026-05-28T15:35:23-07:00"
+        },
+        {
+          "text": "Synthesis: ready to list audio module files.",
+          "at": "2026-05-28T15:35:26-07:00"
+        },
+        {
+          "text": "Listed src/audio and src/cli files: 80 files including audio modules and many CLI commands.",
+          "at": "2026-05-28T15:35:30-07:00"
+        },
+        {
+          "text": "Read src/audio/boundary.rs; now plan to read next audio module and explore CLI commands.",
+          "at": "2026-05-28T15:36:54-07:00"
+        },
+        {
+          "text": "Preparing to list src/audio files.",
+          "at": "2026-05-28T15:37:10-07:00"
+        },
+        {
+          "text": "Preparing to read src/audio/capture.rs.",
+          "at": "2026-05-28T15:37:17-07:00"
+        },
+        {
+          "text": "Read src/audio/capture.rs: shows constants for callback queue and thread priority boost. Next, inspect src/audio/dtw.rs.",
+          "at": "2026-05-28T15:37:19-07:00"
+        },
+        {
+          "text": "Synthesis: key findings and next decision.",
+          "at": "2026-05-28T15:37:27-07:00"
+        },
+        {
+          "text": "Summarized audio and cli modules: capture.rs constants, dtw.rs template scaffold, will next investigate other audio modules.",
+          "at": "2026-05-28T15:37:38-07:00"
+        },
+        {
+          "text": "Synthesis: key findings, implications, and next decision.",
+          "at": "2026-05-28T15:37:57-07:00"
+        },
+        {
+          "text": "Now reading src/cli/commands/live_half_duplex.rs.",
+          "at": "2026-05-28T15:38:21-07:00"
+        },
+        {
+          "text": "Now reading src/cli/commands/live_half_duplex.rs page 2.",
+          "at": "2026-05-28T15:38:29-07:00"
+        },
+        {
+          "text": "Grep for LiveHalfDuplexCommand implementation.",
+          "at": "2026-05-28T15:38:34-07:00"
+        },
+        {
+          "text": "Planning to list source files to inspect audio and cli modules",
+          "at": "2026-05-28T15:39:15-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 1: 80 files listed including src/cli/commands/live_half_duplex.rs and src/audio/capture.rs. Next: read live_half_duplex.rs page 1.",
+          "at": "2026-05-28T15:39:22-07:00"
+        },
+        {
+          "text": "Synthesis: we've catalogued module layout; next step is to read capture.rs to understand audio parameters.",
+          "at": "2026-05-28T15:39:47-07:00"
+        },
+        {
+          "text": "Continue reading next page of capture.rs.",
+          "at": "2026-05-28T15:39:49-07:00"
+        },
+        {
+          "text": "Read remaining lines of capture.rs.",
+          "at": "2026-05-28T15:39:51-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/audio/capture.rs page 3: tested queue capacity logic.",
+          "at": "2026-05-28T15:39:53-07:00"
+        },
+        {
+          "text": "Continue reading dtw.rs page 2.",
+          "at": "2026-05-28T15:39:55-07:00"
+        },
+        {
+          "text": "Continue reading dtw.rs page 3.",
+          "at": "2026-05-28T15:40:05-07:00"
+        },
+        {
+          "text": "Reading capture.rs page 1",
+          "at": "2026-05-28T15:40:29-07:00"
+        },
+        {
+          "text": "...",
+          "at": "2026-05-28T15:40:30-07:00"
+        },
+        {
+          "text": "Reading capture.rs page 1",
+          "at": "2026-05-28T15:40:34-07:00"
+        },
+        {
+          "text": "Need to read capture.rs for detailed implementation.",
+          "at": "2026-05-28T15:40:37-07:00"
+        },
+        {
+          "text": "Reading capture.rs page 1",
+          "at": "2026-05-28T15:40:39-07:00"
+        },
+        {
+          "text": "Reading capture.rs page 2",
+          "at": "2026-05-28T15:40:53-07:00"
+        },
+        {
+          "text": "Attempting read page 3 of capture.rs",
+          "at": "2026-05-28T15:41:08-07:00"
+        },
+        {
+          "text": "Page 3 of capture.rs shows tests for callback_sample_queue_capacity and ensures queue scaling and floor.",
+          "at": "2026-05-28T15:41:11-07:00"
+        },
+        {
+          "text": "Reading dtw.rs page 1",
+          "at": "2026-05-28T15:41:14-07:00"
+        },
+        {
+          "text": "dtw.rs page 1 shows module documentation and imports for DTW templates, alignment, and hypothesis types.",
+          "at": "2026-05-28T15:41:16-07:00"
+        },
+        {
+          "text": "Reading dtw.rs page 2",
+          "at": "2026-05-28T15:41:18-07:00"
+        },
+        {
+          "text": "dtw.rs page 2 defines DtwTemplate struct with name and frames, and a constructor.",
+          "at": "2026-05-28T15:41:19-07:00"
+        },
+        {
+          "text": "Synthesis: need to inspect CLI command modules",
+          "at": "2026-05-28T15:43:03-07:00"
+        },
+        {
+          "text": "Observed listFiles page 3: 20 files including src/cli/commands/mod.rs, next: inspect mod.rs",
+          "at": "2026-05-28T15:43:07-07:00"
+        },
+        {
+          "text": "Inspecting mod.rs page 1",
+          "at": "2026-05-28T15:43:10-07:00"
+        },
+        {
+          "text": "Inspecting mod.rs page 2",
+          "at": "2026-05-28T15:43:11-07:00"
+        },
+        {
+          "text": "Inspected src/cli/commands/mod.rs page 2: exported run_live_half_duplex, run_llama_turn, etc. Next: list files page 2 for more source context.",
+          "at": "2026-05-28T15:43:24-07:00"
+        },
+        {
+          "text": "Observed listFiles page 2: audio files listed. Next: read src/audio/mod.rs.",
+          "at": "2026-05-28T15:43:29-07:00"
+        },
+        {
+          "text": "Inspecting src/audio/mod.rs page 1",
+          "at": "2026-05-28T15:43:30-07:00"
+        },
+        {
+          "text": "Inspected src/audio/mod.rs page 1: module imports list. Next: read page 2.",
+          "at": "2026-05-28T15:43:32-07:00"
+        },
+        {
+          "text": "Observed page 2: [brief summary]. Next should inspect src/cli/commands/mod.rs page 3.",
+          "at": "2026-05-28T15:44:54-07:00"
+        },
+        {
+          "text": "Observed page 3: exported run_live_half_duplex, run_llama_turn, etc. Next: maybe inspect further commands or inspect other modules.",
+          "at": "2026-05-28T15:45:06-07:00"
+        },
+        {
+          "text": "...",
+          "at": "2026-05-28T15:45:14-07:00"
+        },
+        {
+          "text": "Listed files on page 3. Next: inspect interesting ones.",
+          "at": "2026-05-28T15:45:16-07:00"
+        },
+        {
+          "text": "Re-listing files on page 3 to confirm current directory contents.",
+          "at": "2026-05-28T15:45:29-07:00"
+        },
+        {
+          "text": "Synthesis: modules inspected, next step is to list files page 3 and inspect CLI modules.",
+          "at": "2026-05-28T15:47:11-07:00"
+        },
+        {
+          "text": "Synthesis: next step: list page 3",
+          "at": "2026-05-28T15:47:26-07:00"
+        },
+        {
+          "text": "Synthesis completed",
+          "at": "2026-05-28T15:47:29-07:00"
+        },
+        {
+          "text": "ListFiles page 3 shown 20 files; next: inspect live_half_duplex.rs and llama.rs files",
+          "at": "2026-05-28T15:47:31-07:00"
+        },
+        {
+          "text": "LiveHalfDuplex.rs page 1 shows feature gating for asr-whisper, imports, etc.",
+          "at": "2026-05-28T15:47:34-07:00"
+        },
+        {
+          "text": "Observed page 2: ... next step: analyze subsequent page or check behavior.",
+          "at": "2026-05-28T15:47:49-07:00"
+        },
+        {
+          "text": "listing files page 3 to see module structure",
+          "at": "2026-05-28T15:48:40-07:00"
+        },
+        {
+          "text": "Reading src/cli/commands/mod.rs page 4 to see exported commands.",
+          "at": "2026-05-28T15:49:45-07:00"
+        },
+        {
+          "text": "Observing mod.rs page 4 to see exported commands",
+          "at": "2026-05-28T15:49:46-07:00"
+        },
+        {
+          "text": "Proceeding to inspect src/audio.rs page 1 for audio functions.",
+          "at": "2026-05-28T15:49:51-07:00"
+        },
+        {
+          "text": "Observing audio.rs page 1",
+          "at": "2026-05-28T15:49:53-07:00"
+        },
+        {
+          "text": "Synthesis: these functions provide CLI interface to audio and Llama. Next, inspect audio.rs.",
+          "at": "2026-05-28T15:49:55-07:00"
+        },
+        {
+          "text": "Continue reading audio.rs page 3",
+          "at": "2026-05-28T15:50:28-07:00"
+        },
+        {
+          "text": "Observed mod.rs lists exported commands: run_live_half_duplex, run_llama_turn, etc. Next: inspect src/audio.rs page 1.",
+          "at": "2026-05-28T15:50:58-07:00"
+        },
+        {
+          "text": "…",
+          "at": "2026-05-28T15:51:31-07:00"
+        },
+        {
+          "text": "Inspecting CLI commands further.",
+          "at": "2026-05-28T15:52:04-07:00"
+        },
+        {
+          "text": "Synthesis of current findings. Need to inspect page 4 for deeper CLI commands.",
+          "at": "2026-05-28T15:52:07-07:00"
+        },
+        {
+          "text": "Reading further CLI commands definitions.",
+          "at": "2026-05-28T15:52:09-07:00"
+        },
+        {
+          "text": "Inspecting second page of CLI commands.",
+          "at": "2026-05-28T15:52:13-07:00"
+        },
+        {
+          "text": "mod.rs page 2 shows exported run_* command modules. Next: list files in src/cli/commands to see submodule structure.",
+          "at": "2026-05-28T15:52:25-07:00"
+        },
+        {
+          "text": "Listing files in src/cli/commands",
+          "at": "2026-05-28T15:52:26-07:00"
+        },
+        {
+          "text": "Inspecting live_half_duplex command source.",
+          "at": "2026-05-28T15:52:32-07:00"
+        },
+        {
+          "text": "Read next page",
+          "at": "2026-05-28T15:53:19-07:00"
+        },
+        {
+          "text": "Continue run_live_half_duplex function",
+          "at": "2026-05-28T15:53:26-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/commands/live_half_duplex.rs page 13: function signature and context. Next: inspect earlier lines to see function body.",
+          "at": "2026-05-28T15:54:03-07:00"
+        },
+        {
+          "text": "Need to continue reading run_live_half_duplex implementation and later inspect other CLI commands.",
+          "at": "2026-05-28T15:54:06-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/commands/live_half_duplex.rs page 12: function continue after model discover. Next: inspect following lines for run_live_half_duplex logic.",
+          "at": "2026-05-28T15:54:10-07:00"
+        },
+        {
+          "text": "Search for run_live_half_duplex function definition",
+          "at": "2026-05-28T15:55:03-07:00"
+        },
+        {
+          "text": "Open around run_live_half_duplex at line 593",
+          "at": "2026-05-28T15:55:05-07:00"
+        },
+        {
+          "text": "Continue run_live_half_duplex after parameters checks",
+          "at": "2026-05-28T15:55:07-07:00"
+        },
+        {
+          "text": "Continue run_live_half_duplex after parameter checks",
+          "at": "2026-05-28T15:55:11-07:00"
         }
       ],
       "status": "open"
     }
   ],
-  "selected_id": "goal-13",
-  "next_id": 14
+  "selected_id": "goal-15",
+  "next_id": 16
 }

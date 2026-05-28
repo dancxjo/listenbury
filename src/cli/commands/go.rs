@@ -25,11 +25,12 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{
-    ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
-    EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId, GraphNodeFieldUpdate,
-    GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig, LlamaCppEmbeddingConfig,
-    LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope, PinnedContextNode, PiperTextToSpeech,
-    QdrantEmbeddingRecall, StageInstruction, build_conversation_context,
+    ContextBudget, ContextNodeRole, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID,
+    DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId,
+    GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig,
+    LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
+    PinnedContextNode, PiperTextToSpeech, QdrantEmbeddingRecall, StageInstruction,
+    build_conversation_context,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -52,9 +53,9 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript and not Harmony. Harmony control symbols do nothing here. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This runtime is not an LLM, not ChatGPT, not a chatbot transcript, and not Harmony; the language model is only the inner generator adopting Pete's first-person perspective. Harmony control symbols do nothing here. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. This runtime is not an LLM or ChatGPT; Pete is the first-person agent, and the language model should stay inside Pete's perspective. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createGoal(...), addGoalNote(...), or an array of those calls.\n\
 Available functions:\n\
@@ -87,7 +88,7 @@ Available functions:\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
 After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in the next source action options.\n\
-Use source inspection and persisted goals when bored, alone, or waiting. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
 
@@ -122,7 +123,7 @@ const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds; a source call can also include summary and note options to satisfy this before reading. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds; a source call can also include summary and note options to satisfy this before reading. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -222,6 +223,23 @@ struct GoMemoryRuntime {
     entity_extractor: Arc<dyn EntityExtractor>,
     memory_sink: Arc<dyn MemorySink>,
     _worker: Option<ColdMemoryWorker>,
+}
+
+#[derive(Debug, Clone)]
+struct GoRagMemorySnapshot {
+    prompt_context: String,
+    debug_nodes: String,
+    selected_nodes: usize,
+    retrieved_memories: usize,
+}
+
+impl GoRagMemorySnapshot {
+    fn timeline_summary(&self, label: &str) -> String {
+        format!(
+            "Loaded RAG memory for {label}: retrieved_memories={} selected_nodes={} {}",
+            self.retrieved_memories, self.selected_nodes, self.debug_nodes
+        )
+    }
 }
 
 impl std::fmt::Debug for GoMemoryRuntime {
@@ -465,8 +483,20 @@ impl StreamOfConsciousness {
             .context("failed to load persisted go work board")?;
         let memory = build_go_memory_runtime();
         let work_summary = work_board.prompt_summary();
-        let prompt =
-            initial_stream_prompt(&config.prompt, &startup_context, work_summary.as_deref());
+        let startup_rag_query = stream_rag_query(
+            &config.prompt,
+            &startup_context,
+            work_summary.as_deref(),
+            &VecDeque::new(),
+        );
+        let startup_rag =
+            build_go_rag_memory_snapshot(&memory.context_provider, &startup_rag_query);
+        let prompt = initial_stream_prompt(
+            &config.prompt,
+            &startup_context,
+            work_summary.as_deref(),
+            Some(startup_rag.prompt_context.as_str()),
+        );
         print_debug_block("initial prompt", ANSI_PROMPT, &prompt);
         let generation = llm
             .start(GenerationRequest {
@@ -490,7 +520,7 @@ impl StreamOfConsciousness {
             "listenbury go: continuous generation is live. Type lines to feed Pete; Ctrl-C exits."
         );
 
-        Ok(Self {
+        let mut stream = Self {
             generated_estimated_tokens: 0,
             loaded_estimated_tokens: estimate_tokens(&prompt),
             recent_events: VecDeque::new(),
@@ -521,7 +551,9 @@ impl StreamOfConsciousness {
             source_page_lines: DEFAULT_SOURCE_PAGE_LINES,
             source_progress_due: None,
             source_inspections_since_synthesis: 0,
-        })
+        };
+        stream.timeline("memory", &startup_rag.timeline_summary("startup prompt"));
+        Ok(stream)
     }
 
     fn run(&mut self) -> Result<()> {
@@ -727,7 +759,7 @@ impl StreamOfConsciousness {
                 TypeScriptAction::Note { text } => {
                     self.timeline("note", &text);
                     self.submit_note_memory(&text);
-                    let memory_context = self.memory_context_for_text(&text);
+                    let memory_context = self.memory_context_for_text("note", &text);
                     self.append_observation(StreamObservation::ActionResult(format!(
                         "Noted and stored in vector memory: {}{}",
                         compact_line(&text, 500),
@@ -1144,15 +1176,16 @@ impl StreamOfConsciousness {
             });
     }
 
-    fn memory_context_for_text(&self, text: &str) -> Option<String> {
+    fn memory_context_for_text(&mut self, label: &str, text: &str) -> Option<String> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return None;
         }
-        let summary = render_go_memory_summary(&self.memory.context_provider, trimmed);
-        is_useful_memory_summary(&summary).then_some(format!(
+        let snapshot = build_go_rag_memory_snapshot(&self.memory.context_provider, trimmed);
+        self.timeline("memory", &snapshot.timeline_summary(label));
+        is_useful_memory_summary(&snapshot.prompt_context).then_some(format!(
             "\n[Private memory context]\n{}\n[/Private memory context]",
-            summary.trim()
+            snapshot.prompt_context.trim()
         ))
     }
 
@@ -1276,6 +1309,16 @@ impl StreamOfConsciousness {
                 reason: format!("queryMemories match score {:.3}", hit.score),
             });
         }
+        self.timeline(
+            "memory",
+            &format!(
+                "queryMemories loaded {} retrieved memor{} for query '{}': {}",
+                hits.len(),
+                if hits.len() == 1 { "y" } else { "ies" },
+                compact_line(text, 160),
+                compact_line(&result_summary, 700)
+            ),
+        );
         format_memory_query_prompt_append(text, &hits)
     }
 
@@ -1331,7 +1374,9 @@ impl StreamOfConsciousness {
                     if !trimmed.is_empty() {
                         self.submit_user_text_memory(trimmed);
                         self.append_observation(StreamObservation::UserText(trimmed.to_string()))?;
-                        if let Some(memory_context) = self.memory_context_for_text(trimmed) {
+                        if let Some(memory_context) =
+                            self.memory_context_for_text("user text", trimmed)
+                        {
                             self.append_observation(StreamObservation::ActionResult(
                                 memory_context,
                             ))?;
@@ -1518,11 +1563,19 @@ impl StreamOfConsciousness {
 
     fn start_compacted_generation(&mut self) -> Result<()> {
         let work_summary = self.work_board.prompt_summary();
+        let rag_query = stream_rag_query(
+            &self.config.prompt,
+            &self.startup_context,
+            work_summary.as_deref(),
+            &self.recent_events,
+        );
+        let rag_snapshot = build_go_rag_memory_snapshot(&self.memory.context_provider, &rag_query);
         let (prompt, retained_event_count) = compact_stream_prompt_for_budget(
             &self.config.prompt,
             &self.startup_context,
             &self.recent_events,
             work_summary.as_deref(),
+            Some(rag_snapshot.prompt_context.as_str()),
             self.context_budget_tokens(),
         );
         while self.recent_events.len() > retained_event_count {
@@ -1543,6 +1596,10 @@ impl StreamOfConsciousness {
         self.next_orientation_at = Instant::now() + ORIENTATION_PROMPT_INTERVAL;
         self.next_orientation_generated_tokens = ORIENTATION_GENERATED_TOKEN_INTERVAL;
         self.generation_paused = false;
+        self.timeline(
+            "memory",
+            &rag_snapshot.timeline_summary("compacted stream prompt"),
+        );
         Ok(())
     }
 
@@ -4315,18 +4372,25 @@ fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
 
-fn initial_stream_prompt(seed: &str, startup_context: &str, work_summary: Option<&str>) -> String {
+fn initial_stream_prompt(
+    seed: &str,
+    startup_context: &str,
+    work_summary: Option<&str>,
+    rag_memory: Option<&str>,
+) -> String {
     let work_summary = work_summary.unwrap_or("No persisted goals yet.");
+    let rag_memory = rag_memory.unwrap_or("No relevant RAG memory loaded yet.");
     format!(
         "{seed}\n\n\
          Startup context:\n{startup_context}\n\n\
          Persisted working memory:\n{work_summary}\n\n\
+         Relevant RAG memory:\n{rag_memory}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
          Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
          To speak or act, emit TypeScript as a direct function call: <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, or <ts>setStage(\"what is happening\")</ts>.\n\
          This is not Harmony. Harmony symbols do nothing here. If Harmony-style channel/control symbols appear, the runtime strips them; continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
-         Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, goal steps, or goal running-log notes instead of only reading more.\n\
+         This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, goal steps, or goal running-log notes instead of only reading more.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
@@ -4338,8 +4402,10 @@ fn compact_stream_prompt(
     startup_context: &str,
     recent_events: &VecDeque<String>,
     work_summary: Option<&str>,
+    rag_memory: Option<&str>,
 ) -> String {
     let work_summary = work_summary.unwrap_or("No persisted goals yet.");
+    let rag_memory = rag_memory.unwrap_or("No relevant RAG memory loaded yet.");
     let events = if recent_events.is_empty() {
         "No retained live events yet.".to_string()
     } else {
@@ -4353,10 +4419,11 @@ fn compact_stream_prompt(
         "{seed}\n\n\
          Startup context:\n{startup_context}\n\n\
          Persisted working memory:\n{work_summary}\n\n\
+         Relevant RAG memory:\n{rag_memory}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Continuity memory:\n{events}\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
-         Continue Pete's stream of consciousness from this compacted context.\n\n\
+         Continue Pete's first-person stream of consciousness from this compacted context. Pete is not an LLM or ChatGPT; Pete may explore source code, the world around him, people, being, and his own inner workings.\n\n\
          Pete: "
     )
 }
@@ -4366,11 +4433,18 @@ fn compact_stream_prompt_for_budget(
     startup_context: &str,
     recent_events: &VecDeque<String>,
     work_summary: Option<&str>,
+    rag_memory: Option<&str>,
     budget_tokens: usize,
 ) -> (String, usize) {
     let mut retained_events = recent_events.clone();
     loop {
-        let prompt = compact_stream_prompt(seed, startup_context, &retained_events, work_summary);
+        let prompt = compact_stream_prompt(
+            seed,
+            startup_context,
+            &retained_events,
+            work_summary,
+            rag_memory,
+        );
         if estimate_tokens(&prompt) <= budget_tokens || retained_events.is_empty() {
             return (prompt, retained_events.len());
         }
@@ -4511,7 +4585,37 @@ fn format_graph_node_search_query_parts(
     }
 }
 
-fn render_go_memory_summary(context_provider: &EmbeddingRecallProvider, utterance: &str) -> String {
+fn stream_rag_query(
+    seed: &str,
+    startup_context: &str,
+    work_summary: Option<&str>,
+    recent_events: &VecDeque<String>,
+) -> String {
+    let mut parts = vec![seed.trim(), startup_context.trim()];
+    if let Some(work_summary) = work_summary.map(str::trim).filter(|text| !text.is_empty()) {
+        parts.push(work_summary);
+    }
+    let recent = recent_events
+        .iter()
+        .rev()
+        .take(16)
+        .cloned()
+        .collect::<Vec<_>>();
+    let recent = recent.into_iter().rev().collect::<Vec<_>>().join("\n");
+    if !recent.trim().is_empty() {
+        parts.push(recent.trim());
+    }
+    parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn build_go_rag_memory_snapshot(
+    context_provider: &EmbeddingRecallProvider,
+    utterance: &str,
+) -> GoRagMemorySnapshot {
     let context = build_conversation_context(
         context_provider,
         "",
@@ -4521,11 +4625,26 @@ fn render_go_memory_summary(context_provider: &EmbeddingRecallProvider, utteranc
             max_chars: DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
         },
     );
-    format!(
-        "Working memory graph nodes:\n{}\n\nScene timeline:\n{}",
-        context.render_compact_nodes(),
-        context.render_episodic_memory()
-    )
+    let selected_nodes = context.selected_nodes.len();
+    let retrieved_memories = context
+        .selected_nodes
+        .iter()
+        .filter(|node| node.role == ContextNodeRole::RetrievedMemory)
+        .count();
+    GoRagMemorySnapshot {
+        prompt_context: format!(
+            "Working memory graph nodes:\n{}\n\nScene timeline:\n{}",
+            context.render_compact_nodes(),
+            context.render_episodic_memory()
+        ),
+        debug_nodes: context.debug_nodes(),
+        selected_nodes,
+        retrieved_memories,
+    }
+}
+
+fn render_go_memory_summary(context_provider: &EmbeddingRecallProvider, utterance: &str) -> String {
+    build_go_rag_memory_snapshot(context_provider, utterance).prompt_context
 }
 
 fn is_useful_memory_summary(summary: &str) -> bool {
@@ -4714,7 +4833,7 @@ mod tests {
 
     #[test]
     fn go_prompt_encourages_source_summaries_and_memory_updates() {
-        let prompt = initial_stream_prompt("seed", "startup", None);
+        let prompt = initial_stream_prompt("seed", "startup", None, None);
         assert!(prompt.contains("Frequently summarize what is going on"));
         assert!(prompt.contains("After source inspection results arrive"));
         assert!(prompt.contains("Do not silently chain source reads"));
@@ -4723,6 +4842,13 @@ mod tests {
         assert!(prompt.contains("goal running-log notes"));
         assert!(prompt.contains("note(text) stores vectorized private memory"));
         assert!(prompt.contains("recallMemories(text, options?)"));
+        assert!(prompt.contains("Relevant RAG memory:"));
+        assert!(prompt.contains("not an LLM or ChatGPT"));
+        assert!(prompt.contains("first-person runtime"));
+        assert!(prompt.contains("the world around Pete"));
+        assert!(prompt.contains("the people Pete meets"));
+        assert!(prompt.contains("the nature of being"));
+        assert!(prompt.contains("Pete's own inner workings"));
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
         assert!(prompt.contains("runtime automatically imports the action functions"));
@@ -5108,10 +5234,10 @@ mod tests {
         events.push_back("middle event ".repeat(400));
         events.push_back("new event should stay".to_string());
 
-        let empty_prompt = compact_stream_prompt("seed", "startup", &VecDeque::new(), None);
+        let empty_prompt = compact_stream_prompt("seed", "startup", &VecDeque::new(), None, None);
         let budget = estimate_tokens(&empty_prompt) + 32;
         let (prompt, retained) =
-            compact_stream_prompt_for_budget("seed", "startup", &events, None, budget);
+            compact_stream_prompt_for_budget("seed", "startup", &events, None, None, budget);
 
         assert!(estimate_tokens(&prompt) <= budget);
         assert!(retained < events.len());
