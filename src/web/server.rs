@@ -52,6 +52,7 @@ pub struct InputRouter {
     native_capture_enabled: Option<Arc<AtomicBool>>,
     browser_audio_enabled: Arc<AtomicBool>,
     browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
+    browser_audio_store_available: bool,
     browser_visual_speech_tx: Option<crossbeam_channel::Sender<VisualSpeechFrame>>,
 }
 
@@ -65,6 +66,7 @@ impl Default for InputRouter {
             native_capture_enabled: None,
             browser_audio_enabled: Arc::new(AtomicBool::new(true)),
             browser_audio_tx: None,
+            browser_audio_store_available: true,
             browser_visual_speech_tx: None,
         }
     }
@@ -75,12 +77,26 @@ impl InputRouter {
         native_capture_enabled: Option<Arc<AtomicBool>>,
         browser_audio_tx: Option<crossbeam_channel::Sender<AudioFrame>>,
     ) -> Self {
+        let browser_audio_enabled = Arc::new(AtomicBool::new(native_capture_enabled.is_none()));
         Self {
             clock: SessionClock::start_now(),
             arbitration_lock: Arc::new(Mutex::new(())),
             native_capture_enabled,
-            browser_audio_enabled: Arc::new(AtomicBool::new(true)),
+            browser_audio_enabled,
             browser_audio_tx,
+            browser_audio_store_available: true,
+            browser_visual_speech_tx: None,
+        }
+    }
+
+    pub fn native_only(native_capture_enabled: Option<Arc<AtomicBool>>) -> Self {
+        Self {
+            clock: SessionClock::start_now(),
+            arbitration_lock: Arc::new(Mutex::new(())),
+            native_capture_enabled,
+            browser_audio_enabled: Arc::new(AtomicBool::new(false)),
+            browser_audio_tx: None,
+            browser_audio_store_available: false,
             browser_visual_speech_tx: None,
         }
     }
@@ -110,7 +126,8 @@ impl InputRouter {
     }
 
     fn browser_mic_available(&self, live_audio: Option<&LiveSessionAudioStore>) -> bool {
-        self.browser_audio_tx.is_some() || live_audio.is_some()
+        self.browser_audio_tx.is_some()
+            || (self.browser_audio_store_available && live_audio.is_some())
     }
 
     fn set_browser_audio_enabled(&self, enabled: bool) {
@@ -1873,6 +1890,28 @@ mod tests {
     }
 
     #[test]
+    fn native_capture_is_default_when_both_mic_sources_exist() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let live_audio = LiveSessionAudioStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+            live_visual_speech: None,
+            input_control: WebInputControl::new(Some(Arc::clone(&enabled)), None),
+        });
+
+        let response = route_request("GET", "/api/input-status", &state);
+
+        assert_eq!(response.status, 200);
+        assert!(enabled.load(Ordering::Relaxed));
+        let status = String::from_utf8(response.body).expect("utf8 input status");
+        assert!(status.contains("\"nativeMic\":{\"available\":true,\"enabled\":true}"));
+        assert!(status.contains("\"browserMic\":{\"available\":true,\"enabled\":false}"));
+    }
+
+    #[test]
     fn browser_and_native_mic_controls_arbitrate_active_capture_source() {
         let enabled = Arc::new(AtomicBool::new(true));
         let live_audio = LiveSessionAudioStore::new();
@@ -1911,6 +1950,28 @@ mod tests {
         let native_status = String::from_utf8(native_enable.body).expect("utf8 input status");
         assert!(native_status.contains("\"nativeMic\":{\"available\":true,\"enabled\":true}"));
         assert!(native_status.contains("\"browserMic\":{\"available\":true,\"enabled\":false}"));
+    }
+
+    #[test]
+    fn native_only_input_control_does_not_advertise_browser_mic() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let live_audio = LiveSessionAudioStore::new();
+        let state = Arc::new(ServerState {
+            payload: None,
+            trace: None,
+            broadcaster: None,
+            live_audio: Some(live_audio),
+            live_visual_speech: None,
+            input_control: WebInputControl::native_only(Some(Arc::clone(&enabled))),
+        });
+
+        let response = route_request("GET", "/api/input-status", &state);
+
+        assert_eq!(response.status, 200);
+        assert!(enabled.load(Ordering::Relaxed));
+        let status = String::from_utf8(response.body).expect("utf8 input status");
+        assert!(status.contains("\"nativeMic\":{\"available\":true,\"enabled\":true}"));
+        assert!(status.contains("\"browserMic\":{\"available\":false,\"enabled\":false}"));
     }
 
     #[test]

@@ -1206,6 +1206,12 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     let live_audio = command
         .web
         .then(listenbury::web::LiveSessionAudioStore::new);
+    let (browser_audio_tx, browser_audio_rx) = if command.web {
+        let (tx, rx) = crossbeam_channel::bounded::<AudioFrame>(128);
+        (Some(tx), Some(rx))
+    } else {
+        (None, None)
+    };
     let broadcaster = if command.web {
         let bc = SseBroadcaster::new();
         let server_bc = bc.clone();
@@ -1234,7 +1240,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
             live_visual_speech: Some(listenbury::web::LiveSessionVisualSpeechStore::new()),
             input_control: listenbury::web::WebInputControl::new(
                 Some(Arc::clone(&capture_enabled)),
-                None,
+                browser_audio_tx,
             ),
         })
         .context("failed to start embedded web viewer")?;
@@ -1278,6 +1284,7 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
     let (mut ring_tx, mut ring_rx) = make_audio_ring(AUDIO_RING_CAPACITY);
     let mut pending = VecDeque::<f32>::new();
+    let mut pending_browser = VecDeque::<f32>::new();
     let entity_extractor: Arc<dyn EntityExtractor> = Arc::new(HeuristicEntityExtractor);
     let live_memory = build_live_memory_runtime(Arc::clone(&entity_extractor));
     let memory_sink = Arc::clone(&live_memory.memory_sink);
@@ -1327,8 +1334,22 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
     };
     let _cold_memory_worker = live_memory._worker;
     let mut turns = 0usize;
+    let mut last_capture_paused_notice_at: Option<Instant> = None;
 
     'listening: while stop_deadline.is_none_or(|deadline| Instant::now() < deadline) {
+        if !capture_enabled.load(Ordering::Relaxed) {
+            let should_print = last_capture_paused_notice_at
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(2));
+            if should_print {
+                eprintln!(
+                    "[live-half-duplex] native microphone capture is paused; enable Local mic in the web input controls to resume listening"
+                );
+                last_capture_paused_notice_at = Some(Instant::now());
+            }
+        } else {
+            last_capture_paused_notice_at = None;
+        }
+
         match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(sample) => pending.push_back(sample),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
@@ -1337,6 +1358,15 @@ pub(crate) fn run_live_half_duplex(command: LiveHalfDuplexCommand) -> Result<()>
         while let Ok(sample) = sample_rx.try_recv() {
             pending.push_back(sample);
         }
+        drain_browser_audio_into_ring(
+            browser_audio_rx.as_ref(),
+            &mut pending_browser,
+            frame_sample_rate_hz,
+            frame_channels,
+            &mut ring_tx,
+            &dropped_in_ring,
+            &session_clock,
+        );
         drain_pending_into_ring(
             &mut pending,
             input_frame_samples,
@@ -6263,6 +6293,43 @@ fn drain_pending_into_ring(
         if ring_tx.try_push(frame).is_err() {
             dropped_in_ring.fetch_add(1, Ordering::Relaxed);
         }
+    }
+}
+
+#[cfg(all(
+    feature = "audio-cpal",
+    feature = "asr-whisper",
+    feature = "llm-llama-cpp",
+    feature = "tts-piper"
+))]
+fn drain_browser_audio_into_ring(
+    browser_audio_rx: Option<&crossbeam_channel::Receiver<AudioFrame>>,
+    pending_browser: &mut VecDeque<f32>,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
+    ring_tx: &mut listenbury::audio::ring::AudioRingTx,
+    dropped_in_ring: &AtomicUsize,
+    session_clock: &SessionClock,
+) {
+    let Some(browser_audio_rx) = browser_audio_rx else {
+        return;
+    };
+
+    while let Ok(frame) = browser_audio_rx.try_recv() {
+        let input_frame_samples =
+            frame_samples_per_callback_frame(frame.sample_rate_hz, frame.channels);
+        pending_browser.extend(frame.samples);
+        drain_pending_into_ring(
+            pending_browser,
+            input_frame_samples,
+            frame.sample_rate_hz,
+            frame.channels,
+            frame_sample_rate_hz,
+            frame_channels,
+            ring_tx,
+            dropped_in_ring,
+            session_clock,
+        );
     }
 }
 
