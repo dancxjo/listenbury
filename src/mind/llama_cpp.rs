@@ -138,6 +138,8 @@ impl EmbeddingProvider for LlamaCppEmbeddingProvider {
             i32::try_from(self.config.threads).context("threads exceeds i32::MAX")?;
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(context_size))
+            .with_n_batch(self.config.context_size)
+            .with_n_ubatch(self.config.context_size)
             .with_n_threads(thread_count)
             .with_n_threads_batch(thread_count)
             .with_embeddings(true)
@@ -167,6 +169,13 @@ impl EmbeddingProvider for LlamaCppEmbeddingProvider {
         if tokens.len() > n_ctx {
             bail!(
                 "embedding text needs {} tokens, but context_size is {n_ctx}",
+                tokens.len()
+            );
+        }
+        let n_ubatch = ctx.n_ubatch() as usize;
+        if tokens.len() > n_ubatch {
+            bail!(
+                "embedding text needs {} tokens, but n_ubatch is {n_ubatch}",
                 tokens.len()
             );
         }
