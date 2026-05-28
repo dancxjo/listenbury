@@ -36,9 +36,9 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript and not Harmony. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This is not a chat transcript and not Harmony. Harmony control symbols do nothing here. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Speak only with say(...) inside <ts>...</ts>; act only with pete:will builders. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals/tasks, inspect relevant context, or choose a small useful action. Speak with say(...) inside <ts>...</ts>; act with pete:will builders. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The builders are already available in scope; imports from \"pete:will\" are also allowed. Make each <ts>...</ts> block return a command object or an array of command objects.\n\
 Available functions:\n\
@@ -69,7 +69,7 @@ Available functions:\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, or checklist items.\n\
 - cancelItem(idOrTitle, reason?): cancel a goal/task/checklist.\n\
 - selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
-Use source inspection when bored, alone, or waiting. Do not use say for clock ticks, quiet moments, idle narration, or every thought. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
 
 const TYPESCRIPT_START: &str = "<ts>";
@@ -82,7 +82,7 @@ const ORIENTATION_PROMPT_INTERVAL: Duration = Duration::from_secs(120);
 const COMMAND_REMINDER_PROMPT_INTERVAL: Duration = Duration::from_secs(90);
 const WORK_STATE_PROMPT_INTERVAL: Duration = Duration::from_secs(45);
 const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Use these commands when they help Pete keep track of what is happening; do not call commands just to fill quiet time.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -198,57 +198,51 @@ impl StreamObservation {
     fn prompt_text(&self) -> String {
         match self {
             Self::UserText(text) => format!(
-                "\n<live_observation source=\"user\">{}</live_observation>\n",
+                "\n[Live observation: user]\n{}\n",
                 compact_line(text, 1_200)
             ),
             Self::Thought(text) => format!(
-                "\n<live_observation source=\"pete_thought_memory\">{}</live_observation>\n",
+                "\n[Pete thought retained for continuity]\n{}\n",
                 compact_line(text, 1_200)
             ),
             Self::ActionSource(source) => format!(
-                "\n<live_observation source=\"pete_action_source\"><ts>{}</ts></live_observation>\n",
+                "\n[Pete TypeScript action source]\n<ts>{}</ts>\n",
                 compact_line(source, 1_200)
             ),
-            Self::ActionResult(text) => format!(
-                "\n<live_observation source=\"action_result\">{}</live_observation>\n",
-                compact_line(text, 1_000)
-            ),
+            Self::ActionResult(text) => {
+                format!("\n[Action result]\n{}\n", compact_line(text, 1_000))
+            }
             Self::ActionError { source, error } => format!(
-                "\n<live_observation source=\"action_error\">\nPrevious TypeScript action failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected <ts>...</ts> action or continue thinking quietly.\nError: {}\nSource excerpt: {}\n</live_observation>\n",
+                "\n[Action error]\nPrevious TypeScript action failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected <ts>...</ts> action or continue thinking quietly.\nError: {}\nSource excerpt: {}\n",
                 compact_line(error, 1_000),
                 compact_line(source, 1_000)
             ),
             Self::MouthStarted(text) => format!(
-                "\n<live_observation source=\"mouth\">Started speaking: {}</live_observation>\n",
+                "\n[Live observation: mouth]\nStarted speaking: {}\n",
                 compact_line(text, 400)
             ),
             Self::MouthReturned(text) => format!(
-                "\n<live_observation source=\"ear\">Self-heard syllable/speech returned: {}</live_observation>\n",
+                "\n[Live observation: ear]\nSelf-heard syllable/speech returned: {}\n",
                 compact_line(text, 400)
             ),
             Self::MouthError(message) => format!(
-                "\n<live_observation source=\"mouth_error\">{}</live_observation>\n",
+                "\n[Live observation: mouth error]\n{}\n",
                 compact_line(message, 800)
             ),
             Self::ContextCompacted { retained_events } => format!(
-                "\n<live_observation source=\"runtime\">Stream context compacted; retained {retained_events} recent event(s).</live_observation>\n"
+                "\n[Runtime]\nStream context compacted; retained {retained_events} recent event(s).\n"
             ),
             Self::Clock(message) => {
-                format!("\n<live_observation source=\"clock\">{message}</live_observation>\n")
+                format!("\n[Live observation: clock]\n{message}\n")
             }
             Self::Orientation => {
-                format!(
-                    "\n<runtime_orientation>\n{PETE_ORIENTATION_PROMPT}\n</runtime_orientation>\n"
-                )
+                format!("\n[Runtime orientation]\n{PETE_ORIENTATION_PROMPT}\n")
             }
             Self::CommandReminder => {
-                format!("\n<command_reminder>\n{COMMAND_REMINDER_PROMPT}\n</command_reminder>\n")
+                format!("\n[Command reminder]\n{COMMAND_REMINDER_PROMPT}\n")
             }
             Self::WorkState(text) => {
-                format!(
-                    "\n<current_work_state>\n{}\n</current_work_state>\n",
-                    compact_line(text, 2_000)
-                )
+                format!("\n[Current work state]\n{}\n", compact_line(text, 2_000))
             }
         }
     }
@@ -314,6 +308,7 @@ struct StreamOfConsciousness {
     generation_paused: bool,
     startup_context: String,
     timeline_index: u64,
+    generated_text_cleaner: GeneratedTextCleaner,
 }
 
 impl StreamOfConsciousness {
@@ -383,6 +378,7 @@ impl StreamOfConsciousness {
             generation_paused: false,
             startup_context,
             timeline_index: 0,
+            generated_text_cleaner: GeneratedTextCleaner::new(),
         })
     }
 
@@ -434,14 +430,19 @@ impl StreamOfConsciousness {
     }
 
     fn ingest_token(&mut self, text: &str) -> Result<()> {
+        let text = self.generated_text_cleaner.push(text);
+        if text.is_empty() {
+            return Ok(());
+        }
+
         print!("{ANSI_LLM}{text}{ANSI_RESET}");
         std::io::stdout().flush()?;
         self.generated_estimated_tokens = self
             .generated_estimated_tokens
-            .saturating_add(estimate_tokens(text));
+            .saturating_add(estimate_tokens(&text));
         self.pacer.record_token();
 
-        let parsed = self.output_parser.push(text);
+        let parsed = self.output_parser.push(&text);
         for output in parsed.outputs {
             self.handle_output(output)?;
         }
@@ -971,6 +972,7 @@ impl StreamOfConsciousness {
             .context("failed to restart compacted stream")?;
         self.loaded_estimated_tokens = estimate_tokens(&prompt);
         self.generated_estimated_tokens = 0;
+        self.generated_text_cleaner = GeneratedTextCleaner::new();
         self.next_orientation_at = Instant::now() + ORIENTATION_PROMPT_INTERVAL;
         self.next_orientation_generated_tokens = ORIENTATION_GENERATED_TOKEN_INTERVAL;
         self.generation_paused = false;
@@ -1044,6 +1046,145 @@ enum StreamOutput {
 #[derive(Debug, Default)]
 struct ParsedStreamOutput {
     outputs: Vec<StreamOutput>,
+}
+
+#[derive(Debug, Default)]
+struct GeneratedTextCleaner {
+    pending: String,
+}
+
+impl GeneratedTextCleaner {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(&mut self, text: &str) -> String {
+        self.pending.push_str(text);
+        self.drain()
+    }
+
+    fn drain(&mut self) -> String {
+        let mut output = String::new();
+        loop {
+            let Some(control_start) = first_generated_control_start(&self.pending) else {
+                let keep_from = possible_generated_control_prefix_start(&self.pending);
+                output.push_str(&self.pending[..keep_from]);
+                self.pending = self.pending[keep_from..].to_string();
+                break;
+            };
+
+            output.push_str(&self.pending[..control_start]);
+            let control = &self.pending[control_start..];
+            if control.starts_with("<|start|>ts>") {
+                let drain_to = control_start + "<|start|>ts>".len();
+                self.pending.drain(..drain_to);
+                output.push_str(TYPESCRIPT_START);
+                continue;
+            }
+            if control.starts_with("<|start|>ts") && control.len() < "<|start|>ts>".len() {
+                self.pending = self.pending[control_start..].to_string();
+                break;
+            }
+            if let Some(drain_len) = generated_control_len(control) {
+                let drain_to = control_start + drain_len;
+                self.pending.drain(..drain_to);
+                continue;
+            }
+
+            self.pending = self.pending[control_start..].to_string();
+            break;
+        }
+        output
+    }
+}
+
+fn first_generated_control_start(text: &str) -> Option<usize> {
+    [
+        "<|",
+        "PROCESSING_RESULTS",
+        "commentary+private",
+        "analysis to=container.exec",
+        "to=container.exec",
+    ]
+    .iter()
+    .filter_map(|marker| text.find(marker))
+    .min()
+}
+
+fn generated_control_len(text: &str) -> Option<usize> {
+    if text.starts_with("PROCESSING_RESULTS") {
+        return Some("PROCESSING_RESULTS".len());
+    }
+    if text.starts_with("commentary+private") {
+        return Some("commentary+private".len());
+    }
+    if text.starts_with("analysis to=container.exec") {
+        return Some("analysis to=container.exec".len());
+    }
+    if text.starts_with("to=container.exec") {
+        return Some("to=container.exec".len());
+    }
+    if text.starts_with("<|start|>") {
+        let marker_len = "<|start|>".len();
+        let role_len = [
+            "stream",
+            "assistant",
+            "user",
+            "system",
+            "developer",
+            "analysis",
+            "final",
+            "commentary",
+            "ts",
+        ]
+        .iter()
+        .find_map(|role| text[marker_len..].starts_with(role).then_some(role.len()))
+        .unwrap_or(0);
+        return Some(marker_len + role_len);
+    }
+    if text.starts_with("<|channel|>") {
+        if let Some(message) = text.find("<|message|>") {
+            return Some(message + "<|message|>".len());
+        }
+        let marker_len = "<|channel|>".len();
+        let role_len = ["analysis", "final", "commentary"]
+            .iter()
+            .find_map(|role| text[marker_len..].starts_with(role).then_some(role.len()))
+            .unwrap_or(0);
+        return Some(marker_len + role_len);
+    }
+    ["<|end|>", "<|return|>", "<|message|>"]
+        .iter()
+        .find_map(|marker| text.starts_with(marker).then_some(marker.len()))
+        .or_else(|| {
+            text.starts_with("<|")
+                .then(|| text.find("|>").map(|end| end + 2))
+                .flatten()
+        })
+}
+
+fn possible_generated_control_prefix_start(text: &str) -> usize {
+    let markers = [
+        "<|",
+        "PROCESSING_RESULTS",
+        "commentary+private",
+        "analysis to=container.exec",
+        "to=container.exec",
+    ];
+    for index in text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+    {
+        let suffix = &text[index..];
+        if markers
+            .iter()
+            .any(|marker| marker.starts_with(suffix) && !suffix.is_empty())
+        {
+            return index;
+        }
+    }
+    text.len()
 }
 
 #[derive(Debug)]
@@ -3015,15 +3156,15 @@ fn tsrun_error(err: JsError) -> anyhow::Error {
 fn initial_stream_prompt(seed: &str, startup_context: &str) -> String {
     format!(
         "{seed}\n\n\
-         <startup_context>\n{startup_context}\n</startup_context>\n\n\
-         <orientation>\n{PETE_ORIENTATION_PROMPT}\n</orientation>\n\n\
-         <stream_rules>\n\
+         Startup context:\n{startup_context}\n\n\
+         Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
+         Stream rules:\n\
          Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
          To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
-         This is not Harmony. If Harmony-style channel/control symbols appear, treat them as stray artifacts and continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
-         Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable, but do not chatter just to fill time.\n\
-         </stream_rules>\n\n\
-         <pete_will_runtime>\n{PETE_WILL_RUNTIME_PROMPT}\n</pete_will_runtime>\n\n\
+         This is not Harmony. Harmony symbols do nothing here. If Harmony-style channel/control symbols appear, the runtime strips them; continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
+         Do not be idle. When there is no user speech, keep quietly maintaining awareness, goals, tasks, checklists, source context, or a useful next action.\n\
+         Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
+         Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
     )
 }
@@ -3044,10 +3185,10 @@ fn compact_stream_prompt(
     };
     format!(
         "{seed}\n\n\
-         <startup_context>\n{startup_context}\n</startup_context>\n\n\
-         <orientation>\n{PETE_ORIENTATION_PROMPT}\n</orientation>\n\n\
-         <continuity_memory>\n{events}\n</continuity_memory>\n\n\
-         <pete_will_runtime>\n{PETE_WILL_RUNTIME_PROMPT}\n</pete_will_runtime>\n\n\
+         Startup context:\n{startup_context}\n\n\
+         Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
+         Continuity memory:\n{events}\n\n\
+         Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Continue Pete's stream of consciousness from this compacted context.\n\n\
          Pete: "
     )
@@ -3250,6 +3391,29 @@ mod tests {
             parsed.outputs.as_slice(),
             [StreamOutput::MalformedTypeScript(source)] if source.contains("forWe already")
         ));
+    }
+
+    #[test]
+    fn generated_text_cleaner_strips_harmony_control_tags() {
+        let mut cleaner = GeneratedTextCleaner::new();
+        assert_eq!(
+            cleaner.push("Think<|end|><|start|>stream\nmore"),
+            "Think\nmore"
+        );
+        assert_eq!(
+            cleaner.push("<|end|><|start|>ts>listFiles()</ts>commentary+private"),
+            "<ts>listFiles()</ts>"
+        );
+    }
+
+    #[test]
+    fn generated_text_cleaner_handles_split_control_tags() {
+        let mut cleaner = GeneratedTextCleaner::new();
+        assert_eq!(cleaner.push("Ready <|sta"), "Ready ");
+        assert_eq!(
+            cleaner.push("rt|>ts>say(\"Hi\")</ts>"),
+            "<ts>say(\"Hi\")</ts>"
+        );
     }
 
     #[test]
