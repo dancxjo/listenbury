@@ -101,7 +101,16 @@
       "priority": null,
       "tags": [],
       "steps": [],
-      "log": [],
+      "log": [
+        {
+          "text": "Have listed first page of source files.",
+          "at": "2026-05-28T13:05:19-07:00"
+        },
+        {
+          "text": "Ready to read src/acoustic/mod.rs.",
+          "at": "2026-05-28T13:05:21-07:00"
+        }
+      ],
       "status": "open"
     }
   ],

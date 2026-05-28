@@ -86,7 +86,7 @@ Available functions:\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note with addGoalNote(...), logProgress(...), updateItem(..., { note: ... }), checkOff(..., { note: ... }), or note(...) before doing more source inspection. The runtime blocks additional source inspection until a progress note is recorded.\n\
+After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. The runtime blocks additional source inspection until a progress note is recorded.\n\
 Use source inspection and persisted goals when bored, alone, or waiting. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
@@ -121,7 +121,7 @@ const DEFAULT_SOURCE_PAGE_LINES: usize = 20;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, record a progress note before inspecting more source. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"). If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -654,8 +654,9 @@ impl StreamOfConsciousness {
             if let Some(blocked_source_action) = action.source_progress_label()
                 && let Some(previous_source_action) = self.source_progress_due.as_deref()
             {
+                let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Progress note required before {blocked_source_action}. Summarize what the previous source inspection revealed ({previous_source_action}) with addGoalNote(...), logProgress(...), updateItem(..., {{ note: ... }}), checkOff(..., {{ note: ... }}), or note(...), then continue source inspection."
+                    "Progress note required before {blocked_source_action}. Previous source result: {previous_source_action}. Next action should be exactly one progress note, for example: addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"). After that action succeeds, retry {blocked_source_action}."
                 );
                 self.timeline_colored("action_blocked", &message, ANSI_ERROR);
                 self.append_observation(StreamObservation::ActionError {
@@ -972,7 +973,13 @@ impl StreamOfConsciousness {
                 }
             }
             if records_progress_note {
-                self.source_progress_due = None;
+                if let Some(previous_source_action) = self.source_progress_due.take() {
+                    let message = format!(
+                        "Progress note recorded; source inspection gate cleared for {previous_source_action}."
+                    );
+                    self.timeline("action_result", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                }
             }
             if let Some(source_progress_label) = source_progress_label {
                 self.source_progress_due = Some(source_progress_label.to_string());
@@ -2501,6 +2508,24 @@ impl WorkBoard {
             ));
         }
         Some(lines.join("\n"))
+    }
+
+    fn suggested_progress_target(&self) -> String {
+        if let Some(selected) = self.selected_item()
+            && matches!(selected.status, WorkItemStatus::Open)
+        {
+            return selected.id.clone();
+        }
+        if let Some(open) = self
+            .items
+            .iter()
+            .find(|item| matches!(item.status, WorkItemStatus::Open))
+        {
+            return open.id.clone();
+        }
+        self.selected_id
+            .clone()
+            .unwrap_or_else(|| "current-goal-id".to_string())
     }
 
     fn selected_item(&self) -> Option<&Goal> {
@@ -4411,6 +4436,7 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("write vectorized private memory"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is gated"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("the next source action will be blocked"));
     }
 
     #[test]
@@ -4480,6 +4506,7 @@ mod tests {
         let summary = board.prompt_summary().expect("summary");
         assert!(summary.contains("Selected goal goal-1 is complete"));
         assert!(summary.contains("select an open goal"));
+        assert_eq!(board.suggested_progress_target(), "goal-2");
     }
 
     #[test]
