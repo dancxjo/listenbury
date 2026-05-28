@@ -12,6 +12,7 @@ pub mod mind;
 #[cfg(feature = "model-download")]
 pub mod models;
 pub mod mouth;
+pub mod perception;
 pub mod playback_check;
 pub mod prosody;
 pub mod runtime;
@@ -101,6 +102,10 @@ pub use mouth::player::{PlaybackEvent, PlaybackUnitId, Player, SequentialPlayer}
 pub use mouth::read_aloud::{
     ReadAloudAudioPreparer, ReadAloudCandidate, ReadAloudCandidateEvent, ReadAloudCandidateTracker,
     SyntheticCandidateCommitment, SyntheticCandidateId,
+};
+pub use perception::{
+    ChildSensationInput, IMAGE_DESCRIPTION_IMPRESSION_PROMPT, Impression, ImpressionId, Sensation,
+    SensationId, ShortTermTimeline, TimelineFormatter, TimelineQuery, TimelineWindow, VectorRef,
 };
 pub use runtime_event::{EventSource, RuntimeEvent, RuntimeEventKind};
 pub use segmentation::{
