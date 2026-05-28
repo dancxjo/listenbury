@@ -2,7 +2,7 @@
 use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "asr-whisper"))]
-const SOURCE_PAGE_LINES: usize = 80;
+const SOURCE_PAGE_LINES: usize = 120;
 
 #[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_list_source_files() -> String {

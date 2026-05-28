@@ -17,10 +17,11 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{GenerationId, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, VecDeque};
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -63,9 +64,9 @@ Available functions:\n\
 - searchSource(query, limit?): source text search.\n\
 - grepSource(pattern, limit?): grep-like source line search.\n\
 - setSourcePageSize(lines): set the default readSourceFile page size for future source reads.\n\
-- createGoal(title, options?): create a goal. options may include id, summary, priority, tags, and select.\n\
-- createTask(title, options?): create a task. options may include id, summary, parent, priority, tags, and select.\n\
-- createChecklist(title, items?, options?): create a checklist with string items. options may include id, summary, parent, tags, and select.\n\
+- createGoal(title, options?): create a persisted goal. options may include id, summary, priority, tags, and select.\n\
+- createTask(title, options?): create a persisted task. options may include id, summary, parent, priority, tags, and select.\n\
+- createChecklist(title, items?, options?): create a persisted checklist with string items. options may include id, summary, parent, tags, and select.\n\
 - checkOff(idOrTitle, options?) or completeItem(idOrTitle, options?): mark a goal/task/checklist complete. options may include note.\n\
 - checkChecklistItem(checklistIdOrTitle, item, options?): mark one checklist item complete. options may include note.\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, or checklist items.\n\
@@ -84,10 +85,12 @@ const ORIENTATION_PROMPT_INTERVAL: Duration = Duration::from_secs(120);
 const COMMAND_REMINDER_PROMPT_INTERVAL: Duration = Duration::from_secs(90);
 const WORK_STATE_PROMPT_INTERVAL: Duration = Duration::from_secs(45);
 const ORIENTATION_GENERATED_TOKEN_INTERVAL: usize = 512;
-const DEFAULT_SOURCE_PAGE_LINES: usize = 80;
+const PROMPT_CHARS_PER_TOKEN_ESTIMATE: usize = 3;
+const DEFAULT_SOURCE_PAGE_LINES: usize = 120;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage persisted executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -334,7 +337,11 @@ impl StreamOfConsciousness {
         })
         .context("failed to initialize llama.cpp engine")?;
         let startup_context = gather_startup_context();
-        let prompt = initial_stream_prompt(&config.prompt, &startup_context);
+        let work_board = WorkBoard::load_or_default(work_board_path())
+            .context("failed to load persisted go work board")?;
+        let work_summary = work_board.prompt_summary();
+        let prompt =
+            initial_stream_prompt(&config.prompt, &startup_context, work_summary.as_deref());
         print_debug_block("initial prompt", ANSI_PROMPT, &prompt);
         let generation = llm
             .start(GenerationRequest {
@@ -371,7 +378,7 @@ impl StreamOfConsciousness {
             llm,
             generation,
             mouth,
-            work_board: WorkBoard::new(),
+            work_board,
             stdin_rx,
             mouth_rx,
             _mouth_worker: worker,
@@ -416,12 +423,29 @@ impl StreamOfConsciousness {
             }
 
             let terminal = events.iter().any(is_terminal_event);
+            let mut restart_for_context_capacity = false;
             for event in events {
                 match event {
                     LlmEvent::Token { text } => self.ingest_token(&text)?,
+                    LlmEvent::Error { message } if is_context_capacity_message(&message) => {
+                        self.timeline_colored(
+                            "context",
+                            &format!(
+                                "LLM context capacity reached; compacting stream context: {message}"
+                            ),
+                            ANSI_DIM,
+                        );
+                        restart_for_context_capacity = true;
+                    }
                     LlmEvent::Error { message } => anyhow::bail!("go generation failed: {message}"),
                     LlmEvent::Completed | LlmEvent::Cancelled => {}
                 }
+            }
+
+            if restart_for_context_capacity {
+                self.note_context_compaction();
+                self.start_compacted_generation()?;
+                continue;
             }
 
             if terminal {
@@ -429,7 +453,7 @@ impl StreamOfConsciousness {
                     println!();
                     break;
                 }
-                self.restart_generation()?;
+                self.start_compacted_generation()?;
             }
         }
 
@@ -765,12 +789,14 @@ impl StreamOfConsciousness {
                         },
                         select,
                     );
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
                 TypeScriptAction::CompleteWorkItem { target, note } => {
                     let message = self.work_board.complete(&target, note.as_deref());
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
@@ -779,24 +805,28 @@ impl StreamOfConsciousness {
                     let message =
                         self.work_board
                             .check_checklist_item(&target, &item, note.as_deref());
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
                 TypeScriptAction::UpdateWorkItem { target, fields } => {
                     let message = self.work_board.update(&target, fields);
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
                 TypeScriptAction::CancelWorkItem { target, reason } => {
                     let message = self.work_board.cancel(&target, reason.as_deref());
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
                 TypeScriptAction::SelectWorkItem { target } => {
                     let message = self.work_board.select(&target);
+                    self.persist_work_board()?;
                     self.timeline("work", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
@@ -820,6 +850,12 @@ impl StreamOfConsciousness {
             return Ok(());
         };
         self.append_observation(StreamObservation::WorkState(summary))
+    }
+
+    fn persist_work_board(&self) -> Result<()> {
+        self.work_board
+            .save(work_board_path())
+            .context("failed to persist go work board")
     }
 
     fn enqueue_speech(&mut self, text: String) -> Result<()> {
@@ -989,10 +1025,12 @@ impl StreamOfConsciousness {
 
     fn restart_generation(&mut self) -> Result<()> {
         self.cancel_current_generation()?;
+        let work_summary = self.work_board.prompt_summary();
         let prompt = compact_stream_prompt(
             &self.config.prompt,
             &self.startup_context,
             &self.recent_events,
+            work_summary.as_deref(),
         );
         print_debug_block("compacted prompt", ANSI_PROMPT, &prompt);
         self.generation = self
@@ -1677,6 +1715,12 @@ fn env_value(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn work_board_path() -> PathBuf {
+    std::env::var_os("LISTENBURY_GO_WORK_BOARD")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(WORK_BOARD_PATH))
+}
+
 #[derive(Debug, Deserialize)]
 struct IpLocation {
     ip: Option<String>,
@@ -1686,7 +1730,8 @@ struct IpLocation {
     timezone: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum WorkItemKind {
     Goal,
     Task,
@@ -1703,7 +1748,8 @@ impl WorkItemKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum WorkItemStatus {
     Open,
     Complete,
@@ -1720,13 +1766,13 @@ impl WorkItemStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ChecklistEntry {
     text: String,
     done: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorkItem {
     id: String,
     kind: WorkItemKind,
@@ -1739,10 +1785,13 @@ struct WorkItem {
     status: WorkItemStatus,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct WorkBoard {
+    #[serde(default)]
     items: Vec<WorkItem>,
+    #[serde(default)]
     selected_id: Option<String>,
+    #[serde(default)]
     next_id: u64,
 }
 
@@ -1751,6 +1800,53 @@ impl WorkBoard {
         Self {
             next_id: 1,
             ..Default::default()
+        }
+    }
+
+    fn load_or_default(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("read work board {}", path.display()))?;
+        let mut board: Self = serde_json::from_str(&text)
+            .with_context(|| format!("parse work board {}", path.display()))?;
+        board.repair_after_load();
+        Ok(board)
+    }
+
+    fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create work board dir {}", parent.display()))?;
+        }
+        let text = serde_json::to_string_pretty(self).context("serialize work board")?;
+        std::fs::write(path, text).with_context(|| format!("write work board {}", path.display()))
+    }
+
+    fn repair_after_load(&mut self) {
+        if self.next_id == 0 {
+            self.next_id = 1;
+        }
+        let mut highest = 0;
+        for item in &self.items {
+            if let Some(number) = item
+                .id
+                .rsplit_once('-')
+                .and_then(|(_, number)| number.parse::<u64>().ok())
+            {
+                highest = highest.max(number);
+            }
+        }
+        self.next_id = self.next_id.max(highest.saturating_add(1));
+        if self
+            .selected_id
+            .as_deref()
+            .is_some_and(|id| self.items.iter().all(|item| item.id != id))
+        {
+            self.selected_id = None;
         }
     }
 
@@ -3260,10 +3356,12 @@ fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
 
-fn initial_stream_prompt(seed: &str, startup_context: &str) -> String {
+fn initial_stream_prompt(seed: &str, startup_context: &str, work_summary: Option<&str>) -> String {
+    let work_summary = work_summary.unwrap_or("No persisted goals, tasks, or checklists yet.");
     format!(
         "{seed}\n\n\
          Startup context:\n{startup_context}\n\n\
+         Persisted working memory:\n{work_summary}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
          Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
@@ -3280,7 +3378,9 @@ fn compact_stream_prompt(
     seed: &str,
     startup_context: &str,
     recent_events: &VecDeque<String>,
+    work_summary: Option<&str>,
 ) -> String {
+    let work_summary = work_summary.unwrap_or("No persisted goals, tasks, or checklists yet.");
     let events = if recent_events.is_empty() {
         "No retained live events yet.".to_string()
     } else {
@@ -3293,6 +3393,7 @@ fn compact_stream_prompt(
     format!(
         "{seed}\n\n\
          Startup context:\n{startup_context}\n\n\
+         Persisted working memory:\n{work_summary}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Continuity memory:\n{events}\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
@@ -3591,6 +3692,49 @@ mod tests {
                 .iter()
                 .any(|action| matches!(action, TypeScriptAction::SelectWorkItem { .. }))
         );
+    }
+
+    #[test]
+    fn work_board_persists_and_reloads_useful_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("go_work_board.json");
+        let mut board = WorkBoard::new();
+        board.create(
+            WorkItem {
+                id: String::new(),
+                kind: WorkItemKind::Checklist,
+                title: "Keep bearings".to_string(),
+                summary: Some("persist useful working memory".to_string()),
+                parent: None,
+                priority: Some("high".to_string()),
+                tags: ["go".to_string()].into_iter().collect(),
+                checklist: vec![
+                    ChecklistEntry {
+                        text: "write file".to_string(),
+                        done: false,
+                    },
+                    ChecklistEntry {
+                        text: "reload file".to_string(),
+                        done: false,
+                    },
+                ],
+                status: WorkItemStatus::Open,
+            },
+            true,
+        );
+        assert!(
+            board
+                .check_checklist_item("Keep bearings", "write file", None)
+                .contains("Checked")
+        );
+        board.save(&path).expect("save work board");
+
+        let loaded = WorkBoard::load_or_default(&path).expect("load work board");
+        let summary = loaded.prompt_summary().expect("summary");
+        assert!(summary.contains("Selected checklist checklist-1"));
+        assert!(summary.contains("Keep bearings"));
+        assert!(summary.contains("(1/2)"));
+        assert!(loaded.next_id > 1);
     }
 
     #[test]
