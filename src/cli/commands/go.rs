@@ -72,6 +72,7 @@ Available functions:\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, or checklist items.\n\
 - cancelItem(idOrTitle, reason?): cancel a goal/task/checklist.\n\
 - selectItem(idOrTitle): mark one goal/task/checklist as Pete's current focus; it will appear frequently in the prompt.\n\
+Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), tasks/checklists, and memory builders to retain durable findings. Do not silently chain source reads without saying what is there.\n\
 Use source inspection, goals, tasks, and checklists when bored, alone, or waiting. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences. The only executable action syntax here is <ts>peteWillBuilder(...)</ts>.";
 
@@ -90,7 +91,7 @@ const DEFAULT_SOURCE_PAGE_LINES: usize = 120;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage persisted executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal/task, inspect relevant context, or take a small useful action. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), and manage persisted executive state with createGoal(...), createTask(...), createChecklist(...), checkOff(...), checkChecklistItem(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal/task, inspect relevant context, or take a small useful action. Regularly summarize recent context and source discoveries, and store durable facts or next steps in memory, stage, tasks, or checklists. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -479,10 +480,7 @@ impl StreamOfConsciousness {
         }
 
         if self.should_compact() {
-            self.append_observation(StreamObservation::ContextCompacted {
-                retained_events: self.recent_events.len(),
-            })?;
-            self.restart_generation()?;
+            self.compact_context_and_restart()?;
         }
 
         Ok(())
@@ -972,12 +970,23 @@ impl StreamOfConsciousness {
         if self.should_restart_before_append(&prompt_text) {
             self.restart_generation()?;
         }
-        self.loaded_estimated_tokens = self
-            .loaded_estimated_tokens
-            .saturating_add(estimate_tokens(&prompt_text));
-        self.llm
-            .append_prompt(self.generation, prompt_text)
-            .context("failed to append observation to stream")
+        match self.llm.append_prompt(self.generation, prompt_text.clone()) {
+            Ok(()) => {
+                self.loaded_estimated_tokens = self
+                    .loaded_estimated_tokens
+                    .saturating_add(estimate_tokens(&prompt_text));
+                Ok(())
+            }
+            Err(error) if is_context_append_recoverable(&error) => {
+                self.timeline_colored(
+                    "context",
+                    &format!("Prompt append could not fit active context; compacting: {error:#}"),
+                    ANSI_DIM,
+                );
+                self.restart_generation()
+            }
+            Err(error) => Err(error).context("failed to append observation to stream"),
+        }
     }
 
     fn remember_event(&mut self, event: String) {
@@ -1023,15 +1032,38 @@ impl StreamOfConsciousness {
             .max(1)
     }
 
+    fn compact_context_and_restart(&mut self) -> Result<()> {
+        self.note_context_compaction();
+        self.restart_generation()
+    }
+
+    fn note_context_compaction(&mut self) {
+        let retained_events = self.recent_events.len();
+        self.remember_event(StreamObservation::ContextCompacted { retained_events }.memory_text());
+        self.timeline_colored(
+            "context",
+            &format!("Compacting stream context; retaining {retained_events} recent event(s)."),
+            ANSI_DIM,
+        );
+    }
+
     fn restart_generation(&mut self) -> Result<()> {
         self.cancel_current_generation()?;
+        self.start_compacted_generation()
+    }
+
+    fn start_compacted_generation(&mut self) -> Result<()> {
         let work_summary = self.work_board.prompt_summary();
-        let prompt = compact_stream_prompt(
+        let (prompt, retained_event_count) = compact_stream_prompt_for_budget(
             &self.config.prompt,
             &self.startup_context,
             &self.recent_events,
             work_summary.as_deref(),
+            self.context_budget_tokens(),
         );
+        while self.recent_events.len() > retained_event_count {
+            self.recent_events.pop_front();
+        }
         print_debug_block("compacted prompt", ANSI_PROMPT, &prompt);
         self.generation = self
             .llm
@@ -1051,7 +1083,12 @@ impl StreamOfConsciousness {
     }
 
     fn cancel_current_generation(&mut self) -> Result<()> {
-        self.llm.cancel(self.generation)?;
+        if let Err(error) = self.llm.cancel(self.generation) {
+            if is_generation_not_found(&error) {
+                return Ok(());
+            }
+            return Err(error);
+        }
         loop {
             let events = self.llm.poll(self.generation)?;
             if events.iter().any(is_terminal_event) {
@@ -3367,7 +3404,7 @@ fn initial_stream_prompt(seed: &str, startup_context: &str, work_summary: Option
          Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
          To speak or act, emit TypeScript as <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, <ts>setStage(\"what is happening\")</ts>, or another pete:will call.\n\
          This is not Harmony. Harmony symbols do nothing here. If Harmony-style channel/control symbols appear, the runtime strips them; continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
-         Do not be idle. When there is no user speech, keep quietly maintaining awareness, goals, tasks, checklists, source context, or a useful next action.\n\
+         Do not be idle. When there is no user speech, keep quietly maintaining awareness, goals, tasks, checklists, source context, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and task context instead of only reading more.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
@@ -3400,6 +3437,23 @@ fn compact_stream_prompt(
          Continue Pete's stream of consciousness from this compacted context.\n\n\
          Pete: "
     )
+}
+
+fn compact_stream_prompt_for_budget(
+    seed: &str,
+    startup_context: &str,
+    recent_events: &VecDeque<String>,
+    work_summary: Option<&str>,
+    budget_tokens: usize,
+) -> (String, usize) {
+    let mut retained_events = recent_events.clone();
+    loop {
+        let prompt = compact_stream_prompt(seed, startup_context, &retained_events, work_summary);
+        if estimate_tokens(&prompt) <= budget_tokens || retained_events.is_empty() {
+            return (prompt, retained_events.len());
+        }
+        retained_events.pop_front();
+    }
 }
 
 fn print_debug_block(label: &str, color: &str, body: &str) {
@@ -3510,7 +3564,9 @@ fn format_graph_node_search_query_parts(
 }
 
 fn estimate_tokens(text: &str) -> usize {
-    text.len().saturating_add(3) / 4
+    text.len()
+        .saturating_add(PROMPT_CHARS_PER_TOKEN_ESTIMATE - 1)
+        / PROMPT_CHARS_PER_TOKEN_ESTIMATE
 }
 
 fn is_terminal_event(event: &LlmEvent) -> bool {
@@ -3518,6 +3574,28 @@ fn is_terminal_event(event: &LlmEvent) -> bool {
         event,
         LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
     )
+}
+
+fn is_context_capacity_message(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("context_size")
+        || message.contains("context tokens")
+        || message.contains("context capacity")
+}
+
+fn is_context_append_recoverable(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}").to_ascii_lowercase();
+    message.contains("context_size")
+        || message.contains("context tokens")
+        || message.contains("context capacity")
+        || message.contains("no longer accepting prompt appends")
+        || message.contains("generation not found")
+}
+
+fn is_generation_not_found(error: &anyhow::Error) -> bool {
+    format!("{error:#}")
+        .to_ascii_lowercase()
+        .contains("generation not found")
 }
 
 #[cfg(test)]
@@ -3622,6 +3700,34 @@ mod tests {
             cleaner.push("rt|>ts>say(\"Hi\")</ts>"),
             "<ts>say(\"Hi\")</ts>"
         );
+    }
+
+    #[test]
+    fn compact_stream_prompt_for_budget_drops_oldest_events() {
+        let mut events = VecDeque::new();
+        events.push_back("old event ".repeat(400));
+        events.push_back("middle event ".repeat(400));
+        events.push_back("new event should stay".to_string());
+
+        let empty_prompt = compact_stream_prompt("seed", "startup", &VecDeque::new(), None);
+        let budget = estimate_tokens(&empty_prompt) + 32;
+        let (prompt, retained) =
+            compact_stream_prompt_for_budget("seed", "startup", &events, None, budget);
+
+        assert!(estimate_tokens(&prompt) <= budget);
+        assert!(retained < events.len());
+        assert!(!prompt.contains("old event"));
+        assert!(prompt.contains("new event should stay"));
+    }
+
+    #[test]
+    fn context_capacity_messages_are_restartable() {
+        assert!(is_context_capacity_message(
+            "appended prompt needs 8193 context tokens, but context_size is 8192"
+        ));
+        assert!(is_context_append_recoverable(&anyhow::anyhow!(
+            "generation is no longer accepting prompt appends"
+        )));
     }
 
     #[test]
