@@ -1329,6 +1329,218 @@
         {
           "text": "Observed from readSourceFile src/acoustic/neural.rs page 13: token_ids and token_len setup. Next: read page 13 from line 260 onwards to see rest of inputs handling.",
           "at": "2026-05-28T14:49:15-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs line 260: token_ids setup, ensured non-empty, created tensors. Next: Read next page 14.",
+          "at": "2026-05-28T14:50:49-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 14: added duration and f0 tensors.",
+          "at": "2026-05-28T14:50:52-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 15: ran inference, fetched mel output.",
+          "at": "2026-05-28T14:50:56-07:00"
+        },
+        {
+          "text": "Read page 16: Completed extraction of mel tensor and conversion to mel frames. Next: continue to page 17.",
+          "at": "2026-05-28T14:51:04-07:00"
+        },
+        {
+          "text": "Read page 17: Extracted frame_count, f0_hz, voiced tensors; building AcousticFrameTrack. Next: read page 18.",
+          "at": "2026-05-28T14:51:10-07:00"
+        },
+        {
+          "text": "Read page 18: completed AcousticFrameTrack creation and beginning of validate_session_contract. Next: read page 19.",
+          "at": "2026-05-28T14:51:13-07:00"
+        },
+        {
+          "text": "Read page 19: Completed validate_session_contract and started validate_input_name. Next: read page 20.",
+          "at": "2026-05-28T14:51:15-07:00"
+        },
+        {
+          "text": "Read page 20: Completed validate_input_name and started validate_output_name. Next: read page 21.",
+          "at": "2026-05-28T14:51:17-07:00"
+        },
+        {
+          "text": "...",
+          "at": "2026-05-28T14:51:23-07:00"
+        },
+        {
+          "text": "On page 27 we saw match shape logic for output layout. Next: read page 29.",
+          "at": "2026-05-28T14:52:04-07:00"
+        },
+        {
+          "text": "On page 29 we saw fallback_f0_track function for handling f0 track. Next: read page 31.",
+          "at": "2026-05-28T14:52:08-07:00"
+        },
+        {
+          "text": "On page 31 we saw tests for phone_timed_input mapping. Next: read page 33.",
+          "at": "2026-05-28T14:52:11-07:00"
+        },
+        {
+          "text": "On page 33 we saw test for expand_phone_f0. Next: read page 35.",
+          "at": "2026-05-28T14:52:14-07:00"
+        },
+        {
+          "text": "Preparing to read page 35 of src/acoustic/neural.rs",
+          "at": "2026-05-28T14:53:22-07:00"
+        },
+        {
+          "text": "Page 35 shows the closing of a function, likely the end of a method or module. Next: read page 34 for context.",
+          "at": "2026-05-28T14:53:27-07:00"
+        },
+        {
+          "text": "Preparing to read page 34 of src/acoustic/neural.rs",
+          "at": "2026-05-28T14:53:31-07:00"
+        },
+        {
+          "text": "Page 34 shows test functions for mel_tensor_layout_transposes_bins_frames_outputs, asserting mel frames generation. Next: read page 33.",
+          "at": "2026-05-28T14:53:35-07:00"
+        },
+        {
+          "text": "Preparing to read page 33 of src/acoustic/neural.rs",
+          "at": "2026-05-28T14:53:36-07:00"
+        },
+        {
+          "text": "...",
+          "at": "2026-05-28T14:53:51-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 34: ... Next: read page 1.",
+          "at": "2026-05-28T14:54:20-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 1: imports and feature flags for ONNX, basic struct derives.",
+          "at": "2026-05-28T14:54:22-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 2: enum NeuralAcousticModelKind with variants and id/display functions.",
+          "at": "2026-05-28T14:54:24-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 3: enum NeuralMelOutputLayout and struct NeuralAcousticTensorNames fields.",
+          "at": "2026-05-28T14:54:26-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 4: Default implementation for NeuralAcousticTensorNames.",
+          "at": "2026-05-28T14:54:28-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 5: struct NeuralAcousticTrackContract and type NeuralPhoneIdMap, plus start of NeuralAcousticOnnxConfig.",
+          "at": "2026-05-28T14:54:30-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 6: struct NeuralAcousticOnnxConfig fields and start of NeuralAcousticModel struct.",
+          "at": "2026-05-28T14:54:33-07:00"
+        },
+        {
+          "text": "Next: Read page 8 of src/acoustic/neural.rs.",
+          "at": "2026-05-28T14:54:46-07:00"
+        },
+        {
+          "text": "Next: Read page 9 of src/acoustic/neural.rs.",
+          "at": "2026-05-28T14:54:49-07:00"
+        },
+        {
+          "text": "Next: Read page 10 of src/acoustic/neural.rs.",
+          "at": "2026-05-28T14:54:57-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 10: lines show ONNX thread config and optimization level settings. Next: examine next page to see neural model struct definitions.",
+          "at": "2026-05-28T14:55:02-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 11: shows constructor using OnnxRuntime, configuration, and validation. Next: proceed to page 12 to examine methods.",
+          "at": "2026-05-28T14:55:06-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 12: implementation of AcousticModelBackend trait with id and generate methods, delegating to runtime. Next: continue to page 13 to see OnnxAcousticRuntime methods.",
+          "at": "2026-05-28T14:55:09-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 13: token IDs generation, tensor construction, token lengths tensor push. Next: proceed to page 14 to see rest of generation.",
+          "at": "2026-05-28T14:55:12-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 14: ... Next: read page 15",
+          "at": "2026-05-28T14:55:42-07:00"
+        },
+        {
+          "text": "Page 15: session.run inputs, outputs extraction, mel_output retrieval",
+          "at": "2026-05-28T14:55:45-07:00"
+        },
+        {
+          "text": "Page 16: downcast_ref to DynTensorValueType, extract tensor f32, mel_frames_from_tensor call",
+          "at": "2026-05-28T14:55:48-07:00"
+        },
+        {
+          "text": "Page 17: optional_f32_output for f0_hz and voiced, fallback logic, building AcousticFrameTrack",
+          "at": "2026-05-28T14:55:51-07:00"
+        },
+        {
+          "text": "Observed from searchSource NeuralAcousticModel: ... Next: search struct definition",
+          "at": "2026-05-28T14:55:59-07:00"
+        },
+        {
+          "text": "Attempt to read page 2",
+          "at": "2026-05-28T14:58:35-07:00"
+        },
+        {
+          "text": "text",
+          "at": "2026-05-28T14:58:53-07:00"
+        },
+        {
+          "text": "Read page 4: defined NeuralAcousticTensorNames struct with fields: token_ids, token_lengths, durations, f0_hz, output_mel, output_f0_hz, output_voiced. Default implementation sets defaults. Next: read page 5.",
+          "at": "2026-05-28T14:58:56-07:00"
+        },
+        {
+          "text": "Read page 5: defined NeuralAcousticTrackContract struct with sample_rate_hz, hop_samples, mel_bins. Default sets 16000, 256, 80. Defined type NeuralPhoneIdMap. Next: read page 6.",
+          "at": "2026-05-28T14:58:59-07:00"
+        },
+        {
+          "text": "Read page 6: defined NeuralAcousticModelConfig struct fields: kind, model_path, tensor_names, track_contract, phone_ids, mel_output_layout. Defined NeuralAcousticModel struct with kind and runtime. Runtime enum variants Unloaded, Onnx. Next: read page 7.",
+          "at": "2026-05-28T14:59:03-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 7: structs OnnxAcousticRuntime, type aliases for FastSpeech2AcousticModel, MatchaAcousticModel, VitsPiperAcousticModel, SpeechT5AcousticModel, etc. Next: read page 8.",
+          "at": "2026-05-28T14:59:10-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 8: load_onnx checks existence of model file and non-zero sample rate. Next: read page 9.",
+          "at": "2026-05-28T14:59:15-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 9: load_onnx validates hop_samples and mel_bins, initializes ORT runtime, builds session with intra/inter threads. Next: read page 10.",
+          "at": "2026-05-28T14:59:18-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 9: session builder with intra/inter threads. Next: read page 10.",
+          "at": "2026-05-28T14:59:22-07:00"
+        },
+        {
+          "text": "Next action: listFiles page 2.",
+          "at": "2026-05-28T14:59:31-07:00"
+        },
+        {
+          "text": "Next action: listFiles page 3.",
+          "at": "2026-05-28T14:59:34-07:00"
+        },
+        {
+          "text": "Next action: listFiles page 4.",
+          "at": "2026-05-28T14:59:37-07:00"
+        },
+        {
+          "text": "Next action: listFiles page 5.",
+          "at": "2026-05-28T14:59:40-07:00"
+        },
+        {
+          "text": "Read src/acoustic/neural.rs page 1: set up enums, structs, and initial config.",
+          "at": "2026-05-28T14:59:52-07:00"
+        },
+        {
+          "text": "Read src/acoustic/neural.rs page 4: ... Next: read page 3.",
+          "at": "2026-05-28T15:00:37-07:00"
         }
       ],
       "status": "open"

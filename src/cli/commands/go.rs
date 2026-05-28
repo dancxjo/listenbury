@@ -86,7 +86,7 @@ Available functions:\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. The runtime blocks additional source inspection until a progress note is recorded.\n\
+After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or checkOff(\"open-goal-id\", { note: \"Final understanding: ...\" }).\n\
 Use source inspection and persisted goals when bored, alone, or waiting. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
@@ -120,8 +120,9 @@ const SOURCE_ACTION_RESULT_MAX_CHARS: usize = 32_000;
 const DEFAULT_SOURCE_PAGE_LINES: usize = 20;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
+const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"). If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -440,6 +441,7 @@ struct StreamOfConsciousness {
     generated_text_cleaner: GeneratedTextCleaner,
     source_page_lines: usize,
     source_progress_due: Option<String>,
+    source_inspections_since_synthesis: usize,
 }
 
 impl StreamOfConsciousness {
@@ -518,6 +520,7 @@ impl StreamOfConsciousness {
             generated_text_cleaner: GeneratedTextCleaner::new(),
             source_page_lines: DEFAULT_SOURCE_PAGE_LINES,
             source_progress_due: None,
+            source_inspections_since_synthesis: 0,
         })
     }
 
@@ -665,9 +668,25 @@ impl StreamOfConsciousness {
                 })?;
                 continue;
             }
+            if let Some(blocked_source_action) = action.source_progress_label()
+                && self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL
+            {
+                let target = self.work_board.suggested_progress_target();
+                let message = format!(
+                    "Synthesis checkpoint required before {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. Next action should summarize the current goal, for example: updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}). After that succeeds, retry {blocked_source_action}.",
+                    self.source_inspections_since_synthesis
+                );
+                self.timeline_colored("action_blocked", &message, ANSI_ERROR);
+                self.append_observation(StreamObservation::ActionError {
+                    source: format!("blocked source inspection: {blocked_source_action}"),
+                    error: message,
+                })?;
+                continue;
+            }
 
             let source_progress_label = action.source_progress_label();
             let records_progress_note = action.records_progress_note();
+            let records_synthesis = action.records_synthesis_update();
             match action {
                 TypeScriptAction::Say { text, interrupt } => {
                     self.timeline("speech", &text);
@@ -981,8 +1000,26 @@ impl StreamOfConsciousness {
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
             }
+            if records_synthesis {
+                self.source_inspections_since_synthesis = 0;
+                let message =
+                    "Synthesis recorded; source-inspection checkpoint counter reset.".to_string();
+                self.timeline("action_result", &message);
+                self.append_observation(StreamObservation::ActionResult(message))?;
+            }
             if let Some(source_progress_label) = source_progress_label {
                 self.source_progress_due = Some(source_progress_label.to_string());
+                self.source_inspections_since_synthesis =
+                    self.source_inspections_since_synthesis.saturating_add(1);
+                if self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL {
+                    let target = self.work_board.suggested_progress_target();
+                    let message = format!(
+                        "Synthesis checkpoint reached after {} source inspection(s). Before more source inspection, summarize with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings and next decision.\" }}) or complete the goal with checkOff(...).",
+                        self.source_inspections_since_synthesis
+                    );
+                    self.timeline("action_result", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                }
             }
         }
         Ok(())
@@ -2822,6 +2859,19 @@ impl TypeScriptAction {
             _ => false,
         }
     }
+
+    fn records_synthesis_update(&self) -> bool {
+        match self {
+            Self::CompleteWorkItem { note, .. } => note
+                .as_deref()
+                .is_some_and(|note| meaningful_synthesis_text(note)),
+            Self::UpdateWorkItem { fields, .. } => fields
+                .get("summary")
+                .and_then(Value::as_str)
+                .is_some_and(meaningful_synthesis_text),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -4064,6 +4114,17 @@ fn non_empty_text(text: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+fn meaningful_synthesis_text(text: &str) -> bool {
+    let Some(text) = non_empty_text(text) else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    if matches!(lower.as_str(), "..." | "text" | "note" | "[summary]") {
+        return false;
+    }
+    text.split_whitespace().count() >= 6
+}
+
 fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
@@ -4486,6 +4547,8 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is gated"));
         assert!(COMMAND_REMINDER_PROMPT.contains("the next source action will be blocked"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("synthesis checkpoint"));
+        assert!(prompt.contains("After several source inspections"));
     }
 
     #[test]
@@ -4519,6 +4582,41 @@ mod tests {
             fields,
         };
         assert!(update.records_progress_note());
+    }
+
+    #[test]
+    fn synthesis_gate_accepts_goal_summary_or_completion() {
+        let mut fields = Map::new();
+        fields.insert(
+            "summary".to_string(),
+            Value::String(
+                "Neural acoustic models load ONNX sessions and produce acoustic frame tracks."
+                    .to_string(),
+            ),
+        );
+        let update = TypeScriptAction::UpdateWorkItem {
+            target: "goal-13".to_string(),
+            fields,
+        };
+        assert!(update.records_synthesis_update());
+
+        let complete = TypeScriptAction::CompleteWorkItem {
+            target: "goal-13".to_string(),
+            note: Some(
+                "Final understanding: ONNX acoustic generation maps text inputs into mel tracks."
+                    .to_string(),
+            ),
+        };
+        assert!(complete.records_synthesis_update());
+
+        let mut placeholder_fields = Map::new();
+        placeholder_fields.insert("summary".to_string(), Value::String("...".to_string()));
+        let placeholder = TypeScriptAction::UpdateWorkItem {
+            target: "goal-13".to_string(),
+            fields: placeholder_fields,
+        };
+        assert!(!placeholder.records_synthesis_update());
+        assert!(!meaningful_synthesis_text("text"));
     }
 
     #[test]
