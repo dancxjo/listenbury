@@ -13,155 +13,73 @@ use anyhow::Result;
 // ── Safety guard helpers ─────────────────────────────────────────────────────
 //
 // These are plain functions with no feature requirements so they can be
-// exercised by unit tests even when the full asr+llm+tts feature set is absent.
+// exercised by unit tests even when ASR is absent.
 
 /// Returns `true` when `transcript` is blank or contains only whitespace.
-#[cfg_attr(
-    not(all(
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "asr-whisper"), allow(dead_code))]
 pub(crate) fn is_empty_transcript(transcript: &str) -> bool {
     transcript.trim().is_empty()
 }
 
 /// Returns `true` when `new_entry` (after trimming) equals the most recent
 /// entry in `history`, indicating the pipeline is stuck in a repetition loop.
-#[cfg_attr(
-    not(all(
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "asr-whisper"), allow(dead_code))]
 pub(crate) fn is_repeated_transcript(history: &[String], new_entry: &str) -> bool {
     history
         .last()
         .is_some_and(|last| last.trim() == new_entry.trim())
 }
 
-// ── Full implementation (requires all three feature flags) ───────────────────
+// ── Full implementation (requires ASR) ───────────────────────────────────────
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::{
     llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
 };
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use anyhow::Context;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::{read_wav_as_whisper_frames, write_wav};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{
     BreathAsrConfig, LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech, WhisperSpeechRecognizer,
     collect_breath_segments,
 };
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use serde::Serialize;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::io::Write;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::path::Path;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::time::{Duration, Instant};
 
 /// Hard ceiling on turns regardless of the `--turns` flag.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const MAX_HARD_TURNS: usize = 32;
 
 /// Maximum wall-clock seconds to wait for a single TTS synthesis to complete.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const MAX_TTS_TIMEOUT_SECS: u64 = 30;
 
 /// Maximum synthesised audio duration (ms) per turn; longer audio triggers a
 /// hard stop to prevent runaway generation.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const MAX_AUDIO_DURATION_MS: u64 = 60_000;
 
 // ── JSONL trace record ────────────────────────────────────────────────────────
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Serialize)]
 struct TurnRecord {
     turn: usize,
@@ -178,11 +96,7 @@ struct TurnRecord {
     stop_reason: Option<String>,
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Serialize)]
 struct TurnTimings {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,11 +107,7 @@ struct TurnTimings {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
     let turns = command.turns.min(MAX_HARD_TURNS);
 
@@ -387,15 +297,9 @@ pub(crate) fn run_dogfood_two(command: DogfoodTwoCommand) -> Result<()> {
 }
 
 /// Stub for builds that lack the full feature set.
-#[cfg(not(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-)))]
+#[cfg(not(feature = "asr-whisper"))]
 pub(crate) fn run_dogfood_two(_command: DogfoodTwoCommand) -> Result<()> {
-    anyhow::bail!(
-        "listenbury was built without the `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
-    )
+    anyhow::bail!("listenbury was built without the `asr-whisper` feature")
 }
 
 // ── Internal helpers (feature-gated) ─────────────────────────────────────────
@@ -403,11 +307,7 @@ pub(crate) fn run_dogfood_two(_command: DogfoodTwoCommand) -> Result<()> {
 /// Generate a spoken response for `instance_id` given `input` text from the
 /// other instance.  Returns the raw token stream trimmed of surrounding
 /// whitespace.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn generate_response(
     llm: &mut LlamaCppEngine,
     instance_id: &str,
@@ -460,11 +360,7 @@ fn generate_response(
 }
 
 /// Build the prompt for a dogfood turn.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_prompt(instance_id: &str, input: &str) -> String {
     format!(
         "<|system|>\n\
@@ -480,11 +376,7 @@ fn build_prompt(instance_id: &str, input: &str) -> String {
 /// Convert TTS audio frames into a Whisper transcript by bouncing through a
 /// temporary WAV file (which handles sample-rate conversion and channel mixing)
 /// before running the Whisper recogniser.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn transcribe_audio_bridge(
     audio: &[listenbury::AudioFrame],
     whisper_model: &Path,
@@ -543,11 +435,7 @@ fn transcribe_audio_bridge(
 }
 
 /// Append one JSONL record to the optional writer.
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn emit_record(
     writer: &mut Option<std::io::BufWriter<std::fs::File>>,
     record: &TurnRecord,

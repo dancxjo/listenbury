@@ -1,4 +1,3 @@
-#[cfg(feature = "audio-cpal")]
 use crate::cli::commands::{play_audio_frame_stream, play_audio_frames};
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
@@ -70,14 +69,12 @@ use listenbury::{
 use listenbury::{PiperConfig, PiperTextToSpeech};
 #[cfg(feature = "piper-compat")]
 use listenbury::{SpeechT5OnnxAcousticGenerator, SpeechT5OnnxPaths};
-#[cfg(feature = "audio-cpal")]
 use std::io::BufRead;
 #[cfg(feature = "piper-compat")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "piper-compat")]
 use std::process::{Command, Stdio};
-#[cfg(feature = "audio-cpal")]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -322,42 +319,32 @@ fn run_say_stdin_stream(piper_args: SayArgs) -> Result<()> {
         "listenbury say - streams to speaker playback; omit --output-wav"
     );
 
-    #[cfg(not(feature = "audio-cpal"))]
-    {
-        let _ = piper_args;
-        anyhow::bail!("listenbury say - needs the `audio-cpal` feature for speaker playback");
-    }
+    let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<AudioFrame>>(8);
+    let playback = thread::spawn(move || play_audio_frame_stream(frame_rx, "Piper stdin TTS"));
 
-    #[cfg(feature = "audio-cpal")]
-    {
-        let (frame_tx, frame_rx) = crossbeam_channel::bounded::<Vec<AudioFrame>>(8);
-        let playback = thread::spawn(move || play_audio_frame_stream(frame_rx, "Piper stdin TTS"));
+    let synthesis_result = if should_use_klatt_backend(&piper_args) {
+        stream_klatt_stdin_to_frames(piper_args, frame_tx)
+    } else if should_use_source_filter_hifigan_backend(&piper_args) {
+        stream_hifigan_stdin_to_frames(piper_args, frame_tx)
+    } else if should_use_speecht5_backend(&piper_args) {
+        stream_speecht5_stdin_to_frames(piper_args, frame_tx)
+    } else if should_use_mbrola_backend(&piper_args) {
+        stream_mbrola_stdin_to_frames(piper_args, frame_tx)
+    } else {
+        stream_piper_stdin_to_frames(piper_args, frame_tx)
+    };
 
-        let synthesis_result = if should_use_klatt_backend(&piper_args) {
-            stream_klatt_stdin_to_frames(piper_args, frame_tx)
-        } else if should_use_source_filter_hifigan_backend(&piper_args) {
-            stream_hifigan_stdin_to_frames(piper_args, frame_tx)
-        } else if should_use_speecht5_backend(&piper_args) {
-            stream_speecht5_stdin_to_frames(piper_args, frame_tx)
-        } else if should_use_mbrola_backend(&piper_args) {
-            stream_mbrola_stdin_to_frames(piper_args, frame_tx)
-        } else {
-            stream_piper_stdin_to_frames(piper_args, frame_tx)
-        };
-
-        let playback_result = playback
-            .join()
-            .map_err(|_| anyhow::anyhow!("Piper stdin playback thread panicked"))?;
-        if synthesis_result.is_err() {
-            synthesis_result
-        } else {
-            playback_result?;
-            Ok(())
-        }
+    let playback_result = playback
+        .join()
+        .map_err(|_| anyhow::anyhow!("Piper stdin playback thread panicked"))?;
+    if synthesis_result.is_err() {
+        synthesis_result
+    } else {
+        playback_result?;
+        Ok(())
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn stream_klatt_stdin_to_frames(
     mut piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -388,7 +375,6 @@ fn stream_klatt_stdin_to_frames(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn stream_hifigan_stdin_to_frames(
     mut piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -419,7 +405,6 @@ fn stream_hifigan_stdin_to_frames(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn stream_speecht5_stdin_to_frames(
     mut piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -450,7 +435,6 @@ fn stream_speecht5_stdin_to_frames(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn stream_piper_stdin_to_frames(
     piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -488,7 +472,6 @@ fn stream_piper_stdin_to_frames(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn stream_mbrola_stdin_to_frames(
     piper_args: SayArgs,
     frame_tx: crossbeam_channel::Sender<Vec<AudioFrame>>,
@@ -3055,16 +3038,8 @@ fn write_say_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn play_say_audio_with_source(frames: &[AudioFrame], source: &str) -> Result<()> {
     play_audio_frames(frames, source)
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-fn play_say_audio_with_source(_frames: &[AudioFrame], _source: &str) -> Result<()> {
-    anyhow::bail!(
-        "listenbury say needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
-    )
 }
 
 fn looks_like_piper_bin(word: &str) -> bool {
@@ -3113,12 +3088,7 @@ pub(crate) fn piper_config_for_voice(
     piper_config_for_model_path(piper_bin, model_path)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 pub(crate) fn hifigan_text_to_speech(
     hifigan_model: Option<PathBuf>,
     skip_gan: bool,
@@ -3138,25 +3108,13 @@ pub(crate) fn hifigan_text_to_speech(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper",
-    feature = "piper-compat"
-))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 struct HifiganTextBackend {
     hifigan_model: Option<PathBuf>,
     skip_gan: bool,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper",
-    feature = "piper-compat"
-))]
+#[cfg(all(feature = "asr-whisper", feature = "piper-compat"))]
 impl TtsBackend for HifiganTextBackend {
     fn synthesize(&mut self, text: &str) -> Result<Vec<AudioFrame>> {
         synthesize_hifigan_text(

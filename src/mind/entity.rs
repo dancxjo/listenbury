@@ -357,6 +357,17 @@ const COMMON_WORDS: &[&str] = &[
     "right",
     "thanks",
     "thank",
+    "tell",
+    "tells",
+    "told",
+    "me",
+    "get",
+    "got",
+    "let",
+    "lets",
+    "let's",
+    "just",
+    "also",
     "please",
     "so",
     "but",
@@ -520,6 +531,23 @@ fn starts_uppercase(s: &str) -> bool {
     s.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
 }
 
+fn is_spelling_sequence(text: &str) -> bool {
+    let mut letters = 0usize;
+    for part in text.split('-') {
+        if part.len() != 1 || !part.chars().all(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        letters += 1;
+    }
+    letters >= 2
+}
+
+fn is_lexical_query(text: &str) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    (lowered.contains("what does") || lowered.contains("what is"))
+        && (lowered.contains(" mean") || lowered.ends_with("mean"))
+}
+
 /// Determine the entity context from the words that appear before the candidate.
 ///
 /// `words_before` is ordered left-to-right; we look at the *last* few words.
@@ -590,6 +618,10 @@ fn tokenize(text: &str) -> Vec<WordToken<'_>> {
 }
 
 fn extract_heuristic(text: &str) -> Vec<ExtractedEntity> {
+    if is_lexical_query(text) {
+        return Vec::new();
+    }
+
     let tokens = tokenize(text);
     if tokens.is_empty() {
         return Vec::new();
@@ -624,6 +656,10 @@ fn extract_heuristic(text: &str) -> Vec<ExtractedEntity> {
         }
 
         let span_text = span_words.join(" ");
+        if span_words.len() == 1 && is_spelling_sequence(&span_text) {
+            i = j;
+            continue;
+        }
 
         // Gather the alpha-only surface form of preceding tokens for context.
         let preceding: Vec<&str> = tokens[..i]
@@ -832,12 +868,45 @@ mod tests {
     #[test]
     fn spoken_fillers_and_auxiliaries_do_not_become_people() {
         let entities = extractor()
-            .extract("Hello. Hmm. That's interesting. Can you do that? Do you know? Alright. Mmm.");
+            .extract("Hello. Hmm. That's interesting. Can you tell me? Tell me what you discover. Do you know? Alright. Mmm.");
 
         assert!(
             entities.is_empty(),
             "spoken fillers and auxiliary verbs should not produce provisional people: {entities:?}"
         );
+    }
+
+    #[test]
+    fn spelling_tokens_and_lexical_queries_do_not_become_people() {
+        let spelling = extractor().extract("W-E-I-B");
+        assert!(
+            spelling.is_empty(),
+            "standalone spelling fragments should not produce people: {spelling:?}"
+        );
+
+        let lexical = extractor().extract("What does German W-E-I-B mean?");
+        assert!(
+            lexical
+                .iter()
+                .all(|entity| entity.provisional_node_id() != "person:w-e-i-b"),
+            "lexical queries should not produce person:w-e-i-b: {lexical:?}"
+        );
+        assert!(
+            lexical.is_empty(),
+            "lexical definition queries should remain quoted query text, not durable entities: {lexical:?}"
+        );
+    }
+
+    #[test]
+    fn identity_correction_extracts_full_spoken_name() {
+        let entities = extractor().extract("My name is Travis Reed");
+        let travis = entities
+            .iter()
+            .find(|entity| entity.text == "Travis Reed")
+            .expect("full spoken name should be extracted");
+
+        assert_eq!(travis.kind, EntityKind::Person);
+        assert_eq!(travis.provisional_node_id(), "person:travis_reed");
     }
 
     #[test]

@@ -86,13 +86,11 @@ pub use mind::controller::{
 pub use mind::episodic::{
     EpisodicEpisode, EpisodicMemory, EpisodicScene, EpisodicSpeaker, EpisodicTurn, StageInstruction,
 };
-#[cfg(feature = "llm-llama-cpp")]
 pub use mind::llama_cpp::{
     LlamaCppConfig, LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine,
 };
 pub use mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent, MockLlmEngine};
 pub use mind::turn::{TurnState, TurnTracker};
-#[cfg(feature = "tts-piper")]
 pub use mouth::piper::{PiperConfig, PiperTextToSpeech};
 pub use mouth::planner::{
     ExpressiveUnit, FaceCommand, MouthCommand, MouthSyntheticPlan, SyntheticPlanner,

@@ -1,23 +1,7 @@
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use super::*;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn wrap_live_input(text: &str) -> String {
     format!(
         "\n\n--- LIVE EVENT: user ---\n{}\n--- END LIVE EVENT ---\n\n",
@@ -25,28 +9,12 @@ pub(super) fn wrap_live_input(text: &str) -> String {
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn wrap_time_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: clock ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn wrap_ear_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: ear ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
@@ -61,28 +29,12 @@ pub(super) fn wrap_runtime_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: runtime ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn wrap_source_event(message: &str) -> String {
     format!("\n\n--- LIVE EVENT: source ---\n{message}\n--- END LIVE EVENT ---\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn current_time_message() -> String {
     let now = Local::now();
     format!(
@@ -93,15 +45,7 @@ pub(super) fn current_time_message() -> String {
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn next_time_event_interval(jitter_state: &mut u64) -> Duration {
     *jitter_state ^= *jitter_state << 7;
     *jitter_state ^= *jitter_state >> 9;

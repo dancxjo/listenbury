@@ -1,34 +1,10 @@
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use std::sync::OnceLock;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const SOURCE_PAGE_LINES: usize = 50;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_list_source_files() -> String {
     let mut files: Vec<_> = source_bundle().keys().cloned().collect();
     files.sort();
@@ -40,15 +16,7 @@ pub(in crate::cli::commands) fn execute_list_source_files() -> String {
     response
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_view_source_file(path: &str, page: usize) -> String {
     let normalized = path.trim().trim_start_matches("./");
     let page = page.max(1);
@@ -73,41 +41,17 @@ pub(in crate::cli::commands) fn execute_view_source_file(path: &str, page: usize
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_search_source(query: &str, limit: usize) -> String {
     search_source_lines(query, limit, false)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(in crate::cli::commands) fn execute_grep_source(pattern: &str, limit: usize) -> String {
     search_source_lines(pattern, limit, true)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn search_source_lines(needle: &str, limit: usize, literal: bool) -> String {
     let needle = needle.trim();
     if needle.is_empty() {
@@ -155,15 +99,7 @@ fn search_source_lines(needle: &str, limit: usize, literal: bool) -> String {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn compact_source_line(text: &str, max_chars: usize) -> String {
     let mut line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if line.chars().count() <= max_chars {
@@ -174,15 +110,7 @@ fn compact_source_line(text: &str, max_chars: usize) -> String {
     line
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn source_bundle() -> &'static std::collections::HashMap<String, String> {
     static BUNDLE: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
     BUNDLE.get_or_init(|| {

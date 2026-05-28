@@ -3,15 +3,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-#[cfg(feature = "audio-cpal")]
 use super::play_audio_frames;
 use crate::cli::{SingDemoBackendOption, SingDemoCommand};
 
-#[cfg(feature = "tts-piper")]
 use crate::cli::model_paths::resolve_piper_voice;
 #[cfg(feature = "piper-compat")]
 use crate::cli::model_paths::{resolve_hifigan_model, resolve_speecht5_acoustic_dir};
-#[cfg(feature = "tts-piper")]
 use crate::cli::piper::resolve_piper_bin;
 use listenbury::audio::{frame::AudioFrame, write_wav};
 use listenbury::linguistic::phonology::Phone;
@@ -150,7 +147,6 @@ fn vocoder_config_for_command(
     }
 
     if backend == SingDemoBackendOption::Piper {
-        #[cfg(feature = "tts-piper")]
         {
             let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
             let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
@@ -215,16 +211,8 @@ fn write_demo_wav(output_path: &Path, frames: &[AudioFrame]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn play_demo_audio(frames: &[AudioFrame], source: &str) -> Result<()> {
     play_audio_frames(frames, source)
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-fn play_demo_audio(_frames: &[AudioFrame], _source: &str) -> Result<()> {
-    anyhow::bail!(
-        "listenbury sing needs the `audio-cpal` feature for speaker playback; pass --output-wav <path> to write a WAV instead"
-    )
 }
 
 fn timed_phone(ipa: &str, start_ms: u64, end_ms: u64) -> Result<TimedPhoneRef> {

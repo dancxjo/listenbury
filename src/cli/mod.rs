@@ -2,13 +2,7 @@ mod commands;
 #[cfg(feature = "model-download")]
 mod download_progress;
 mod live_session;
-#[cfg(any(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
 mod model_paths;
-#[cfg(feature = "tts-piper")]
 mod piper;
 
 use anyhow::Result;
@@ -30,6 +24,8 @@ enum Command {
     Transcribe(TranscribeCommand),
     #[command(about = "Speak text aloud")]
     Say(SayCommand),
+    #[command(about = "Run Pete's continuous stream of consciousness")]
+    Go(GoCommand),
     #[command(about = "Render a raw MBROLA .pho file to WAV")]
     MbrolaRender(MbrolaRenderCommand),
     #[command(about = "Sing the ragtime demo phrase")]
@@ -247,6 +243,54 @@ pub(crate) struct ThinkSayCommand {
     #[arg(long)]
     pub(crate) dump: Option<PathBuf>,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
+    pub(crate) prompt: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GoCommand {
+    #[arg(long, alias = "model-path")]
+    pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_voice: Option<PathBuf>,
+    /// Use the source-filter acoustic model plus HiFi-GAN vocoder for Pete's voice.
+    #[arg(long)]
+    pub(crate) hifigan: bool,
+    #[arg(long = "hifigan-model", requires = "hifigan")]
+    pub(crate) hifigan_model: Option<PathBuf>,
+    /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
+    #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
+    pub(crate) skip_gan: bool,
+    /// Optional generated-token cap. By default, continue until Ctrl-C or context fills.
+    #[arg(long)]
+    pub(crate) max_tokens: Option<u32>,
+    /// llama.cpp context size for the live stream.
+    #[arg(long, default_value_t = 8192)]
+    pub(crate) context_size: u32,
+    /// Tokens reserved when rebuilding the compact stream prompt.
+    #[arg(long, default_value_t = 512)]
+    pub(crate) reserved_generation_tokens: u32,
+    /// Number of recent observations retained verbatim after compaction.
+    #[arg(long, default_value_t = 16)]
+    pub(crate) memory_events: usize,
+    /// Maximum generated token fragments to let Pete get ahead of mouth/ear pacing.
+    #[arg(long, default_value_t = 8)]
+    pub(crate) lookahead_tokens: usize,
+    /// Flush a partial speakable unit after this many characters even without punctuation.
+    #[arg(long, default_value_t = 80)]
+    pub(crate) lookahead_chars: usize,
+    /// Require the mouth playback completion signal before allowing more visible generation.
+    #[arg(long, default_value_t = true)]
+    pub(crate) require_self_hearing: bool,
+    /// Record the stream without synthesizing or playing audio.
+    #[arg(long)]
+    pub(crate) mock_mouth: bool,
+    /// Initial stream seed. If omitted, Pete wakes into an open live session.
+    #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
 }
 
@@ -1197,6 +1241,7 @@ pub(crate) fn run() -> Result<()> {
     match command {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
+        Command::Go(cmd) => commands::run_go(cmd),
         Command::MbrolaRender(cmd) => commands::run_mbrola_render(cmd),
         Command::Sing(cmd) => commands::run_sing_demo(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),

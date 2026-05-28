@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 
 use crate::audio::frame::AudioFrame;
 use crate::audio::write_wav;
-#[cfg(feature = "tts-piper")]
 use crate::mouth::piper::PiperConfig;
 use crate::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
 use crate::mouth::tts::TextToSpeech;
@@ -136,7 +135,6 @@ impl FileSyntheticCache {
         }
     }
 
-    #[cfg(feature = "tts-piper")]
     pub fn for_piper(listenbury_home: impl AsRef<Path>, config: &PiperConfig) -> Self {
         let voice_id = config
             .model_path

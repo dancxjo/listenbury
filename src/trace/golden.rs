@@ -17,7 +17,7 @@
 //! # Running golden tests
 //!
 //! ```text
-//! cargo test --no-default-features --features tts-piper --test golden_traces
+//! cargo test --no-default-features --test golden_traces
 //! ```
 //!
 //! # Regenerating expected payloads
@@ -27,7 +27,7 @@
 //!
 //! ```text
 //! LISTENBURY_UPDATE_GOLDEN=1 cargo test --no-default-features \
-//!     --features tts-piper --test golden_traces
+//!     --test golden_traces
 //! ```
 //!
 //! See [`docs/golden-trace-fixtures.md`] for guidance on adding new fixtures.

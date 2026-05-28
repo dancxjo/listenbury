@@ -1,58 +1,58 @@
 use std::time::Duration;
 
 use anyhow::Context;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::append_mock_downstream_trace;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::real_payload;
 use listenbury::{
     MockLoopTraceConfig, mock_interaction_trace, summarize_latency, write_trace_jsonl,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use serde_json::json;
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::collections::VecDeque;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::time::Instant;
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::capture::{
     boost_current_thread_for_capture, callback_sample_queue_capacity,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::vad::{VadBackendKind, create_vad_backend_with_profile};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::{UtteranceEndReason, UtteranceSmoother, UtteranceSmootherEvent};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{AudioFrame, ExactTimestamp, TraceEvent, WhisperSpeechRecognizer};
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::resolve_vad_config;
 use crate::cli::{LoopTraceCommand, LoopTraceProfile};
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WHISPER_FRAME_SAMPLES: usize = 160;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const MONO_CHANNELS: u16 = 1;
 
 pub(crate) fn run_loop_trace(command: LoopTraceCommand) -> anyhow::Result<()> {
@@ -88,12 +88,12 @@ fn mock_loop_trace(command: &LoopTraceCommand) -> Vec<listenbury::TraceEvent> {
     mock_interaction_trace(config)
 }
 
-#[cfg(not(all(feature = "asr-whisper", feature = "audio-cpal")))]
+#[cfg(not(feature = "asr-whisper"))]
 fn real_ear_loop_trace(_command: &LoopTraceCommand) -> anyhow::Result<Vec<listenbury::TraceEvent>> {
-    anyhow::bail!("loop-trace --profile ear requires the `audio-cpal` and `asr-whisper` features")
+    anyhow::bail!("loop-trace --profile ear requires the `asr-whisper` feature")
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn real_ear_loop_trace(command: &LoopTraceCommand) -> anyhow::Result<Vec<TraceEvent>> {
     anyhow::ensure!(
         command.duration > 0,
@@ -315,7 +315,7 @@ fn real_ear_loop_trace(command: &LoopTraceCommand) -> anyhow::Result<Vec<TraceEv
     Ok(events)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 struct EarTraceState {
     vad: Box<dyn listenbury::hearing::vad::VoiceActivityDetector>,
     vad_backend: VadBackendKind,
@@ -324,7 +324,7 @@ struct EarTraceState {
     first_asr_final_elapsed: Option<Duration>,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn process_pending_samples(
     pending: &mut VecDeque<f32>,
@@ -365,7 +365,7 @@ fn process_pending_samples(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn process_ear_frame(
     frame: AudioFrame,
     state: &mut EarTraceState,
@@ -416,7 +416,7 @@ fn process_ear_frame(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn finish_active_utterance(
     state: &mut EarTraceState,
     recognizer: &mut WhisperSpeechRecognizer,
@@ -435,7 +435,7 @@ fn finish_active_utterance(
     )
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn handle_utterance_events(
     utterance_events: Vec<UtteranceSmootherEvent>,
     state: &mut EarTraceState,
@@ -516,7 +516,7 @@ fn handle_utterance_events(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn transcribe_closed_utterance(
     frames: Vec<AudioFrame>,
     reason: UtteranceEndReason,
@@ -559,7 +559,7 @@ fn transcribe_closed_utterance(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn average_word_confidence(words: &[listenbury::word::TranscriptWord]) -> Option<f32> {
     let mut sum = 0.0;
     let mut count = 0;
@@ -570,7 +570,7 @@ fn average_word_confidence(words: &[listenbury::word::TranscriptWord]) -> Option
     (count > 0).then(|| sum / count as f32)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn vad_frame_format(
     vad_backend: VadBackendKind,
     input_sample_rate_hz: u32,
@@ -582,13 +582,13 @@ fn vad_frame_format(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize {
     let samples_per_channel = usize::try_from(sample_rate_hz / 100).unwrap_or(1).max(1);
     samples_per_channel.saturating_mul(usize::from(channels).max(1))
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn convert_frame_samples(
     samples: &[f32],
     input_sample_rate_hz: u32,
@@ -609,7 +609,7 @@ fn convert_frame_samples(
     .samples
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn prepare_whisper_frames(
     frames: &[AudioFrame],
     frame_samples: usize,
@@ -658,7 +658,7 @@ fn prepare_whisper_frames(
         .collect())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,

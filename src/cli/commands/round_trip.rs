@@ -1,94 +1,38 @@
 use crate::cli::RoundTripWavCommand;
 use anyhow::Result;
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::{
     llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_whisper_model,
 };
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use anyhow::Context;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::{read_wav_as_whisper_frames, write_wav};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::planner::{
     ExpressiveUnit, MouthSyntheticPlan, SyntheticPlanner, SyntheticUnit,
 };
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::SpeechRecognizer;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{BreathAsrConfig, collect_breath_segments};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::io::Write;
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::path::{Path, PathBuf};
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::time::Duration;
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     let paths = RoundTripModelPaths::discover(command)?;
     let frames = read_wav_as_whisper_frames(&paths.input_wav, 1_600)?;
@@ -109,22 +53,12 @@ pub(crate) fn run_round_trip_wav(command: RoundTripWavCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-)))]
+#[cfg(not(feature = "asr-whisper"))]
 pub(crate) fn run_round_trip_wav(_command: RoundTripWavCommand) -> Result<()> {
-    anyhow::bail!(
-        "listenbury was built without the `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
-    )
+    anyhow::bail!("listenbury was built without the `asr-whisper` feature")
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
 struct RoundTripModelPaths {
     input_wav: PathBuf,
@@ -135,11 +69,7 @@ struct RoundTripModelPaths {
     piper_voice: PathBuf,
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl RoundTripModelPaths {
     fn discover(command: RoundTripWavCommand) -> Result<Self> {
         let llm_model = resolve_llm_model(command.llm_model)?;
@@ -155,11 +85,7 @@ impl RoundTripModelPaths {
     }
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn transcribe_frames(
     paths: &RoundTripModelPaths,
     frames: &[listenbury::AudioFrame],
@@ -188,11 +114,7 @@ fn transcribe_frames(
     Ok(transcripts.join(" "))
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn generate_synthetic_plan(
     paths: &RoundTripModelPaths,
     transcript: &str,
@@ -252,11 +174,7 @@ fn generate_synthetic_plan(
     Ok(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(response)))
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn print_llm_events(events: &[LlmEvent]) -> Result<()> {
     for event in events {
         match event {
@@ -273,11 +191,7 @@ fn print_llm_events(events: &[LlmEvent]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn is_terminal_llm_event(event: &LlmEvent) -> bool {
     matches!(
         event,
@@ -285,11 +199,7 @@ fn is_terminal_llm_event(event: &LlmEvent) -> bool {
     )
 }
 
-#[cfg(all(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_round_trip_prompt(transcript: &str) -> String {
     format!(
         "<|system|>\nYou are Pete, speaking aloud through a TTS system.\nWrite in short, complete spoken sentences.\nDo not rely on long subordinate clauses.\nPrefer natural sentence boundaries.\nEach sentence should be speakable on its own.</s>\n<|user|>\n{transcript}</s>\n<|assistant|>\n"

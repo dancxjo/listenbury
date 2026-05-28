@@ -1,18 +1,14 @@
-#[cfg(feature = "llm-llama-cpp")]
 use super::llama::build_prompt;
-#[cfg(feature = "llm-llama-cpp")]
 use crate::cli::{PromptMode, model_paths};
 use crate::cli::{SayCommand, ThinkSayCommand, ThinkSayMouthOption};
 use anyhow::{Context, Result};
 use listenbury::LlmEngine;
 use listenbury::mind::llm::{GenerationRequest, LlmEvent, MockLlmEngine};
-#[cfg(feature = "llm-llama-cpp")]
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 use serde_json::json;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "llm-llama-cpp")]
 use std::time::Duration;
 
 const DEFAULT_BREATH_GROUP_CHARS: usize = 120;
@@ -74,7 +70,6 @@ fn run_llm<M: ThinkSayMouth>(
     }
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 fn run_real_llm<M: ThinkSayMouth>(
     args: &ThinkSayArgs,
     runner: &mut ThinkSayRunner<'_, M>,
@@ -109,16 +104,6 @@ fn run_real_llm<M: ThinkSayMouth>(
         }
     }
     runner.finish()
-}
-
-#[cfg(not(feature = "llm-llama-cpp"))]
-fn run_real_llm<M: ThinkSayMouth>(
-    _args: &ThinkSayArgs,
-    _runner: &mut ThinkSayRunner<'_, M>,
-) -> Result<()> {
-    anyhow::bail!(
-        "listenbury debug think-say without --mock-llm requires the `llm-llama-cpp` feature"
-    )
 }
 
 #[derive(Debug)]

@@ -1,36 +1,24 @@
 use crate::cli::{PlayWavCommand, RecordWavCommand};
 use anyhow::Result;
 
-#[cfg(feature = "audio-cpal")]
 use anyhow::Context;
-#[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(feature = "audio-cpal")]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(feature = "audio-cpal")]
 use listenbury::audio::frame::AudioFrame;
-#[cfg(feature = "audio-cpal")]
 use listenbury::audio::normalize::{
     AudioConversionReport, AudioFormat, NormalizedAudio, SampleKind, normalize_interleaved_f32,
 };
-#[cfg(feature = "audio-cpal")]
 use listenbury::audio::{read_wav_frames, write_wav};
-#[cfg(feature = "audio-cpal")]
 use listenbury::time::ExactTimestamp;
-#[cfg(feature = "audio-cpal")]
 use std::collections::VecDeque;
-#[cfg(feature = "audio-cpal")]
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-#[cfg(feature = "audio-cpal")]
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "audio-cpal")]
 const CALLBACK_CHANNEL_CAPACITY: usize = 16_384;
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
     anyhow::ensure!(
         command.seconds > 0,
@@ -144,24 +132,12 @@ pub(crate) fn run_record_wav(command: RecordWavCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn run_play_wav(command: PlayWavCommand) -> Result<()> {
     let frames = read_wav_frames(&command.input_wav, 2_048)
         .with_context(|| format!("failed to read WAV {}", command.input_wav.display()))?;
     play_audio_frames(&frames, &command.input_wav.display().to_string())
 }
 
-#[cfg(not(feature = "audio-cpal"))]
-pub(crate) fn run_record_wav(_command: RecordWavCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
-}
-
-#[cfg(not(feature = "audio-cpal"))]
-pub(crate) fn run_play_wav(_command: PlayWavCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `audio-cpal` feature")
-}
-
-#[cfg(feature = "audio-cpal")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -186,7 +162,6 @@ where
         .context("failed to build input stream")
 }
 
-#[cfg(feature = "audio-cpal")]
 fn build_output_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -218,7 +193,6 @@ where
         .context("failed to build output stream")
 }
 
-#[cfg(feature = "audio-cpal")]
 fn build_output_queue_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -244,7 +218,6 @@ where
         .context("failed to build streaming output stream")
 }
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) struct PreparedAudioPlayback {
     device: cpal::Device,
     stream_config: cpal::StreamConfig,
@@ -256,7 +229,6 @@ pub(crate) struct PreparedAudioPlayback {
     pub(crate) conversion_report: AudioConversionReport,
 }
 
-#[cfg(feature = "audio-cpal")]
 impl PreparedAudioPlayback {
     pub(crate) fn sample_count(&self) -> usize {
         self.samples.len()
@@ -439,7 +411,6 @@ impl PreparedAudioPlayback {
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn prepare_audio_playback(
     frames: &[AudioFrame],
     source: &str,
@@ -512,7 +483,6 @@ pub(crate) fn prepare_audio_playback(
     })
 }
 
-#[cfg(feature = "audio-cpal")]
 fn convert_frames_for_output(
     frames: &[AudioFrame],
     source: &str,
@@ -562,7 +532,6 @@ fn convert_frames_for_output(
     .samples)
 }
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<()> {
     let playback = prepare_audio_playback(frames, source)?;
     let playback_cursor = Arc::new(AtomicUsize::new(0));
@@ -598,7 +567,6 @@ pub(crate) fn play_audio_frames(frames: &[AudioFrame], source: &str) -> Result<(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn play_audio_frame_stream(
     frame_rx: crossbeam_channel::Receiver<Vec<AudioFrame>>,
     source: &str,
@@ -652,7 +620,6 @@ pub(crate) fn play_audio_frame_stream(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 struct OutputConfig {
     sample_format: cpal::SampleFormat,
     sample_rate_hz: u32,
@@ -660,7 +627,6 @@ struct OutputConfig {
     stream_config: cpal::StreamConfig,
 }
 
-#[cfg(feature = "audio-cpal")]
 fn select_output_config(
     device: &cpal::Device,
     sample_rate: u32,
@@ -696,7 +662,6 @@ fn select_output_config(
     ))
 }
 
-#[cfg(feature = "audio-cpal")]
 fn output_config_from_supported(config: cpal::SupportedStreamConfig) -> OutputConfig {
     let sample_format = config.sample_format();
     let sample_rate_hz = config.sample_rate().0;
@@ -710,7 +675,6 @@ fn output_config_from_supported(config: cpal::SupportedStreamConfig) -> OutputCo
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn convert_audio_samples(
     samples: &[f32],
     source_sample_rate_hz: u32,
@@ -728,7 +692,6 @@ fn convert_audio_samples(
     .expect("validated CPAL audio formats should always normalize")
 }
 
-#[cfg(feature = "audio-cpal")]
 fn playback_duration(total_samples: usize, sample_rate: u32, channels: u16) -> Duration {
     let sample_frames = total_samples as f64 / f64::from(channels);
     Duration::from_secs_f64(sample_frames / f64::from(sample_rate))
@@ -736,12 +699,9 @@ fn playback_duration(total_samples: usize, sample_rate: u32, channels: u16) -> D
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "audio-cpal")]
     use super::playback_duration;
-    #[cfg(feature = "audio-cpal")]
     use std::time::Duration;
 
-    #[cfg(feature = "audio-cpal")]
     #[test]
     fn playback_duration_uses_channels_and_rate() {
         assert_eq!(playback_duration(96_000, 48_000, 2), Duration::from_secs(1));

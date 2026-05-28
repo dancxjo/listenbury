@@ -1,60 +1,20 @@
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use super::*;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::speech::recognizer::StreamingRecognizerBackend;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::speech::transcript::{
     TranscriptCandidateEvent, TranscriptCandidateId, TranscriptReplacementReason,
     TranscriptStabilityState,
 };
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Default)]
 pub(super) struct TranscriptSpeculativePlanner {
     active_candidate: Option<TranscriptCandidateId>,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl TranscriptSpeculativePlanner {
     pub(super) fn observe(
         &mut self,
@@ -108,15 +68,7 @@ impl TranscriptSpeculativePlanner {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) enum ContinueEarEvent {
     ListeningStarted {
         device: String,
@@ -159,15 +111,7 @@ pub(super) enum ContinueEarEvent {
     },
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl ContinueEarEvent {
     pub(super) fn to_message(&self) -> String {
         match self {

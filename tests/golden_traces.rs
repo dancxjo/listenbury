@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! LISTENBURY_UPDATE_GOLDEN=1 cargo test --no-default-features \
-//!     --features tts-piper --test golden_traces
+//!     --test golden_traces
 //! ```
 //!
 //! ## Adding a new fixture

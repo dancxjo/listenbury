@@ -14,9 +14,7 @@ use listenbury::models::{
 #[cfg(not(feature = "model-download"))]
 #[derive(Debug, Clone, Copy)]
 enum ModelKind {
-    #[cfg(feature = "llm-llama-cpp")]
     Llm,
-    #[cfg(feature = "tts-piper")]
     Voice,
     #[cfg(feature = "piper-compat")]
     Vocoder,
@@ -24,7 +22,6 @@ enum ModelKind {
     Whisper,
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(
         explicit,
@@ -37,7 +34,6 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     )
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn resolve_text_embedding_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(
         explicit,
@@ -50,14 +46,12 @@ pub(crate) fn resolve_text_embedding_model(explicit: Option<PathBuf>) -> Result<
     )
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LlmRuntimePlacement {
     pub(crate) gpu_layers: Option<u32>,
     pub(crate) cpu_only: bool,
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn llm_runtime_placement(
     model_path: &Path,
     explicit_gpu_layers: Option<u32>,
@@ -83,12 +77,10 @@ pub(crate) fn llm_runtime_placement(
     })
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 fn llm_model_needs_cpu_runtime(model_path: &Path) -> bool {
     llm_model_filename(model_path).contains("gpt-oss")
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 fn llm_model_filename(model_path: &Path) -> String {
     model_path
         .file_name()
@@ -160,7 +152,6 @@ pub(crate) fn resolve_refine_whisper_model(explicit: Option<PathBuf>) -> Result<
     }
 }
 
-#[cfg(feature = "tts-piper")]
 pub(crate) fn resolve_piper_voice(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(
         explicit,
@@ -221,11 +212,6 @@ pub(crate) fn resolve_speecht5_acoustic_dir() -> Result<PathBuf> {
     }
 }
 
-#[cfg(any(
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
 fn resolve_model_path(
     explicit: Option<PathBuf>,
     env_var: &str,
@@ -368,7 +354,6 @@ fn discover_model_file(matches: &impl Fn(&Path) -> bool) -> Result<Option<PathBu
 mod tests {
     use super::*;
 
-    #[cfg(feature = "llm-llama-cpp")]
     #[test]
     fn gpt_oss_defaults_to_cpu_without_gpu_default() {
         let placement =
@@ -378,7 +363,6 @@ mod tests {
         assert!(placement.cpu_only);
     }
 
-    #[cfg(feature = "llm-llama-cpp")]
     #[test]
     fn gpt_oss_uses_cuda_default_when_provided() {
         let placement =

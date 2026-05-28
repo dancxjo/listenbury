@@ -9,14 +9,11 @@ use crate::vocoder::{
 };
 use crate::voice::articulator::{RenderPlan, SungBackendDetail, SungBackendKind};
 
-#[cfg(feature = "tts-piper")]
 use crate::{PiperConfig, PiperTextToSpeech};
-#[cfg(feature = "tts-piper")]
 use crate::{
     mouth::planner::{MouthSyntheticPlan, SyntheticUnit},
     mouth::tts::TextToSpeech,
 };
-#[cfg(feature = "tts-piper")]
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
@@ -73,7 +70,6 @@ impl PiperBackend {
         }
     }
 
-    #[cfg(feature = "tts-piper")]
     fn collect_tts_audio(
         tts: &mut impl TextToSpeech,
         timeout: Duration,
@@ -119,26 +115,17 @@ impl SpeechSynthesizer for PiperBackend {
     fn render(&mut self, input: VocoderInput<'_>) -> Result<Vec<AudioFrame>> {
         let text = Self::text_from_input(input)?;
 
-        #[cfg(not(feature = "tts-piper"))]
-        {
-            let _ = text;
-            bail!("Piper backend is unavailable: rebuild with the `tts-piper` feature enabled")
+        let config = self.config.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("piper backend requires explicit piper_bin and piper_voice config")
+        })?;
+        let mut piper_config =
+            PiperConfig::new(config.piper_bin.clone(), config.piper_voice.clone());
+        let inferred_config_path = config.piper_voice.with_extension("onnx.json");
+        if inferred_config_path.exists() {
+            piper_config.config_path = Some(inferred_config_path);
         }
-
-        #[cfg(feature = "tts-piper")]
-        {
-            let config = self.config.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("piper backend requires explicit piper_bin and piper_voice config")
-            })?;
-            let mut piper_config =
-                PiperConfig::new(config.piper_bin.clone(), config.piper_voice.clone());
-            let inferred_config_path = config.piper_voice.with_extension("onnx.json");
-            if inferred_config_path.exists() {
-                piper_config.config_path = Some(inferred_config_path);
-            }
-            let mut tts = PiperTextToSpeech::new(piper_config);
-            tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(text)))?;
-            Self::collect_tts_audio(&mut tts, config.timeout)
-        }
+        let mut tts = PiperTextToSpeech::new(piper_config);
+        tts.enqueue(MouthSyntheticPlan::from(SyntheticUnit::FullTurn(text)))?;
+        Self::collect_tts_audio(&mut tts, config.timeout)
     }
 }

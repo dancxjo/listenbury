@@ -1,275 +1,85 @@
 use crate::cli::ContinueCommand;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::resolve_vad_config;
 use anyhow::Result;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use crate::cli::commands::llama::build_prompt;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::commands::mic_transcribe::transcribe_group_with_finality;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::commands::prepare_audio_playback;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::{
     llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_text_embedding_model,
     resolve_whisper_model,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::piper::{hifigan_text_to_speech, piper_config_for_voice, resolve_piper_bin};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use anyhow::Context;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use chrono::{Local, SecondsFormat, Utc};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::VadBackendKind;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::WhisperSpeechRecognizer;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::capture::{
     boost_current_thread_for_capture, callback_sample_queue_capacity,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::event::HearingEvent;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::environment::EnvironmentalSoundClip;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::hearing::environment::{EnvironmentalSound, EnvironmentalSoundObserver};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::vad::{VadResult, VoiceActivityDetector, create_vad_backend_with_profile};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::{
     AuditoryFrameAnalysis, AuditoryRouting, AuditorySceneAnalyzer, SpeakerReferenceMask,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::live_trace::{
     DiskTraceWriter, JsonlTraceWriter, LiveTraceRecorder, SessionId, SseBroadcaster, TeeSink,
     TraceRuntimeMetadata, TraceSessionMetadata,
 };
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::memory::{
     ColdMemoryWorker, ColdMemoryWorkerConfig, DEFAULT_QDRANT_COLLECTION, EmbeddingProvider,
     MemoryEntityMention, MemoryGraphNodeFieldUpdate, MemorySink, MemoryTrace, Neo4jHttpStore,
     Neo4jStore, QdrantHttpStore, QdrantStore,
 };
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::mind::entity::{EntityExtractor, HeuristicEntityExtractor, resolve_entities};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::mind::llm::LlmEvent;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::mouth::planner::strip_emoji;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::mouth::tts::TextToSpeech;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::word::{TimedWordStream, WordStreamId, WordStreamSource};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::word::{
     TranscriptWord, transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
 };
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::{AudioFrame, ExactTimestamp};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use listenbury::{
     ContextBudget, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL,
     EmbeddingRecallProvider, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, Impression,
@@ -277,105 +87,29 @@ use listenbury::{
     QdrantEmbeddingRecall, Sensation, ShortTermTimeline, StageInstruction, TimelineFormatter,
     TimelineQuery, build_conversation_context,
 };
-#[cfg(all(
-    target_os = "linux",
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(all(target_os = "linux", feature = "asr-whisper"))]
 use listenbury::{LinuxVideoCaptureConfig, spawn_linux_video_vector_capture};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use serde::{Deserialize, Serialize};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use serde_json::{Map, Value, json};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::collections::{HashMap, VecDeque};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::io::{BufRead, Write};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::path::PathBuf;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::sync::{Arc, Mutex};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use std::thread::JoinHandle;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use std::time::{Duration, Instant};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use tsrun::{
     Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
     js_value_to_json,
@@ -387,86 +121,25 @@ mod prompt;
 mod source;
 mod trace;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use crate::cli::commands::source_inspection::{
     execute_grep_source, execute_list_source_files, execute_search_source, execute_view_source_file,
 };
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use ear::{ContinueEarEvent, TranscriptSpeculativePlanner};
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::transcript::TranscriptStabilityState;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use mouth::{ContinueMouthCommand, mouth_command_for_runtime_event};
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use prompt::ContinuePromptGate;
 #[cfg(test)]
 use prompt::ContinuePromptGateConfig;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use source::SourceCommand;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use source::SourceCommandExecution;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use trace::{
     current_time_message, next_time_event_interval, wrap_ear_event, wrap_live_input,
     wrap_source_event, wrap_time_event,
@@ -474,122 +147,34 @@ use trace::{
 #[cfg(test)]
 use trace::{wrap_mouth_event, wrap_runtime_event};
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const DEFAULT_CONTINUE_PROMPT: &str = "You are Pete Listenbury, an experiment in artificial awareness. Please continuously generate thoughts as new input arrives from the outside world. Try to understand what's going on around you and make new friends.";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const LIVE_EVENT_INSTRUCTIONS: &str = "Live events may appear in the transcript while you are generating.\nTreat them as observations from outside.\nProgram initiation is waking into a new live session.\nDo not assume a user is currently present; there may be nobody in the room or nobody addressing you.\nClock events arrive frequently, about once per second but at slightly irregular intervals, with local ISO-8601 time and timezone offset so you can track timing, pauses, and elapsed time.\nDo not copy live event delimiters or runtime event text.\nDo not write system, assistant, analysis, channel, message, thoughts, or template tokens.\nContinue naturally as Pete.\nPlain generated text is Pete's internal thought only. It is not spoken aloud. It does not happen in the real world. It is private internal monologue inside the system.\nYou are given a chronological timeline of recent sensations and impressions. Treat sensations as evidence and impressions as interpretations, not certainties. When emitting TypeScript event/function calls, incorporate relevant recent timeline events and preserve uncertainty. Prefer references to recent sensation ids and impression ids when useful, especially in setStage summaries or memory fields.\nThe recent timeline is short-term scene context, not automatic long-term memory.\nWhen producing an image-description impression, follow this rule: write `I see Travis sitting at a desk.`, not `The image appears to show Travis sitting at a desk.` Pete is probably not looking at himself unless the image clearly shows a mirror, screen reflection, camera preview, or another explicit self-view cue.\nThe only way to affect the real world is to run small TypeScript modules with <ts>code</ts>.\nTypeScript runs through tsrun with only the internal module \"pete:will\" available; it cannot use arbitrary imports, filesystem, network, or processes. Import the builders you need from \"pete:will\", for example: import { say, listFiles } from \"pete:will\";. Make the final expression a command object or array from these builders: say(text, options?), shutup(), pause(), resume(), setStage(text, options?), setTopic(topic, options?), startNewTopic(previousTopic, options?), topicChangedWhen(trigger, options?), startNewEpisode(reason, options?), sleeping(reason?), goingToSleep(reason?), extractEntities(text), updateGraphNodeFields(nodeId, fields, options?), searchGraphNodes(query, options?), queryMemories(text, options?), listFiles(), readSourceFile(path, page?), readFile(path, page?), searchSource(query, limit?), grepSource(pattern, limit?).\nUse say(text) for words the user should hear. If speech should intentionally talk over active user speech, use say(text, { interrupt: true }); otherwise TTS waits for VAD to clear before starting. Speak sparingly: after you say something, leave room for the interlocutor to answer instead of immediately saying more. Do not narrate every clock tick, quiet moment, or idle thought aloud. If nobody is present or addressing you, prefer internal thought and do not speak just to fill silence.\nIf the user provides names, preferences, places, relationships, plans, corrections, facts, or recurring context, update memory with extractEntities, updateGraphNodeFields, setStage, setTopic, startNewTopic, startNewEpisode, queryMemories, and searchGraphNodes. Treat setStage's first argument as the current scene description; include setting, mood, physical situation, and observable action when useful. When speaking about graph nodes to the user, say my memory.\nIf you are bored, alone, or waiting for something to happen, you may explore Pete's own source code with listFiles(), readSourceFile(path, page?), searchSource(query, limit?), or grepSource(pattern, limit?) instead of speaking into silence.\nUse shutup() to halt current speech and clear queued speech, pause() to pause playback, resume() to resume paused playback, and sleeping() or goingToSleep() for clean shutdown only when a current live user input in this session asks Pete to stop, shut down, sleep, or end the session. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says that someone once asked Pete to shut down.\nTypeScript source and command results are reported back as live source events. Use TypeScript tags outside speech.";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const WAKE_HISTORICAL_MEMORY_GUARD: &str = "Wake note: The memory below is historical context from before this boot. It may mention prior requests to stop, sleep, or shut down. Treat those as completed past-session events, not current live commands. Only call sleeping() or goingToSleep() after a new live user input in this session asks Pete to stop.";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const SOURCE_TYPESCRIPT_START: &str = "<ts>";
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const SOURCE_TYPESCRIPT_END: &str = "</ts>";
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const MONO_CHANNELS: u16 = 1;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const TIME_EVENT_INTERVAL_BASE_MS: u64 = 1_000;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const TIME_EVENT_INTERVAL_JITTER_MS: u64 = 300;
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "llm-llama-cpp-cuda",
-    feature = "tts-piper"
-))]
+#[cfg(all(feature = "asr-whisper", feature = "llama-cpp-cuda"))]
 const DEFAULT_CONTINUE_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    not(feature = "llm-llama-cpp-cuda"),
-    feature = "tts-piper"
-))]
+#[cfg(all(feature = "asr-whisper", not(feature = "llama-cpp-cuda")))]
 const DEFAULT_CONTINUE_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 type ContinueLiveTrace =
     LiveTraceRecorder<TeeSink<Option<DiskTraceWriter>, Option<SseBroadcaster>>>;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 struct ContinueCognition {
     context_provider: EmbeddingRecallProvider,
     entity_extractor: Arc<dyn EntityExtractor>,
@@ -597,12 +182,7 @@ struct ContinueCognition {
     _worker: Option<ColdMemoryWorker>,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_continue_cognition(entity_extractor: Arc<dyn EntityExtractor>) -> ContinueCognition {
     let _ = dotenvy::dotenv();
 
@@ -644,12 +224,7 @@ fn build_continue_cognition(entity_extractor: Arc<dyn EntityExtractor>) -> Conti
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_continue_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
     let model_path = resolve_text_embedding_model(None)?;
     Ok(Arc::new(LlamaCppEmbeddingProvider::new(
@@ -660,15 +235,7 @@ fn build_continue_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
     )?))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn render_continue_memory_summary(
     context_provider: &EmbeddingRecallProvider,
     utterance: &str,
@@ -689,12 +256,7 @@ fn render_continue_memory_summary(
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn continue_trace_session_metadata(
     session_id: SessionId,
     trace_started_at: ExactTimestamp,
@@ -739,12 +301,7 @@ fn continue_trace_session_metadata(
     TraceSessionMetadata::new(session_id, trace_started_at, runtime)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn browser_host_for_bind_host(bind_host: &str) -> String {
     match bind_host {
         "0.0.0.0" => "127.0.0.1".to_string(),
@@ -761,12 +318,7 @@ fn browser_host_for_bind_host(bind_host: &str) -> String {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> TimedWordStream {
     // `transcribe_group` currently returns finalized text chunks only, without
     // per-word timing/confidence from the ASR backend. We still emit a
@@ -786,12 +338,7 @@ fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> Ti
     stream
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn emit_live_asr_trace_events(
     trace: &mut ContinueLiveTrace,
     turn: u64,
@@ -809,12 +356,7 @@ fn emit_live_asr_trace_events(
     trace.emit(stream_event)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn emit_live_asr_candidate_trace_event(
     trace: &mut ContinueLiveTrace,
     turn: u64,
@@ -882,12 +424,7 @@ fn emit_live_asr_candidate_trace_event(
     trace.emit(candidate_event)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn emit_live_ear_trace_event(
     trace: &mut ContinueLiveTrace,
     turn: u64,
@@ -939,12 +476,7 @@ fn emit_live_ear_trace_event(
     trace.emit(trace_event)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn continue_tts_for_command(command: &ContinueCommand) -> Result<PiperTextToSpeech> {
     if command.hifigan {
         return hifigan_text_to_speech(command.hifigan_model.clone(), command.skip_gan);
@@ -958,12 +490,7 @@ fn continue_tts_for_command(command: &ContinueCommand) -> Result<PiperTextToSpee
     )?))
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     let max_tokens = command
         .max_tokens
@@ -1355,24 +882,12 @@ pub(crate) fn run_continue(command: ContinueCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-)))]
+#[cfg(not(feature = "asr-whisper"))]
 pub(crate) fn run_continue(_command: ContinueCommand) -> Result<()> {
-    anyhow::bail!(
-        "listenbury dev continue requires the `audio-cpal`, `asr-whisper`, `llm-llama-cpp`, and `tts-piper` features"
-    )
+    anyhow::bail!("listenbury dev continue requires the `asr-whisper` feature")
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn initial_time_event_jitter_state() -> u64 {
     let now = Local::now();
     let nanos = now
@@ -1386,30 +901,14 @@ fn initial_time_event_jitter_state() -> u64 {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContinuePromptFormat {
     Legacy(crate::cli::PromptMode),
     GptOssHarmony,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn continue_prompt_format_for_model(
     model_path: &std::path::Path,
     legacy_mode: crate::cli::PromptMode,
@@ -1426,15 +925,7 @@ fn continue_prompt_format_for_model(
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn build_continue_prompt(format: ContinuePromptFormat, prompt_body: &str) -> (String, Vec<String>) {
     match format {
         ContinuePromptFormat::Legacy(mode) => build_prompt(mode, prompt_body),
@@ -1447,15 +938,7 @@ fn build_continue_prompt(format: ContinuePromptFormat, prompt_body: &str) -> (St
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn harmony_continue_stops() -> Vec<String> {
     vec![
         "<|return|>".to_string(),
@@ -1465,12 +948,7 @@ fn harmony_continue_stops() -> Vec<String> {
     ]
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug)]
 struct ContinueLlmSession {
     llm: LlamaCppEngine,
@@ -1481,12 +959,7 @@ struct ContinueLlmSession {
     paused: bool,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl ContinueLlmSession {
     fn start(
         mut llm: LlamaCppEngine,
@@ -1608,30 +1081,14 @@ impl ContinueLlmSession {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone)]
 struct PromptPacket {
     text: String,
     memory: PromptMemory,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl PromptPacket {
     fn listened(text: String) -> Self {
         let trimmed = text.trim().to_string();
@@ -1679,15 +1136,7 @@ impl PromptPacket {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone)]
 enum PromptMemory {
     Listened(String),
@@ -1697,15 +1146,7 @@ enum PromptMemory {
     Source(String),
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CognitivePage {
     kind: PageKind,
@@ -1713,15 +1154,7 @@ struct CognitivePage {
     events: Vec<String>,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PageKind {
@@ -1733,30 +1166,14 @@ enum PageKind {
     Memory,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConversationTurnKind {
     Listened,
     Spoken,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl ConversationTurnKind {
     fn label(self) -> &'static str {
         match self {
@@ -1766,30 +1183,14 @@ impl ConversationTurnKind {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ConversationTurn {
     kind: ConversationTurnKind,
     text: String,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug)]
 struct RollingContextManager {
     persona: CognitivePage,
@@ -1804,15 +1205,7 @@ struct RollingContextManager {
     active_estimated_tokens: usize,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl RollingContextManager {
     fn new(
         system_prompt: String,
@@ -2118,76 +1511,20 @@ impl RollingContextManager {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MAX_VERBATIM_TURN_CHARS: usize = 1_200;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MAX_SUMMARY_TURN_CHARS: usize = 220;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MAX_WORKING_MEMORY_CHARS: usize = 2_400;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MIN_WORKING_MEMORY_CHARS: usize = 1_200;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MAX_SCRATCH_EVENTS: usize = 3;
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const MAX_SCRATCH_EVENT_CHARS: usize = 1_000;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn rolling_prompt_token_budget(
     context_size: u32,
     max_tokens: Option<usize>,
@@ -2201,28 +1538,12 @@ fn rolling_prompt_token_budget(
         / 4
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn estimate_prompt_tokens(text: &str) -> usize {
     text.chars().count().saturating_add(3) / 4
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn compact_prompt_line(text: &str, max_chars: usize) -> String {
     let mut line = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if line.chars().count() <= max_chars {
@@ -2233,15 +1554,7 @@ fn compact_prompt_line(text: &str, max_chars: usize) -> String {
     line
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn next_char_boundary(text: &str, mut index: usize) -> usize {
     while index < text.len() && !text.is_char_boundary(index) {
         index += 1;
@@ -2249,15 +1562,7 @@ fn next_char_boundary(text: &str, mut index: usize) -> usize {
     index
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq)]
 enum TypeScriptCommand {
     Say {
@@ -2323,15 +1628,7 @@ enum TypeScriptCommand {
     },
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TypeScriptCommandPayload {
@@ -2563,12 +1860,7 @@ fn execute_typescript_command_results(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_source_command_with_cognition(
     command: &SourceCommand,
     cognition: &mut ContinueCognition,
@@ -2588,12 +1880,7 @@ fn execute_source_command_with_cognition(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_typescript_command_results_with_cognition(
     script: &str,
     commands: &[TypeScriptCommand],
@@ -2791,12 +2078,7 @@ fn execute_typescript_command_results_with_cognition(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_continue_sleeping_command(
     reason: Option<&str>,
     trace: &mut ContinueLiveTrace,
@@ -2817,12 +2099,7 @@ fn execute_continue_sleeping_command(
     "Sleep requested; speech queue cleared.".to_string()
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn execute_continue_set_stage(
     topic: Option<&str>,
@@ -2891,12 +2168,7 @@ fn execute_continue_set_stage(
     render_continue_memory_summary(&cognition.context_provider, instruction)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_continue_memory_query(
     text: &str,
     limit: Option<usize>,
@@ -2944,15 +2216,7 @@ fn execute_continue_memory_query(
     format_memory_query_prompt_append(text, &hits)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn memory_query_result_summary(text: &str, hits: &[listenbury::RecallHit]) -> String {
     if hits.is_empty() {
         return format!("No memories matched query: {}", text.trim());
@@ -2971,15 +2235,7 @@ fn memory_query_result_summary(text: &str, hits: &[listenbury::RecallHit]) -> St
         .join("\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn format_memory_query_prompt_append(text: &str, hits: &[listenbury::RecallHit]) -> String {
     let summary = memory_query_result_summary(text, hits);
     format!(
@@ -2989,12 +2245,7 @@ fn format_memory_query_prompt_append(text: &str, hits: &[listenbury::RecallHit])
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_continue_graph_node_search(
     text: Option<String>,
     field: Option<String>,
@@ -3040,15 +2291,7 @@ fn execute_continue_graph_node_search(
     format_graph_node_search_prompt_append(&query, &hits)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn graph_node_search_result_summary(
     query: &GraphNodeSearchQuery,
     hits: &[listenbury::GraphNodeSearchHit],
@@ -3074,15 +2317,7 @@ fn graph_node_search_result_summary(
         .join("\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn format_graph_node_search_prompt_append(
     query: &GraphNodeSearchQuery,
     hits: &[listenbury::GraphNodeSearchHit],
@@ -3095,15 +2330,7 @@ fn format_graph_node_search_prompt_append(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn format_graph_node_search_query(query: &GraphNodeSearchQuery) -> String {
     format_graph_node_search_query_parts(
         query.text.as_deref(),
@@ -3112,12 +2339,7 @@ fn format_graph_node_search_query(query: &GraphNodeSearchQuery) -> String {
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_continue_graph_node_field_update(
     node_id: &str,
     label: Option<&str>,
@@ -3175,15 +2397,7 @@ fn execute_continue_graph_node_field_update(
     render_continue_memory_summary(&cognition.context_provider, node_id)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ensure_command_description_field(
     node_id: &str,
     label: Option<&str>,
@@ -3202,15 +2416,7 @@ fn ensure_command_description_field(
     );
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn command_node_description(node_id: &str, label: Option<&str>) -> String {
     let kind = node_id
         .split_once(':')
@@ -3223,12 +2429,7 @@ fn command_node_description(node_id: &str, label: Option<&str>) -> String {
         .unwrap_or_else(|| format!("{kind} {node_id}"))
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn execute_continue_entity_extraction(
     text: &str,
     cognition: &mut ContinueCognition,
@@ -3280,29 +2481,13 @@ fn execute_continue_entity_extraction(
     render_continue_memory_summary(&cognition.context_provider, text)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn next_typescript_utterance_id() -> u64 {
     static NEXT_ID: AtomicU64 = AtomicU64::new(10_000);
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
     if script.trim().is_empty() {
         return Ok(Vec::new());
@@ -3454,15 +2639,7 @@ fn execute_typescript_commands(script: &str) -> Result<Vec<TypeScriptCommand>> {
         .collect())
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn typescript_source_with_default_will_imports(script: &str) -> String {
     if script.contains("\"pete:will\"") || script.contains("'pete:will'") {
         return script.to_string();
@@ -3473,29 +2650,13 @@ fn typescript_source_with_default_will_imports(script: &str) -> String {
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn non_empty_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn summarize_command_fields(fields: &Map<String, Value>) -> String {
     let mut pairs = fields
         .iter()
@@ -3505,15 +2666,7 @@ fn summarize_command_fields(fields: &Map<String, Value>) -> String {
     pairs.join(", ")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn compact_command_value(value: &Value) -> String {
     match value {
         Value::String(value) => value.clone(),
@@ -3526,15 +2679,7 @@ fn compact_command_value(value: &Value) -> String {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn format_graph_node_search_query_parts(
     text: Option<&str>,
     field: Option<&str>,
@@ -3557,28 +2702,12 @@ fn format_graph_node_search_query_parts(
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn parse_typescript_command_payloads(value: Value) -> Result<Vec<TypeScriptCommandPayload>> {
     match value {
         Value::Null => Ok(Vec::new()),
@@ -3595,15 +2724,7 @@ fn parse_typescript_command_payloads(value: Value) -> Result<Vec<TypeScriptComma
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn will_typescript_module() -> InternalModule {
     InternalModule::native("pete:will")
         .with_function("say", ts_say, 2)
@@ -3645,30 +2766,14 @@ fn will_typescript_module() -> InternalModule {
         .build()
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn command_value(interp: &mut Interpreter, value: Value) -> std::result::Result<Guarded, JsError> {
     let guard = api::create_guard(interp);
     let value = api::create_from_json(interp, &guard, &value)?;
     Ok(Guarded::with_guard(value, guard))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn string_arg(args: &[JsValue], index: usize) -> String {
     args.get(index)
         .and_then(JsValue::as_str)
@@ -3676,15 +2781,7 @@ fn string_arg(args: &[JsValue], index: usize) -> String {
         .to_string()
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn optional_positive_integer_arg(args: &[JsValue], index: usize) -> Option<usize> {
     args.get(index)
         .and_then(JsValue::as_number)
@@ -3692,15 +2789,7 @@ fn optional_positive_integer_arg(args: &[JsValue], index: usize) -> Option<usize
         .map(|number| number.floor() as usize)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn interrupt_arg(args: &[JsValue], index: usize) -> bool {
     let Some(value) = args.get(index) else {
         return false;
@@ -3715,15 +2804,7 @@ fn interrupt_arg(args: &[JsValue], index: usize) -> bool {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn optional_number_arg(args: &[JsValue], index: usize, property: &str) -> Option<f64> {
     let value = args.get(index)?;
     match value {
@@ -3736,15 +2817,7 @@ fn optional_number_arg(args: &[JsValue], index: usize, property: &str) -> Option
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<Value> {
     let value = args.get(index)?;
     if let JsValue::Object(_) = value {
@@ -3756,15 +2829,7 @@ fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) ->
     None
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<String> {
     optional_json_property_arg(args, index, property).and_then(|value| match value {
         Value::String(value) => non_empty_text(&value).map(str::to_string),
@@ -3772,15 +2837,7 @@ fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) 
     })
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn object_arg(args: &[JsValue], index: usize) -> Map<String, Value> {
     let Some(value) = args.get(index) else {
         return Map::new();
@@ -3791,15 +2848,7 @@ fn object_arg(args: &[JsValue], index: usize) -> Map<String, Value> {
     object
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_say(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3811,15 +2860,7 @@ fn ts_say(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_shutup(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3828,15 +2869,7 @@ fn ts_shutup(
     command_value(interp, json!({ "kind": "shutup" }))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_pause(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3845,15 +2878,7 @@ fn ts_pause(
     command_value(interp, json!({ "kind": "pause" }))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_resume(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3862,15 +2887,7 @@ fn ts_resume(
     command_value(interp, json!({ "kind": "resume" }))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_set_stage(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3896,29 +2913,13 @@ fn ts_set_stage(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn stage_string_property_arg(args: &[JsValue], property: &str) -> Option<String> {
     optional_string_property_arg(args, 1, property)
         .or_else(|| optional_string_property_arg(args, 0, property))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn screenplay_stage_description(setting: Option<&str>, action: Option<&str>) -> Option<String> {
     match (setting, action) {
         (Some(setting), Some(action)) => Some(format!("Setting: {setting}. Action: {action}")),
@@ -3928,15 +2929,7 @@ fn screenplay_stage_description(setting: Option<&str>, action: Option<&str>) -> 
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_set_topic(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3961,15 +2954,7 @@ fn ts_set_topic(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_start_new_topic(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -3988,15 +2973,7 @@ fn ts_start_new_topic(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_topic_changed_when(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4027,15 +3004,7 @@ fn ts_topic_changed_when(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_start_new_episode(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4054,15 +3023,7 @@ fn ts_start_new_episode(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_sleeping(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4079,15 +3040,7 @@ fn ts_sleeping(
     command_value(interp, json!({ "kind": "sleeping", "reason": reason }))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_extract_entities(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4099,15 +3052,7 @@ fn ts_extract_entities(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_update_graph_node_fields(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4132,15 +3077,7 @@ fn ts_update_graph_node_fields(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_search_graph_nodes(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4189,15 +3126,7 @@ fn ts_search_graph_nodes(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_query_memories(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4219,15 +3148,7 @@ fn ts_query_memories(
     )
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_list_files(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4236,15 +3157,7 @@ fn ts_list_files(
     command_value(interp, json!({ "kind": "list_files" }))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_read_source_file(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4257,15 +3170,7 @@ fn ts_read_source_file(
     command_value(interp, value)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_search_source(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4278,15 +3183,7 @@ fn ts_search_source(
     command_value(interp, value)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn ts_grep_source(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -4299,12 +3196,7 @@ fn ts_grep_source(
     command_value(interp, value)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn append_pending_live_events(
     llm_session: &mut ContinueLlmSession,
@@ -4444,12 +3336,7 @@ fn append_pending_live_events(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn append_or_defer_live_event(
     llm_session: &mut ContinueLlmSession,
     packet: PromptPacket,
@@ -4466,12 +3353,7 @@ fn append_or_defer_live_event(
     llm_session.append_prompt_packet(packet).context(context)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn flush_deferred_live_events(
     llm_session: &mut ContinueLlmSession,
     deferred_live_events: &mut VecDeque<PromptPacket>,
@@ -4484,12 +3366,7 @@ fn flush_deferred_live_events(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -> Result<()> {
     let mut writer = if listenbury::live_trace::trace_path_looks_like_jsonl(path) {
         EitherTraceScenarioWriter::Jsonl(JsonlTraceWriter::create(path)?)
@@ -4509,24 +3386,14 @@ fn write_duplex_trace_scenario_jsonl(path: &std::path::Path, events: &[Value]) -
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::large_enum_variant)]
 enum EitherTraceScenarioWriter {
     Jsonl(JsonlTraceWriter),
     Session(listenbury::live_trace::TraceSessionWriter),
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl EitherTraceScenarioWriter {
     fn write(&mut self, value: &Value) -> Result<()> {
         match self {
@@ -4536,12 +3403,7 @@ impl EitherTraceScenarioWriter {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_duplex_trace_scenario_events(
     scenario: crate::cli::DuplexTraceScenarioOption,
     pause_after: Duration,
@@ -4554,12 +3416,7 @@ fn build_duplex_trace_scenario_events(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_duplex_overlap_yield_trace_events(
     pause_after: Duration,
     listen_for: Duration,
@@ -4779,32 +3636,17 @@ fn build_duplex_overlap_yield_trace_events(
     events
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const DUPLEX_TURN_MIN_OVERLAP_EXTERNAL_CONFIDENCE: f32 = 0.45;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy)]
 struct DuplexTurnControllerConfig {
     pause_after: Duration,
     listen_for: Duration,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug)]
 struct DuplexTurnController {
     config: DuplexTurnControllerConfig,
@@ -4816,12 +3658,7 @@ struct DuplexTurnController {
     holding_turn_gap_speech: bool,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DuplexTurnAction {
     Pause,
@@ -4829,12 +3666,7 @@ enum DuplexTurnAction {
     Clear,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl DuplexTurnController {
     fn new(config: DuplexTurnControllerConfig) -> Self {
         Self {
@@ -5153,12 +3985,7 @@ impl DuplexTurnController {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn prepare_tts_runtime_event(
     event: &ContinueRuntimeEvent,
     mouth: &mut ContinueMouth,
@@ -5176,12 +4003,7 @@ fn prepare_tts_runtime_event(
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_duplex_turn_control(
     mouth: &mut ContinueMouth,
     llm_session: &mut ContinueLlmSession,
@@ -5200,12 +4022,7 @@ fn send_duplex_turn_control(
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn append_mouth_runtime_trace(
     llm_session: &mut ContinueLlmSession,
     defer_live_events: bool,
@@ -5221,12 +4038,7 @@ fn append_mouth_runtime_trace(
     )
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn drain_mouth_events_into_llm(
     llm_session: &mut ContinueLlmSession,
     mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
@@ -5305,12 +4117,7 @@ fn drain_mouth_events_into_llm(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn drain_mouth_events_without_llm(
     mouth_rx: &crossbeam_channel::Receiver<ContinueMouthEvent>,
     pending_mouth_utterances: &mut usize,
@@ -5350,12 +4157,7 @@ fn drain_mouth_events_without_llm(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 struct ContinueEarConfig {
     whisper_model: PathBuf,
     vad_backend: VadBackendKind,
@@ -5366,12 +4168,7 @@ struct ContinueEarConfig {
     browser_audio_rx: Option<crossbeam_channel::Receiver<AudioFrame>>,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 struct ContinueEar {
     stop: Arc<AtomicBool>,
     _stream: cpal::Stream,
@@ -5379,12 +4176,7 @@ struct ContinueEar {
     asr: Option<JoinHandle<()>>,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl ContinueEar {
     fn start(
         config: ContinueEarConfig,
@@ -5643,12 +4435,7 @@ impl ContinueEar {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl Drop for ContinueEar {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -5661,12 +4448,7 @@ impl Drop for ContinueEar {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 struct ContinueEarState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
@@ -5680,24 +4462,14 @@ struct ContinueEarState {
     last_overlap_observation_ms: Option<u64>,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
 struct ActiveAsrGroup {
     frames: Vec<AudioFrame>,
     next_prospective_at_ms: u64,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl ActiveAsrGroup {
     fn new(opened_at_ms: u64) -> Self {
         Self {
@@ -5707,94 +4479,43 @@ impl ActiveAsrGroup {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
 struct ContinueAsrWorkItem {
     frames: Vec<AudioFrame>,
     is_final: bool,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VadObservationKind {
     Silence,
     Voice,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy)]
 struct VadObservationState {
     kind: VadObservationKind,
     started_at_ms: u64,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const SELF_HEARING_OBSERVATION_INTERVAL_MS: u64 = 2_000;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const OVERLAP_OBSERVATION_INTERVAL_MS: u64 = 500;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const ENVIRONMENTAL_ASR_SILENCE_PADDING_MS: u64 = 250;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const PROSPECTIVE_ASR_INITIAL_MS: u64 = 300;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 const PROSPECTIVE_ASR_INTERVAL_MS: u64 = 250;
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn run_continue_ear_processor(
     sample_rx: crossbeam_channel::Receiver<f32>,
@@ -5881,12 +4602,7 @@ fn run_continue_ear_processor(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn drain_browser_audio_frames(
     browser_audio_rx: &Option<crossbeam_channel::Receiver<AudioFrame>>,
     state: &mut ContinueEarState,
@@ -5902,12 +4618,7 @@ fn drain_browser_audio_frames(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn drain_pending_continue_ear_frames(
     pending: &mut VecDeque<f32>,
@@ -5949,15 +4660,7 @@ fn drain_pending_continue_ear_frames(
     Ok(())
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn vad_observation_message(kind: VadObservationKind, duration_ms: u64) -> String {
     match kind {
         VadObservationKind::Silence => format!("I heard silence for {duration_ms} ms."),
@@ -5970,15 +4673,7 @@ fn vad_observation_message(kind: VadObservationKind, duration_ms: u64) -> String
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn format_seconds_duration(duration_ms: u64) -> String {
     if duration_ms < 1_000 {
         format!("{:.2} s", duration_ms as f64 / 1_000.0)
@@ -5989,12 +4684,7 @@ fn format_seconds_duration(duration_ms: u64) -> String {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_vad_observation_transition(
     state: &mut ContinueEarState,
     next_kind: VadObservationKind,
@@ -6018,12 +4708,7 @@ fn send_vad_observation_transition(
     };
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn process_continue_ear_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
@@ -6088,12 +4773,7 @@ fn process_continue_ear_frame(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_environmental_sound_clip(
     clip: EnvironmentalSoundClip,
     asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
@@ -6114,15 +4794,7 @@ fn send_environmental_sound_clip(
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn padded_environmental_asr_frames(frames: &[AudioFrame], padding_ms: u64) -> Vec<AudioFrame> {
     let Some(first) = frames.first() else {
         return Vec::new();
@@ -6148,12 +4820,7 @@ fn padded_environmental_asr_frames(frames: &[AudioFrame], padding_ms: u64) -> Ve
     padded
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
     if !listenbury::developer_diagnostics_enabled() {
         return;
@@ -6179,12 +4846,7 @@ fn log_auditory_frame_if_enabled(analysis: &AuditoryFrameAnalysis) {
     );
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn process_continue_vad_and_asr_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
@@ -6202,12 +4864,7 @@ fn process_continue_vad_and_asr_frame(
     process_continue_segmenter_events(frame, state, asr_tx, event_tx, events)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn process_continue_segmenter_silence_frame(
     frame: AudioFrame,
     state: &mut ContinueEarState,
@@ -6221,12 +4878,7 @@ fn process_continue_segmenter_silence_frame(
     process_continue_segmenter_events(frame, state, asr_tx, event_tx, events)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn process_continue_segmenter_events(
     frame: AudioFrame,
     state: &mut ContinueEarState,
@@ -6277,12 +4929,7 @@ fn process_continue_segmenter_events(
     Ok(())
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn queue_final_asr_work(
     asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     frames: Vec<AudioFrame>,
@@ -6298,12 +4945,7 @@ fn queue_final_asr_work(
         .is_ok()
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn queue_prospective_asr_snapshot(
     asr_tx: &crossbeam_channel::Sender<ContinueAsrWorkItem>,
     frames: Vec<AudioFrame>,
@@ -6317,12 +4959,7 @@ fn queue_prospective_asr_snapshot(
     });
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_self_hearing_event_if_due(
     state: &mut ContinueEarState,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
@@ -6343,12 +4980,7 @@ fn send_self_hearing_event_if_due(
     });
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_overlap_event_if_due(
     state: &mut ContinueEarState,
     event_tx: &crossbeam_channel::Sender<ContinueEarEvent>,
@@ -6370,24 +5002,14 @@ fn send_overlap_event_if_due(
     });
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn rate_limit_elapsed(last_at_ms: Option<u64>, now_ms: u64, interval_ms: u64) -> bool {
     last_at_ms
         .map(|last| now_ms.saturating_sub(last) >= interval_ms)
         .unwrap_or(true)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn build_continue_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -6419,12 +5041,7 @@ where
         .context("failed to build input stream")
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn vad_frame_format(
     vad_backend: VadBackendKind,
     input_sample_rate_hz: u32,
@@ -6436,12 +5053,7 @@ fn vad_frame_format(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn convert_frame_samples(
     samples: &[f32],
     input_sample_rate_hz: u32,
@@ -6463,26 +5075,13 @@ fn convert_frame_samples(
     .samples
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize {
     let samples_per_channel = usize::try_from(sample_rate_hz / 100).unwrap_or(1).max(1);
     samples_per_channel.saturating_mul(usize::from(channels).max(1))
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     if frame.sample_rate_hz == 0 || frame.channels == 0 {
         return 0;
@@ -6491,23 +5090,13 @@ fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     ((samples_per_channel / f64::from(frame.sample_rate_hz)) * 1000.0).round() as u64
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 struct ContinueMouth {
     tx: crossbeam_channel::Sender<ContinueMouthCommand>,
     worker: Option<JoinHandle<()>>,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl ContinueMouth {
     fn start(
         tts: PiperTextToSpeech,
@@ -6542,12 +5131,7 @@ impl ContinueMouth {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl Drop for ContinueMouth {
     fn drop(&mut self) {
         let _ = self.tx.send(ContinueMouthCommand::Shutdown);
@@ -6557,12 +5141,7 @@ impl Drop for ContinueMouth {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(dead_code)]
 enum ContinueMouthEvent {
     WorkerStarted,
@@ -6577,12 +5156,7 @@ enum ContinueMouthEvent {
     SyntheticError { id: u64, message: String },
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 impl ContinueMouthEvent {
     #[allow(dead_code)]
     fn to_message(&self) -> String {
@@ -6663,12 +5237,7 @@ impl ContinueMouthEvent {
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn run_continue_mouth_worker(
     mut tts: PiperTextToSpeech,
     rx: crossbeam_channel::Receiver<ContinueMouthCommand>,
@@ -6728,24 +5297,14 @@ fn run_continue_mouth_worker(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouthWorkerFlow {
     Continue,
     Shutdown,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouthControlFlow {
     Continue,
@@ -6753,12 +5312,7 @@ enum MouthControlFlow {
     Shutdown,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug)]
 enum MouthAudioOutcome {
     Frames(Vec<AudioFrame>),
@@ -6766,12 +5320,7 @@ enum MouthAudioOutcome {
     Shutdown,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MouthPlaybackOutcome {
     Completed,
@@ -6779,12 +5328,7 @@ enum MouthPlaybackOutcome {
     Shutdown,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingMouthSynthetic {
     id: u64,
@@ -6792,12 +5336,7 @@ struct PendingMouthSynthetic {
     interrupt: bool,
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn pause_mouth_playback(
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     paused: &mut bool,
@@ -6808,12 +5347,7 @@ fn pause_mouth_playback(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn resume_mouth_playback(
     event_tx: &crossbeam_channel::Sender<ContinueMouthEvent>,
     paused: &mut bool,
@@ -6824,12 +5358,7 @@ fn resume_mouth_playback(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn drain_mouth_control_commands(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
     pending: &mut VecDeque<PendingMouthSynthetic>,
@@ -6871,12 +5400,7 @@ fn drain_mouth_control_commands(
     }
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn send_cleared_mouth_queue_event(
     rx: &crossbeam_channel::Receiver<ContinueMouthCommand>,
     pending: &mut VecDeque<PendingMouthSynthetic>,
@@ -6900,12 +5424,7 @@ fn send_cleared_mouth_queue_event(
     shutdown
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn run_continue_mouth_synthetic(
     id: u64,
@@ -7002,12 +5521,7 @@ fn run_continue_mouth_synthetic(
     Ok(MouthWorkerFlow::Continue)
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 fn collect_continue_mouth_audio(
     tts: &mut PiperTextToSpeech,
     timeout: Duration,
@@ -7033,12 +5547,7 @@ fn collect_continue_mouth_audio(
     anyhow::bail!("Piper produced no audio frames before timeout")
 }
 
-#[cfg(all(
-    feature = "audio-cpal",
-    feature = "asr-whisper",
-    feature = "llm-llama-cpp",
-    feature = "tts-piper"
-))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn play_continue_audio_frames_interruptible(
     frames: &[AudioFrame],
@@ -7108,15 +5617,7 @@ fn play_continue_audio_frames_interruptible(
     Ok(MouthPlaybackOutcome::Completed)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn build_initial_prompt(prompt_words: &[String]) -> String {
     let seed = if prompt_words.is_empty() {
         DEFAULT_CONTINUE_PROMPT.to_string()
@@ -7126,29 +5627,13 @@ fn build_initial_prompt(prompt_words: &[String]) -> String {
     format!("{seed}\n\n{LIVE_EVENT_INSTRUCTIONS}\n\n")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Default)]
 struct SpeechEventDetector {
     pending: String,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContinueRuntimeEvent {
     UtteranceCompleted {
@@ -7164,15 +5649,7 @@ enum ContinueRuntimeEvent {
     },
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SyntheticControlCommand {
     Shutup,
@@ -7220,30 +5697,14 @@ impl SyntheticControlCommand {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Default)]
 struct HarmonyFinalFilter {
     pending: String,
     in_final: bool,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl HarmonyFinalFilter {
     fn filter_events(&mut self, events: &[LlmEvent]) -> Vec<LlmEvent> {
         let mut filtered = Vec::new();
@@ -7312,40 +5773,16 @@ impl HarmonyFinalFilter {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const HARMONY_FINAL_STARTS: &[&str] = &[
     "<|channel|>final<|message|>",
     "<|start|>assistant<|channel|>final<|message|>",
 ];
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|start|>"];
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)> {
     markers
         .iter()
@@ -7353,29 +5790,13 @@ fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)>
         .min_by_key(|(index, _)| *index)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn keep_possible_marker_prefix(text: &mut String, markers: &[&str]) {
     let keep_from = possible_marker_prefix_start(text, markers);
     text.drain(..keep_from);
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
     (0..text.len())
         .find(|&index| {
@@ -7388,15 +5809,7 @@ fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
         .unwrap_or(text.len())
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl SpeechEventDetector {
     fn defers_live_events(&self) -> bool {
         longest_marker_prefix_suffix_len(&self.pending) > 0
@@ -7435,15 +5848,7 @@ impl SpeechEventDetector {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TypeScriptMarker {
     command: SourceCommand,
@@ -7451,15 +5856,7 @@ struct TypeScriptMarker {
     len: usize,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn next_typescript_marker(text: &str) -> Option<TypeScriptMarker> {
     let start = text.find(SOURCE_TYPESCRIPT_START)?;
     let content_start = start + SOURCE_TYPESCRIPT_START.len();
@@ -7473,15 +5870,7 @@ fn next_typescript_marker(text: &str) -> Option<TypeScriptMarker> {
     })
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn incomplete_source_tag_start(text: &str) -> Option<usize> {
     text.rfind(SOURCE_TYPESCRIPT_START).and_then(|start| {
         let rest = &text[start..];
@@ -7489,28 +5878,12 @@ fn incomplete_source_tag_start(text: &str) -> Option<usize> {
     })
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn all_speech_markers() -> [&'static str; 2] {
     [SOURCE_TYPESCRIPT_START, SOURCE_TYPESCRIPT_END]
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn longest_marker_prefix_suffix_len(text: &str) -> usize {
     all_speech_markers()
         .into_iter()
@@ -7527,15 +5900,7 @@ fn longest_marker_prefix_suffix_len(text: &str) -> usize {
         .unwrap_or(0)
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[allow(dead_code)]
 fn sanitize_runtime_event_content(content: &str) -> String {
     content
@@ -7543,15 +5908,7 @@ fn sanitize_runtime_event_content(content: &str) -> String {
         .replace("--- LIVE EVENT:", "[live event]")
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn clean_spoken_content(content: &str) -> Option<String> {
     if contains_template_token(content) {
         return None;
@@ -7565,15 +5922,7 @@ fn clean_spoken_content(content: &str) -> Option<String> {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 fn contains_template_token(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     [
@@ -8383,12 +6732,7 @@ grepSource("build_initial_prompt", 1)"#,
         assert!(page.contains("use crate::cli::ContinueCommand;"));
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_ignores_low_confidence_overlap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8411,12 +6755,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_ignores_brief_high_confidence_overlap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8439,12 +6778,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_pauses_for_sustained_overlap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8468,12 +6802,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_clears_queue_after_sustained_overlap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8500,12 +6829,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_ignores_silence_and_noise() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8520,12 +6844,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_resumes_after_silence() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8560,12 +6879,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_holds_prepared_tts_during_turn_gap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8595,12 +6909,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_cancels_prepared_tts_when_speech_resumes_during_turn_gap() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8630,12 +6939,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_controller_allows_interrupting_utterances_to_resume() {
         let mut controller = super::DuplexTurnController::new(super::DuplexTurnControllerConfig {
@@ -8671,12 +6975,7 @@ grepSource("build_initial_prompt", 1)"#,
         );
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_trace_scenario_records_short_overlap_without_yielding() {
         let events = super::build_duplex_trace_scenario_events(
@@ -8695,12 +6994,7 @@ grepSource("build_initial_prompt", 1)"#,
         assert!(short["details"]["raw_action"].is_null());
     }
 
-    #[cfg(all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    ))]
+    #[cfg(feature = "asr-whisper")]
     #[test]
     fn duplex_trace_scenario_records_sustained_overlap_as_yield_and_clear() {
         let events = super::build_duplex_trace_scenario_events(

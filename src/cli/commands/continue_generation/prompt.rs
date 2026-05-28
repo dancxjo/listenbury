@@ -1,23 +1,7 @@
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use super::*;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ContinuePromptGateConfig {
     pub(super) duplicate_suppression_window: Duration,
@@ -25,15 +9,7 @@ pub(super) struct ContinuePromptGateConfig {
     pub(super) overlap_summary_threshold: usize,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl Default for ContinuePromptGateConfig {
     fn default() -> Self {
         Self {
@@ -44,28 +20,12 @@ impl Default for ContinuePromptGateConfig {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 trait PromptGate {
     fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket>;
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug)]
 pub(super) struct ContinuePromptGate {
     config: ContinuePromptGateConfig,
@@ -75,30 +35,14 @@ pub(super) struct ContinuePromptGate {
     pending_overlap_count: usize,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl Default for ContinuePromptGate {
     fn default() -> Self {
         Self::new(ContinuePromptGateConfig::default())
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl ContinuePromptGate {
     pub(super) fn new(config: ContinuePromptGateConfig) -> Self {
         Self {
@@ -159,15 +103,7 @@ impl ContinuePromptGate {
     }
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 impl PromptGate for ContinuePromptGate {
     fn consider_ear_event(&mut self, event: &ContinueEarEvent, now: Instant) -> Vec<PromptPacket> {
         let mut packets = Vec::new();

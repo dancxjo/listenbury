@@ -1,21 +1,13 @@
 use crate::cli::LlamaTurnCommand;
-#[cfg(any(test, feature = "llm-llama-cpp"))]
 use crate::cli::PromptMode;
-#[cfg(feature = "llm-llama-cpp")]
 use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
-#[cfg(feature = "llm-llama-cpp")]
 use anyhow::Context;
 use anyhow::Result;
-#[cfg(feature = "llm-llama-cpp")]
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
-#[cfg(feature = "llm-llama-cpp")]
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
-#[cfg(feature = "llm-llama-cpp")]
 use std::io::Write;
-#[cfg(feature = "llm-llama-cpp")]
 use std::path::PathBuf;
 
-#[cfg(feature = "llm-llama-cpp")]
 pub(crate) fn run_llama_turn(command: LlamaTurnCommand) -> Result<()> {
     let args = LlamaTurnArgs::from_command(command)?;
     let model_path = resolve_llm_model(args.llm_model)?;
@@ -69,12 +61,6 @@ pub(crate) fn run_llama_turn(command: LlamaTurnCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "llm-llama-cpp"))]
-pub(crate) fn run_llama_turn(_command: LlamaTurnCommand) -> Result<()> {
-    anyhow::bail!("listenbury was built without the `llm-llama-cpp` feature")
-}
-
-#[cfg(feature = "llm-llama-cpp")]
 #[derive(Debug)]
 struct LlamaTurnArgs {
     llm_model: Option<PathBuf>,
@@ -84,7 +70,6 @@ struct LlamaTurnArgs {
     stop: Vec<String>,
 }
 
-#[cfg(feature = "llm-llama-cpp")]
 impl LlamaTurnArgs {
     fn from_command(command: LlamaTurnCommand) -> Result<Self> {
         let mut prompt = command.prompt;
@@ -115,7 +100,6 @@ impl LlamaTurnArgs {
     }
 }
 
-#[cfg(any(test, feature = "llm-llama-cpp"))]
 pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<String>) {
     match mode {
         PromptMode::Raw => (user_prompt.to_string(), Vec::new()),
@@ -157,7 +141,6 @@ pub(crate) fn build_prompt(mode: PromptMode, user_prompt: &str) -> (String, Vec<
     }
 }
 
-#[cfg(any(test, feature = "llm-llama-cpp"))]
 fn role_stops() -> Vec<String> {
     vec![
         "\nUser:".into(),
@@ -168,17 +151,14 @@ fn role_stops() -> Vec<String> {
     ]
 }
 
-#[cfg(any(test, feature = "llm-llama-cpp"))]
 fn spoken_stops() -> Vec<String> {
     role_stops()
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "llm-llama-cpp")]
     use super::*;
 
-    #[cfg(feature = "llm-llama-cpp")]
     #[test]
     fn llama_turn_args_treats_single_argument_as_prompt() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
@@ -194,7 +174,6 @@ mod tests {
         assert_eq!(args.prompt, "hello");
     }
 
-    #[cfg(feature = "llm-llama-cpp")]
     #[test]
     fn llama_turn_args_accepts_legacy_model_position() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {
@@ -216,7 +195,6 @@ mod tests {
         assert_eq!(args.prompt, "hello");
     }
 
-    #[cfg(feature = "llm-llama-cpp")]
     #[test]
     fn llama_turn_args_wraps_spoken_prompt_by_default() {
         let args = LlamaTurnArgs::from_command(LlamaTurnCommand {

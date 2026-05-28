@@ -1,55 +1,35 @@
 use crate::cli::EarScopeCommand;
-#[cfg(feature = "audio-cpal")]
 use crate::cli::resolve_vad_config;
 use anyhow::{Context, Result};
 
-#[cfg(feature = "audio-cpal")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(feature = "audio-cpal")]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(feature = "audio-cpal")]
 use listenbury::audio::capture::{
     boost_current_thread_for_capture, callback_sample_queue_capacity,
 };
-#[cfg(feature = "audio-cpal")]
 use listenbury::audio::{
     AudioFormat, MONO_CHANNELS, SampleKind, WHISPER_SAMPLE_RATE_HZ, WavExportOptions,
     WavSampleEncoding, analyze_mono_samples, normalize_interleaved_f32, write_wav_with_report,
 };
-#[cfg(feature = "audio-cpal")]
 use listenbury::event::HearingEvent;
-#[cfg(feature = "audio-cpal")]
 use listenbury::hearing::breath::{BreathGroupConfig, BreathGroupId, BreathGroupSegmenter};
-#[cfg(feature = "audio-cpal")]
 use listenbury::hearing::vad::{VadBackendKind, create_vad_backend_with_profile};
-#[cfg(feature = "audio-cpal")]
 use listenbury::{AudioFrame, ExactTimestamp};
-#[cfg(feature = "audio-cpal")]
 use serde::Serialize;
-#[cfg(feature = "audio-cpal")]
 use std::collections::{HashMap, VecDeque};
-#[cfg(feature = "audio-cpal")]
 use std::io::Write;
-#[cfg(feature = "audio-cpal")]
 use std::path::Path;
-#[cfg(feature = "audio-cpal")]
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-#[cfg(feature = "audio-cpal")]
 use std::time::{Duration, Instant};
 
-#[cfg(feature = "audio-cpal")]
 const FRAME_SAMPLES: usize = 160;
-#[cfg(feature = "audio-cpal")]
 const FRAME_MS: u64 = 10;
-#[cfg(feature = "audio-cpal")]
 const TARGET_CHANNELS: u16 = MONO_CHANNELS;
-#[cfg(feature = "audio-cpal")]
 const TARGET_SAMPLE_RATE_HZ: u32 = WHISPER_SAMPLE_RATE_HZ;
 
-#[cfg(feature = "audio-cpal")]
 pub(crate) fn run_ear_scope(command: EarScopeCommand) -> Result<()> {
     anyhow::ensure!(
         command.duration > 0,
@@ -107,12 +87,6 @@ pub(crate) fn run_ear_scope(command: EarScopeCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "audio-cpal"))]
-pub(crate) fn run_ear_scope(_command: EarScopeCommand) -> Result<()> {
-    anyhow::bail!("listenbury debug ear-scope requires the `audio-cpal` feature")
-}
-
-#[cfg(feature = "audio-cpal")]
 struct EarScopeCapture {
     frames: Vec<AudioFrame>,
     device_name: String,
@@ -122,7 +96,6 @@ struct EarScopeCapture {
     dropped_in_callback: usize,
 }
 
-#[cfg(feature = "audio-cpal")]
 fn capture_normalized_mic_frames(duration_secs: u64) -> Result<EarScopeCapture> {
     let host = cpal::default_host();
     let device = host
@@ -289,7 +262,6 @@ fn capture_normalized_mic_frames(duration_secs: u64) -> Result<EarScopeCapture> 
     })
 }
 
-#[cfg(feature = "audio-cpal")]
 fn drain_pending_capture_frames(
     pending: &mut VecDeque<f32>,
     frames: &mut Vec<AudioFrame>,
@@ -328,13 +300,11 @@ fn drain_pending_capture_frames(
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize {
     let samples_per_channel = usize::try_from(sample_rate_hz / 100).unwrap_or(1).max(1);
     samples_per_channel.saturating_mul(usize::from(channels).max(1))
 }
 
-#[cfg(feature = "audio-cpal")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -362,14 +332,12 @@ where
         .context("failed to build input stream")
 }
 
-#[cfg(feature = "audio-cpal")]
 #[derive(Debug)]
 struct EarScopeDiagnostics {
     frames: Vec<EarScopeFrameDiagnostic>,
     utterance_regions: Vec<UtteranceRegion>,
 }
 
-#[cfg(feature = "audio-cpal")]
 #[derive(Debug, Clone, Serialize)]
 struct EarScopeFrameDiagnostic {
     kind: &'static str,
@@ -387,7 +355,6 @@ struct EarScopeFrameDiagnostic {
     callback_drops: usize,
 }
 
-#[cfg(feature = "audio-cpal")]
 #[derive(Debug, Clone)]
 struct UtteranceRegion {
     start_frame: usize,
@@ -395,7 +362,6 @@ struct UtteranceRegion {
     reason: String,
 }
 
-#[cfg(feature = "audio-cpal")]
 fn collect_diagnostics(
     frames: &[AudioFrame],
     backend: VadBackendKind,
@@ -478,14 +444,12 @@ fn collect_diagnostics(
     })
 }
 
-#[cfg(feature = "audio-cpal")]
 fn breath_group_start_frame(index: usize, config: BreathGroupConfig) -> usize {
     index
         .saturating_add(1)
         .saturating_sub(config.open_after_speech_frames.max(1))
 }
 
-#[cfg(feature = "audio-cpal")]
 fn write_diagnostics_jsonl(path: &Path, frames: &[EarScopeFrameDiagnostic]) -> Result<()> {
     let file = std::fs::File::create(path)
         .with_context(|| format!("failed to create {}", path.display()))?;
@@ -498,7 +462,6 @@ fn write_diagnostics_jsonl(path: &Path, frames: &[EarScopeFrameDiagnostic]) -> R
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -507,7 +470,6 @@ fn rms(samples: &[f32]) -> f32 {
     (sum_sq / samples.len() as f32).sqrt()
 }
 
-#[cfg(feature = "audio-cpal")]
 fn peak(samples: &[f32]) -> f32 {
     samples
         .iter()
@@ -515,7 +477,6 @@ fn peak(samples: &[f32]) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
-#[cfg(feature = "audio-cpal")]
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -527,7 +488,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn render_ear_scope_png(
     path: &Path,
     frames: &[AudioFrame],
@@ -642,7 +602,6 @@ fn render_ear_scope_png(
     canvas.write_png(path)
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_panel(
     canvas: &mut Canvas,
     x: usize,
@@ -662,7 +621,6 @@ fn draw_panel(
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_waveform(canvas: &mut Canvas, samples: &[f32], x: usize, y: usize, w: usize, h: usize) {
     if samples.is_empty() || w == 0 || h == 0 {
         return;
@@ -696,7 +654,6 @@ fn draw_waveform(canvas: &mut Canvas, samples: &[f32], x: usize, y: usize, w: us
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn sample_to_y(sample: f32, max_abs: f32, y: usize, h: usize) -> usize {
     let normalized = (sample / max_abs).clamp(-1.0, 1.0);
     let center = y as f32 + h as f32 / 2.0;
@@ -706,7 +663,6 @@ fn sample_to_y(sample: f32, max_abs: f32, y: usize, h: usize) -> usize {
         .clamp(y as f32, (y + h - 1) as f32) as usize
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_rms_curve(
     canvas: &mut Canvas,
     diagnostics: &[EarScopeFrameDiagnostic],
@@ -737,7 +693,6 @@ fn draw_rms_curve(
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_vad_frames(
     canvas: &mut Canvas,
     diagnostics: &[EarScopeFrameDiagnostic],
@@ -772,7 +727,6 @@ fn draw_vad_frames(
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_utterance_regions(
     canvas: &mut Canvas,
     regions: &[UtteranceRegion],
@@ -803,7 +757,6 @@ fn draw_utterance_regions(
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_spectrogram(
     canvas: &mut Canvas,
     level: &listenbury::audio::acoustic::SpectrogramLevel,
@@ -826,7 +779,6 @@ fn draw_spectrogram(
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn spectrogram_color(db: f32) -> Rgb {
     let t = ((db + 96.0) / 96.0).clamp(0.0, 1.0);
     let (r, g, b) = if t < 0.35 {
@@ -854,12 +806,10 @@ fn spectrogram_color(db: f32) -> Rgb {
     rgb(r as u8, g as u8, b as u8)
 }
 
-#[cfg(feature = "audio-cpal")]
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_time_axis(canvas: &mut Canvas, x: usize, y: usize, w: usize, duration_secs: f32) {
     let seconds = duration_secs.ceil().max(1.0) as usize;
     for second in 0..=seconds {
@@ -875,7 +825,6 @@ fn draw_time_axis(canvas: &mut Canvas, x: usize, y: usize, w: usize, duration_se
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 #[derive(Debug, Clone, Copy)]
 struct Rgb {
     r: u8,
@@ -883,19 +832,16 @@ struct Rgb {
     b: u8,
 }
 
-#[cfg(feature = "audio-cpal")]
 const fn rgb(r: u8, g: u8, b: u8) -> Rgb {
     Rgb { r, g, b }
 }
 
-#[cfg(feature = "audio-cpal")]
 struct Canvas {
     width: usize,
     height: usize,
     pixels: Vec<u8>,
 }
 
-#[cfg(feature = "audio-cpal")]
 impl Canvas {
     fn new(width: usize, height: usize, fill: Rgb) -> Self {
         let mut canvas = Self {
@@ -999,7 +945,6 @@ impl Canvas {
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn draw_glyph(canvas: &mut Canvas, x: usize, y: usize, ch: char, color: Rgb, scale: usize) {
     let glyph = glyph_5x7(ch);
     for (row, bits) in glyph.iter().enumerate() {
@@ -1011,7 +956,6 @@ fn draw_glyph(canvas: &mut Canvas, x: usize, y: usize, ch: char, color: Rgb, sca
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn glyph_5x7(ch: char) -> [&'static str; 7] {
     match ch {
         'A' => [
@@ -1140,7 +1084,6 @@ fn glyph_5x7(ch: char) -> [&'static str; 7] {
     }
 }
 
-#[cfg(feature = "audio-cpal")]
 fn encode_png_rgb(width: usize, height: usize, rgb_pixels: &[u8]) -> Result<Vec<u8>> {
     anyhow::ensure!(width > 0 && height > 0, "PNG dimensions must be non-zero");
     anyhow::ensure!(
@@ -1168,7 +1111,6 @@ fn encode_png_rgb(width: usize, height: usize, rgb_pixels: &[u8]) -> Result<Vec<
     Ok(out)
 }
 
-#[cfg(feature = "audio-cpal")]
 fn write_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) -> Result<()> {
     let len = u32::try_from(data.len()).context("PNG chunk exceeds u32 length")?;
     out.extend_from_slice(&len.to_be_bytes());
@@ -1181,7 +1123,6 @@ fn write_png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) -> Result<()>
     Ok(())
 }
 
-#[cfg(feature = "audio-cpal")]
 fn zlib_store_blocks(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + data.len() / 65_535 * 5 + 6);
     out.extend_from_slice(&[0x78, 0x01]);
@@ -1201,7 +1142,6 @@ fn zlib_store_blocks(data: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(feature = "audio-cpal")]
 fn adler32(data: &[u8]) -> u32 {
     const MOD_ADLER: u32 = 65_521;
     let mut a = 1u32;
@@ -1213,7 +1153,6 @@ fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
-#[cfg(feature = "audio-cpal")]
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for byte in data {
@@ -1226,7 +1165,7 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-#[cfg(all(test, feature = "audio-cpal"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

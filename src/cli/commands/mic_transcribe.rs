@@ -1,77 +1,77 @@
 use crate::cli::MicTranscribeCommand;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::{resolve_refine_whisper_model, resolve_whisper_model};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use crate::cli::resolve_vad_config;
 use anyhow::Result;
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use anyhow::Context;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use cpal::{FromSample, Sample, SizedSample};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::capture::{
     boost_current_thread_for_capture, callback_sample_queue_capacity,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::ring::make_audio_ring;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::event::HearingEvent;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::breath::{
     BreathGroupConfig, BreathGroupId, BreathGroupSegmenter, DEFAULT_VAD_FRAME_MS,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::live_trace::{LiveTraceRecorder, SseBroadcaster};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::recognizer::{
     SpeechRecognizer, StreamingRecognizerBackend, StreamingSpeechRecognizer,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::speech::transcript::{TranscriptCandidateEvent, TranscriptStabilityState};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::word::{
     TimedWordStream, TranscriptWord, WordStreamId, WordStreamSource,
     transcript_to_energy_snapped_word_stream, transcript_to_word_stream,
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use listenbury::{AudioFrame, ExactTimestamp, WhisperSpeechRecognizer};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use serde_json::json;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::collections::{HashMap, VecDeque};
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 use std::time::{Duration, Instant};
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const AUDIO_RING_CAPACITY: usize = 256;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WHISPER_SAMPLE_RATE_HZ: u32 = 16_000;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WHISPER_FRAME_SAMPLES: usize = 160;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const MONO_CHANNELS: u16 = 1;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WEB_TRANSCRIBE_PROSPECTIVE_INITIAL_MS: u64 = 300;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WEB_TRANSCRIBE_PROSPECTIVE_INTERVAL_MS: u64 = 250;
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 const WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS: u64 = 350;
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 struct MicTranscribeState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
@@ -84,7 +84,7 @@ struct MicTranscribeState {
     candidate_planner: WebTranscriptSpeculativePlanner,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 struct WebTranscribeState {
     vad: Box<dyn VoiceActivityDetector>,
     segmenter: BreathGroupSegmenter,
@@ -107,14 +107,14 @@ struct WebTranscribeState {
     refine_tx: crossbeam_channel::Sender<RefinementWorkItem>,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 struct ActiveTranscriptGroup {
     frames: Vec<AudioFrame>,
     opened_at_ms: u64,
     next_prospective_at_ms: u64,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
 struct FinalizedAsrSegment {
     frames: Vec<AudioFrame>,
@@ -122,7 +122,7 @@ struct FinalizedAsrSegment {
     text: String,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 impl ActiveTranscriptGroup {
     fn new(opened_at_ms: u64) -> Self {
         Self {
@@ -134,7 +134,7 @@ impl ActiveTranscriptGroup {
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
 struct RefinementWorkItem {
     frames: Vec<AudioFrame>,
@@ -142,16 +142,16 @@ struct RefinementWorkItem {
     segment_count: usize,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 type WebTranscriptStabilityState = TranscriptStabilityState;
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 #[derive(Debug, Default)]
 struct WebTranscriptSpeculativePlanner {
     active_candidate: Option<listenbury::speech::transcript::TranscriptCandidateId>,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 impl WebTranscriptSpeculativePlanner {
     fn observe(&mut self, event: &TranscriptCandidateEvent) -> Option<WebTranscriptStabilityState> {
         match event {
@@ -202,7 +202,7 @@ impl WebTranscriptSpeculativePlanner {
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     if command.web {
         return run_web_mic_transcribe(command);
@@ -454,7 +454,7 @@ pub(crate) fn run_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     anyhow::ensure!(
         command.refine_window_seconds > 0,
@@ -767,12 +767,12 @@ fn run_web_mic_transcribe(command: MicTranscribeCommand) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(feature = "asr-whisper", feature = "audio-cpal")))]
+#[cfg(not(feature = "asr-whisper"))]
 pub(crate) fn run_mic_transcribe(_command: MicTranscribeCommand) -> Result<()> {
-    anyhow::bail!("listenbury mic-transcribe requires the `audio-cpal` and `asr-whisper` features")
+    anyhow::bail!("listenbury mic-transcribe requires the `asr-whisper` feature")
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Result<()> {
     let frame_duration_ms = frame_duration_ms(&frame);
     let vad_result = state.vad.process_frame(&frame)?;
@@ -854,7 +854,7 @@ fn process_live_frame(frame: AudioFrame, state: &mut MicTranscribeState) -> Resu
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn emit_live_candidate_updates(
     planner: &mut WebTranscriptSpeculativePlanner,
     output: &TranscribeGroupOutput,
@@ -871,7 +871,7 @@ fn emit_live_candidate_updates(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn candidate_console_message(
     event: &TranscriptCandidateEvent,
     stability: Option<&WebTranscriptStabilityState>,
@@ -924,7 +924,7 @@ fn candidate_console_message(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 pub(super) struct TranscribeGroupOutput {
     pub(super) text: String,
     pub(super) words: Vec<TranscriptWord>,
@@ -932,7 +932,7 @@ pub(super) struct TranscribeGroupOutput {
     pub(super) backend: StreamingRecognizerBackend,
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 pub(super) fn transcribe_group(
     frames: &[AudioFrame],
     recognizer: &mut WhisperSpeechRecognizer,
@@ -940,7 +940,7 @@ pub(super) fn transcribe_group(
     transcribe_group_with_finality(frames, recognizer, true)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 pub(super) fn transcribe_group_with_finality(
     frames: &[AudioFrame],
     recognizer: &mut WhisperSpeechRecognizer,
@@ -976,7 +976,7 @@ pub(super) fn transcribe_group_with_finality(
     })
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 #[allow(clippy::too_many_arguments)]
 fn drain_pending_into_ring(
     pending: &mut VecDeque<f32>,
@@ -1018,7 +1018,7 @@ fn drain_pending_into_ring(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn process_ring_frames(
     ring_rx: &mut listenbury::audio::ring::AudioRingRx,
     state: &mut MicTranscribeState,
@@ -1029,7 +1029,7 @@ fn process_ring_frames(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn process_web_ring_frames(
     ring_rx: &mut listenbury::audio::ring::AudioRingRx,
     state: &mut WebTranscribeState,
@@ -1040,7 +1040,7 @@ fn process_web_ring_frames(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn drain_browser_audio_into_ring(
     browser_audio_rx: &crossbeam_channel::Receiver<AudioFrame>,
     ring_tx: &mut listenbury::audio::ring::AudioRingTx,
@@ -1053,7 +1053,7 @@ fn drain_browser_audio_into_ring(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeState) -> Result<()> {
     state.live_audio.push_frame(frame.clone());
     let frame_duration_ms = frame_duration_ms(&frame);
@@ -1162,7 +1162,7 @@ fn process_web_transcribe_frame(frame: AudioFrame, state: &mut WebTranscribeStat
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn emit_web_transcribe_output(
     state: &mut WebTranscribeState,
     output: TranscribeGroupOutput,
@@ -1223,7 +1223,7 @@ fn emit_web_transcribe_output(
     Ok(())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn offset_timed_word_stream_to_session(stream: &mut TimedWordStream, offset_ms: u64) {
     if offset_ms == 0 {
         return;
@@ -1236,7 +1236,7 @@ fn offset_timed_word_stream_to_session(stream: &mut TimedWordStream, offset_ms: 
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn emit_web_confirmed_transcript(
     state: &mut WebTranscribeState,
     text: String,
@@ -1260,7 +1260,7 @@ fn emit_web_confirmed_transcript(
     state.live_trace.emit(event)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn web_transcribe_breath_group_config() -> BreathGroupConfig {
     BreathGroupConfig {
         close_after_silence_frames: WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS
@@ -1272,7 +1272,7 @@ fn web_transcribe_breath_group_config() -> BreathGroupConfig {
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn emit_web_candidate_trace_event(
     trace: &mut LiveTraceRecorder<SseBroadcaster>,
     turn: u64,
@@ -1307,7 +1307,7 @@ fn emit_web_candidate_trace_event(
     trace.emit(candidate_event)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn candidate_trace_artifact(
     stability: Option<&WebTranscriptStabilityState>,
     backend: StreamingRecognizerBackend,
@@ -1343,7 +1343,7 @@ fn candidate_trace_artifact(
     artifact
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn candidate_latency_ms(audio_frames: &[AudioFrame], occurred_at: ExactTimestamp) -> u64 {
     let Some(first) = audio_frames.first() else {
         return 0;
@@ -1354,7 +1354,7 @@ fn candidate_latency_ms(audio_frames: &[AudioFrame], occurred_at: ExactTimestamp
     (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn append_finalized_asr_segment(
     state: &mut WebTranscribeState,
     frames: Vec<AudioFrame>,
@@ -1381,7 +1381,7 @@ fn append_finalized_asr_segment(
     );
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn trim_finalized_asr_segments(
     segments: &mut VecDeque<FinalizedAsrSegment>,
     duration_ms: &mut u64,
@@ -1396,7 +1396,7 @@ fn trim_finalized_asr_segments(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn finalized_segments_text(segments: &VecDeque<FinalizedAsrSegment>) -> String {
     segments
         .iter()
@@ -1406,7 +1406,7 @@ fn finalized_segments_text(segments: &VecDeque<FinalizedAsrSegment>) -> String {
         .join(" ")
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn normalized_transcript_for_confirmation(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
@@ -1415,12 +1415,12 @@ fn normalized_transcript_for_confirmation(text: &str) -> String {
         .to_ascii_lowercase()
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn confirms_existing_finalized_segments(state: &WebTranscribeState, text: &str) -> bool {
     confirms_finalized_segments(&state.finalized_segments, text)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn confirms_finalized_segments(segments: &VecDeque<FinalizedAsrSegment>, text: &str) -> bool {
     if segments.len() < 2 {
         return false;
@@ -1431,7 +1431,7 @@ fn confirms_finalized_segments(segments: &VecDeque<FinalizedAsrSegment>, text: &
             == normalized_transcript_for_confirmation(text)
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn queue_refinement_if_due(state: &mut WebTranscribeState) {
     if state.finalized_segments.len() < 2 || Instant::now() < state.next_refine_at {
         return;
@@ -1450,7 +1450,7 @@ fn queue_refinement_if_due(state: &mut WebTranscribeState) {
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn finalized_segments_refinement_work(
     segments: &VecDeque<FinalizedAsrSegment>,
     observed_at: ExactTimestamp,
@@ -1479,7 +1479,7 @@ fn finalized_segments_refinement_work(
     })
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn run_refinement_worker(
     model_path: std::path::PathBuf,
     rx: crossbeam_channel::Receiver<RefinementWorkItem>,
@@ -1524,14 +1524,14 @@ fn run_refinement_worker(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn total_frame_duration_ms(frames: &[AudioFrame]) -> u64 {
     frames.iter().fold(0u64, |total, frame| {
         total.saturating_add(frame_duration_ms(frame))
     })
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> TimedWordStream {
     let words = transcript
         .split_whitespace()
@@ -1547,7 +1547,7 @@ fn live_asr_text_to_word_stream(stream_id: WordStreamId, transcript: &str) -> Ti
     stream
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn browser_host_for_bind_host(bind_host: &str) -> String {
     match bind_host {
         "0.0.0.0" => "127.0.0.1".to_string(),
@@ -1564,7 +1564,7 @@ fn browser_host_for_bind_host(bind_host: &str) -> String {
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn prepare_whisper_frames(frames: &[AudioFrame], frame_samples: usize) -> Result<Vec<AudioFrame>> {
     anyhow::ensure!(frame_samples > 0, "frame_samples must be greater than zero");
     let Some(first) = frames.first() else {
@@ -1610,7 +1610,7 @@ fn prepare_whisper_frames(frames: &[AudioFrame], frame_samples: usize) -> Result
         .collect())
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn vad_frame_format(
     vad_backend: listenbury::hearing::vad::VadBackendKind,
     input_sample_rate_hz: u32,
@@ -1627,7 +1627,7 @@ fn vad_frame_format(
     }
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn convert_frame_samples(
     samples: &[f32],
     input_sample_rate_hz: u32,
@@ -1649,13 +1649,13 @@ fn convert_frame_samples(
     .samples
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize {
     let samples_per_channel = usize::try_from(sample_rate_hz / 100).unwrap_or(1).max(1);
     samples_per_channel.saturating_mul(usize::from(channels).max(1))
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     if frame.sample_rate_hz == 0 || frame.channels == 0 {
         return 0;
@@ -1664,7 +1664,7 @@ fn frame_duration_ms(frame: &AudioFrame) -> u64 {
     ((samples_per_channel / f64::from(frame.sample_rate_hz)) * 1000.0).round() as u64
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -1686,7 +1686,7 @@ where
     )
 }
 
-#[cfg(all(feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(feature = "asr-whisper")]
 fn build_input_stream_with_capture_control<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -1721,7 +1721,7 @@ where
         .context("failed to build input stream")
 }
 
-#[cfg(all(test, feature = "asr-whisper", feature = "audio-cpal"))]
+#[cfg(all(test, feature = "asr-whisper"))]
 mod tests {
     use super::{
         FinalizedAsrSegment, WEB_TRANSCRIBE_BREATH_GROUP_SILENCE_MS, confirms_finalized_segments,

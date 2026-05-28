@@ -70,6 +70,19 @@ impl ContextNodeRole {
             ContextNodeRole::Organization => "Organization",
         }
     }
+
+    pub fn debug_source(self) -> &'static str {
+        match self {
+            ContextNodeRole::SelfIdentity | ContextNodeRole::CurrentUser => "pinned",
+            ContextNodeRole::RecentMention
+            | ContextNodeRole::Place
+            | ContextNodeRole::Object
+            | ContextNodeRole::Task
+            | ContextNodeRole::Organization => "recentMention",
+            ContextNodeRole::RetrievedMemory => "retrievedMemory",
+            ContextNodeRole::ActiveTopic => "activeTopic",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,7 +226,16 @@ impl ConversationContext {
         } else {
             self.pinned_nodes
                 .iter()
-                .map(|node| format!("{}:{}({})", node.scope.as_str(), node.node_id, node.reason))
+                .map(|node| {
+                    format!(
+                        "source=pinned kind={} id={} score=1.00 mutation_allowed={} reason={} scope={}",
+                        context_node_kind(&node.node_id),
+                        node.node_id,
+                        context_node_mutation_allowed(&node.node_id, "pinned"),
+                        node.reason.trim(),
+                        node.scope.as_str()
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -223,11 +245,15 @@ impl ConversationContext {
             self.selected_nodes
                 .iter()
                 .map(|node| {
+                    let source = node.role.debug_source();
                     format!(
-                        "{}:{}({:.2})",
-                        node.role.as_str(),
+                        "source={} kind={} id={} score={:.2} mutation_allowed={} reason={}",
+                        source,
+                        context_node_kind(&node.node.id),
                         node.node.id,
-                        node.relevance
+                        node.relevance,
+                        context_node_mutation_allowed(&node.node.id, source),
+                        node.reason.trim()
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1157,7 +1183,10 @@ impl EmbeddingRecallProvider {
 
     pub fn pin_node(&self, pinned: PinnedContextNode) {
         if let Ok(mut pins) = self.pinned_nodes.lock() {
-            pins.retain(|existing| existing.node_id != pinned.node_id);
+            pins.retain(|existing| {
+                existing.node_id != pinned.node_id
+                    && !(is_voice_node_id(&pinned.node_id) && is_voice_node_id(&existing.node_id))
+            });
             pins.push(pinned);
         }
     }
@@ -1380,6 +1409,9 @@ impl EmbeddingRecallProvider {
 
         let mut seen_node_ids = HashSet::new();
         for node in selected_nodes {
+            if !context_node_prompt_eligible(node) {
+                continue;
+            }
             if !seen_node_ids.insert(node.node.id.as_str()) {
                 continue;
             }
@@ -1398,6 +1430,9 @@ impl EmbeddingRecallProvider {
         }
 
         for pinned in pinned_nodes {
+            if is_voice_node_id(&pinned.node_id) || is_low_value_context_node_id(&pinned.node_id) {
+                continue;
+            }
             let entry = tracker
                 .topics
                 .entry(pinned.node_id.clone())
@@ -1413,7 +1448,9 @@ impl EmbeddingRecallProvider {
         }
 
         tracker.topics.retain(|node_id, state| {
-            pinned_ids.contains(node_id.as_str()) || state.salience >= TOPIC_MIN_SALIENCE
+            !is_low_value_context_node_id(node_id)
+                && !is_voice_node_id(node_id)
+                && (pinned_ids.contains(node_id.as_str()) || state.salience >= TOPIC_MIN_SALIENCE)
         });
     }
 }
@@ -1516,6 +1553,7 @@ impl ContextProvider for EmbeddingRecallProvider {
         }
 
         self.apply_field_overlays(&mut selected);
+        selected.retain(context_node_prompt_eligible);
         let pinned_nodes = self.pinned_nodes_snapshot();
         let turn_fingerprint = input_turn_fingerprint(utterance, conversation_tail);
         self.update_active_topics(&selected, &pinned_nodes, turn_fingerprint);
@@ -1617,6 +1655,96 @@ fn payload_string(payload: &serde_json::Map<String, Value>, keys: &[&str]) -> Op
         .map(str::trim)
         .find(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn context_node_kind(node_id: &str) -> &'static str {
+    match node_id.split_once(':').map(|(kind, _)| kind) {
+        Some("person") => "person",
+        Some("voice") => "voice",
+        Some("topic") => "topic",
+        Some("memory") => "memory",
+        Some("code") | Some("source") | Some("file") => "code",
+        _ => "unknown",
+    }
+}
+
+fn context_node_mutation_allowed(node_id: &str, source: &str) -> bool {
+    source != "activeTopic"
+        && !is_voice_node_id(node_id)
+        && !is_low_value_context_node_id(node_id)
+        && !is_spelling_fragment_node_id(node_id)
+}
+
+fn context_node_prompt_eligible(node: &ContextNode) -> bool {
+    !is_voice_node_id(&node.node.id)
+        && !is_low_value_context_node_id(&node.node.id)
+        && !is_low_value_context_label(&node.node.label)
+        && !is_spelling_fragment_node_id(&node.node.id)
+        && !is_spelling_fragment_label(&node.node.label)
+}
+
+fn is_voice_node_id(node_id: &str) -> bool {
+    node_id
+        .split_once(':')
+        .is_some_and(|(kind, _)| kind.eq_ignore_ascii_case("voice"))
+}
+
+fn is_low_value_context_node_id(node_id: &str) -> bool {
+    node_id
+        .split_once(':')
+        .is_some_and(|(kind, label)| kind == "person" && is_low_value_context_label(label))
+}
+
+fn is_low_value_context_label(label: &str) -> bool {
+    let normalized = label
+        .trim()
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+        .replace('_', " ")
+        .to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "a" | "an"
+            | "the"
+            | "i"
+            | "i'm"
+            | "im"
+            | "me"
+            | "you"
+            | "can"
+            | "could"
+            | "do"
+            | "does"
+            | "did"
+            | "tell"
+            | "told"
+            | "alright"
+            | "okay"
+            | "ok"
+            | "what"
+            | "when"
+            | "where"
+            | "why"
+            | "how"
+            | "please"
+    )
+}
+
+fn is_spelling_fragment_node_id(node_id: &str) -> bool {
+    node_id
+        .split_once(':')
+        .is_some_and(|(_, label)| is_spelling_fragment_label(label))
+}
+
+fn is_spelling_fragment_label(label: &str) -> bool {
+    let normalized = label.replace('_', "-");
+    let mut letters = 0usize;
+    for part in normalized.split('-') {
+        if part.len() != 1 || !part.chars().all(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        letters += 1;
+    }
+    letters >= 2
 }
 
 fn summarize_graph_node_fields(fields: &Map<String, Value>) -> String {
@@ -2405,7 +2533,7 @@ mod tests {
         };
 
         let summary = graph.summarize_neighborhood(GraphNeighborhoodSummaryConfig {
-            max_chars: 320,
+            max_chars: 512,
             max_tokens: None,
             chars_per_token: 4,
             verbatim_node_ids: vec!["topic:aurora".to_string()],
@@ -2464,7 +2592,123 @@ mod tests {
         assert!(
             context
                 .debug_nodes()
-                .contains("pinned=[Session:topic:mission(active mission)]")
+                .contains("source=pinned kind=topic id=topic:mission score=1.00 mutation_allowed=true reason=active mission scope=Session")
+        );
+    }
+
+    #[test]
+    fn context_debug_includes_selection_source_kind_score_mutability_and_reason() {
+        let context = ConversationContext {
+            system_prompt: "system".to_string(),
+            self_node: GraphNodeRef {
+                id: DEFAULT_SELF_NODE_ID.to_string(),
+                label: DEFAULT_SELF_NODE_LABEL.to_string(),
+            },
+            pinned_nodes: Vec::new(),
+            active_topics: Vec::new(),
+            selected_nodes: vec![ContextNode {
+                node: GraphNodeRef {
+                    id: "memory:seattle".to_string(),
+                    label: "Seattle trip".to_string(),
+                },
+                role: ContextNodeRole::RetrievedMemory,
+                relevance: 0.87,
+                reason: "vector recall".to_string(),
+                summary: "Packing notes".to_string(),
+            }],
+            episodic_memory: EpisodicMemory::empty(),
+            conversation_tail: Vec::new(),
+            budget: ContextBudget::default(),
+        };
+
+        let debug = context.debug_nodes();
+        assert!(debug.contains("source=retrievedMemory"));
+        assert!(debug.contains("kind=memory"));
+        assert!(debug.contains("score=0.87"));
+        assert!(debug.contains("mutation_allowed=true"));
+        assert!(debug.contains("reason=vector recall"));
+    }
+
+    #[test]
+    fn low_value_asr_entities_and_voice_recall_do_not_enter_prompt_context() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_entity_extractor(Arc::new(StaticEntityExtractor {
+            entities: vec![
+                ExtractedEntity {
+                    text: "Can".to_string(),
+                    span: 0..3,
+                    kind: EntityKind::Person,
+                    confidence: 0.8,
+                },
+                ExtractedEntity {
+                    text: "Tell".to_string(),
+                    span: 4..8,
+                    kind: EntityKind::Person,
+                    confidence: 0.8,
+                },
+                ExtractedEntity {
+                    text: "W-E-I-B".to_string(),
+                    span: 9..16,
+                    kind: EntityKind::Person,
+                    confidence: 0.8,
+                },
+            ],
+        }));
+
+        let context = build_conversation_context(
+            &provider,
+            "system",
+            "Can you tell me what W-E-I-B means?",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+
+        assert!(
+            context.selected_nodes.is_empty(),
+            "{:?}",
+            context.selected_nodes
+        );
+        assert!(
+            context.active_topics.is_empty(),
+            "{:?}",
+            context.active_topics
+        );
+    }
+
+    #[test]
+    fn only_latest_voice_pin_remains_available_for_prompt() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        });
+        provider.pin_node(PinnedContextNode {
+            node_id: "voice:first".to_string(),
+            scope: PinScope::Temporary { remaining_turns: 3 },
+            reason: "first candidate".to_string(),
+        });
+        provider.pin_node(PinnedContextNode {
+            node_id: "voice:best".to_string(),
+            scope: PinScope::Temporary { remaining_turns: 3 },
+            reason: "best current candidate".to_string(),
+        });
+
+        let context = build_conversation_context(
+            &provider,
+            "system",
+            "hello",
+            Vec::new(),
+            ContextBudget::default(),
+        );
+
+        assert_eq!(context.pinned_nodes.len(), 1);
+        assert_eq!(context.pinned_nodes[0].node_id, "voice:best");
+        assert!(
+            context
+                .debug_nodes()
+                .contains("source=pinned kind=voice id=voice:best")
         );
     }
 
@@ -2743,6 +2987,10 @@ mod tests {
         label: String,
     }
 
+    struct StaticEntityExtractor {
+        entities: Vec<ExtractedEntity>,
+    }
+
     impl KeywordTopicExtractor {
         fn new(keyword: &str, label: &str) -> Self {
             Self {
@@ -2768,6 +3016,12 @@ mod tests {
                 kind: EntityKind::Topic,
                 confidence: 0.8,
             }]
+        }
+    }
+
+    impl EntityExtractor for StaticEntityExtractor {
+        fn extract(&self, _text: &str) -> Vec<ExtractedEntity> {
+            self.entities.clone()
         }
     }
 

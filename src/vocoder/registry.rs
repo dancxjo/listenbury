@@ -10,9 +10,7 @@ use crate::vocoder::klatt::KlattBackend;
 use crate::vocoder::mbrola::MbrolaBackend;
 use crate::vocoder::mel_debug::MelDebugRendererBackend;
 use crate::vocoder::neural_onnx::RiperOnnxDirectBackend;
-use crate::vocoder::piper::PiperBackend;
-#[cfg(feature = "tts-piper")]
-use crate::vocoder::piper::PiperBackendConfig;
+use crate::vocoder::piper::{PiperBackend, PiperBackendConfig};
 use crate::vocoder::riper::RiperKlattFallbackBackend;
 use crate::vocoder::source_filter::NeuralSourceFilterBackend;
 use crate::vocoder::{SpeechSynthesizer, VocoderDescriptor};
@@ -52,7 +50,6 @@ pub fn backend_for_option(
             Ok(Box::new(MbrolaBackend::new(voice)))
         }
         SingDemoBackendSelector::Piper => {
-            #[cfg(feature = "tts-piper")]
             let piper = {
                 let piper_bin = config
                     .piper_bin
@@ -66,8 +63,6 @@ pub fn backend_for_option(
                     timeout: config.piper_timeout.unwrap_or(Duration::from_secs(30)),
                 })
             };
-            #[cfg(not(feature = "tts-piper"))]
-            let piper = None;
             Ok(Box::new(PiperBackend::new(piper)))
         }
         SingDemoBackendSelector::Hifigan => {

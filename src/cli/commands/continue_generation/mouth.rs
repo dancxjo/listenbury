@@ -1,23 +1,7 @@
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 use super::*;
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ContinueMouthCommand {
     Speak {
@@ -31,15 +15,7 @@ pub(super) enum ContinueMouthCommand {
     Shutdown,
 }
 
-#[cfg(any(
-    test,
-    all(
-        feature = "audio-cpal",
-        feature = "asr-whisper",
-        feature = "llm-llama-cpp",
-        feature = "tts-piper"
-    )
-))]
+#[cfg(any(test, feature = "asr-whisper"))]
 pub(super) fn mouth_command_for_runtime_event(
     event: &ContinueRuntimeEvent,
 ) -> Option<(ContinueMouthCommand, bool)> {
