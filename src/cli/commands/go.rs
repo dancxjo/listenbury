@@ -73,10 +73,10 @@ Available functions:\n\
 - updateGraphNodeFields(nodeId, fields, options?): request memory field updates, especially description: \"natural language noun phrase\".\n\
 - searchGraphNodes(query, options?): search memory by text, field, value, or combinations. query may be a string or object with text, field, value, and limit.\n\
 - queryMemories(text, options?) or recallMemories(text, options?): retrieve memories for a phrase, sentence, name, topic, or claim. options may include limit and minScore. Results are appended privately to the active stream.\n\
-- listFiles(pageOrOptions?): list bundled Listenbury source files. Use listFiles(2) or listFiles({ page: 2, pageSize: 80 }) for later pages.\n\
-- readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. Use readSourceFile(\"src/lib.rs\", 2) for page 2, or readSourceFile(\"src/lib.rs\", { line: 42 }) for the page containing line 42. pageOrOptions may be a page number or { page, line, pageSize }.\n\
-- searchSource(query, limit?): source text search.\n\
-- grepSource(pattern, limit?): grep-like source line search.\n\
+- listFiles(pageOrOptions?): list bundled Listenbury source files. Use listFiles(2) or listFiles({ page: 2, pageSize: 80, note: \"Observed previous result; next...\" }) for later pages.\n\
+- readSourceFile(path, pageOrOptions?) or readFile(path, pageOrOptions?): inspect one source file page. Use readSourceFile(\"src/lib.rs\", 2) for page 2, or readSourceFile(\"src/lib.rs\", { line: 42 }) for the page containing line 42. pageOrOptions may be a page number or { page, line, pageSize, note, summary, target }.\n\
+- searchSource(query, limitOrOptions?): source text search.\n\
+- grepSource(pattern, limitOrOptions?): grep-like source line search.\n\
 - setSourcePageSize(lines): set the default readSourceFile page size for future source reads.\n\
 - createGoal(title, options?): create one persisted goal. options may include id, summary, parent, priority, tags, steps, items, note, and select.\n\
 - addGoalNote(idOrTitle, text) or logProgress(idOrTitle, text): append a dated running-log note to an ongoing goal. Use this freely when progress, blockers, decisions, or discoveries happen.\n\
@@ -86,7 +86,7 @@ Available functions:\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or checkOff(\"open-goal-id\", { note: \"Final understanding: ...\" }).\n\
+After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in the next source action options.\n\
 Use source inspection and persisted goals when bored, alone, or waiting. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
@@ -122,7 +122,7 @@ const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds; a source call can also include summary and note options to satisfy this before reading. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -654,12 +654,16 @@ impl StreamOfConsciousness {
         }
 
         for action in actions {
+            if action.source_progress_label().is_some() {
+                self.apply_inline_source_workflow(action.source_workflow())?;
+            }
+
             if let Some(blocked_source_action) = action.source_progress_label()
                 && let Some(previous_source_action) = self.source_progress_due.as_deref()
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Progress note required before {blocked_source_action}. Previous source result: {previous_source_action}. Next action should be exactly one progress note, for example: addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"). After that action succeeds, retry {blocked_source_action}."
+                    "Progress note required before {blocked_source_action}. Previous source result: {previous_source_action}. Record progress with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"), or include note in the source call options before retrying."
                 );
                 self.timeline_colored("action_blocked", &message, ANSI_ERROR);
                 self.append_observation(StreamObservation::ActionError {
@@ -673,7 +677,7 @@ impl StreamOfConsciousness {
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Synthesis checkpoint required before {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. Next action should summarize the current goal, for example: updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}). After that succeeds, retry {blocked_source_action}.",
+                    "Synthesis checkpoint required before {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. Summarize the current goal with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}), or include summary and note in the source call options before retrying.",
                     self.source_inspections_since_synthesis
                 );
                 self.timeline_colored("action_blocked", &message, ANSI_ERROR);
@@ -853,7 +857,9 @@ impl StreamOfConsciousness {
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
-                TypeScriptAction::ListFiles { page, page_size } => {
+                TypeScriptAction::ListFiles {
+                    page, page_size, ..
+                } => {
                     let output = execute_list_source_files_page(page, page_size);
                     self.timeline(
                         "action_result",
@@ -866,6 +872,7 @@ impl StreamOfConsciousness {
                     page,
                     line,
                     page_size,
+                    ..
                 } => {
                     let page_lines = page_size
                         .unwrap_or(self.source_page_lines)
@@ -895,12 +902,12 @@ impl StreamOfConsciousness {
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
-                TypeScriptAction::SearchSource { query, limit } => {
+                TypeScriptAction::SearchSource { query, limit, .. } => {
                     let output = execute_search_source(&query, limit);
                     self.timeline("action_result", &format!("Searched source for {query}."));
                     self.append_observation(StreamObservation::ActionResult(output))?;
                 }
-                TypeScriptAction::GrepSource { pattern, limit } => {
+                TypeScriptAction::GrepSource { pattern, limit, .. } => {
                     let output = execute_grep_source(&pattern, limit);
                     self.timeline("action_result", &format!("Grepped source for {pattern}."));
                     self.append_observation(StreamObservation::ActionResult(output))?;
@@ -1022,6 +1029,66 @@ impl StreamOfConsciousness {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn apply_inline_source_workflow(
+        &mut self,
+        workflow: Option<&SourceWorkflowUpdate>,
+    ) -> Result<()> {
+        let Some(workflow) = workflow else {
+            return Ok(());
+        };
+        let target = workflow
+            .target
+            .clone()
+            .unwrap_or_else(|| self.work_board.suggested_progress_target());
+        let mut recorded_work = false;
+
+        if let Some(summary) = workflow
+            .summary
+            .as_deref()
+            .filter(|summary| meaningful_synthesis_text(summary))
+        {
+            let mut fields = Map::new();
+            fields.insert("summary".to_string(), Value::String(summary.to_string()));
+            if let Some(note) = workflow.note.as_deref() {
+                fields.insert("note".to_string(), Value::String(note.to_string()));
+            }
+            let message = self.work_board.update(&target, fields);
+            self.persist_work_board()?;
+            self.timeline("work", &message);
+            self.append_observation(StreamObservation::ActionResult(message))?;
+            self.append_current_work_state()?;
+            self.source_inspections_since_synthesis = 0;
+            self.timeline(
+                "action_result",
+                "Inline source synthesis recorded; checkpoint counter reset.",
+            );
+            self.append_observation(StreamObservation::ActionResult(
+                "Inline source synthesis recorded; checkpoint counter reset.".to_string(),
+            ))?;
+            recorded_work = true;
+        } else if let Some(note) = workflow.note.as_deref() {
+            let message = self.work_board.add_note(&target, note);
+            self.persist_work_board()?;
+            self.timeline("work", &message);
+            self.append_observation(StreamObservation::ActionResult(message))?;
+            self.append_current_work_state()?;
+            recorded_work = true;
+        }
+
+        if recorded_work
+            && workflow.note.is_some()
+            && let Some(previous_source_action) = self.source_progress_due.take()
+        {
+            let message = format!(
+                "Inline progress note recorded; source inspection gate cleared for {previous_source_action}."
+            );
+            self.timeline("action_result", &message);
+            self.append_observation(StreamObservation::ActionResult(message))?;
+        }
+
         Ok(())
     }
 
@@ -2767,12 +2834,14 @@ enum TypeScriptAction {
     ListFiles {
         page: usize,
         page_size: Option<usize>,
+        workflow: SourceWorkflowUpdate,
     },
     ReadSourceFile {
         file: String,
         page: usize,
         line: Option<usize>,
         page_size: Option<usize>,
+        workflow: SourceWorkflowUpdate,
     },
     SetSourcePageSize {
         lines: usize,
@@ -2780,10 +2849,12 @@ enum TypeScriptAction {
     SearchSource {
         query: String,
         limit: usize,
+        workflow: SourceWorkflowUpdate,
     },
     GrepSource {
         pattern: String,
         limit: usize,
+        workflow: SourceWorkflowUpdate,
     },
     CreateWorkItem {
         id: Option<String>,
@@ -2826,6 +2897,27 @@ enum TypeScriptAction {
     Note {
         text: String,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SourceWorkflowUpdate {
+    target: Option<String>,
+    note: Option<String>,
+    summary: Option<String>,
+}
+
+impl SourceWorkflowUpdate {
+    fn new(target: Option<String>, note: Option<String>, summary: Option<String>) -> Self {
+        Self {
+            target: clean_optional_text(target),
+            note: clean_optional_text(note),
+            summary: clean_optional_text(summary),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.target.is_none() && self.note.is_none() && self.summary.is_none()
+    }
 }
 
 impl TypeScriptAction {
@@ -2871,6 +2963,17 @@ impl TypeScriptAction {
                 .is_some_and(meaningful_synthesis_text),
             _ => false,
         }
+    }
+
+    fn source_workflow(&self) -> Option<&SourceWorkflowUpdate> {
+        let workflow = match self {
+            Self::ListFiles { workflow, .. }
+            | Self::ReadSourceFile { workflow, .. }
+            | Self::SearchSource { workflow, .. }
+            | Self::GrepSource { workflow, .. } => workflow,
+            _ => return None,
+        };
+        (!workflow.is_empty()).then_some(workflow)
     }
 }
 
@@ -2946,6 +3049,12 @@ enum TypeScriptActionPayload {
         page: Option<usize>,
         #[serde(default)]
         page_size: Option<usize>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        note: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
     },
     ReadSourceFile {
         file: String,
@@ -2955,6 +3064,12 @@ enum TypeScriptActionPayload {
         line: Option<usize>,
         #[serde(default)]
         page_size: Option<usize>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        note: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
     },
     SetSourcePageSize {
         lines: usize,
@@ -2963,11 +3078,23 @@ enum TypeScriptActionPayload {
         query: String,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        note: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
     },
     GrepSource {
         pattern: String,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        note: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
     },
     CreateGoal {
         title: String,
@@ -3200,17 +3327,25 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 },
             )
         }
-        TypeScriptActionPayload::ListFiles { page, page_size } => {
-            Some(TypeScriptAction::ListFiles {
-                page: page.unwrap_or(1).max(1),
-                page_size,
-            })
-        }
+        TypeScriptActionPayload::ListFiles {
+            page,
+            page_size,
+            target,
+            note,
+            summary,
+        } => Some(TypeScriptAction::ListFiles {
+            page: page.unwrap_or(1).max(1),
+            page_size,
+            workflow: SourceWorkflowUpdate::new(target, note, summary),
+        }),
         TypeScriptActionPayload::ReadSourceFile {
             file,
             page,
             line,
             page_size,
+            target,
+            note,
+            summary,
         } => {
             let file = file.trim();
             (!file.is_empty()).then(|| TypeScriptAction::ReadSourceFile {
@@ -3219,6 +3354,7 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 line: line.map(|line| line.max(1)),
                 page_size: page_size
                     .map(|lines| lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES)),
+                workflow: SourceWorkflowUpdate::new(target, note, summary),
             })
         }
         TypeScriptActionPayload::SetSourcePageSize { lines } => {
@@ -3226,18 +3362,28 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 lines: lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES),
             })
         }
-        TypeScriptActionPayload::SearchSource { query, limit } => {
-            non_empty_text(&query).map(|query| TypeScriptAction::SearchSource {
-                query: query.to_string(),
-                limit: limit.unwrap_or(12).max(1),
-            })
-        }
-        TypeScriptActionPayload::GrepSource { pattern, limit } => {
-            non_empty_text(&pattern).map(|pattern| TypeScriptAction::GrepSource {
-                pattern: pattern.to_string(),
-                limit: limit.unwrap_or(12).max(1),
-            })
-        }
+        TypeScriptActionPayload::SearchSource {
+            query,
+            limit,
+            target,
+            note,
+            summary,
+        } => non_empty_text(&query).map(|query| TypeScriptAction::SearchSource {
+            query: query.to_string(),
+            limit: limit.unwrap_or(12).max(1),
+            workflow: SourceWorkflowUpdate::new(target, note, summary),
+        }),
+        TypeScriptActionPayload::GrepSource {
+            pattern,
+            limit,
+            target,
+            note,
+            summary,
+        } => non_empty_text(&pattern).map(|pattern| TypeScriptAction::GrepSource {
+            pattern: pattern.to_string(),
+            limit: limit.unwrap_or(12).max(1),
+            workflow: SourceWorkflowUpdate::new(target, note, summary),
+        }),
         TypeScriptActionPayload::CreateGoal {
             title,
             id,
@@ -3730,6 +3876,7 @@ fn ts_list_files(
     if let Some(page_size) = list_source_page_size_arg(args) {
         value["page_size"] = json!(page_size);
     }
+    add_source_workflow_fields(&mut value, &source_workflow_update_arg(args, &[0]));
     command_value(interp, value)
 }
 
@@ -3748,6 +3895,7 @@ fn ts_read_source_file(
     if let Some(page_size) = read_source_page_size_arg(args) {
         value["page_size"] = json!(page_size);
     }
+    add_source_workflow_fields(&mut value, &source_workflow_update_arg(args, &[1, 2]));
     command_value(interp, value)
 }
 
@@ -3773,6 +3921,7 @@ fn ts_search_source(
     if let Some(limit) = optional_positive_integer_arg(args, 1, "limit") {
         value["limit"] = json!(limit);
     }
+    add_source_workflow_fields(&mut value, &source_workflow_update_arg(args, &[1]));
     command_value(interp, value)
 }
 
@@ -3785,6 +3934,7 @@ fn ts_grep_source(
     if let Some(limit) = optional_positive_integer_arg(args, 1, "limit") {
         value["limit"] = json!(limit);
     }
+    add_source_workflow_fields(&mut value, &source_workflow_update_arg(args, &[1]));
     command_value(interp, value)
 }
 
@@ -4025,6 +4175,38 @@ fn read_source_page_size_arg(args: &[JsValue]) -> Option<usize> {
         .map(|lines| lines.clamp(MIN_SOURCE_PAGE_LINES, MAX_SOURCE_PAGE_LINES))
 }
 
+fn source_workflow_update_arg(args: &[JsValue], indexes: &[usize]) -> SourceWorkflowUpdate {
+    SourceWorkflowUpdate::new(
+        first_string_property_arg(args, indexes, &["target", "goal", "id"]),
+        first_string_property_arg(args, indexes, &["note", "progress", "log"]),
+        first_string_property_arg(args, indexes, &["summary", "synthesis"]),
+    )
+}
+
+fn add_source_workflow_fields(value: &mut Value, workflow: &SourceWorkflowUpdate) {
+    if let Some(target) = workflow.target.as_deref() {
+        value["target"] = json!(target);
+    }
+    if let Some(note) = workflow.note.as_deref() {
+        value["note"] = json!(note);
+    }
+    if let Some(summary) = workflow.summary.as_deref() {
+        value["summary"] = json!(summary);
+    }
+}
+
+fn first_string_property_arg(
+    args: &[JsValue],
+    indexes: &[usize],
+    properties: &[&str],
+) -> Option<String> {
+    indexes.iter().find_map(|index| {
+        properties
+            .iter()
+            .find_map(|property| optional_string_property_arg(args, *index, property))
+    })
+}
+
 fn optional_json_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<Value> {
     let value = args.get(index)?;
     if let JsValue::Object(_) = value {
@@ -4112,6 +4294,10 @@ fn screenplay_stage_description(setting: Option<&str>, action: Option<&str>) -> 
 fn non_empty_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn clean_optional_text(text: Option<String>) -> Option<String> {
+    text.and_then(|text| non_empty_text(&text).map(str::to_string))
 }
 
 fn meaningful_synthesis_text(text: &str) -> bool {
@@ -4558,6 +4744,7 @@ mod tests {
             page: 1,
             line: Some(4),
             page_size: None,
+            workflow: SourceWorkflowUpdate::default(),
         };
         assert_eq!(
             source.source_progress_label().as_deref(),
@@ -4631,6 +4818,7 @@ mod tests {
                 page: 2,
                 line: None,
                 page_size: None,
+                workflow: SourceWorkflowUpdate::default(),
             }]
         );
 
@@ -4645,6 +4833,56 @@ mod tests {
                 page: 1,
                 line: Some(2),
                 page_size: None,
+                workflow: SourceWorkflowUpdate::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn source_actions_can_carry_workflow_notes() {
+        let actions = execute_typescript_actions(
+            r#"readSourceFile("src/acoustic/neural.rs", { page: 5, target: "goal-13", note: "Observed page 4: tensors and inference run; next inspect mel conversion.", summary: "Neural acoustic inference now clearly builds ONNX tensors and extracts mel outputs." })"#,
+        )
+        .expect("readSourceFile workflow action should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::ReadSourceFile {
+                file: "src/acoustic/neural.rs".to_string(),
+                page: 5,
+                line: None,
+                page_size: None,
+                workflow: SourceWorkflowUpdate {
+                    target: Some("goal-13".to_string()),
+                    note: Some(
+                        "Observed page 4: tensors and inference run; next inspect mel conversion."
+                            .to_string()
+                    ),
+                    summary: Some(
+                        "Neural acoustic inference now clearly builds ONNX tensors and extracts mel outputs."
+                            .to_string()
+                    ),
+                },
+            }]
+        );
+
+        let actions = execute_typescript_actions(
+            r#"grepSource("load_onnx", { limit: 3, note: "Searched load_onnx references; next inspect call sites." })"#,
+        )
+        .expect("grepSource workflow action should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::GrepSource {
+                pattern: "load_onnx".to_string(),
+                limit: 3,
+                workflow: SourceWorkflowUpdate {
+                    target: None,
+                    note: Some(
+                        "Searched load_onnx references; next inspect call sites.".to_string()
+                    ),
+                    summary: None,
+                },
             }]
         );
     }
