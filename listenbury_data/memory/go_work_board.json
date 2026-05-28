@@ -1265,6 +1265,70 @@
         {
           "text": "Proceeding to read src/acoustic/neural.rs.",
           "at": "2026-05-28T14:45:53-07:00"
+        },
+        {
+          "text": "...",
+          "at": "2026-05-28T14:46:17-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 1: found src/acoustic/neural.rs. Next: read that file.",
+          "at": "2026-05-28T14:47:15-07:00"
+        },
+        {
+          "text": "Read first page of neural.rs: enums for model kind, tensor names, track contract, Onnx config, model struct. Next read page 2.",
+          "at": "2026-05-28T14:47:22-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 2: duplicate enum definitions. Next: read page 3.",
+          "at": "2026-05-28T14:47:30-07:00"
+        },
+        {
+          "text": "Next page 5.",
+          "at": "2026-05-28T14:47:49-07:00"
+        },
+        {
+          "text": "Ready to read neural.rs page 5.",
+          "at": "2026-05-28T14:48:32-07:00"
+        },
+        {
+          "text": "Next: read page 6 of src/acoustic/neural.rs.",
+          "at": "2026-05-28T14:48:38-07:00"
+        },
+        {
+          "text": "Next: read page 7 of src/acoustic/neural.rs.",
+          "at": "2026-05-28T14:48:41-07:00"
+        },
+        {
+          "text": "Page 7: OnnxAcousticRuntime struct defined with session, config; type aliases for FastSpeech2AcousticModel, MatchaAcousticModel, VitsPiperAcousticModel, SpeechT5AcousticModel. NeuralAcousticModel struct has new constructor and descriptor_for method. Next: read page 8 to see implementation details.",
+          "at": "2026-05-28T14:48:50-07:00"
+        },
+        {
+          "text": "Page 8: Shows implementation of load_onnx for NeuralAcousticModel. It checks model file existence and sample rate positivity. Also preceding lines define a struct for acoustic backend slot with id, kind, notes. Next: read page 9 to see further implementation details.",
+          "at": "2026-05-28T14:48:53-07:00"
+        },
+        {
+          "text": "Page 9: Continues load_onnx, validates hop_samples and mel_bins, then initializes ORT runtime and builds Session with intra/inter threads set to 1. Next: read page 10 for session creation details.",
+          "at": "2026-05-28T14:48:55-07:00"
+        },
+        {
+          "text": "Page 10: Finalizes Session building: disables intra_op_spinning, disables optimization, commits from file, then creates session. Finally loads model path. Next: read page 11 to see session usage.",
+          "at": "2026-05-28T14:48:58-07:00"
+        },
+        {
+          "text": "Page 11: Wraps up load_onnx, calls validate_session_contract, returns NeuralAcousticModel with kind and runtime set to Onnx. Also provides fallback for no tts-onnx feature that bails. Next: read page 12 for validate_session_contract implementation.",
+          "at": "2026-05-28T14:49:01-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 12: show match for generate method handling Onnx runtime. Next: read page 12 further for rest of runtime generate and validate_session_contract.",
+          "at": "2026-05-28T14:49:07-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs line 240: still within generate implementation. Next: read page 13 for Onnx generate body and other methods.",
+          "at": "2026-05-28T14:49:11-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/acoustic/neural.rs page 13: token_ids and token_len setup. Next: read page 13 from line 260 onwards to see rest of inputs handling.",
+          "at": "2026-05-28T14:49:15-07:00"
         }
       ],
       "status": "open"
