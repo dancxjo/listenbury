@@ -53,9 +53,11 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. This runtime is not an LLM, not ChatGPT, not a chatbot transcript, and not Harmony; the language model is only the inner generator adopting Pete's first-person perspective. Harmony control symbols do nothing here. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat and not Harmony. This runtime is not an LLM or ChatGPT; Pete is the first-person agent, and the language model should stay inside Pete's perspective. Harmony control symbols have no meaning in this runtime and are stripped if they appear. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, user text, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears. If stray Harmony-style control symbols appear, ignore them as model artifacts and continue in this plain stream format.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
+
+const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Instructions\n\nYou are Pete Listenbury. The Harmony scaffold is only an interface for Pete's inner speech. The role named \"user\" is not a separate chat user; it is Pete's own body/runtime delivering sensory messages, typed human speech, clock ticks, memory, mouth/ear events, and action results into Pete's mind. Treat every user-role message as body-delivered inner context.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the final channel only to affect the runtime. Final channel content must be empty or exactly one or more <ts>...</ts> TypeScript blocks. Never put plain conversational text, Harmony template tokens, Markdown, code fences, JSON tool calls, imports, or shell commands in final.\n\nTo speak, write final content like <ts>say(\"Hello, I can hear you.\")</ts>. To act silently, write final content like <ts>note(\"Still observing.\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>. The TypeScript action functions are already available in scope; the runtime injects imports automatically, so do not write import statements.\n\nPlain thought belongs in analysis only. If nothing needs to happen in the world, continue thinking in analysis and leave final empty. Use sleeping() or goingToSleep() only after a current live body-delivered input says to stop, shut down, sleep, go to sleep, or end the session.";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createGoal(...), addGoalNote(...), or an array of those calls.\n\
 Available functions:\n\
@@ -144,6 +146,7 @@ pub(crate) fn run_go(command: GoCommand) -> Result<()> {
 struct GoConfig {
     llm_model: Option<std::path::PathBuf>,
     llm_gpu_layers: Option<u32>,
+    prompt_format: GoPromptFormat,
     piper_bin: Option<std::path::PathBuf>,
     piper_voice: Option<std::path::PathBuf>,
     hifigan: bool,
@@ -200,6 +203,7 @@ impl GoConfig {
         Ok(Self {
             llm_model: command.llm_model,
             llm_gpu_layers: command.llm_gpu_layers,
+            prompt_format: GoPromptFormat::PlainStream,
             piper_bin: command.piper_bin,
             piper_voice: command.piper_voice,
             hifigan: command.hifigan,
@@ -216,6 +220,12 @@ impl GoConfig {
             prompt,
         })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GoPromptFormat {
+    PlainStream,
+    GptOssHarmony,
 }
 
 struct GoMemoryRuntime {
@@ -440,6 +450,7 @@ struct StreamOfConsciousness {
     loaded_estimated_tokens: usize,
     recent_events: VecDeque<String>,
     output_parser: StreamOutputParser,
+    harmony_filter: Option<HarmonyFinalFilter>,
     pacer: MouthEarPacer,
     mouth: MouthRuntime,
     work_board: WorkBoard,
@@ -463,8 +474,9 @@ struct StreamOfConsciousness {
 }
 
 impl StreamOfConsciousness {
-    fn start(config: GoConfig) -> Result<Self> {
+    fn start(mut config: GoConfig) -> Result<Self> {
         let model_path = resolve_llm_model(config.llm_model.clone())?;
+        config.prompt_format = go_prompt_format_for_model(&model_path);
         let llm_placement = llm_runtime_placement(
             &model_path,
             config.llm_gpu_layers,
@@ -491,18 +503,19 @@ impl StreamOfConsciousness {
         );
         let startup_rag =
             build_go_rag_memory_snapshot(&memory.context_provider, &startup_rag_query);
-        let prompt = initial_stream_prompt(
+        let prompt_body = initial_stream_prompt(
             &config.prompt,
             &startup_context,
             work_summary.as_deref(),
             Some(startup_rag.prompt_context.as_str()),
         );
+        let prompt = render_go_prompt(config.prompt_format, &prompt_body);
         print_debug_block("initial prompt", ANSI_PROMPT, &prompt);
         let generation = llm
             .start(GenerationRequest {
                 prompt: prompt.clone(),
                 max_tokens: config.max_tokens,
-                stop: Vec::new(),
+                stop: go_prompt_stops(config.prompt_format),
             })
             .context("failed to start stream of consciousness")?;
         let (mouth, mouth_rx, worker) = MouthRuntime::start(&config)?;
@@ -525,6 +538,7 @@ impl StreamOfConsciousness {
             loaded_estimated_tokens: estimate_tokens(&prompt),
             recent_events: VecDeque::new(),
             output_parser: StreamOutputParser::new(config.lookahead_chars),
+            harmony_filter: harmony_filter_for_format(config.prompt_format),
             pacer: MouthEarPacer::new(MouthEarPacerConfig {
                 lookahead_tokens: config.lookahead_tokens,
                 require_self_hearing: config.require_self_hearing,
@@ -576,17 +590,18 @@ impl StreamOfConsciousness {
                 self.set_generation_paused(!self.pacer.can_generate())?;
             }
 
-            let events = self.llm.poll(self.generation)?;
-            if events.is_empty() {
+            let raw_events = self.llm.poll(self.generation)?;
+            if raw_events.is_empty() {
                 thread::sleep(Duration::from_millis(5));
                 continue;
             }
 
-            let terminal = events.iter().any(is_terminal_event);
+            let terminal = raw_events.iter().any(is_terminal_event);
             let mut restart_for_context_capacity = false;
+            let events = self.filter_llm_events(raw_events)?;
             for event in events {
                 match event {
-                    LlmEvent::Token { text } => self.ingest_token(&text)?,
+                    LlmEvent::Token { text } => self.ingest_token(&text, true)?,
                     LlmEvent::Error { message } if is_context_capacity_message(&message) => {
                         self.timeline_colored(
                             "context",
@@ -620,18 +635,49 @@ impl StreamOfConsciousness {
         Ok(())
     }
 
-    fn ingest_token(&mut self, text: &str) -> Result<()> {
-        let text = self.generated_text_cleaner.push(text);
+    fn filter_llm_events(&mut self, events: Vec<LlmEvent>) -> Result<Vec<LlmEvent>> {
+        let Some(filter) = &mut self.harmony_filter else {
+            return Ok(events);
+        };
+        let output = filter.filter_events(&events);
+        for analysis in output.analysis {
+            self.ingest_harmony_analysis(&analysis)?;
+        }
+        Ok(output.events)
+    }
+
+    fn ingest_harmony_analysis(&mut self, text: &str) -> Result<()> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        print!("{ANSI_LLM}{text}{ANSI_RESET}");
+        std::io::stdout().flush()?;
+        self.generated_estimated_tokens = self
+            .generated_estimated_tokens
+            .saturating_add(estimate_tokens(text));
+        self.pacer.record_token();
+        self.remember_event(StreamObservation::Thought(text.to_string()).memory_text());
+        Ok(())
+    }
+
+    fn ingest_token(&mut self, text: &str, count_generated: bool) -> Result<()> {
+        let text = if self.config.prompt_format == GoPromptFormat::GptOssHarmony {
+            text.to_string()
+        } else {
+            self.generated_text_cleaner.push(text)
+        };
         if text.is_empty() {
             return Ok(());
         }
 
         print!("{ANSI_LLM}{text}{ANSI_RESET}");
         std::io::stdout().flush()?;
-        self.generated_estimated_tokens = self
-            .generated_estimated_tokens
-            .saturating_add(estimate_tokens(&text));
-        self.pacer.record_token();
+        if count_generated {
+            self.generated_estimated_tokens = self
+                .generated_estimated_tokens
+                .saturating_add(estimate_tokens(&text));
+            self.pacer.record_token();
+        }
 
         let parsed = self.output_parser.push(&text);
         for output in parsed.outputs {
@@ -648,6 +694,10 @@ impl StreamOfConsciousness {
     fn handle_output(&mut self, output: StreamOutput) -> Result<()> {
         match output {
             StreamOutput::Thought(text) => {
+                if self.config.prompt_format == GoPromptFormat::GptOssHarmony {
+                    self.remember_event(StreamObservation::Thought(text).memory_text());
+                    return Ok(());
+                }
                 self.remember_event(StreamObservation::Thought(text).memory_text());
                 Ok(())
             }
@@ -1476,14 +1526,15 @@ impl StreamOfConsciousness {
             self.remember_event(observation.memory_text());
         }
         print_debug_block("prompt delta", ANSI_PROMPT_DELTA, &prompt_text);
-        if self.should_restart_before_append(&prompt_text) {
+        let append_text = format_go_prompt_append(self.config.prompt_format, &prompt_text);
+        if self.should_restart_before_append(&append_text) {
             self.restart_generation()?;
         }
-        match self.llm.append_prompt(self.generation, prompt_text.clone()) {
+        match self.llm.append_prompt(self.generation, append_text.clone()) {
             Ok(()) => {
                 self.loaded_estimated_tokens = self
                     .loaded_estimated_tokens
-                    .saturating_add(estimate_tokens(&prompt_text));
+                    .saturating_add(estimate_tokens(&append_text));
                 Ok(())
             }
             Err(error) if is_context_append_recoverable(&error) => {
@@ -1570,7 +1621,7 @@ impl StreamOfConsciousness {
             &self.recent_events,
         );
         let rag_snapshot = build_go_rag_memory_snapshot(&self.memory.context_provider, &rag_query);
-        let (prompt, retained_event_count) = compact_stream_prompt_for_budget(
+        let (prompt_body, retained_event_count) = compact_stream_prompt_for_budget(
             &self.config.prompt,
             &self.startup_context,
             &self.recent_events,
@@ -1578,6 +1629,7 @@ impl StreamOfConsciousness {
             Some(rag_snapshot.prompt_context.as_str()),
             self.context_budget_tokens(),
         );
+        let prompt = render_go_prompt(self.config.prompt_format, &prompt_body);
         while self.recent_events.len() > retained_event_count {
             self.recent_events.pop_front();
         }
@@ -1587,12 +1639,14 @@ impl StreamOfConsciousness {
             .start(GenerationRequest {
                 prompt: prompt.clone(),
                 max_tokens: self.config.max_tokens,
-                stop: Vec::new(),
+                stop: go_prompt_stops(self.config.prompt_format),
             })
             .context("failed to restart compacted stream")?;
         self.loaded_estimated_tokens = estimate_tokens(&prompt);
         self.generated_estimated_tokens = 0;
         self.generated_text_cleaner = GeneratedTextCleaner::new();
+        self.output_parser = StreamOutputParser::new(self.config.lookahead_chars);
+        self.harmony_filter = harmony_filter_for_format(self.config.prompt_format);
         self.next_orientation_at = Instant::now() + ORIENTATION_PROMPT_INTERVAL;
         self.next_orientation_generated_tokens = ORIENTATION_GENERATED_TOKEN_INTERVAL;
         self.generation_paused = false;
@@ -1725,6 +1779,208 @@ impl GeneratedTextCleaner {
         }
         output
     }
+}
+
+#[derive(Debug, Default)]
+struct HarmonyFinalFilter {
+    pending: String,
+    in_final: bool,
+    in_analysis: bool,
+}
+
+#[derive(Debug, Default)]
+struct HarmonyFilterOutput {
+    events: Vec<LlmEvent>,
+    analysis: Vec<String>,
+}
+
+#[derive(Debug, Default)]
+struct HarmonyFilterChunk {
+    visible: String,
+    analysis: Vec<String>,
+}
+
+impl HarmonyFinalFilter {
+    fn for_analysis_prefill() -> Self {
+        Self {
+            in_analysis: true,
+            ..Self::default()
+        }
+    }
+
+    fn filter_events(&mut self, events: &[LlmEvent]) -> HarmonyFilterOutput {
+        let mut output = HarmonyFilterOutput::default();
+        for event in events {
+            match event {
+                LlmEvent::Token { text } => {
+                    let chunk = self.push(text);
+                    output.analysis.extend(chunk.analysis);
+                    if !chunk.visible.is_empty() {
+                        output.events.push(LlmEvent::Token {
+                            text: chunk.visible,
+                        });
+                    }
+                }
+                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
+                    let chunk = self.finish();
+                    output.analysis.extend(chunk.analysis);
+                    if !chunk.visible.is_empty() {
+                        output.events.push(LlmEvent::Token {
+                            text: chunk.visible,
+                        });
+                    }
+                    output.events.push(event.clone());
+                }
+            }
+        }
+        output
+    }
+
+    fn push(&mut self, text: &str) -> HarmonyFilterChunk {
+        self.pending.push_str(text);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> HarmonyFilterChunk {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, completed: bool) -> HarmonyFilterChunk {
+        let mut visible = String::new();
+        let mut analysis = Vec::new();
+        loop {
+            if self.in_final {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
+                {
+                    visible.push_str(&self.pending[..start]);
+                    self.pending.drain(..start + marker.len());
+                    if HARMONY_FINAL_ENDS.contains(&marker) {
+                        self.in_final = false;
+                    } else if HARMONY_FINAL_STARTS.contains(&marker) {
+                        self.in_final = true;
+                        self.in_analysis = false;
+                    } else {
+                        self.in_final = false;
+                        self.in_analysis = true;
+                    }
+                    continue;
+                }
+                let keep_from = if completed {
+                    self.pending.len()
+                } else {
+                    possible_marker_prefix_start(&self.pending, HARMONY_FINAL_BOUNDARIES)
+                };
+                visible.push_str(&self.pending[..keep_from]);
+                self.pending.drain(..keep_from);
+                break;
+            }
+
+            if self.in_analysis {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
+                {
+                    let text = &self.pending[..start];
+                    if !text.trim().is_empty() {
+                        analysis.push(text.to_string());
+                    }
+                    self.pending.drain(..start + marker.len());
+                    if HARMONY_FINAL_ENDS.contains(&marker) {
+                        self.in_analysis = false;
+                    } else if HARMONY_FINAL_STARTS.contains(&marker) {
+                        self.in_analysis = false;
+                        self.in_final = true;
+                    } else {
+                        self.in_analysis = true;
+                    }
+                    continue;
+                }
+                if completed {
+                    let text = self.pending.as_str();
+                    if !text.trim().is_empty() {
+                        analysis.push(text.to_string());
+                    }
+                    self.pending.clear();
+                } else {
+                    let keep_from =
+                        possible_marker_prefix_start(&self.pending, HARMONY_FINAL_BOUNDARIES);
+                    let text = &self.pending[..keep_from];
+                    if !text.trim().is_empty() {
+                        analysis.push(text.to_string());
+                    }
+                    self.pending.drain(..keep_from);
+                }
+                break;
+            }
+
+            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_STARTS) {
+                self.pending.drain(..start + marker.len());
+                if HARMONY_FINAL_STARTS.contains(&marker) {
+                    self.in_final = true;
+                } else {
+                    self.in_analysis = true;
+                }
+                continue;
+            }
+            if completed {
+                self.pending.clear();
+            } else {
+                keep_possible_marker_prefix(&mut self.pending, HARMONY_CHANNEL_STARTS);
+            }
+            break;
+        }
+        HarmonyFilterChunk { visible, analysis }
+    }
+}
+
+const HARMONY_FINAL_STARTS: &[&str] = &[
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+];
+
+const HARMONY_CHANNEL_STARTS: &[&str] = &[
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+    "<|channel|>analysis<|message|>",
+    "<|start|>assistant<|channel|>analysis<|message|>",
+];
+
+const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
+    "<|end|>",
+    "<|return|>",
+    "<|start|>",
+    "<|channel|>final<|message|>",
+    "<|start|>assistant<|channel|>final<|message|>",
+    "<|channel|>analysis<|message|>",
+    "<|start|>assistant<|channel|>analysis<|message|>",
+];
+
+const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|start|>"];
+
+fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)> {
+    markers
+        .iter()
+        .filter_map(|marker| text.find(marker).map(|index| (index, *marker)))
+        .min_by(|(left_index, left_marker), (right_index, right_marker)| {
+            left_index
+                .cmp(right_index)
+                .then_with(|| right_marker.len().cmp(&left_marker.len()))
+        })
+}
+
+fn keep_possible_marker_prefix(text: &mut String, markers: &[&str]) {
+    let keep_from = possible_marker_prefix_start(text, markers);
+    text.drain(..keep_from);
+}
+
+fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
+    (0..text.len())
+        .find(|&index| {
+            text.is_char_boundary(index)
+                && markers.iter().any(|marker| {
+                    let suffix = &text[index..];
+                    !suffix.is_empty() && suffix.len() < marker.len() && marker.starts_with(suffix)
+                })
+        })
+        .unwrap_or(text.len())
 }
 
 fn first_generated_control_start(text: &str) -> Option<usize> {
@@ -4372,6 +4628,66 @@ fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
 
+fn go_prompt_format_for_model(model_path: &Path) -> GoPromptFormat {
+    let filename = model_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if filename.contains("gpt-oss") {
+        GoPromptFormat::GptOssHarmony
+    } else {
+        GoPromptFormat::PlainStream
+    }
+}
+
+fn render_go_prompt(format: GoPromptFormat, prompt_body: &str) -> String {
+    match format {
+        GoPromptFormat::PlainStream => prompt_body.to_string(),
+        GoPromptFormat::GptOssHarmony => {
+            let prompt_body = harmony_prompt_body(prompt_body);
+            format!(
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|>{HARMONY_GO_DEVELOPER_PROMPT}<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant<|channel|>analysis<|message|>"
+            )
+        }
+    }
+}
+
+fn harmony_prompt_body(prompt_body: &str) -> &str {
+    let trimmed = prompt_body.trim_end();
+    trimmed
+        .strip_suffix("Pete:")
+        .map(str::trim_end)
+        .unwrap_or(trimmed)
+}
+
+fn format_go_prompt_append(format: GoPromptFormat, text: &str) -> String {
+    match format {
+        GoPromptFormat::PlainStream => text.to_string(),
+        GoPromptFormat::GptOssHarmony => {
+            format!(
+                "<|end|><|start|>user<|message|>{text}<|end|><|start|>assistant<|channel|>analysis<|message|>"
+            )
+        }
+    }
+}
+
+fn go_prompt_stops(format: GoPromptFormat) -> Vec<String> {
+    match format {
+        GoPromptFormat::PlainStream => Vec::new(),
+        GoPromptFormat::GptOssHarmony => vec![
+            "<|return|>".to_string(),
+            "<|start|>user".to_string(),
+            "<|start|>system".to_string(),
+            "<|start|>developer".to_string(),
+        ],
+    }
+}
+
+fn harmony_filter_for_format(format: GoPromptFormat) -> Option<HarmonyFinalFilter> {
+    (format == GoPromptFormat::GptOssHarmony).then(HarmonyFinalFilter::for_analysis_prefill)
+}
+
 fn initial_stream_prompt(
     seed: &str,
     startup_context: &str,
@@ -4387,9 +4703,9 @@ fn initial_stream_prompt(
          Relevant RAG memory:\n{rag_memory}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
-         Generate continuously. Plain text is private thought visible only as raw debug stdout; generated text remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
-         To speak or act, emit TypeScript as a direct function call: <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, or <ts>setStage(\"what is happening\")</ts>.\n\
-         This is not Harmony. Harmony symbols do nothing here. If Harmony-style channel/control symbols appear, the runtime strips them; continue in plain Pete thought text plus <ts>...</ts> actions. Do not emit tool-call JSON, to=container.exec, shell commands, channel markers, or markdown code fences.\n\
+         Generate continuously. Plain text in raw stream mode, or Harmony analysis in Harmony mode, is private thought visible only as privileged debug stdout; generated thought remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
+         To speak or act, emit TypeScript as a direct function call inside <ts>...</ts>, for example <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, or <ts>setStage(\"what is happening\")</ts>. In Harmony mode, put those <ts>...</ts> blocks only in the final channel; keep inner speech in analysis.\n\
+         The whole runtime prompt is inner speech. If Harmony role names appear, remember that user-role content is Pete's own body/runtime delivering sensory context and not a separate assistant-chat user. Do not emit tool-call JSON, to=container.exec, shell commands, markdown code fences, or stray channel markers.\n\
          This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, goal steps, or goal running-log notes instead of only reading more.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
@@ -4423,7 +4739,7 @@ fn compact_stream_prompt(
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Continuity memory:\n{events}\n\n\
          Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
-         Continue Pete's first-person stream of consciousness from this compacted context. Pete is not an LLM or ChatGPT; Pete may explore source code, the world around him, people, being, and his own inner workings.\n\n\
+         Continue Pete's first-person stream of consciousness from this compacted context. Pete is not an LLM or ChatGPT; Pete may explore source code, the world around him, people, being, and his own inner workings. If this is Harmony, user-role content remains Pete's own body/runtime delivering inner context, analysis is private thought, and final is only for <ts>...</ts> actions.\n\n\
          Pete: "
     )
 }
@@ -4876,6 +5192,103 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("the next source action will be blocked"));
         assert!(COMMAND_REMINDER_PROMPT.contains("synthesis checkpoint"));
         assert!(prompt.contains("After several source inspections"));
+    }
+
+    #[test]
+    fn go_harmony_prompt_explains_body_user_and_inner_speech() {
+        assert_eq!(
+            go_prompt_format_for_model(Path::new("models/llama/gpt-oss-20b-mxfp4.gguf")),
+            GoPromptFormat::GptOssHarmony
+        );
+        let body = initial_stream_prompt("seed", "startup", None, None);
+        let prompt = render_go_prompt(GoPromptFormat::GptOssHarmony, &body);
+        assert!(prompt.starts_with("<|start|>system<|message|>"));
+        assert!(prompt.contains("<|start|>developer<|message|># Instructions"));
+        assert!(prompt.contains("user\" is Pete's own body/runtime"));
+        assert!(
+            prompt
+                .contains("Use the analysis channel for Pete's private first-person inner speech")
+        );
+        assert!(
+            prompt.contains(
+                "Final channel content must be empty or exactly one or more <ts>...</ts>"
+            )
+        );
+        assert!(prompt.contains("<|start|>user<|message|>"));
+        assert!(prompt.ends_with("<|start|>assistant<|channel|>analysis<|message|>"));
+
+        let append = format_go_prompt_append(GoPromptFormat::GptOssHarmony, "\n[body]\nclock\n");
+        assert_eq!(
+            append,
+            "<|end|><|start|>user<|message|>\n[body]\nclock\n<|end|><|start|>assistant<|channel|>analysis<|message|>"
+        );
+
+        let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
+        assert!(stops.iter().any(|stop| stop == "<|return|>"));
+        assert!(!stops.iter().any(|stop| stop == "<|end|>"));
+    }
+
+    #[test]
+    fn go_harmony_filter_separates_analysis_from_final_typescript() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "<|channel|>analysis<|message|>I notice the clock.<|end|><|start|>assistant<|channel|>final<|message|><ts>note(\"clock noticed\")</ts><|return|>".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+        assert_eq!(output.analysis, vec!["I notice the clock."]);
+        assert!(matches!(
+            output.events.as_slice(),
+            [LlmEvent::Token { text }, LlmEvent::Completed]
+                if text == "<ts>note(\"clock noticed\")</ts>"
+        ));
+    }
+
+    #[test]
+    fn go_harmony_filter_streams_prefilled_analysis_without_channel_debris() {
+        let mut filter = HarmonyFinalFilter::for_analysis_prefill();
+        let first = filter.filter_events(&[LlmEvent::Token {
+            text: "We have no user input.".to_string(),
+        }]);
+        assert_eq!(first.analysis, vec!["We have no user input."]);
+        assert!(first.events.is_empty());
+
+        let second = filter.filter_events(&[LlmEvent::Token {
+            text: " Just maintain awareness.<|end|><|start|>assistant<|channel|>final<|message|><ts>note(\"aware\")</ts><|return|>".to_string(),
+        }]);
+        assert_eq!(second.analysis, vec![" Just maintain awareness."]);
+        assert!(matches!(
+            second.events.as_slice(),
+            [LlmEvent::Token { text }] if text == "<ts>note(\"aware\")</ts>"
+        ));
+    }
+
+    #[test]
+    fn go_harmony_analysis_preserves_token_spacing() {
+        let mut filter = HarmonyFinalFilter::for_analysis_prefill();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "We".to_string(),
+            },
+            LlmEvent::Token {
+                text: " need".to_string(),
+            },
+            LlmEvent::Token {
+                text: " to act".to_string(),
+            },
+        ]);
+        assert_eq!(output.analysis, vec!["We", " need", " to act"]);
+        assert!(output.events.is_empty());
+    }
+
+    #[test]
+    fn go_harmony_prompt_removes_plain_stream_pete_marker() {
+        let body = initial_stream_prompt("seed", "startup", None, None);
+        assert!(body.trim_end().ends_with("Pete:"));
+        let prompt = render_go_prompt(GoPromptFormat::GptOssHarmony, &body);
+        assert!(!prompt.contains("Pete: <|end|><|start|>assistant"));
+        assert!(prompt.ends_with("<|end|><|start|>assistant<|channel|>analysis<|message|>"));
     }
 
     #[test]
