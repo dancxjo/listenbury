@@ -6852,7 +6852,7 @@ mod tests {
         assert!(prompt.contains("Pete's own body delivering inner context"));
         assert!(prompt.contains("Choose one useful next runtime action, and at most one"));
         assert!(prompt.contains("Idleness is forbidden"));
-        assert!(prompt.contains("If no goal is open, create or select a useful one"));
+        assert!(prompt.contains("create or select a useful curiosity"));
         assert!(prompt.contains("Use native Harmony function calls on commentary"));
         assert!(prompt.contains("Continue the stream by acting on the live context"));
         assert!(prompt.contains("Do not write completion, shutdown, or refusal chatter"));
@@ -6862,7 +6862,7 @@ mod tests {
         let append = format_go_prompt_append(GoPromptFormat::GptOssHarmony, "\n[body]\nclock\n");
         assert_eq!(
             append,
-            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, or no open goals. If no goal is open, create or select a useful one.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
+            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
         );
 
         let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
