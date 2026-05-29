@@ -769,6 +769,7 @@ fn harmony_stop_strings(encoding: &openai_harmony::HarmonyEncoding) -> Result<Ve
         .stop_tokens()?
         .into_iter()
         .filter_map(|token| encoding.tokenizer().decode_utf8([token]).ok())
+        .filter(|stop| stop != "<|end|>")
         .collect::<Vec<_>>();
     stops.sort();
     stops.dedup();
@@ -1654,7 +1655,7 @@ fn harmony_candidate_developer_update(
                 TranscriptReplacementReason::Restarted => 0,
             };
             Some(format!(
-                "No, not: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
+                "You were interrupted {percent}% through hearing: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
             ))
         }
         TranscriptCandidateEvent::CandidateCancelled { .. } => {
@@ -2762,6 +2763,31 @@ mod tests {
     }
 
     #[test]
+    fn harmony_go_extracts_final_after_analysis_message() {
+        let encoding = load_harmony_encoding(HarmonyEncodingName::HarmonyGptOss).unwrap();
+        let completion = "<|channel|>analysis<|message|>Pete hears a direct check-in.<|end|><|start|>assistant<|channel|>final<|message|>I can hear you.<|return|>";
+        let messages = parse_completion_messages(&encoding, completion).unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].channel.as_deref(), Some("analysis"));
+        assert_eq!(messages[1].channel.as_deref(), Some("final"));
+        assert_eq!(
+            visible_text_from_message(&messages[1]),
+            Some("I can hear you.".to_string())
+        );
+    }
+
+    #[test]
+    fn harmony_go_stops_do_not_end_after_private_analysis() {
+        let encoding = load_harmony_encoding(HarmonyEncodingName::HarmonyGptOss).unwrap();
+        let stops = harmony_stop_strings(&encoding).unwrap();
+
+        assert!(!stops.iter().any(|stop| stop == "<|end|>"));
+        assert!(stops.iter().any(|stop| stop == "<|return|>"));
+        assert!(stops.iter().any(|stop| stop == "<|call|>"));
+    }
+
+    #[test]
     fn harmony_go_uses_official_renderer_for_prompt() {
         let encoding = load_harmony_encoding(HarmonyEncodingName::HarmonyGptOss).unwrap();
         let mut history = initial_harmony_messages();
@@ -3081,7 +3107,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(update.contains("No, not:"));
+        assert!(update.contains("You were interrupted"));
         assert!(update.contains("through hearing"));
     }
 
