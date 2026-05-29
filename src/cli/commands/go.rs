@@ -28,8 +28,7 @@ use listenbury::{
     ContextBudget, ContextNodeRole, ConversationContext, DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
     DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory,
     ExactTimestamp, GenerationId, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery,
-    LlamaCppConfig,
-    LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
+    LlamaCppConfig, LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
     PinnedContextNode, PiperTextToSpeech, QdrantEmbeddingRecall, StageInstruction,
     build_conversation_context,
 };
@@ -346,11 +345,21 @@ enum StreamObservation {
     Thought(String),
     ActionSource(String),
     ActionResult(String),
-    ActionError { source: String, error: String },
+    ActionError {
+        source: String,
+        error: String,
+    },
+    HarmonyToolCallError {
+        recipient: String,
+        arguments: String,
+        error: String,
+    },
     MouthStarted(String),
     MouthReturned(String),
     MouthError(String),
-    ContextCompacted { retained_events: usize },
+    ContextCompacted {
+        retained_events: usize,
+    },
     Clock(String),
     Orientation,
     CommandReminder,
@@ -380,6 +389,16 @@ impl StreamObservation {
                 "\n[Action error]\nPrevious TypeScript action failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected <ts>...</ts> action or continue thinking quietly.\nError: {}\nSource excerpt: {}\n",
                 compact_line(error, 1_000),
                 compact_line(source, 1_000)
+            ),
+            Self::HarmonyToolCallError {
+                recipient,
+                arguments,
+                error,
+            } => format!(
+                "\n[Action error]\nPrevious Harmony function call failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected native function call on the commentary channel or continue thinking quietly.\nError: {}\nRecipient: {}\nArguments excerpt: {}\n",
+                compact_line(error, 1_000),
+                compact_line(recipient, 300),
+                compact_line(arguments, 1_000)
             ),
             Self::MouthStarted(text) => format!(
                 "\n[Live observation: mouth]\nStarted speaking: {}\n",
@@ -426,6 +445,9 @@ impl StreamObservation {
             }
             Self::ActionError { error, .. } => {
                 format!("Action error: {}", compact_line(error, 360))
+            }
+            Self::HarmonyToolCallError { error, .. } => {
+                format!("Harmony function call error: {}", compact_line(error, 360))
             }
             Self::MouthStarted(text) => format!("Mouth started: {}", compact_line(text, 240)),
             Self::MouthReturned(text) => format!("Self-heard return: {}", compact_line(text, 240)),
@@ -683,12 +705,9 @@ impl StreamOfConsciousness {
                 }
                 let message = format!("Harmony tool call failed: {error:#}");
                 self.timeline_colored("action_error", &message, ANSI_ERROR);
-                self.append_observation(StreamObservation::ActionError {
-                    source: format!(
-                        "{} {}",
-                        tool_call.recipient,
-                        compact_line(&tool_call.arguments, 500)
-                    ),
+                self.append_observation(StreamObservation::HarmonyToolCallError {
+                    recipient: tool_call.recipient,
+                    arguments: tool_call.arguments,
                     error: message,
                 })
             }
@@ -2059,8 +2078,18 @@ impl HarmonyFinalFilter {
                 break;
             }
 
+            let envelope_start = first_harmony_tool_envelope_start(&self.pending);
             let tool_start = first_harmony_tool_call_start(&self.pending);
             let channel_start = first_marker(&self.pending, HARMONY_CHANNEL_STARTS);
+            if let Some((start, envelope_len, tool_call)) = envelope_start {
+                if channel_start.map_or(true, |(channel_index, _)| start <= channel_index) {
+                    self.pending.drain(..start + envelope_len);
+                    self.in_analysis = false;
+                    self.in_final = false;
+                    tool_calls.push(tool_call);
+                    continue;
+                }
+            }
             if let Some((start, header_len, recipient)) = tool_start {
                 if channel_start.map_or(true, |(channel_index, _)| start <= channel_index) {
                     self.pending.drain(..start + header_len);
@@ -2165,6 +2194,8 @@ const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
 
 const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|constrain|>", "<|start|>"];
 const HARMONY_TOOL_CALL_ENDS: &[&str] = &[
+    "commentaryanalysis<|message|>",
+    "commentaryfinal<|message|>",
     "commentary<|channel|>",
     "commentary<|start|>",
     "<|call|>",
@@ -2175,6 +2206,49 @@ const HARMONY_TOOL_CALL_ENDS: &[&str] = &[
 const HARMONY_TOOL_CALL_HEADER_STARTS: &[&str] =
     &["<|channel|>commentary", "<|start|>assistant", "commentary"];
 const HARMONY_MESSAGE_MARKER: &str = "<|message|>";
+const HARMONY_TOOL_ENVELOPE_MARKERS: &[&str] = &[".json<|message|>", "json<|message|>"];
+
+fn first_harmony_tool_envelope_start(text: &str) -> Option<(usize, usize, HarmonyToolCall)> {
+    HARMONY_TOOL_ENVELOPE_MARKERS
+        .iter()
+        .flat_map(|marker| text.match_indices(marker))
+        .filter_map(|(start, marker)| harmony_tool_envelope_at(text, start, marker))
+        .min_by_key(|(start, _, _)| *start)
+}
+
+fn harmony_tool_envelope_at(
+    text: &str,
+    start: usize,
+    marker: &str,
+) -> Option<(usize, usize, HarmonyToolCall)> {
+    let rest = &text[start + marker.len()..];
+    let mut values = serde_json::Deserializer::from_str(rest).into_iter::<Value>();
+    let value = match values.next()? {
+        Ok(value) => value,
+        Err(error) if error.is_eof() => return None,
+        Err(_) => return None,
+    };
+    let tool_call = harmony_tool_call_from_envelope(value)?;
+    Some((start, marker.len() + values.byte_offset(), tool_call))
+}
+
+fn harmony_tool_call_from_envelope(value: Value) -> Option<HarmonyToolCall> {
+    let object = value.as_object()?;
+    let recipient = object.get("name")?.as_str()?.trim();
+    if !recipient.starts_with("functions.") {
+        return None;
+    }
+    let arguments = match object.get("arguments") {
+        Some(Value::String(arguments)) => arguments.clone(),
+        Some(Value::Object(arguments)) => serde_json::to_string(arguments).ok()?,
+        Some(Value::Null) | None => String::new(),
+        Some(arguments) => serde_json::to_string(arguments).ok()?,
+    };
+    Some(HarmonyToolCall {
+        recipient: recipient.to_string(),
+        arguments,
+    })
+}
 
 fn first_harmony_tool_call_start(text: &str) -> Option<(usize, usize, String)> {
     HARMONY_TOOL_CALL_HEADER_STARTS
@@ -2228,6 +2302,7 @@ fn possible_harmony_prefix_start(text: &str) -> usize {
     HARMONY_CHANNEL_STARTS
         .iter()
         .chain(HARMONY_TOOL_CALL_HEADER_STARTS.iter())
+        .chain(HARMONY_TOOL_ENVELOPE_MARKERS.iter())
         .filter_map(|marker| possible_marker_prefix_start_for(text, marker))
         .min()
         .unwrap_or(text.len())
@@ -3988,6 +4063,8 @@ fn parse_harmony_tool_arguments(arguments: &str) -> Result<Map<String, Value>> {
 fn is_harmony_tool_argument_trailing_debris(text: &str) -> bool {
     let text = text.trim_start();
     text == "commentary"
+        || text.starts_with("commentaryanalysis<|message|>")
+        || text.starts_with("commentaryfinal<|message|>")
         || text.starts_with("commentary<|")
         || text.starts_with("<|channel|>")
         || text.starts_with("<|start|>assistant")
@@ -6003,6 +6080,60 @@ mod tests {
     }
 
     #[test]
+    fn go_harmony_filter_stops_tool_json_before_fused_analysis_marker() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "commentary to=functions.note <|constrain|>json<|message|>{\"text\":\"Read src/voice/mod.rs page 3.\"}commentaryanalysis<|message|>Done.".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+
+        assert!(output.analysis.is_empty());
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert_eq!(
+            output.tool_calls,
+            vec![HarmonyToolCall {
+                recipient: "functions.note".to_string(),
+                arguments: "{\"text\":\"Read src/voice/mod.rs page 3.\"}".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_filter_extracts_bare_tool_json_envelope() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "We need to satisfy gate. ".to_string(),
+            },
+            LlmEvent::Token {
+                text: ".json<|message|>{\"name\":\"functions.read_source_file\",\"arguments\":{\"file\":\"src/voice/mod.rs\",\"page\":1}}commentary .assistantNo further actions.".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert_eq!(
+            output.tool_calls,
+            vec![HarmonyToolCall {
+                recipient: "functions.read_source_file".to_string(),
+                arguments: "{\"file\":\"src/voice/mod.rs\",\"page\":1}".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn go_harmony_native_function_call_ignores_leaked_channel_after_json() {
         let actions = actions_from_harmony_tool_call(&HarmonyToolCall {
             recipient: "functions.list_files".to_string(),
@@ -6017,6 +6148,24 @@ mod tests {
                 page: 5,
                 page_size: None,
                 workflow: SourceWorkflowUpdate::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_native_function_call_ignores_fused_analysis_after_json() {
+        let actions = actions_from_harmony_tool_call(&HarmonyToolCall {
+            recipient: "functions.note".to_string(),
+            arguments:
+                "{\"text\":\"Read src/voice/mod.rs page 3.\"}commentaryanalysis<|message|>End."
+                    .to_string(),
+        })
+        .expect("tool JSON followed by fused channel debris should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::Note {
+                text: "Read src/voice/mod.rs page 3.".to_string(),
             }]
         );
     }
@@ -6400,6 +6549,21 @@ mod tests {
         let prompt = observation.prompt_text();
         assert!(prompt.contains("first second"));
         assert!(!prompt.contains("first\nsecond"));
+    }
+
+    #[test]
+    fn harmony_tool_call_errors_request_native_commentary_calls() {
+        let observation = StreamObservation::HarmonyToolCallError {
+            recipient: "functions.list_files".to_string(),
+            arguments: "{\"page\":5}commentary<|channel|>analysis<|message|>Wait.".to_string(),
+            error: "Harmony tool call failed: trailing characters".to_string(),
+        };
+        let prompt = observation.prompt_text();
+
+        assert!(prompt.contains("Previous Harmony function call failed"));
+        assert!(prompt.contains("native function call on the commentary channel"));
+        assert!(prompt.contains("Recipient: functions.list_files"));
+        assert!(!prompt.contains("corrected <ts>"));
     }
 
     #[test]
