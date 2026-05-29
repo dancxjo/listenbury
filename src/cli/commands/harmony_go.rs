@@ -1,9 +1,35 @@
 use crate::cli::GoCommand;
+#[cfg(feature = "asr-whisper")]
+use crate::cli::commands::mic_transcribe::transcribe_group_with_finality;
+#[cfg(feature = "asr-whisper")]
+use crate::cli::model_paths::resolve_whisper_model;
 use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
+#[cfg(feature = "asr-whisper")]
+use crate::cli::resolve_vad_config;
 use anyhow::{Context, Result, bail};
 use chrono::Local;
+#[cfg(feature = "asr-whisper")]
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(feature = "asr-whisper")]
+use cpal::{FromSample, Sample, SizedSample};
+#[cfg(feature = "asr-whisper")]
+use listenbury::audio::capture::{
+    boost_current_thread_for_capture, callback_sample_queue_capacity,
+};
+#[cfg(feature = "asr-whisper")]
+use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
+#[cfg(feature = "asr-whisper")]
+use listenbury::event::HearingEvent;
+#[cfg(feature = "asr-whisper")]
+use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
+#[cfg(feature = "asr-whisper")]
+use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{extract_emoji_sequences, strip_emoji};
+#[cfg(feature = "asr-whisper")]
+use listenbury::speech::transcript::{TranscriptCandidateEvent, TranscriptReplacementReason};
+#[cfg(feature = "asr-whisper")]
+use listenbury::{AudioFrame, ExactTimestamp, VadBackendKind, WhisperSpeechRecognizer};
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 use openai_harmony::chat::{
     Author, ChannelConfig, Content, Conversation, DeveloperContent, Message, ReasoningEffort, Role,
@@ -12,7 +38,9 @@ use openai_harmony::chat::{
 use openai_harmony::{HarmonyEncodingName, ParseOptions, load_harmony_encoding};
 use owo_colors::OwoColorize;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
+#[cfg(feature = "asr-whisper")]
+use std::collections::{HashMap, VecDeque};
 use std::env;
 use std::io::{self, Write};
 use std::sync::{
@@ -20,7 +48,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread;
+#[cfg(feature = "asr-whisper")]
+use std::thread::JoinHandle;
 use std::time::Duration;
+use tsrun::{
+    Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
+    js_value_to_json,
+};
 
 const DEFAULT_HARMONY_GO_GPU_LAYERS: u32 = 99;
 const HARMONY_GO_IDLE_PAUSE: Duration = Duration::from_millis(50);
@@ -34,6 +68,9 @@ const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
     "If speech would feel natural, say one short sentence. Otherwise think concretely and choose a quiet runtime action.",
     "Do not repeat the previous idle move. Shift the beat: scene, countenance, note, topic, or brief speech.",
 ];
+
+const TYPESCRIPT_START: &str = "<ts>";
+const TYPESCRIPT_END: &str = "</ts>";
 
 const PETE_HARMONY_CONTRACT: &str = r#"You are the Narrator of Pete Listenbury.
 
@@ -52,6 +89,14 @@ Use analysis for private narrator work: Pete's immediate experience, inner movem
 When Pete speaks, use the say motor or final text for only what Pete actually says.
 
 When Pete acts, notices, changes expression, recalls, or stores memory, use the available runtime motors.
+
+Runtime action surfaces:
+- Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, and sleeping.
+- TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
+- TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, and sleeping.
+- The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }).
+
+If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer the run_typescript function tool when using native Harmony tool calls. Do not use TypeScript for conversation; use it only for runtime actions.
 
 Never print channel names, control tokens, raw tool-call syntax, JSON wrappers, shell commands, Markdown fences, or implementation protocol text.
 
@@ -87,7 +132,9 @@ const PETE_HARMONY_STARTUP_TASK: &str = r#"Runtime task:
 Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
-Use final only for short visible speech that Pete actually says when a motor call is not the right action.
+Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
+Native Harmony tools: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, sleeping.
+TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.
 Do not wait for a human chat turn.
 Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
 When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
@@ -114,6 +161,9 @@ enum PeteAction {
     SetTopic {
         topic: String,
     },
+    RunTypeScript {
+        source: String,
+    },
     Shutup,
     Pause,
     Resume,
@@ -123,6 +173,12 @@ enum PeteAction {
 #[derive(Debug, Deserialize)]
 struct TextArgs {
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TypeScriptArgs {
+    source: Option<String>,
+    code: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -168,9 +224,11 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
     let mut runtime = HarmonyRuntime {
         history: initial_harmony_messages(),
         current_countenance: None,
+        asr_state: HarmonyAsrPromptState::default(),
         timeline_index: 0,
         tick_index: 0,
     };
+    let (_ear, ear_rx) = start_harmony_asr(&command)?;
     let interrupted = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
         let interrupted = Arc::clone(&interrupted);
@@ -188,14 +246,20 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
     let mut continue_after_tool_result = false;
     let mut startup_pending = Some(startup_runtime_observation(&command.prompt));
     while !interrupted.load(Ordering::Relaxed) {
+        let asr_context_appended = drain_harmony_asr_events(&ear_rx, &mut runtime)?;
         if !continue_after_tool_result {
-            let observation = startup_pending.take().unwrap_or_else(|| {
+            if let Some(startup) = startup_pending.take() {
+                runtime
+                    .history
+                    .push(Message::from_role_and_content(Role::User, startup));
+            } else if !asr_context_appended {
                 let directive = runtime.next_idle_directive();
-                idle_runtime_observation(runtime.current_countenance.as_ref(), directive)
-            });
-            runtime
-                .history
-                .push(Message::from_role_and_content(Role::User, observation));
+                let observation =
+                    idle_runtime_observation(runtime.current_countenance.as_ref(), directive);
+                runtime
+                    .history
+                    .push(Message::from_role_and_content(Role::User, observation));
+            }
         }
 
         runtime.trim_history();
@@ -240,8 +304,15 @@ fn initial_harmony_messages() -> Vec<Message> {
 struct HarmonyRuntime {
     history: Vec<Message>,
     current_countenance: Option<CountenanceState>,
+    asr_state: HarmonyAsrPromptState,
     timeline_index: u64,
     tick_index: usize,
+}
+
+#[derive(Debug, Default)]
+struct HarmonyAsrPromptState {
+    active_text: Option<String>,
+    announced_text: bool,
 }
 
 impl HarmonyRuntime {
@@ -343,7 +414,9 @@ fn run_harmony_completion(
     let mut outcome = HarmonyTurnOutcome::default();
     for message in messages {
         if message.channel.as_deref() == Some("analysis") {
-            runtime.timeline("analysis", compact_line(&message_text(&message), 240));
+            if listenbury::developer_diagnostics_enabled() {
+                runtime.timeline("analysis", compact_line(&message_text(&message), 240));
+            }
             runtime.history.push(message);
             continue;
         }
@@ -361,7 +434,17 @@ fn run_harmony_completion(
             break;
         }
         if let Some(text) = visible_text_from_message(&message) {
-            if !text.trim().is_empty() {
+            let sources = typescript_sources_from_text(&text);
+            if !sources.is_empty() {
+                for source in sources {
+                    let result = runtime.execute_action(&PeteAction::RunTypeScript { source });
+                    runtime.push_tool_result("functions.run_typescript".to_string(), result);
+                }
+                runtime.history.push(message);
+                outcome.acted = true;
+                outcome.tool_result = true;
+                break;
+            } else if !text.trim().is_empty() {
                 runtime.timeline("speech", format!("Pete: {}", text.trim()));
                 runtime.history.push(message);
                 outcome.acted = true;
@@ -464,8 +547,1006 @@ fn reported_reality_context() -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|_| "unknown current working directory".to_string());
     format!(
-        "Reported reality:\n- Process: listenbury harmony-go is running in a terminal.\n- Current working directory: {cwd}\n- Sensors in this path: no microphone, camera, room, window, light, weather, object, or ambient-audio sensor is connected to this runtime.\n- Therefore: apartments, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, background hums, lighting, and room details are unknown unless explicitly reported by a runtime event or memory.\n- Grounding rule: set_stage and note must describe only reported runtime facts, explicit input, retrieved memory, or uncertainty about missing sensors."
+        "Reported reality:\n- Process: listenbury harmony-go is running in a terminal.\n- Current working directory: {cwd}\n- Sensors in this path: microphone/ASR facts are available only when a developer runtime event explicitly reports them; no camera, room, window, light, weather, object, or ambient-audio scene sensor is connected to this runtime.\n- Therefore: apartments, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, background hums, lighting, and room details are unknown unless explicitly reported by a runtime event or memory.\n- Grounding rule: set_stage and note must describe only reported runtime facts, explicit input, retrieved memory, or uncertainty about missing sensors."
     )
+}
+
+#[cfg(feature = "asr-whisper")]
+type HarmonyAsrReceiver = crossbeam_channel::Receiver<HarmonyAsrEvent>;
+
+#[cfg(not(feature = "asr-whisper"))]
+type HarmonyAsrReceiver = ();
+
+#[cfg(feature = "asr-whisper")]
+struct HarmonyEar {
+    stop: Arc<AtomicBool>,
+    _stream: cpal::Stream,
+    processor: Option<JoinHandle<()>>,
+    asr: Option<JoinHandle<()>>,
+}
+
+#[cfg(feature = "asr-whisper")]
+impl Drop for HarmonyEar {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.processor.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.asr.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(feature = "asr-whisper")]
+#[derive(Debug, Clone)]
+enum HarmonyAsrEvent {
+    ListeningStarted {
+        device: String,
+        sample_rate_hz: u32,
+        channels: u16,
+        vad: VadBackendKind,
+    },
+    SpeechStarted,
+    SpeechStopped,
+    Candidate {
+        event: TranscriptCandidateEvent,
+        latency_ms: u64,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[cfg(feature = "asr-whisper")]
+#[derive(Debug)]
+struct HarmonyAsrWorkItem {
+    frames: Vec<AudioFrame>,
+    is_final: bool,
+}
+
+#[cfg(feature = "asr-whisper")]
+struct HarmonyEarState {
+    vad: Box<dyn VoiceActivityDetector>,
+    segmenter: BreathGroupSegmenter,
+    active_groups: HashMap<BreathGroupId, HarmonyActiveAsrGroup>,
+    frame_time_ms: u64,
+}
+
+#[cfg(feature = "asr-whisper")]
+#[derive(Debug, Clone)]
+struct HarmonyActiveAsrGroup {
+    frames: Vec<AudioFrame>,
+    next_prospective_at_ms: u64,
+}
+
+#[cfg(feature = "asr-whisper")]
+impl HarmonyActiveAsrGroup {
+    fn new(opened_at_ms: u64) -> Self {
+        Self {
+            frames: Vec::new(),
+            next_prospective_at_ms: opened_at_ms.saturating_add(HARMONY_ASR_INITIAL_MS),
+        }
+    }
+}
+
+#[cfg(feature = "asr-whisper")]
+const HARMONY_ASR_INITIAL_MS: u64 = 300;
+#[cfg(feature = "asr-whisper")]
+const HARMONY_ASR_INTERVAL_MS: u64 = 250;
+#[cfg(feature = "asr-whisper")]
+const WEBRTC_VAD_SAMPLE_RATE_HZ: u32 = 16_000;
+#[cfg(feature = "asr-whisper")]
+const MONO_CHANNELS: u16 = 1;
+
+#[cfg(feature = "asr-whisper")]
+fn start_harmony_asr(command: &GoCommand) -> Result<(Option<HarmonyEar>, HarmonyAsrReceiver)> {
+    let whisper_model = resolve_whisper_model(command.whisper_model.clone())?;
+    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    let mut recognizer = WhisperSpeechRecognizer::new_quiet(&whisper_model).with_context(|| {
+        format!(
+            "failed to load Whisper model at {}",
+            whisper_model.display()
+        )
+    })?;
+
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| anyhow::anyhow!("no default input device available"))?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "<unknown input device>".to_string());
+    let supported_config = device
+        .default_input_config()
+        .with_context(|| format!("failed to read default input config for {device_name}"))?;
+    let stream_config = supported_config.config();
+    let input_sample_rate_hz = stream_config.sample_rate.0;
+    let input_channels = stream_config.channels;
+    anyhow::ensure!(
+        input_channels > 0,
+        "default input device reported zero channels"
+    );
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let sample_capacity = callback_sample_queue_capacity(input_sample_rate_hz, input_channels);
+    let (sample_tx, sample_rx) = crossbeam_channel::bounded::<f32>(sample_capacity);
+    let (asr_tx, asr_rx) = crossbeam_channel::bounded::<HarmonyAsrWorkItem>(8);
+    let (event_tx, event_rx) = crossbeam_channel::unbounded::<HarmonyAsrEvent>();
+    let capture_enabled = Arc::new(AtomicBool::new(true));
+    let dropped_in_callback = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let err_fn = |err| eprintln!("input stream error: {err}");
+    let stream = match supported_config.sample_format() {
+        cpal::SampleFormat::F32 => build_harmony_input_stream::<f32>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::F64 => build_harmony_input_stream::<f64>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I8 => build_harmony_input_stream::<i8>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I16 => build_harmony_input_stream::<i16>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I32 => build_harmony_input_stream::<i32>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::I64 => build_harmony_input_stream::<i64>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U8 => build_harmony_input_stream::<u8>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U16 => build_harmony_input_stream::<u16>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U32 => build_harmony_input_stream::<u32>(
+            &device,
+            &stream_config,
+            sample_tx.clone(),
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        cpal::SampleFormat::U64 => build_harmony_input_stream::<u64>(
+            &device,
+            &stream_config,
+            sample_tx,
+            Arc::clone(&dropped_in_callback),
+            Arc::clone(&capture_enabled),
+            err_fn,
+        )?,
+        sample_format => anyhow::bail!("unsupported input sample format: {sample_format:?}"),
+    };
+    stream
+        .play()
+        .with_context(|| format!("failed to start capture from {device_name}"))?;
+
+    let _ = event_tx.send(HarmonyAsrEvent::ListeningStarted {
+        device: device_name.clone(),
+        sample_rate_hz: input_sample_rate_hz,
+        channels: input_channels,
+        vad: vad_config.backend,
+    });
+    eprintln!(
+        "{}",
+        format!(
+            "harmony-go ASR listening on {device_name}: {input_sample_rate_hz} Hz, {input_channels} channel(s), vad={}",
+            vad_config.backend.as_str()
+        )
+        .dimmed()
+    );
+
+    let stop_for_asr = Arc::clone(&stop);
+    let event_tx_for_asr = event_tx.clone();
+    let asr = thread::Builder::new()
+        .name("listenbury-harmony-go-asr".to_string())
+        .spawn(move || {
+            while !stop_for_asr.load(Ordering::Relaxed) {
+                match asr_rx.recv_timeout(Duration::from_millis(20)) {
+                    Ok(work) => {
+                        let observed_at = ExactTimestamp::now();
+                        let latency_ms = work
+                            .frames
+                            .first()
+                            .map(|frame| {
+                                let elapsed_ns = observed_at
+                                    .unix_nanos
+                                    .saturating_sub(frame.captured_at.unix_nanos);
+                                (elapsed_ns / 1_000_000).try_into().unwrap_or(u64::MAX)
+                            })
+                            .unwrap_or_default();
+                        match transcribe_group_with_finality(
+                            &work.frames,
+                            &mut recognizer,
+                            work.is_final,
+                        ) {
+                            Ok(output) => {
+                                for event in output.candidate_events {
+                                    if event_tx_for_asr
+                                        .send(HarmonyAsrEvent::Candidate { event, latency_ms })
+                                        .is_err()
+                                    {
+                                        return;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                let _ = event_tx_for_asr.send(HarmonyAsrEvent::Error {
+                                    message: error.to_string(),
+                                });
+                            }
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                }
+            }
+        })
+        .context("failed to spawn harmony-go ASR worker")?;
+
+    let stop_for_processor = Arc::clone(&stop);
+    let processor = thread::Builder::new()
+        .name("listenbury-harmony-go-ear".to_string())
+        .spawn(move || {
+            if let Err(error) = run_harmony_ear_processor(
+                sample_rx,
+                asr_tx,
+                event_tx.clone(),
+                stop_for_processor,
+                vad_config.backend,
+                vad_config.profile,
+                input_sample_rate_hz,
+                input_channels,
+            ) {
+                let _ = event_tx.send(HarmonyAsrEvent::Error {
+                    message: error.to_string(),
+                });
+            }
+        })
+        .context("failed to spawn harmony-go ear worker")?;
+
+    Ok((
+        Some(HarmonyEar {
+            stop,
+            _stream: stream,
+            processor: Some(processor),
+            asr: Some(asr),
+        }),
+        event_rx,
+    ))
+}
+
+#[cfg(not(feature = "asr-whisper"))]
+fn start_harmony_asr(_command: &GoCommand) -> Result<(Option<()>, HarmonyAsrReceiver)> {
+    Ok((None, ()))
+}
+
+#[cfg(feature = "asr-whisper")]
+#[allow(clippy::too_many_arguments)]
+fn run_harmony_ear_processor(
+    sample_rx: crossbeam_channel::Receiver<f32>,
+    asr_tx: crossbeam_channel::Sender<HarmonyAsrWorkItem>,
+    event_tx: crossbeam_channel::Sender<HarmonyAsrEvent>,
+    stop: Arc<AtomicBool>,
+    vad_backend: VadBackendKind,
+    vad_profile: Option<listenbury::VadProfile>,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+) -> Result<()> {
+    boost_current_thread_for_capture("listenbury-harmony-go-ear");
+
+    let input_frame_samples =
+        frame_samples_per_callback_frame(input_sample_rate_hz, input_channels);
+    let (frame_sample_rate_hz, frame_channels) =
+        harmony_vad_frame_format(vad_backend, input_sample_rate_hz, input_channels);
+    let mut pending = VecDeque::<f32>::new();
+    let mut state = HarmonyEarState {
+        vad: create_vad_backend_with_profile(vad_backend, vad_profile.as_ref())?,
+        segmenter: vad_profile
+            .map(|profile| BreathGroupSegmenter::new(profile.breath_group_config()))
+            .unwrap_or_default(),
+        active_groups: HashMap::new(),
+        frame_time_ms: 0,
+    };
+
+    while !stop.load(Ordering::Relaxed) {
+        match sample_rx.recv_timeout(Duration::from_millis(20)) {
+            Ok(sample) => pending.push_back(sample),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        }
+        while let Ok(sample) = sample_rx.try_recv() {
+            pending.push_back(sample);
+        }
+        drain_pending_harmony_ear_frames(
+            &mut pending,
+            input_frame_samples,
+            input_sample_rate_hz,
+            input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
+            &mut state,
+            &asr_tx,
+            &event_tx,
+        )?;
+    }
+
+    for (_, group) in state.active_groups.drain() {
+        if !queue_harmony_final_asr_work(&asr_tx, group.frames) {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "asr-whisper")]
+#[allow(clippy::too_many_arguments)]
+fn drain_pending_harmony_ear_frames(
+    pending: &mut VecDeque<f32>,
+    input_frame_samples: usize,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
+    state: &mut HarmonyEarState,
+    asr_tx: &crossbeam_channel::Sender<HarmonyAsrWorkItem>,
+    event_tx: &crossbeam_channel::Sender<HarmonyAsrEvent>,
+) -> Result<()> {
+    while pending.len() >= input_frame_samples {
+        let mut samples = Vec::with_capacity(input_frame_samples);
+        for _ in 0..input_frame_samples {
+            if let Some(sample) = pending.pop_front() {
+                samples.push(sample);
+            }
+        }
+        if samples.len() < input_frame_samples {
+            break;
+        }
+        let samples = convert_harmony_frame_samples(
+            &samples,
+            input_sample_rate_hz,
+            input_channels,
+            frame_sample_rate_hz,
+            frame_channels,
+        );
+        let frame = AudioFrame {
+            captured_at: ExactTimestamp::now(),
+            sample_rate_hz: frame_sample_rate_hz,
+            channels: frame_channels,
+            samples,
+            voice_signatures: Vec::new(),
+        };
+        process_harmony_ear_frame(frame, state, asr_tx, event_tx)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "asr-whisper")]
+fn process_harmony_ear_frame(
+    frame: AudioFrame,
+    state: &mut HarmonyEarState,
+    asr_tx: &crossbeam_channel::Sender<HarmonyAsrWorkItem>,
+    event_tx: &crossbeam_channel::Sender<HarmonyAsrEvent>,
+) -> Result<()> {
+    let frame_duration_ms = harmony_frame_duration_ms(&frame);
+    let vad_result = state.vad.process_frame(&frame)?;
+    let events = state.segmenter.process(vad_result);
+    for event in &events {
+        match event {
+            HearingEvent::SpeechStarted => {
+                let _ = event_tx.send(HarmonyAsrEvent::SpeechStarted);
+            }
+            HearingEvent::BreathGroupOpened { id } => {
+                state
+                    .active_groups
+                    .entry(*id)
+                    .or_insert_with(|| HarmonyActiveAsrGroup::new(state.frame_time_ms));
+            }
+            HearingEvent::BreathGroupClosed { .. } => {
+                let _ = event_tx.send(HarmonyAsrEvent::SpeechStopped);
+            }
+            HearingEvent::SpeechContinued { .. } | HearingEvent::PauseStarted => {}
+        }
+    }
+    for group in state.active_groups.values_mut() {
+        group.frames.push(frame.clone());
+    }
+    for event in events {
+        if let HearingEvent::BreathGroupClosed { id, .. } = event
+            && let Some(group) = state.active_groups.remove(&id)
+            && !queue_harmony_final_asr_work(asr_tx, group.frames)
+        {
+            return Ok(());
+        }
+    }
+
+    let frame_end_ms = state.frame_time_ms.saturating_add(frame_duration_ms);
+    for group in state.active_groups.values_mut() {
+        if group.frames.is_empty() || frame_end_ms < group.next_prospective_at_ms {
+            continue;
+        }
+        let _ = asr_tx.try_send(HarmonyAsrWorkItem {
+            frames: group.frames.clone(),
+            is_final: false,
+        });
+        group.next_prospective_at_ms = frame_end_ms.saturating_add(HARMONY_ASR_INTERVAL_MS);
+    }
+    state.frame_time_ms = frame_end_ms;
+    Ok(())
+}
+
+#[cfg(feature = "asr-whisper")]
+fn queue_harmony_final_asr_work(
+    asr_tx: &crossbeam_channel::Sender<HarmonyAsrWorkItem>,
+    frames: Vec<AudioFrame>,
+) -> bool {
+    if frames.is_empty() {
+        return true;
+    }
+    asr_tx
+        .send(HarmonyAsrWorkItem {
+            frames,
+            is_final: true,
+        })
+        .is_ok()
+}
+
+#[cfg(feature = "asr-whisper")]
+fn build_harmony_input_stream<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    sample_tx: crossbeam_channel::Sender<f32>,
+    dropped_in_callback: Arc<std::sync::atomic::AtomicUsize>,
+    capture_enabled: Arc<AtomicBool>,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+) -> Result<cpal::Stream>
+where
+    T: Sample + SizedSample,
+    f32: FromSample<T>,
+{
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], _| {
+                if !capture_enabled.load(Ordering::Relaxed) {
+                    return;
+                }
+                for sample in data {
+                    if sample_tx.try_send(sample.to_sample::<f32>()).is_err() {
+                        dropped_in_callback.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            },
+            err_fn,
+            None,
+        )
+        .context("failed to build input stream")
+}
+
+#[cfg(feature = "asr-whisper")]
+fn harmony_vad_frame_format(
+    vad_backend: VadBackendKind,
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+) -> (u32, u16) {
+    match vad_backend {
+        VadBackendKind::WebRtc => (WEBRTC_VAD_SAMPLE_RATE_HZ, MONO_CHANNELS),
+        VadBackendKind::Energy | VadBackendKind::Silero => (input_sample_rate_hz, input_channels),
+    }
+}
+
+#[cfg(feature = "asr-whisper")]
+fn convert_harmony_frame_samples(
+    samples: &[f32],
+    input_sample_rate_hz: u32,
+    input_channels: u16,
+    frame_sample_rate_hz: u32,
+    frame_channels: u16,
+) -> Vec<f32> {
+    if input_sample_rate_hz == frame_sample_rate_hz && input_channels == frame_channels {
+        return samples.to_vec();
+    }
+    normalize_interleaved_f32(
+        samples,
+        AudioFormat::new(input_sample_rate_hz, input_channels, SampleKind::F32),
+        AudioFormat::new(frame_sample_rate_hz, frame_channels, SampleKind::F32),
+        "harmony_go_vad_frame",
+    )
+    .expect("validated harmony-go frame formats should always normalize")
+    .samples
+}
+
+#[cfg(feature = "asr-whisper")]
+fn frame_samples_per_callback_frame(sample_rate_hz: u32, channels: u16) -> usize {
+    let samples_per_channel = usize::try_from(sample_rate_hz / 100).unwrap_or(1).max(1);
+    samples_per_channel.saturating_mul(usize::from(channels).max(1))
+}
+
+#[cfg(feature = "asr-whisper")]
+fn harmony_frame_duration_ms(frame: &AudioFrame) -> u64 {
+    if frame.sample_rate_hz == 0 || frame.channels == 0 {
+        return 0;
+    }
+    let samples_per_channel = frame.samples.len() as f64 / f64::from(frame.channels);
+    ((samples_per_channel / f64::from(frame.sample_rate_hz)) * 1000.0).round() as u64
+}
+
+#[cfg(feature = "asr-whisper")]
+fn drain_harmony_asr_events(
+    ear_rx: &HarmonyAsrReceiver,
+    runtime: &mut HarmonyRuntime,
+) -> Result<bool> {
+    let mut appended = false;
+    for event in ear_rx.try_iter() {
+        if let HarmonyAsrEvent::Error { message } = &event {
+            anyhow::bail!("harmony-go ASR failed: {message}");
+        }
+        if let Some(update) = harmony_asr_developer_update(&event, &mut runtime.asr_state) {
+            runtime.timeline("asr", compact_line(&update, 500));
+            runtime
+                .history
+                .push(Message::from_role_and_content(Role::Developer, update));
+            appended = true;
+        }
+    }
+    Ok(appended)
+}
+
+#[cfg(not(feature = "asr-whisper"))]
+fn drain_harmony_asr_events(
+    _ear_rx: &HarmonyAsrReceiver,
+    _runtime: &mut HarmonyRuntime,
+) -> Result<bool> {
+    Ok(false)
+}
+
+#[cfg(feature = "asr-whisper")]
+fn harmony_asr_developer_update(
+    event: &HarmonyAsrEvent,
+    state: &mut HarmonyAsrPromptState,
+) -> Option<String> {
+    match event {
+        HarmonyAsrEvent::ListeningStarted {
+            device,
+            sample_rate_hz,
+            channels,
+            vad,
+        } => Some(format!(
+            "Runtime ASR is listening through {device} at {sample_rate_hz} Hz, {channels} channel(s), vad={}. Treat following ASR updates as body/runtime context, not conversation turns.",
+            vad.as_str()
+        )),
+        HarmonyAsrEvent::SpeechStarted => {
+            state.active_text = None;
+            state.announced_text = false;
+            Some("You just started hearing speech aloud.".to_string())
+        }
+        HarmonyAsrEvent::SpeechStopped => None,
+        HarmonyAsrEvent::Candidate { event, latency_ms } => {
+            harmony_candidate_developer_update(event, *latency_ms, state)
+        }
+        HarmonyAsrEvent::Error { .. } => None,
+    }
+}
+
+#[cfg(feature = "asr-whisper")]
+fn harmony_candidate_developer_update(
+    event: &TranscriptCandidateEvent,
+    latency_ms: u64,
+    state: &mut HarmonyAsrPromptState,
+) -> Option<String> {
+    match event {
+        TranscriptCandidateEvent::CandidateStarted { .. } => None,
+        TranscriptCandidateEvent::CandidateUpdated {
+            text,
+            stable_prefix_len,
+            confidence,
+            ..
+        } => {
+            let text = prompt_worthy_text(text)?;
+            state.active_text = Some(text.clone());
+            let confidence = confidence
+                .map(|value| format!(" confidence={value:.2}"))
+                .unwrap_or_default();
+            let stable = stable_percent(*stable_prefix_len, text.len());
+            let prefix = if state.announced_text {
+                "You are still hearing speech aloud"
+            } else {
+                state.announced_text = true;
+                "You just started hearing speech aloud"
+            };
+            Some(format!(
+                "{prefix}: \"{text}\". ASR latency={latency_ms} ms stable={stable}%{confidence}. This is body/runtime context, not a conversation turn."
+            ))
+        }
+        TranscriptCandidateEvent::CandidateFinalized {
+            text, confidence, ..
+        } => {
+            let text = prompt_worthy_text(text)?;
+            state.active_text = None;
+            state.announced_text = false;
+            let confidence = confidence
+                .map(|value| format!(" confidence={value:.2}"))
+                .unwrap_or_default();
+            Some(format!(
+                "You just heard aloud: \"{text}\". ASR latency={latency_ms} ms{confidence}. This is body/runtime context, not a conversation turn."
+            ))
+        }
+        TranscriptCandidateEvent::CandidateReplaced { reason, .. } => {
+            let old_text = state.active_text.as_deref()?;
+            let percent = match reason {
+                TranscriptReplacementReason::HeadChanged { stable_prefix_len } => {
+                    stable_percent(*stable_prefix_len, old_text.len())
+                }
+                TranscriptReplacementReason::Restarted => 0,
+            };
+            Some(format!(
+                "You were interrupted {percent}% through hearing: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
+            ))
+        }
+        TranscriptCandidateEvent::CandidateCancelled { .. } => {
+            let old_text = state.active_text.take()?;
+            state.announced_text = false;
+            Some(format!(
+                "You were interrupted before finishing hearing: \"{old_text}\". The ASR candidate was cancelled."
+            ))
+        }
+    }
+}
+
+#[cfg(feature = "asr-whisper")]
+fn prompt_worthy_text(text: &str) -> Option<String> {
+    text.chars()
+        .any(char::is_alphanumeric)
+        .then(|| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|text| !text.is_empty())
+}
+
+#[cfg(feature = "asr-whisper")]
+fn stable_percent(stable_prefix_len: usize, total_len: usize) -> u64 {
+    if total_len == 0 {
+        return 0;
+    }
+    (((stable_prefix_len.min(total_len) as f64 / total_len as f64) * 100.0).round() as u64).min(100)
+}
+
+fn typescript_sources_from_text(text: &str) -> Vec<String> {
+    let mut sources = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find(TYPESCRIPT_START) {
+        let body = &rest[start + TYPESCRIPT_START.len()..];
+        let Some(end) = body.find(TYPESCRIPT_END) else {
+            break;
+        };
+        let source = body[..end].trim();
+        if !source.is_empty() {
+            sources.push(source.to_string());
+        }
+        rest = &body[end + TYPESCRIPT_END.len()..];
+    }
+    sources
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum HarmonyTypeScriptPayload {
+    Say {
+        text: String,
+    },
+    Note {
+        text: String,
+    },
+    SetCountenance {
+        emoji: Option<String>,
+        mood: Option<String>,
+        reason: Option<String>,
+    },
+    SetStage {
+        scene: String,
+    },
+    SetTopic {
+        topic: String,
+    },
+    Shutup,
+    Pause,
+    Resume,
+    Sleeping,
+}
+
+fn execute_harmony_typescript(script: &str) -> Result<Vec<PeteAction>> {
+    if script.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let script = typescript_source_with_default_imports(script);
+    let config = InterpreterConfig {
+        internal_modules: vec![harmony_typescript_module()],
+        ..Default::default()
+    };
+    let mut interp = Interpreter::with_config(config);
+    interp
+        .prepare(&script, Some(tsrun::ModulePath::new("/harmony-go-will.ts")))
+        .map_err(tsrun_error)?;
+    let value = loop {
+        match interp.step().map_err(tsrun_error)? {
+            StepResult::Continue => continue,
+            StepResult::Complete(value) => break value,
+            StepResult::NeedImports(imports) => {
+                let names = imports
+                    .iter()
+                    .map(|request| request.specifier.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!("unsupported TypeScript import(s): {names}");
+            }
+            StepResult::Suspended { .. } => {
+                anyhow::bail!("TypeScript execution suspended; async host commands are not enabled")
+            }
+            StepResult::Done => return Ok(Vec::new()),
+        }
+    };
+    let command_value = js_value_to_json(value.value()).map_err(tsrun_error)?;
+    let payloads = parse_harmony_typescript_payloads(command_value)?;
+    Ok(payloads
+        .into_iter()
+        .filter_map(|payload| match payload {
+            HarmonyTypeScriptPayload::Say { text } => {
+                non_empty_text(&text).map(|text| PeteAction::Say {
+                    text: text.to_string(),
+                })
+            }
+            HarmonyTypeScriptPayload::Note { text } => {
+                non_empty_text(&text).map(|text| PeteAction::Note {
+                    text: text.to_string(),
+                })
+            }
+            HarmonyTypeScriptPayload::SetCountenance {
+                emoji,
+                mood,
+                reason,
+            } => Some(PeteAction::SetCountenance {
+                emoji: emoji.unwrap_or_default(),
+                mood,
+                reason,
+            }),
+            HarmonyTypeScriptPayload::SetStage { scene } => {
+                non_empty_text(&scene).map(|scene| PeteAction::SetStage {
+                    scene: scene.to_string(),
+                })
+            }
+            HarmonyTypeScriptPayload::SetTopic { topic } => {
+                non_empty_text(&topic).map(|topic| PeteAction::SetTopic {
+                    topic: topic.to_string(),
+                })
+            }
+            HarmonyTypeScriptPayload::Shutup => Some(PeteAction::Shutup),
+            HarmonyTypeScriptPayload::Pause => Some(PeteAction::Pause),
+            HarmonyTypeScriptPayload::Resume => Some(PeteAction::Resume),
+            HarmonyTypeScriptPayload::Sleeping => Some(PeteAction::Sleeping),
+        })
+        .collect())
+}
+
+fn parse_harmony_typescript_payloads(value: Value) -> Result<Vec<HarmonyTypeScriptPayload>> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(items) => items
+            .into_iter()
+            .filter(|item| !item.is_null())
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into),
+        Value::Object(_) => Ok(vec![serde_json::from_value(value)?]),
+        other => anyhow::bail!("TypeScript must return a command object or array, got {other}"),
+    }
+}
+
+fn typescript_source_with_default_imports(script: &str) -> String {
+    if script.contains("\"pete:will\"") || script.contains("'pete:will'") {
+        return script.to_string();
+    }
+    format!(
+        "import {{ say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping }} from \"pete:will\";\n{script}"
+    )
+}
+
+fn harmony_typescript_module() -> InternalModule {
+    InternalModule::native("pete:will")
+        .with_function("say", ts_say, 2)
+        .with_function("note", ts_note, 1)
+        .with_function("setStage", ts_set_stage, 2)
+        .with_function("set_stage", ts_set_stage, 2)
+        .with_function("setTopic", ts_set_topic, 1)
+        .with_function("set_topic", ts_set_topic, 1)
+        .with_function("setCountenance", ts_set_countenance, 2)
+        .with_function("set_countenance", ts_set_countenance, 2)
+        .with_function("setMood", ts_set_mood, 2)
+        .with_function("set_mood", ts_set_mood, 2)
+        .with_function("shutup", ts_shutup, 0)
+        .with_function("pause", ts_pause, 0)
+        .with_function("resume", ts_resume, 0)
+        .with_function("sleeping", ts_sleeping, 0)
+        .build()
+}
+
+fn command_value(interp: &mut Interpreter, value: Value) -> std::result::Result<Guarded, JsError> {
+    let guard = api::create_guard(interp);
+    let value = api::create_from_json(interp, &guard, &value)?;
+    Ok(Guarded::with_guard(value, guard))
+}
+
+fn string_arg(args: &[JsValue], index: usize) -> String {
+    args.get(index)
+        .and_then(JsValue::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn optional_string_property_arg(args: &[JsValue], index: usize, property: &str) -> Option<String> {
+    let value = args.get(index)?;
+    if let JsValue::Object(_) = value {
+        return api::get_property(value, property)
+            .ok()
+            .and_then(|value| js_value_to_json(&value).ok())
+            .and_then(|value| match value {
+                Value::String(value) => non_empty_text(&value).map(str::to_string),
+                _ => None,
+            });
+    }
+    None
+}
+
+fn tsrun_error(err: JsError) -> anyhow::Error {
+    anyhow::anyhow!("TypeScript execution failed: {err}")
+}
+
+fn ts_say(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "say", "text": string_arg(args, 0) }),
+    )
+}
+
+fn ts_note(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "note", "text": string_arg(args, 0) }),
+    )
+}
+
+fn ts_set_stage(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let scene = optional_string_property_arg(args, 0, "scene")
+        .or_else(|| optional_string_property_arg(args, 1, "scene"))
+        .unwrap_or_else(|| string_arg(args, 0));
+    command_value(interp, json!({ "kind": "set_stage", "scene": scene }))
+}
+
+fn ts_set_topic(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({ "kind": "set_topic", "topic": string_arg(args, 0) }),
+    )
+}
+
+fn ts_set_countenance(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "set_countenance",
+            "emoji": optional_string_property_arg(args, 0, "emoji").unwrap_or_else(|| string_arg(args, 0)),
+            "mood": optional_string_property_arg(args, 0, "mood").or_else(|| optional_string_property_arg(args, 1, "mood")),
+            "reason": optional_string_property_arg(args, 0, "reason").or_else(|| optional_string_property_arg(args, 1, "reason")),
+        }),
+    )
+}
+
+fn ts_set_mood(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "set_countenance",
+            "emoji": optional_string_property_arg(args, 1, "emoji").unwrap_or_else(|| "🙂".to_string()),
+            "mood": string_arg(args, 0),
+            "reason": optional_string_property_arg(args, 1, "reason"),
+        }),
+    )
+}
+
+fn ts_shutup(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "shutup" }))
+}
+
+fn ts_pause(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "pause" }))
+}
+
+fn ts_resume(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "resume" }))
+}
+
+fn ts_sleeping(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    _args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(interp, json!({ "kind": "sleeping" }))
 }
 
 fn runtime_action_tools() -> Vec<ToolDescription> {
@@ -521,6 +1602,18 @@ fn runtime_action_tools() -> Vec<ToolDescription> {
                 "type": "object",
                 "properties": { "topic": { "type": "string" } },
                 "required": ["topic"],
+                "additionalProperties": false
+            })),
+        ),
+        ToolDescription::new(
+            "run_typescript",
+            "Motor: execute one small TypeScript expression through the restricted pete:will runtime. Available functions: say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.",
+            Some(json!({
+                "type": "object",
+                "properties": {
+                    "source": { "type": "string" },
+                    "code": { "type": "string" }
+                },
                 "additionalProperties": false
             })),
         ),
@@ -592,6 +1685,12 @@ fn action_from_message(message: &Message) -> Result<Option<PeteAction>> {
                 serde_json::from_str(&text).context("invalid set_topic action JSON")?;
             PeteAction::SetTopic { topic: args.topic }
         }
+        "run_typescript" | "typescript" => {
+            let args: TypeScriptArgs =
+                serde_json::from_str(&text).context("invalid run_typescript action JSON")?;
+            let source = args.source.or(args.code).unwrap_or_default();
+            PeteAction::RunTypeScript { source }
+        }
         "shutup" => PeteAction::Shutup,
         "pause" => PeteAction::Pause,
         "resume" => PeteAction::Resume,
@@ -634,6 +1733,20 @@ impl HarmonyRuntime {
                 self.timeline("topic", compact_line(topic, 240));
                 json!({"ok": true, "result": format!("Topic updated: {}", compact_line(topic, 240))})
             }
+            PeteAction::RunTypeScript { source } => match execute_harmony_typescript(source) {
+                Ok(actions) => {
+                    let mut results = Vec::new();
+                    for action in actions {
+                        results.push(self.execute_action(&action));
+                    }
+                    json!({"ok": true, "result": "TypeScript executed", "actions": results})
+                }
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    self.timeline("action_error", compact_line(&message, 500));
+                    json!({"ok": false, "error": message})
+                }
+            },
             PeteAction::Shutup => {
                 self.timeline("tool_result", "shutup requested");
                 json!({"ok": true, "result": "speech stopped"})
@@ -789,6 +1902,8 @@ fn message_text(message: &Message) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "asr-whisper")]
+    use listenbury::speech::transcript::TranscriptCandidateId;
     use openai_harmony::{HarmonyEncodingName, load_harmony_encoding};
 
     #[test]
@@ -824,6 +1939,12 @@ mod tests {
         assert!(rendered.contains("Pete is not you"));
         assert!(rendered.contains("Ground every narration in what is actually reported"));
         assert!(rendered.contains("Do not invent sensory facts"));
+        assert!(rendered.contains("Runtime action surfaces:"));
+        assert!(rendered.contains("Native Harmony function tools are available in commentary"));
+        assert!(rendered.contains("set_countenance, set_stage, set_topic, run_typescript"));
+        assert!(rendered.contains("TypeScript uses only the internal module \"pete:will\""));
+        assert!(rendered.contains("Available TypeScript functions are say, note, setStage"));
+        assert!(rendered.contains("final <ts>...</ts> blocks"));
         assert!(rendered.contains("Runtime/body context for Pete"));
         assert!(rendered.contains("Reported reality:"));
         assert!(rendered.contains("no microphone, camera, room"));
@@ -864,6 +1985,7 @@ mod tests {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
             current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -887,6 +2009,7 @@ mod tests {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
             current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -931,6 +2054,7 @@ mod tests {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
             current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -944,6 +2068,7 @@ mod tests {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
             current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -961,6 +2086,7 @@ mod tests {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
             current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -970,5 +2096,92 @@ mod tests {
         });
 
         assert!(accepted.contains("\"ok\":true"));
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
+    fn harmony_go_asr_updates_are_developer_runtime_context() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
+            timeline_index: 0,
+            tick_index: 0,
+        };
+        let update = harmony_candidate_developer_update(
+            &TranscriptCandidateEvent::CandidateFinalized {
+                id: TranscriptCandidateId(1),
+                text: "testing aloud".to_string(),
+                confidence: Some(0.8),
+            },
+            42,
+            &mut runtime.asr_state,
+        )
+        .unwrap();
+
+        runtime
+            .history
+            .push(Message::from_role_and_content(Role::Developer, update));
+
+        let message = runtime.history.last().unwrap();
+        assert_eq!(message.author.role, Role::Developer);
+        assert!(message_text(message).contains("You just heard aloud"));
+        assert!(message_text(message).contains("not a conversation turn"));
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
+    fn harmony_go_asr_replacement_reports_interrupted_progress() {
+        let mut state = HarmonyAsrPromptState {
+            active_text: Some("half spoken phrase".to_string()),
+            announced_text: true,
+        };
+
+        let update = harmony_candidate_developer_update(
+            &TranscriptCandidateEvent::CandidateReplaced {
+                old: TranscriptCandidateId(1),
+                new: TranscriptCandidateId(2),
+                reason: TranscriptReplacementReason::HeadChanged {
+                    stable_prefix_len: 8,
+                },
+            },
+            10,
+            &mut state,
+        )
+        .unwrap();
+
+        assert!(update.contains("You were interrupted"));
+        assert!(update.contains("through hearing"));
+    }
+
+    #[test]
+    fn harmony_go_executes_restricted_typescript_actions() {
+        let actions = execute_harmony_typescript(
+            r#"[note("still observing"), setTopic("runtime"), say("Hi")]"#,
+        )
+        .expect("restricted TypeScript should execute");
+
+        assert_eq!(
+            actions,
+            vec![
+                PeteAction::Note {
+                    text: "still observing".to_string()
+                },
+                PeteAction::SetTopic {
+                    topic: "runtime".to_string()
+                },
+                PeteAction::Say {
+                    text: "Hi".to_string()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn harmony_go_extracts_final_typescript_blocks() {
+        assert_eq!(
+            typescript_sources_from_text(r#"<ts>note("clock")</ts>"#),
+            vec![r#"note("clock")"#.to_string()]
+        );
     }
 }

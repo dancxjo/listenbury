@@ -295,6 +295,13 @@ pub(crate) struct GoCommand {
     /// Record the stream without synthesizing or playing audio.
     #[arg(long)]
     pub(crate) mock_mouth: bool,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
+    pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
     /// Initial stream seed. If omitted, Pete wakes into an open live session.
     #[arg(num_args = 0.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
