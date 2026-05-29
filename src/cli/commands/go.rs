@@ -93,7 +93,7 @@ Available functions:\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in the next source action options.\n\
+After listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) results, usually record a short progress note before doing much more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") is also useful for durable private memory. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime may remind you when source results have not been summarized, but source inspection is allowed to continue. After several source inspections, synthesize when practical with updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in a source action.\n\
 Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. If the system seems confused about the go command or this runtime, inspect src/cli/commands/go.rs first. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
@@ -129,8 +129,8 @@ const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds; a source call can also include summary and note options to satisfy this before reading. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
-const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, note, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Source inspection is gated by progress notes and occasional synthesis. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, note, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Source inspection progress notes and synthesis are encouraged but advisory. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
 const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
 
@@ -835,29 +835,21 @@ impl StreamOfConsciousness {
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Progress note required before {blocked_source_action}. Previous source result: {previous_source_action}. Record progress with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"), or include note in the source call options before retrying."
+                    "Source progress note encouraged before or after {blocked_source_action}. Previous source result: {previous_source_action}. When practical, record progress with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"), or include note in the source call options."
                 );
-                self.timeline_colored("action_blocked", &message, ANSI_ERROR);
-                self.append_observation(StreamObservation::ActionError {
-                    source: format!("blocked source inspection: {blocked_source_action}"),
-                    error: message,
-                })?;
-                continue;
+                self.timeline_colored("action_reminder", &message, ANSI_DIM);
+                self.append_observation(StreamObservation::ActionResult(message))?;
             }
             if let Some(blocked_source_action) = action.source_progress_label()
                 && self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Synthesis checkpoint required before {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. Summarize the current goal with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}), or include summary and note in the source call options before retrying.",
+                    "Source synthesis encouraged around {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. When practical, summarize the current goal with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}), or include summary and note in the source call options.",
                     self.source_inspections_since_synthesis
                 );
-                self.timeline_colored("action_blocked", &message, ANSI_ERROR);
-                self.append_observation(StreamObservation::ActionError {
-                    source: format!("blocked source inspection: {blocked_source_action}"),
-                    error: message,
-                })?;
-                continue;
+                self.timeline_colored("action_reminder", &message, ANSI_DIM);
+                self.append_observation(StreamObservation::ActionResult(message))?;
             }
 
             let source_progress_label = action.source_progress_label();
@@ -1173,7 +1165,7 @@ impl StreamOfConsciousness {
             if records_progress_note {
                 if let Some(previous_source_action) = self.source_progress_due.take() {
                     let message = format!(
-                        "Progress note recorded; source inspection gate cleared for {previous_source_action}."
+                        "Progress note recorded for previous source inspection: {previous_source_action}."
                     );
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
@@ -1182,7 +1174,7 @@ impl StreamOfConsciousness {
             if records_synthesis {
                 self.source_inspections_since_synthesis = 0;
                 let message =
-                    "Synthesis recorded; source-inspection checkpoint counter reset.".to_string();
+                    "Synthesis recorded; source-inspection reminder counter reset.".to_string();
                 self.timeline("action_result", &message);
                 self.append_observation(StreamObservation::ActionResult(message))?;
             }
@@ -1193,7 +1185,7 @@ impl StreamOfConsciousness {
                 if self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL {
                     let target = self.work_board.suggested_progress_target();
                     let message = format!(
-                        "Synthesis checkpoint reached after {} source inspection(s). Before more source inspection, summarize with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings and next decision.\" }}) or complete the goal with checkOff(...).",
+                        "Synthesis would be useful after {} source inspection(s). When practical, summarize with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings and next decision.\" }}) or complete the goal with checkOff(...).",
                         self.source_inspections_since_synthesis
                     );
                     self.timeline("action_result", &message);
@@ -1235,10 +1227,10 @@ impl StreamOfConsciousness {
             self.source_inspections_since_synthesis = 0;
             self.timeline(
                 "action_result",
-                "Inline source synthesis recorded; checkpoint counter reset.",
+                "Inline source synthesis recorded; reminder counter reset.",
             );
             self.append_observation(StreamObservation::ActionResult(
-                "Inline source synthesis recorded; checkpoint counter reset.".to_string(),
+                "Inline source synthesis recorded; reminder counter reset.".to_string(),
             ))?;
             recorded_work = true;
         } else if let Some(note) = workflow.note.as_deref() {
@@ -1255,7 +1247,7 @@ impl StreamOfConsciousness {
             && let Some(previous_source_action) = self.source_progress_due.take()
         {
             let message = format!(
-                "Inline progress note recorded; source inspection gate cleared for {previous_source_action}."
+                "Inline progress note recorded for previous source inspection: {previous_source_action}."
             );
             self.timeline("action_result", &message);
             self.append_observation(StreamObservation::ActionResult(message))?;
@@ -5900,9 +5892,9 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("Keep running logs on goals"));
         assert!(COMMAND_REMINDER_PROMPT.contains("write vectorized private memory"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is gated"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("the next source action will be blocked"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("synthesis checkpoint"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is advisory-tracked"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection may continue without a note"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("synthesize when practical"));
         assert!(prompt.contains("After several source inspections"));
     }
 
