@@ -1760,7 +1760,7 @@
     {
       "id": "current-goal-id",
       "title": "Open goal: Inspect source files",
-      "summary": "Inspected src/lib.rs pages 1-8, collecting public re-exports for perception, runtime_event, segmentation, soundscape, span, speech modules, and alignment/prosody utilities.",
+      "summary": "What is now understood across the inspected source",
       "parent": null,
       "priority": null,
       "tags": [],
@@ -1921,6 +1921,118 @@
         {
           "text": "Completed: Completed inspection of src/lib.rs",
           "at": "2026-05-28T18:07:53-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 4: listed command variants for Diphone, Vad, Debug, Dev. Next: continue reading further pages to capture more command definitions.",
+          "at": "2026-05-28T18:10:56-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 5: defined DebugCommand and DevCommand enums. Next: continue reading further pages.",
+          "at": "2026-05-28T18:10:58-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 6: listed many command variants including LiveHalfDuplex, SoundscapeDebug, SyntheticCache, DiphoneCache, MbrolaInventory, MbrolaAudit. Next: continue reading further pages.",
+          "at": "2026-05-28T18:11:04-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 7: defined TextCommand and associated Args structs. Next: continue reading further pages.",
+          "at": "2026-05-28T18:11:05-07:00"
+        },
+        {
+          "text": "Synthesis: key findings include structured command args and flags, indicating extensive CLI controls for audio capture, playback, and profiling. Next decision: continue inspecting remaining source files or begin summarizing overall architecture.",
+          "at": "2026-05-28T18:12:25-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 10: added flags for self-hearing, trace output, whisper model path, VAD backend, and profile. Next: inspect page 11.",
+          "at": "2026-05-28T18:12:31-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 2: files 21-40; next: listFiles page 3.",
+          "at": "2026-05-28T18:12:42-07:00"
+        },
+        {
+          "text": "Synthesis: We have catalogued initial modules. Next step is to read selected key files (e.g., src/cli/main.rs, src/hearing/mod.rs) to understand architecture.",
+          "at": "2026-05-28T18:12:49-07:00"
+        },
+        {
+          "text": "Synthesis: The repository is organized around CLI commands for live session, soundscape debugging, synthetic cache, and hearing modules. Core logic resides in src/hearing, src/linguistic, and src/cli. Next step: read key modules like src/cli/main.rs, src/hearing/mod.rs, and src/hearing/audition.rs to understand architecture.",
+          "at": "2026-05-28T18:13:11-07:00"
+        },
+        {
+          "text": "Observed listFiles page 1: 20 files listed, including Cargo.toml, src/acoustic/mod.rs, etc. Next: listFiles(2).",
+          "at": "2026-05-28T18:13:19-07:00"
+        },
+        {
+          "text": "Observed listFiles page 2: 20 files listed, including src/audio/lattice/fusion.rs, src/cli/commands/breath_transcribe.rs, etc. Next: listFiles(3).",
+          "at": "2026-05-28T18:13:21-07:00"
+        },
+        {
+          "text": "Observed listFiles page 3: 20 files listed, including src/cli/commands/live_half_duplex.rs, src/cli/commands/mic_transcribe.rs, etc. Next: listFiles(4).",
+          "at": "2026-05-28T18:13:24-07:00"
+        },
+        {
+          "text": "Observed listFiles page 4: 20 files listed, including src/cli/commands/round_trip.rs, src/cli/commands/sing_demo.rs, etc. Next: listFiles(5).",
+          "at": "2026-05-28T18:13:30-07:00"
+        },
+        {
+          "text": "Synthesis: after 7 inspections, understanding of repository layout and next step to inspect main.rs for CLI entry.",
+          "at": "2026-05-28T18:14:19-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 7: found subcommand structs for diphone cache, mbrola inventory/audit, and text command.",
+          "at": "2026-05-28T18:14:28-07:00"
+        },
+        {
+          "text": "Prepared to read page 8.",
+          "at": "2026-05-28T18:14:31-07:00"
+        },
+        {
+          "text": "Thorough compact source summary; next step",
+          "at": "2026-05-28T18:25:24-07:00"
+        },
+        {
+          "text": "Thorough compact source summary; next step",
+          "at": "2026-05-28T18:25:26-07:00"
+        },
+        {
+          "text": "Thorough compact source summary; next step",
+          "at": "2026-05-28T18:25:29-07:00"
+        },
+        {
+          "text": "Thorough compact source summary; next step",
+          "at": "2026-05-28T18:25:35-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:25:38-07:00"
+        },
+        {
+          "text": "Thorough compact source summary; next step",
+          "at": "2026-05-28T18:25:40-07:00"
+        },
+        {
+          "text": "Continue source inspection",
+          "at": "2026-05-28T18:25:45-07:00"
+        },
+        {
+          "text": "Continue source inspection",
+          "at": "2026-05-28T18:25:47-07:00"
+        },
+        {
+          "text": "Continue source inspection",
+          "at": "2026-05-28T18:25:48-07:00"
+        },
+        {
+          "text": "Continuing source inspection of src/cli/mod.rs page 16: discovered LoopTraceProfile enum with Mock and Ear variants, effective_profile method switches to Ear when real mic/asr enabled.",
+          "at": "2026-05-28T18:25:56-07:00"
+        },
+        {
+          "text": "Continue source inspection",
+          "at": "2026-05-28T18:25:59-07:00"
+        },
+        {
+          "text": "Page17",
+          "at": "2026-05-28T18:26:09-07:00"
         }
       ],
       "status": "complete"
@@ -1953,7 +2065,7 @@
     {
       "id": "goal-14",
       "title": "Inspect source files",
-      "summary": "Inspected round_trip.rs; partial implementation of round-trip audio processing using whisper, Piper, TTS, etc. Key findings: modular setup, feature flags, and command execution flow.",
+      "summary": "Inspected src/audio/mod.rs page 3 reveals extensive re-exports for normalization utilities, phone classification, speech likelihood, viterbi alignment, voice signatures, voice vectors, and wav handling. Key components: audio conversion, phone class hypotheses, speech likelihood stream, viterbi alignment, voice signature structures, voice vector constants, wav I/O functions.",
       "parent": null,
       "priority": null,
       "tags": [],
@@ -1998,9 +2110,25 @@
         {
           "text": "Synthesis: key findings and next decision.",
           "at": "2026-05-28T18:08:08-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/audio/mod.rs page 3: listed audio conversion, phone_class, speech_likelihood, viterbi, voice_signature, voice_vector, wav modules. Next: read page 4",
+          "at": "2026-05-28T18:09:28-07:00"
+        },
+        {
+          "text": "Synthesis: after 7 source inspections, next step is to read src/audio/mod.rs page 3 to see remaining content, then decide if goal can be checked off.",
+          "at": "2026-05-28T18:09:40-07:00"
+        },
+        {
+          "text": "Synthesis: after 8 source inspections, next step is to read src/audio/mod.rs page 4 to see remaining content, then decide if goal can be checked off.",
+          "at": "2026-05-28T18:09:46-07:00"
+        },
+        {
+          "text": "Completed: Completed source inspection of src/audio/mod.rs.",
+          "at": "2026-05-28T18:09:48-07:00"
         }
       ],
-      "status": "open"
+      "status": "complete"
     },
     {
       "id": "goal-15",
@@ -2821,7 +2949,7 @@
     {
       "id": "goal-16",
       "title": "Inspect src/lib.rs",
-      "summary": "Investigate core library",
+      "summary": "Inspected src/lib.rs up to page 9, mapping re-exports of core modules and data structures for acoustic, rendering, and speech work. Key entities include AcousticChunk, BufferWatermarks, SpeechWorkGraph, SyntheticPipelineWatermarks, and others.",
       "parent": null,
       "priority": null,
       "tags": [],
@@ -2834,9 +2962,37 @@
         {
           "text": "Observed from readSourceFile src/lib.rs page 2: listed submodules and their purpose; next: read page 3",
           "at": "2026-05-28T18:04:43-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 4: continued public re-exports of memory, mind, context modules. Next: read page 5",
+          "at": "2026-05-28T18:11:34-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 5: continued public re-exports of mouth and mind modules. Next: read page 6",
+          "at": "2026-05-28T18:11:39-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 6: continued public re-exports of perception and runtime_event modules. Next: read page 7",
+          "at": "2026-05-28T18:11:41-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 7: continued public re-exports of sound and span, speech modules. Next: read page 8",
+          "at": "2026-05-28T18:11:46-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/lib.rs page 8: continued public re-exports of speech::recognizer, synthetic_plan, and work modules. Next: read page 9",
+          "at": "2026-05-28T18:11:48-07:00"
+        },
+        {
+          "text": "Synthesis: key findings show the library’s focus on acoustic and synthetic rendering pipelines, with extensive type definitions for stages, events, and representations. Next step: continue to page 10 to capture remaining re‑exports and see if there are public APIs for audio synthesis or configuration.",
+          "at": "2026-05-28T18:11:54-07:00"
+        },
+        {
+          "text": "Completed: Completed source inspection up to page 10; remaining page 11 pending.",
+          "at": "2026-05-28T18:12:00-07:00"
         }
       ],
-      "status": "open"
+      "status": "complete"
     },
     {
       "id": "goal-17",
@@ -2846,13 +3002,18 @@
       "priority": null,
       "tags": [],
       "steps": [],
-      "log": [],
-      "status": "open"
+      "log": [
+        {
+          "text": "Completed: Completed src/lib.rs page 11.",
+          "at": "2026-05-28T18:12:02-07:00"
+        }
+      ],
+      "status": "complete"
     },
     {
       "id": "goal-18",
       "title": "Inspect src/cli/main.rs",
-      "summary": "Read and summarize main CLI entry point",
+      "summary": "What is now understood across the inspected source",
       "parent": "goal-15",
       "priority": "medium",
       "tags": [
@@ -2880,11 +3041,360 @@
         {
           "text": "Observed from readSourceFile src/cli/mod.rs page 3: included Echo, Listen, Ask, Complete, Reply, Web, Models commands. Next: read page 4",
           "at": "2026-05-28T18:06:02-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 4: listed Diphone, Vad, Debug, Dev commands. Next: read page 5.",
+          "at": "2026-05-28T18:12:09-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 5: defined DebugCommand and DevCommand variants. Next: read page 6.",
+          "at": "2026-05-28T18:12:11-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 6: listed command variants including LiveHalfDuplex, SoundscapeDebug, SyntheticCache, DiphoneCache. Next: read page 7.",
+          "at": "2026-05-28T18:12:16-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 8: defined RecordWavCommand, PlayWavCommand, LoopTraceCommand.",
+          "at": "2026-05-28T18:14:43-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/main.rs: main() initializes tracing and calls cli::run().",
+          "at": "2026-05-28T18:14:52-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 2: enum Command with Transcribe, Say, Go, MbrolaRender, Sing, RiperCompare, Echo, Listen, Ask, Complete, Reply, Web, Models",
+          "at": "2026-05-28T18:15:49-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 1: src/cli/mod.rs is present; main.rs not found in src/cli/. Updated target to inspect src/cli/mod.rs.",
+          "at": "2026-05-28T18:15:58-07:00"
+        },
+        {
+          "text": "Reviewed src/cli/mod.rs page 4: saw Diphone, Vad, Debug, Dev subcommands.",
+          "at": "2026-05-28T18:16:04-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 1: symbols, responsibilities, relationships, control flow, implications. Next: listFiles page 2",
+          "at": "2026-05-28T18:16:21-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 2: many modules across hearing, linguistic, memory, mind, mouth, prosody. Next: listFiles page 3",
+          "at": "2026-05-28T18:16:23-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 3: numerous prosody, runtime, segmentation, soundscape, speech, vision, vocoder, voice modules. Next: listFiles page 4",
+          "at": "2026-05-28T18:16:27-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 4: remaining voice, web, word modules. End of file list.",
+          "at": "2026-05-28T18:16:29-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/main.rs page 1: symbols, responsibilities, relationships, control flow, implications. Next: inspect src/cli/mod.rs",
+          "at": "2026-05-28T18:16:36-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:16:41-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 2: defined Command enum variants for various subcommands including Transcribe, Say, Go, MbrolaRender, Sing, RiperCompare, Echo, Listen, Ask, Complete, Reply, Web, Models.",
+          "at": "2026-05-28T18:16:45-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 3: added command variants including Echo, Listen, Ask, Complete, Reply, Web, Models.",
+          "at": "2026-05-28T18:16:50-07:00"
+        },
+        {
+          "text": "Synthesis: key findings include modular CLI command organization, separation of audio processing modules, and the presence of source_inspection command for introspection. Unresolved questions: specific implementations of audio capture and synthesis, and how config is loaded. Next decision: dive into src/cli/commands/source_inspection.rs for deeper insight.",
+          "at": "2026-05-28T18:17:02-07:00"
+        },
+        {
+          "text": "continue listing",
+          "at": "2026-05-28T18:17:33-07:00"
+        },
+        {
+          "text": "continue",
+          "at": "2026-05-28T18:17:36-07:00"
+        },
+        {
+          "text": "continue",
+          "at": "2026-05-28T18:17:38-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:17:51-07:00"
+        },
+        {
+          "text": "Completed: Completed source inspection and synthesis",
+          "at": "2026-05-28T18:17:54-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "goal-19",
+      "title": "Inspect src/cli/mod.rs page 8",
+      "summary": "Inspected src/cli/mod.rs up to page 14, noting audio flags, HiFi-GAN options, context size, token limits, and memory retention settings. No further pages to read in this file.",
+      "parent": null,
+      "priority": "normal",
+      "tags": [
+        "source-inspection"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Synthesis: identified new command structs for recording, playing, and looping traces. Next: read page 9 for further command definitions.",
+          "at": "2026-05-28T18:11:11-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 12: added mock_llm, mock_mouth, mouth, llm_model, llm_gpu_layers, max_tokens, sentence_by_sentence flags. Next: read page 13.",
+          "at": "2026-05-28T18:11:22-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 13: added breath_group, dump, prompt flags, GoCommand struct. Next: read page 14.",
+          "at": "2026-05-28T18:11:23-07:00"
+        },
+        {
+          "text": "Synthesis: key findings and next decision.",
+          "at": "2026-05-28T18:11:28-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "goal-20",
+      "title": "Inspect src/cli/mod.rs page 8",
+      "summary": "What is now understood across the inspected source",
+      "parent": "goal-18",
+      "priority": "medium",
+      "tags": [
+        "cli",
+        "source-inspection"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Page 8 contains definitions for RecordWavCommand, PlayWavCommand, and LoopTraceCommand structs with their arguments.",
+          "at": "2026-05-28T18:18:05-07:00"
+        },
+        {
+          "text": "Page 9 adds boolean flags for real_mic, real_asr, mock_mic, mock_llm, mock_mouth, json, and pretty.",
+          "at": "2026-05-28T18:18:08-07:00"
+        },
+        {
+          "text": "Page 10 includes flags no_self_hearing, write, whisper_model, vad, vad_profile, and defines EarScopeCommand with duration.",
+          "at": "2026-05-28T18:18:11-07:00"
+        },
+        {
+          "text": "Page 11 adds flags for output_wav, output_png, output_jsonl, vad, and vad_profile; also begins definition of ThinkSayCommand struct with deterministic token stream flag.",
+          "at": "2026-05-28T18:18:17-07:00"
+        },
+        {
+          "text": "Page 12 adds flags for mock_llm, mock_mouth, mouth, llm_model, llm_gpu_layers, max_tokens, sentence_by_sentence, and breath_group conflicts.",
+          "at": "2026-05-28T18:18:21-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:18:28-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 14: flags for hifigan, model, skip_gan, max_tokens, context_size, reserved_generation_tokens, memory_events, lookahead_tokens, lookahead_chars, require_self_hearing, mock_mouth, prompt; control flow for speech generation and mouth playback. Next: continue reading further pages.",
+          "at": "2026-05-28T18:18:33-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 17: defined VadTraceCommand struct with fields input_wav, jsonl, vad, vad_profile; defined BreathTranscribeCommand struct with input_wav, whisper_model, default value for ???",
+          "at": "2026-05-28T18:18:52-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 18: MicTranscribeCommand struct with seconds, until_ctrl_c, whisper_model, refine_whisper_model, plus preceding fields pre_roll_ms, trailing_pad_ms, min_group_ms, max_group_ms.",
+          "at": "2026-05-28T18:18:59-07:00"
+        },
+        {
+          "text": "Synthesized after reading pages 17‑19. Highlights:\n- MicTranscribeCommand: controls recording duration, Ctrl‑C handling, whisper model selection, and refinement behavior.\n- VadTraceCommand & BreathTranscribeCommand: similar",
+          "at": "2026-05-28T18:19:25-07:00"
+        },
+        {
+          "text": "Page 9: Added flags for real/mocked components and JSON/pretty output.",
+          "at": "2026-05-28T18:19:32-07:00"
+        },
+        {
+          "text": "Page 10: Flags for no_self_hearing, write path, whisper_model, VAD options, vad_profile, and EarScopeCommand duration.",
+          "at": "2026-05-28T18:19:34-07:00"
+        },
+        {
+          "text": "Page 11: EarScopeCommand output paths (wav, png, jsonl), VAD, vad_profile, and ThinkSayCommand start.",
+          "at": "2026-05-28T18:19:37-07:00"
+        },
+        {
+          "text": "Page 12: Flags for mock_llm, mock_mouth, mouth backend, llm_model, llm_gpu_layers, max_tokens, sentence_by_sentence, breath_group conflicts.",
+          "at": "2026-05-28T18:19:43-07:00"
+        },
+        {
+          "text": "Page 13: Flags for breath_group, dump trace, prompt args; GoCommand struct with llm_model, llm_gpu_layers, piper_bin, piper_voice, source-filter config.",
+          "at": "2026-05-28T18:19:46-07:00"
+        },
+        {
+          "text": "Synthesis: After inspecting src/cli/mod.rs pages 12-14, key flags include mock_llm, mock_mouth, mouth backend, llm_model, llm_gpu_layers, max_tokens, sentence_by_sentence, breath_group, dump trace, prompt args, hifigan, hifigan-model, skip_gan, context_size, reserved_generation_tokens, memory_events. Relationships: CLI options configure LLM and TTS backends, audio generation pipeline, and memory retention. Unresolved: exact impact of breath_group conflicts, how memory_events interacts with compaction. Next step: review main.rs for entry point and piper usage.",
+          "at": "2026-05-28T18:19:55-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:20:03-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 9: flag definitions for mock and real paths, latency output options, and self-hearing control. Page 10 extends flags for trace output, whisper model path, VAD backend, and VAD profile. Next, continue page 11 to capture remaining command structs.",
+          "at": "2026-05-28T18:20:08-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 10: flag for disabling self-hearing, output trace file path, model path alias, whisper model default, VAD backend and profile flags. Next, continue page 11 to capture remaining command structs.",
+          "at": "2026-05-28T18:20:14-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 11: flags for output WAV, PNG, JSONL diagnostics, VAD backend default, and optional VAD profile. Next, continue page 12 to capture remaining command structs.",
+          "at": "2026-05-28T18:20:17-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 12: flags for mock_llm, mock_mouth, mouth backend selection, optional llm_model path, gpu layers, max tokens, sentence-by-sentence and breath-group conflicts.",
+          "at": "2026-05-28T18:20:24-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 13: flags for breath_group, dump, prompt list, plus GoCommand struct with llm_model, llm_gpu_layers, piper_bin, piper_voice, source-filter acoustic model usage.",
+          "at": "2026-05-28T18:20:28-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:20:35-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 15: symbols, responsibilities, relationships, control flow, implications. Next: continue source inspection.",
+          "at": "2026-05-28T18:20:38-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 16: enumeration of LoopTraceProfile, effective_profile method, struct definitions, advancing toward understanding of command handling.",
+          "at": "2026-05-28T18:20:44-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 8: defined RecordWavCommand and PlayWavCommand structs with Arg derive; also began LoopTraceCommand struct definition and its fields.",
+          "at": "2026-05-28T18:23:43-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 10: added flags for no_self_hearing, write path, whisper_model, vad, vad_profile; defined EarScopeCommand struct with duration field.",
+          "at": "2026-05-28T18:23:52-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 11: added output_wav, output_png, output_jsonl flags; VAD enum default and optional profile; began ThinkSayCommand struct.",
+          "at": "2026-05-28T18:24:01-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 12: added mock_llm, mock_mouth, mouth option, llm_model, llm_gpu_layers, max_tokens, sentence_by_sentence, breath_group conflict.",
+          "at": "2026-05-28T18:24:04-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 13: added breath_group flag, dump optional JSONL, prompt vec; defined GoCommand struct with llm_model, llm_gpu_layers, piper_bin, piper_voice, ...",
+          "at": "2026-05-28T18:24:11-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 14: added hifigan flags, max_tokens, context_size, reserved_generation_tokens, memory_events, and max_generated_token_fragments",
+          "at": "2026-05-28T18:24:14-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:24:54-07:00"
+        },
+        {
+          "text": "Page 8 shows RecordWavCommand, PlayWavCommand, and LoopTraceCommand definitions with args and defaults.",
+          "at": "2026-05-28T18:25:07-07:00"
+        },
+        {
+          "text": "Page 9 lists boolean flags for real_mic, real_asr, mock_mic, mock_llm, mock_mouth, and json/pretty output options.",
+          "at": "2026-05-28T18:25:11-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "goal-21",
+      "title": "Explore CLI entry definitions in src/cli/mod.rs further pages",
+      "summary": "Exploring CLI entry definitions in src/cli/mod.rs: Enumerated command variants and subcommands, revealing structure of live voice loop, LLM interactions, audio diagnostics, and dev utilities.",
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
+      "log": [
+        {
+          "text": "Page18: MicTranscribeCommand struct with args for seconds, until_ctrl_c, whisper_model, refine_whisper_model.",
+          "at": "2026-05-28T18:26:17-07:00"
+        },
+        {
+          "text": "Page19: MicTranscribeCommand args refine_window_seconds, refine_interval_ms, vad, vad_profile, web, web_host, web_port.",
+          "at": "2026-05-28T18:26:21-07:00"
+        },
+        {
+          "text": "Page20: LlamaTurnCommand struct with args llm_model, llm_gpu_layers, mode, max_tokens, prompt.",
+          "at": "2026-05-28T18:26:29-07:00"
+        },
+        {
+          "text": "Source main.rs: defines main that initializes tracing and calls cli::run().",
+          "at": "2026-05-28T18:26:40-07:00"
+        },
+        {
+          "text": "Snippet from src/cli/mod.rs page 22: defines command-line arguments for vad backend, vad_profile, prompt mode, max_tokens, context_size, reserved_generation_tokens, verbatim_turns. These control audio VAD, prompt framing, token limits, context, and turn retention.",
+          "at": "2026-05-28T18:26:48-07:00"
+        },
+        {
+          "text": "Page 23 snippet: defines model_profile, no_backchannels flag, tts VAD pause/listen times, web viewer flags, host/port. These extend CLI for model selection, TTS control, and web UI.",
+          "at": "2026-05-28T18:26:52-07:00"
+        },
+        {
+          "text": "Page 24 snippet: defines duplex_trace_scenario option, jsonl output path, native_video capture flags, device path, width/height/fps settings for V4L2 camera integration.",
+          "at": "2026-05-28T18:26:59-07:00"
+        },
+        {
+          "text": "Page 25 snippet: defines retain_video_images flag, prompt args; TraceViewerExportCommand with input_jsonl/output_json; ProsodyPlanCommand with alignment_json.",
+          "at": "2026-05-28T18:27:01-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:27:09-07:00"
+        },
+        {
+          "text": "Observed from readSourceFile src/cli/mod.rs page 1: defined module imports, clap parser struct Cli with command subcommand; initial declarations of submodules (commands, download_progress, live_session, model_paths, piper).",
+          "at": "2026-05-28T18:27:20-07:00"
+        },
+        {
+          "text": "Command enum",
+          "at": "2026-05-28T18:27:29-07:00"
+        },
+        {
+          "text": "Read src/cli/mod.rs page 2",
+          "at": "2026-05-28T18:27:34-07:00"
+        },
+        {
+          "text": "Synthesis: The CLI defines a comprehensive command set for audio processing, model hosting, and debugging. Key symbols include LiveHalfDuplexCommand, LlamaTurnCommand, RoundTripWavCommand, WebCommand, and nested subcommands under Models, Diphone, Vad, Debug, Dev. Relationships: top-level enum Command maps to subcommand enums. Implications: robust interface for voice AI workflow. Unresolved: specific implementations of each subcommand not yet inspected. Next decision: inspect src/cli/mod.rs further pages for command handlers and module imports.",
+          "at": "2026-05-28T18:27:45-07:00"
+        },
+        {
+          "text": "Page 6 of src/cli/mod.rs reveals additional subcommands: PlayWav, LlamaTurn, Continue, TraceViewerExport, ProsodyPlan, MelRoundtrip, SingDemo, RoundTripWav, LiveHalfDuplex, DogfoodTwo, SoundscapeDebug, and SyntheticCache with nested command. Also starts DiphoneCache submodule. This extends audio playback, LLM interaction, diagnostics, and cache management.",
+          "at": "2026-05-28T18:27:53-07:00"
+        },
+        {
+          "text": "Page 7 adds DiphoneCacheCommand, MbrolaInventory and MbrolaAudit commands, plus TextCommand struct. This expands cache and voice database introspection and basic text argument parsing.",
+          "at": "2026-05-28T18:27:56-07:00"
+        },
+        {
+          "text": "Page 8 defines RecordWavCommand with output path and duration, PlayWavCommand for input wav, and LoopTraceCommand with profile, duration, and microphone flags. Extends recording and trace utilities.",
+          "at": "2026-05-28T18:28:04-07:00"
+        },
+        {
+          "text": "Page 9 continues LoopTraceCommand flags: real_mic, real_asr, mock_mic, mock_llm, mock_mouth, json, pretty. Provides options for real vs synthetic I/O and output format.",
+          "at": "2026-05-28T18:28:08-07:00"
         }
       ],
       "status": "open"
     }
   ],
-  "selected_id": "goal-14",
-  "next_id": 19
+  "selected_id": "goal-21",
+  "next_id": 22
 }

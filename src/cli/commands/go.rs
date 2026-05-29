@@ -22,7 +22,9 @@ use listenbury::memory::{
 };
 use listenbury::mind::entity::{EntityExtractor, HeuristicEntityExtractor, resolve_entities};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
-use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji};
+use listenbury::mouth::planner::{
+    MouthSyntheticPlan, SyntheticUnit, extract_emoji_sequences, strip_emoji,
+};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{
     ContextBudget, ContextNodeRole, ConversationContext, DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
@@ -57,7 +59,7 @@ const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent
 
 const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. In Harmony mode, speak or act with native functions on the commentary channel; in plain stream mode, act by calling the available functions directly inside the legacy action block. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
 
-const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, action results, and source-inspection results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the commentary channel for function calls to the `functions` namespace. Do not use final for status, completion, refusal, shutdown, or no-op chatter. Do not wrap function calls in XML tags, TypeScript code, imports, Markdown, shell commands, or JSON outside the native Harmony tool-call message body.\n\nPlain thought belongs in analysis only. Do not write completion, shutdown, or refusal chatter when there is a useful next action. Only the runtime controls the stream lifecycle. Use the sleeping tool only after a current live body-delivered instruction asks for shutdown.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Queue spoken words for Pete's mouth.\ntype say = (_: { text: string, interrupt?: boolean }) => any;\n\n// Stop current or queued speech.\ntype shutup = () => any;\n\n// Pause synthetic playback.\ntype pause = () => any;\n\n// Resume synthetic playback.\ntype resume = () => any;\n\n// Store a durable private note.\ntype note = (_: { text: string }) => any;\n\n// Update the current screenplay-style scene beat.\ntype set_stage = (_: { instruction: string, topic?: string, summary?: string }) => any;\n\n// Update the lightweight topic label.\ntype set_topic = (_: { topic: string, instruction?: string, summary?: string }) => any;\n\n// Mark a scene or topic transition.\ntype start_new_topic = (_: { last_topic: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Mark the words or event that caused a topic transition.\ntype topic_changed_when = (_: { trigger: string, from_topic?: string, to_topic?: string, topic?: string, instruction?: string, summary?: string }) => any;\n\n// Mark a larger episode reset.\ntype start_new_episode = (_: { reason: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Clean shutdown. Use only after a current live shutdown request.\ntype sleeping = (_: { reason?: string }) => any;\n\n// Request entity extraction from a text span.\ntype extract_entities = (_: { text?: string }) => any;\n\n// Update memory fields for an existing graph node.\ntype update_graph_node_fields = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Search memory by text, field, value, or combinations.\ntype search_graph_nodes = (_: { text?: string, field?: string, value?: any, limit?: number }) => any;\n\n// Retrieve memories for a phrase, sentence, name, topic, or claim.\ntype query_memories = (_: { text: string, limit?: number, min_score?: number }) => any;\n\n// List bundled Listenbury source files.\ntype list_files = (_: { page?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Inspect one source file page or the page containing a line.\ntype read_source_file = (_: { file: string, page?: number, line?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Search Listenbury source text.\ntype search_source = (_: { query: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Grep Listenbury source lines.\ntype grep_source = (_: { pattern: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Set the default source page size.\ntype set_source_page_size = (_: { lines: number }) => any;\n\n// Create one persisted goal.\ntype create_goal = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], steps?: string[], items?: string[], note?: string, select?: boolean }) => any;\n\n// Create one persisted task.\ntype create_task = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], select?: boolean }) => any;\n\n// Create one persisted checklist.\ntype create_checklist = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], items?: string[], select?: boolean }) => any;\n\n// Append a running-log note to an ongoing goal.\ntype add_goal_note = (_: { target: string, text: string }) => any;\n\n// Mark a goal or task complete.\ntype check_off = (_: { target: string, note?: string }) => any;\n\n// Mark one checklist item complete.\ntype check_checklist_item = (_: { target: string, item: string, note?: string }) => any;\n\n// Update title, summary, priority, parent, tags, steps/items, or note/log fields.\ntype update_item = (_: { target: string, fields?: object }) => any;\n\n// Cancel a goal and append the reason to its log.\ntype cancel_item = (_: { target: string, reason?: string }) => any;\n\n// Mark one goal as Pete's current focus.\ntype select_item = (_: { target: string }) => any;\n\n} // namespace functions";
+const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, action results, and source-inspection results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the commentary channel for function calls to the `functions` namespace. Do not use final for status, completion, refusal, shutdown, or no-op chatter. Do not wrap function calls in XML tags, TypeScript code, imports, Markdown, shell commands, or JSON outside the native Harmony tool-call message body.\n\nPlain thought belongs in analysis only. Do not write completion, shutdown, or refusal chatter when there is a useful next action. Only the runtime controls the stream lifecycle. Use the sleeping tool only after a current live body-delivered instruction asks for shutdown.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Queue spoken words for Pete's mouth.\ntype say = (_: { text: string, interrupt?: boolean }) => any;\n\n// Stop current or queued speech.\ntype shutup = () => any;\n\n// Pause synthetic playback.\ntype pause = () => any;\n\n// Resume synthetic playback.\ntype resume = () => any;\n\n// Store a durable private note.\ntype note = (_: { text: string }) => any;\n\n// Set Pete's outward countenance as a single emoji and optional mood/reason.\ntype set_countenance = (_: { emoji: string, mood?: string, reason?: string }) => any;\n\n// Update the current screenplay-style scene beat.\ntype set_stage = (_: { instruction: string, topic?: string, summary?: string }) => any;\n\n// Update the lightweight topic label.\ntype set_topic = (_: { topic: string, instruction?: string, summary?: string }) => any;\n\n// Mark a scene or topic transition.\ntype start_new_topic = (_: { last_topic: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Mark the words or event that caused a topic transition.\ntype topic_changed_when = (_: { trigger: string, from_topic?: string, to_topic?: string, topic?: string, instruction?: string, summary?: string }) => any;\n\n// Mark a larger episode reset.\ntype start_new_episode = (_: { reason: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Clean shutdown. Use only after a current live shutdown request.\ntype sleeping = (_: { reason?: string }) => any;\n\n// Request entity extraction from a text span.\ntype extract_entities = (_: { text?: string }) => any;\n\n// Merge or update memory fields for an existing or provisional graph node.\ntype merge_graph_node = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Update memory fields for an existing or provisional graph node.\ntype update_graph_node_fields = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Search memory by text, field, value, or combinations.\ntype search_graph_nodes = (_: { text?: string, field?: string, value?: any, limit?: number }) => any;\n\n// Retrieve memories for a phrase, sentence, name, topic, or claim.\ntype query_memories = (_: { text: string, limit?: number, min_score?: number }) => any;\n\n// List bundled Listenbury source files.\ntype list_files = (_: { page?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Inspect one source file page or the page containing a line.\ntype read_source_file = (_: { file: string, page?: number, line?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Search Listenbury source text.\ntype search_source = (_: { query: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Grep Listenbury source lines.\ntype grep_source = (_: { pattern: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Set the default source page size.\ntype set_source_page_size = (_: { lines: number }) => any;\n\n// Create one persisted goal.\ntype create_goal = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], steps?: string[], items?: string[], note?: string, select?: boolean }) => any;\n\n// Create one persisted task.\ntype create_task = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], select?: boolean }) => any;\n\n// Create one persisted checklist.\ntype create_checklist = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], items?: string[], select?: boolean }) => any;\n\n// Append a running-log note to an ongoing goal.\ntype add_goal_note = (_: { target: string, text: string }) => any;\n\n// Mark a goal or task complete.\ntype check_off = (_: { target: string, note?: string }) => any;\n\n// Mark one checklist item complete.\ntype check_checklist_item = (_: { target: string, item: string, note?: string }) => any;\n\n// Update title, summary, priority, parent, tags, steps/items, or note/log fields.\ntype update_item = (_: { target: string, fields?: object }) => any;\n\n// Cancel a goal and append the reason to its log.\ntype cancel_item = (_: { target: string, reason?: string }) => any;\n\n// Mark one goal as Pete's current focus.\ntype select_item = (_: { target: string }) => any;\n\n} // namespace functions";
 
 const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose at most one useful next runtime action. Use native Harmony function calls on commentary for runtime actions; keep private thought in analysis.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n\nRuntime/body context:";
 
@@ -70,14 +72,17 @@ Available functions:\n\
 - pause(): request synthetic playback pause.\n\
 - resume(): request synthetic playback resume.\n\
 - note(text): write a runtime note to the debug timeline.\n\
+- setCountenance(emojiOrOptions, options?) or setMood(...): set Pete's outward facial countenance as a single emoji plus optional mood and reason. Emoji included in say(...) also updates countenance, but setCountenance is clearer when no speech is needed.\n\
+- reportBug(title, options?), reportFeatureRequest(title, options?), or reportIssue(title, options?): append a bug or feature request entry to BUGS.md at the project root. options may include type/kind/issueType, details, context, and severity.\n\
 - setStage(text, options?): update the current screenplay beat. options may include topic, summary, setting, and action. Prefer action-first scene prose such as setStage(\"Setting: lab. Action: Pete listens.\", { topic: \"lab\", summary: \"Pete listens\" }).\n\
 - setTopic(topic, options?): lightweight topic label; options may include instruction and summary.\n\
 - startNewTopic(previousTopic, options?): mark a scene/topic transition. options may include topic, instruction, summary, and trigger.\n\
 - topicChangedWhen(trigger, options?): mark the words or event that caused a topic transition. options may include fromTopic, toTopic, topic, instruction, and summary.\n\
 - startNewEpisode(reason, options?): mark a larger episode reset. options may include topic, instruction, summary, and trigger.\n\
 - sleeping(reason?) or goingToSleep(reason?): clean shutdown only after a current live user input asks Pete to stop, shut down, sleep, go to sleep, or end the session.\n\
-- extractEntities(text): request entity extraction for names, preferences, places, relationships, plans, corrections, facts, or recurring context.\n\
-- updateGraphNodeFields(nodeId, fields, options?): request memory field updates, especially description: \"natural language noun phrase\".\n\
+- extractEntities(text): extract names, preferences, places, relationships, plans, corrections, facts, or recurring context into stable provisional graph node IDs such as person:travis or topic:listenbury.\n\
+- mergeGraphNode(nodeId, fields, options?) or upsertGraphNode(...): add or update a graph node by stable ID. This MERGEs in Neo4j through the memory worker; it is the narrow graph write surface, not full Cypher. options may include { label: \"Human label\" }.\n\
+- updateGraphNodeFields(nodeId, fields, options?): same graph-node merge/update path, especially description: \"natural language noun phrase\".\n\
 - searchGraphNodes(query, options?): search memory by text, field, value, or combinations. query may be a string or object with text, field, value, and limit.\n\
 - queryMemories(text, options?) or recallMemories(text, options?): retrieve memories for a phrase, sentence, name, topic, or claim. options may include limit and minScore. Results are appended privately to the active stream.\n\
 - listFiles(pageOrOptions?): list bundled Listenbury source files. Use listFiles(2) or listFiles({ page: 2, pageSize: 80, note: \"Observed previous result; next...\" }) for later pages.\n\
@@ -92,8 +97,9 @@ Available functions:\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, steps/items, or add note/log text.\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
-Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
-After listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) results, usually record a short progress note before doing much more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") is also useful for durable private memory. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime may remind you when source results have not been summarized, but source inspection is allowed to continue. After several source inspections, synthesize when practical with updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in a source action.\n\
+Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Source notes are compression artifacts: write thorough but compact summaries that preserve the useful information from the source page because the raw page may fall out of context. Include names of modules, structs, traits, functions, constants, control flow, responsibilities, relationships, surprising details, and the next file/page decision when those details are present. Do not silently chain source reads without saying what is there.\n\
+After listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) results, usually record a substantive progress note before doing much more source inspection. Prefer addGoalNote(\"open-goal-id\", \"Observed from readSourceFile src/lib.rs page 2: modules X/Y/Z do A/B/C; key exports and relationships; implication; next inspect page 3.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") is also useful for durable private memory. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result in enough detail to reconstruct the page's purpose; next...\" }). The runtime may remind you when source results have not been summarized, but source inspection is allowed to continue. After several source inspections, synthesize when practical with updateItem(\"open-goal-id\", { summary: \"What is now understood across files\", note: \"Synthesis: key facts, implications, unresolved questions, and next decision\" }) or include summary and note in a source action.\n\
+When the live context contains a name, preference, correction, relationship, identity clue, plan, recurring topic, or fact worth keeping, prefer the graph workflow: extractEntities(\"source sentence\"), searchGraphNodes({ text: \"label or claim\", limit: 5 }), then mergeGraphNode(\"kind:stable_slug\", { description: \"...\", ... }, { label: \"Readable label\" }) or updateGraphNodeFields(...). Use stable IDs like person:travis_reed, place:seattle, topic:listenbury_memory, project:listenbury. Merge/update nodes for durable facts; do not invent full Cypher or database syntax.\n\
 Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. If the system seems confused about the go command or this runtime, inspect src/cli/commands/go.rs first. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
@@ -128,9 +134,11 @@ const DEFAULT_SOURCE_PAGE_LINES: usize = 20;
 const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
+const GRAPH_MEMORY_REMINDER_INTERVAL: usize = 3;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
-const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, note, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Source inspection progress notes and synthesis are encouraged but advisory. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
+const BUG_REPORT_PATH: &str = "BUGS.md";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, setCountenance/setMood, note, bug/feature reporting, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Emoji in say(...) is a countenance signal and is stripped before TTS. Source inspection progress notes and synthesis are encouraged but advisory. Make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
 const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
 
@@ -259,6 +267,26 @@ impl GoRagMemorySnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CountenanceState {
+    emoji: String,
+    mood: Option<String>,
+    reason: Option<String>,
+}
+
+impl CountenanceState {
+    fn prompt_summary(&self) -> String {
+        let mut parts = vec![format!("emoji={}", self.emoji)];
+        if let Some(mood) = self.mood.as_deref() {
+            parts.push(format!("mood={mood}"));
+        }
+        if let Some(reason) = self.reason.as_deref() {
+            parts.push(format!("reason={}", compact_line(reason, 220)));
+        }
+        parts.join(" ")
+    }
+}
+
 impl std::fmt::Debug for GoMemoryRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GoMemoryRuntime")
@@ -357,6 +385,12 @@ enum StreamObservation {
     MouthStarted(String),
     MouthReturned(String),
     MouthError(String),
+    CountenanceChanged {
+        emoji: String,
+        mood: Option<String>,
+        reason: Option<String>,
+        source: String,
+    },
     ContextCompacted {
         retained_events: usize,
     },
@@ -412,6 +446,24 @@ impl StreamObservation {
                 "\n[Live observation: mouth error]\n{}\n",
                 compact_line(message, 800)
             ),
+            Self::CountenanceChanged {
+                emoji,
+                mood,
+                reason,
+                source,
+            } => {
+                let mood = mood
+                    .as_deref()
+                    .map(|mood| format!("\nMood: {mood}"))
+                    .unwrap_or_default();
+                let reason = reason
+                    .as_deref()
+                    .map(|reason| format!("\nReason: {}", compact_line(reason, 500)))
+                    .unwrap_or_default();
+                format!(
+                    "\n[Live observation: countenance]\nPete's face changed to {emoji} via {source}.{mood}{reason}\n"
+                )
+            }
             Self::ContextCompacted { retained_events } => format!(
                 "\n[Runtime]\nStream context compacted; retained {retained_events} recent event(s).\n"
             ),
@@ -452,6 +504,21 @@ impl StreamObservation {
             Self::MouthStarted(text) => format!("Mouth started: {}", compact_line(text, 240)),
             Self::MouthReturned(text) => format!("Self-heard return: {}", compact_line(text, 240)),
             Self::MouthError(message) => format!("Mouth error: {}", compact_line(message, 240)),
+            Self::CountenanceChanged {
+                emoji,
+                mood,
+                reason,
+                source,
+            } => format!(
+                "Countenance changed to {emoji}{}{} via {source}",
+                mood.as_deref()
+                    .map(|mood| format!(" mood={mood}"))
+                    .unwrap_or_default(),
+                reason
+                    .as_deref()
+                    .map(|reason| format!(" reason={}", compact_line(reason, 180)))
+                    .unwrap_or_default(),
+            ),
             Self::ContextCompacted { retained_events } => {
                 format!("Runtime compacted stream context retaining {retained_events} events")
             }
@@ -484,6 +551,7 @@ struct StreamOfConsciousness {
     mouth: MouthRuntime,
     work_board: WorkBoard,
     memory: GoMemoryRuntime,
+    current_countenance: Option<CountenanceState>,
     stdin_rx: Receiver<std::result::Result<String, String>>,
     mouth_rx: Receiver<MouthEvent>,
     _mouth_worker: Option<JoinHandle<()>>,
@@ -501,6 +569,8 @@ struct StreamOfConsciousness {
     source_page_lines: usize,
     source_progress_due: Option<String>,
     source_inspections_since_synthesis: usize,
+    graph_memory_due: Option<String>,
+    graph_memory_reminders_since_update: usize,
 }
 
 impl StreamOfConsciousness {
@@ -579,6 +649,7 @@ impl StreamOfConsciousness {
             mouth,
             work_board,
             memory,
+            current_countenance: None,
             stdin_rx,
             mouth_rx,
             _mouth_worker: worker,
@@ -596,6 +667,8 @@ impl StreamOfConsciousness {
             source_page_lines: DEFAULT_SOURCE_PAGE_LINES,
             source_progress_due: None,
             source_inspections_since_synthesis: 0,
+            graph_memory_due: None,
+            graph_memory_reminders_since_update: 0,
         };
         stream.timeline("memory", &startup_rag.timeline_summary("startup prompt"));
         Ok(stream)
@@ -835,7 +908,7 @@ impl StreamOfConsciousness {
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Source progress note encouraged before or after {blocked_source_action}. Previous source result: {previous_source_action}. When practical, record progress with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: ... Next: ...\") or note(\"Observed from {previous_source_action}: ... Next: ...\"), or include note in the source call options."
+                    "Source progress note encouraged before or after {blocked_source_action}. Previous source result: {previous_source_action}. When practical, record a thorough compact summary with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: symbols, responsibilities, relationships, control flow, implications. Next: ...\") or note(\"Observed from {previous_source_action}: detailed source compression. Next: ...\"), or include note in the source call options."
                 );
                 self.timeline_colored("action_reminder", &message, ANSI_DIM);
                 self.append_observation(StreamObservation::ActionResult(message))?;
@@ -845,7 +918,7 @@ impl StreamOfConsciousness {
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Source synthesis encouraged around {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. When practical, summarize the current goal with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings, implications, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}), or include summary and note in the source call options.",
+                    "Source synthesis encouraged around {blocked_source_action}. You have inspected {} source result(s) since the last synthesis. When practical, summarize the current goal with updateItem(\"{target}\", {{ summary: \"What is now understood across the inspected files\", note: \"Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.\" }}) or checkOff(\"{target}\", {{ note: \"Final understanding: ...\" }}), or include summary and note in the source call options.",
                     self.source_inspections_since_synthesis
                 );
                 self.timeline_colored("action_reminder", &message, ANSI_DIM);
@@ -855,8 +928,17 @@ impl StreamOfConsciousness {
             let source_progress_label = action.source_progress_label();
             let records_progress_note = action.records_progress_note();
             let records_synthesis = action.records_synthesis_update();
+            let graph_memory_label = action.graph_memory_update_label();
             match action {
                 TypeScriptAction::Say { text, interrupt } => {
+                    if let Some(emoji) = last_emoji_sequence(&text) {
+                        self.apply_countenance_change(
+                            emoji,
+                            None,
+                            Some("emoji included in say(...)".to_string()),
+                            "speech emoji",
+                        )?;
+                    }
                     self.timeline("speech", &text);
                     self.append_observation(StreamObservation::ActionResult(format!(
                         "Queued speech{}: {}",
@@ -900,6 +982,36 @@ impl StreamOfConsciousness {
                             .map(|context| format!("\n{context}"))
                             .unwrap_or_default()
                     )))?;
+                }
+                TypeScriptAction::SetCountenance {
+                    emoji,
+                    mood,
+                    reason,
+                } => {
+                    let message = self.apply_countenance_change(
+                        emoji,
+                        mood,
+                        reason,
+                        "setCountenance action",
+                    )?;
+                    self.append_observation(StreamObservation::ActionResult(message))?;
+                }
+                TypeScriptAction::ReportIssue {
+                    issue_type,
+                    title,
+                    details,
+                    context,
+                    severity,
+                } => {
+                    let message = append_issue_report(
+                        &issue_type,
+                        &title,
+                        details.as_deref(),
+                        context.as_deref(),
+                        severity.as_deref(),
+                    )?;
+                    self.timeline("issue_report", &message);
+                    self.append_observation(StreamObservation::ActionResult(message))?;
                 }
                 TypeScriptAction::SetStage {
                     topic,
@@ -1178,6 +1290,18 @@ impl StreamOfConsciousness {
                 self.timeline("action_result", &message);
                 self.append_observation(StreamObservation::ActionResult(message))?;
             }
+            if let Some(graph_memory_label) = graph_memory_label {
+                self.graph_memory_reminders_since_update = 0;
+                let message = if let Some(previous_graph_context) = self.graph_memory_due.take() {
+                    format!(
+                        "Graph memory action recorded for previous reminder: {previous_graph_context}. Action: {graph_memory_label}."
+                    )
+                } else {
+                    format!("Graph memory action recorded: {graph_memory_label}.")
+                };
+                self.timeline("action_result", &message);
+                self.append_observation(StreamObservation::ActionResult(message))?;
+            }
             if let Some(source_progress_label) = source_progress_label {
                 self.source_progress_due = Some(source_progress_label.to_string());
                 self.source_inspections_since_synthesis =
@@ -1185,7 +1309,7 @@ impl StreamOfConsciousness {
                 if self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL {
                     let target = self.work_board.suggested_progress_target();
                     let message = format!(
-                        "Synthesis would be useful after {} source inspection(s). When practical, summarize with updateItem(\"{target}\", {{ summary: \"What is now understood\", note: \"Synthesis: key findings and next decision.\" }}) or complete the goal with checkOff(...).",
+                        "Synthesis would be useful after {} source inspection(s). When practical, summarize with updateItem(\"{target}\", {{ summary: \"What is now understood across the inspected source\", note: \"Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.\" }}) or complete the goal with checkOff(...).",
                         self.source_inspections_since_synthesis
                     );
                     self.timeline("action_result", &message);
@@ -1289,6 +1413,74 @@ impl StreamOfConsciousness {
                 scene: current_go_memory_scene_ref(&self.memory.context_provider),
                 occurred_at: ExactTimestamp::now(),
             });
+    }
+
+    fn submit_countenance_memory(
+        &self,
+        emoji: &str,
+        mood: Option<&str>,
+        reason: Option<&str>,
+        source: &str,
+    ) {
+        let mood_suffix = mood
+            .map(|mood| format!(" Mood: {mood}."))
+            .unwrap_or_default();
+        let reason_suffix = reason
+            .map(|reason| format!(" Reason: {reason}."))
+            .unwrap_or_default();
+        for text in [
+            format!("I turn my face into {emoji}.{mood_suffix}{reason_suffix}"),
+            format!("I feel my face turn into {emoji}.{mood_suffix}{reason_suffix}"),
+        ] {
+            self.memory
+                .memory_sink
+                .submit(MemoryTrace::AssistantAnalysisCaptured {
+                    text: format!("{text} Source: {source}."),
+                    scene: current_go_memory_scene_ref(&self.memory.context_provider),
+                    occurred_at: ExactTimestamp::now(),
+                });
+        }
+    }
+
+    fn apply_countenance_change(
+        &mut self,
+        emoji: String,
+        mood: Option<String>,
+        reason: Option<String>,
+        source: &str,
+    ) -> Result<String> {
+        let Some(emoji) = normalize_countenance_emoji(&emoji) else {
+            let message = "Countenance was not changed because no emoji was provided.".to_string();
+            self.timeline_colored("action_error", &message, ANSI_ERROR);
+            return Ok(message);
+        };
+        let mood = mood.and_then(|mood| non_empty_text(&mood).map(str::to_string));
+        let reason = reason.and_then(|reason| non_empty_text(&reason).map(str::to_string));
+        self.current_countenance = Some(CountenanceState {
+            emoji: emoji.clone(),
+            mood: mood.clone(),
+            reason: reason.clone(),
+        });
+        self.submit_countenance_memory(&emoji, mood.as_deref(), reason.as_deref(), source);
+        self.timeline(
+            "countenance",
+            &countenance_timeline_text(&emoji, &mood, &reason),
+        );
+        self.append_observation(StreamObservation::CountenanceChanged {
+            emoji: emoji.clone(),
+            mood: mood.clone(),
+            reason: reason.clone(),
+            source: source.to_string(),
+        })?;
+        Ok(format!(
+            "Countenance set: {}",
+            CountenanceState {
+                emoji,
+                mood,
+                reason,
+            }
+            .prompt_summary()
+        ))
     }
 
     fn set_memory_stage(&self, instruction: &str, summary: Option<&str>) {
@@ -1513,12 +1705,62 @@ impl StreamOfConsciousness {
                                 memory_context,
                             ))?;
                         }
+                        self.append_graph_memory_reminder(trimmed)?;
                     }
                 }
                 Err(message) => anyhow::bail!("failed to read stdin: {message}"),
             }
         }
         Ok(())
+    }
+
+    fn append_graph_memory_reminder(&mut self, text: &str) -> Result<()> {
+        let Some(reason) = self.graph_memory_reminder_reason(text) else {
+            return Ok(());
+        };
+        self.graph_memory_due = Some(reason.clone());
+        self.graph_memory_reminders_since_update =
+            self.graph_memory_reminders_since_update.saturating_add(1);
+
+        let quoted = compact_line(text, 220);
+        let interval_note =
+            if self.graph_memory_reminders_since_update >= GRAPH_MEMORY_REMINDER_INTERVAL {
+                format!(
+                    " This is reminder {} since the last graph memory action.",
+                    self.graph_memory_reminders_since_update
+                )
+            } else {
+                String::new()
+            };
+        let message = format!(
+            "Graph memory reminder: {reason}. When practical, use extractEntities(\"{quoted}\"), searchGraphNodes({{ text: \"...\", limit: 5 }}), then mergeGraphNode(\"kind:stable_slug\", {{ description: \"...\" }}, {{ label: \"Readable label\" }}) or updateGraphNodeFields(...) to add or update durable nodes. Use stable IDs such as person:travis_reed, place:seattle, topic:listenbury_memory, or project:listenbury; do not emit Cypher.{interval_note}"
+        );
+        self.timeline_colored("memory_reminder", &message, ANSI_DIM);
+        self.append_observation(StreamObservation::ActionResult(message))
+    }
+
+    fn graph_memory_reminder_reason(&self, text: &str) -> Option<String> {
+        let trimmed = non_empty_text(text)?;
+        let extracted = self.memory.entity_extractor.extract(trimmed);
+        let entity_summary = extracted
+            .iter()
+            .take(4)
+            .map(|entity| format!("{} ({})", entity.text, entity.provisional_node_id()))
+            .collect::<Vec<_>>();
+        if !entity_summary.is_empty() {
+            return Some(format!(
+                "current user text contains extractable graph entities: {}",
+                entity_summary.join(", ")
+            ));
+        }
+
+        if graph_memory_text_has_cue(trimmed) {
+            return Some(
+                "current user text looks like durable identity, preference, relationship, plan, correction, or recurring context".to_string(),
+            );
+        }
+
+        None
     }
 
     fn drain_mouth(&mut self) -> Result<()> {
@@ -1696,17 +1938,21 @@ impl StreamOfConsciousness {
     fn start_compacted_generation(&mut self) -> Result<()> {
         self.flush_harmony_analysis_memory();
         let work_summary = self.work_board.prompt_summary();
+        let recent_events = recent_events_with_current_countenance(
+            &self.recent_events,
+            self.current_countenance.as_ref(),
+        );
         let rag_query = stream_rag_query(
             &self.config.prompt,
             &self.startup_context,
             work_summary.as_deref(),
-            &self.recent_events,
+            &recent_events,
         );
         let rag_snapshot = build_go_rag_memory_snapshot(&self.memory.context_provider, &rag_query);
         let (prompt_body, retained_event_count) = compact_stream_prompt_for_budget(
             &self.config.prompt,
             &self.startup_context,
-            &self.recent_events,
+            &recent_events,
             work_summary.as_deref(),
             Some(rag_snapshot.prompt_context.as_str()),
             self.context_budget_tokens(),
@@ -1818,6 +2064,7 @@ struct ParsedStreamOutput {
 struct GeneratedTextCleaner {
     pending: String,
     needs_separator: bool,
+    needs_source_navigation_separator: bool,
     last_output_ended_non_whitespace: bool,
 }
 
@@ -1839,6 +2086,7 @@ impl GeneratedTextCleaner {
                 push_generated_text_preserving_separator(
                     &mut output,
                     &mut self.needs_separator,
+                    &mut self.needs_source_navigation_separator,
                     &mut self.last_output_ended_non_whitespace,
                     &self.pending[..keep_from],
                 );
@@ -1849,6 +2097,7 @@ impl GeneratedTextCleaner {
             push_generated_text_preserving_separator(
                 &mut output,
                 &mut self.needs_separator,
+                &mut self.needs_source_navigation_separator,
                 &mut self.last_output_ended_non_whitespace,
                 &self.pending[..control_start],
             );
@@ -1859,6 +2108,7 @@ impl GeneratedTextCleaner {
                 push_generated_text_preserving_separator(
                     &mut output,
                     &mut self.needs_separator,
+                    &mut self.needs_source_navigation_separator,
                     &mut self.last_output_ended_non_whitespace,
                     TYPESCRIPT_START,
                 );
@@ -1885,6 +2135,7 @@ impl GeneratedTextCleaner {
 fn push_generated_text_preserving_separator(
     output: &mut String,
     needs_separator: &mut bool,
+    source_navigation_separator_pending: &mut bool,
     last_output_ended_non_whitespace: &mut bool,
     text: &str,
 ) {
@@ -1896,13 +2147,59 @@ fn push_generated_text_preserving_separator(
         && text.chars().next().is_some_and(|ch| !ch.is_whitespace())
     {
         output.push(' ');
+    } else if *source_navigation_separator_pending
+        && !text.starts_with(TYPESCRIPT_START)
+        && text.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+    {
+        output.push(' ');
     }
-    output.push_str(text);
+    let normalized = normalize_source_navigation_spacing(text);
+    output.push_str(&normalized);
     *needs_separator = false;
-    *last_output_ended_non_whitespace = text
+    *source_navigation_separator_pending = needs_source_navigation_separator(&normalized, "0");
+    *last_output_ended_non_whitespace = normalized
         .chars()
         .next_back()
         .is_some_and(|ch| !ch.is_whitespace());
+}
+
+fn normalize_source_navigation_spacing(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut remaining = text;
+    while let Some((start, word)) = first_source_navigation_word_before_digit(remaining) {
+        output.push_str(&remaining[..start]);
+        output.push_str(word);
+        output.push(' ');
+        remaining = &remaining[start + word.len()..];
+    }
+    output.push_str(remaining);
+    output
+}
+
+fn first_source_navigation_word_before_digit(text: &str) -> Option<(usize, &'static str)> {
+    const WORDS: &[&str] = &["page", "line"];
+    WORDS
+        .iter()
+        .flat_map(|word| {
+            text.match_indices(word).filter_map(move |(start, _)| {
+                let end = start + word.len();
+                let next = text[end..].chars().next()?;
+                let before = text[..start].chars().next_back();
+                (next.is_ascii_digit()
+                    && !before.is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_'))
+                .then_some((start, *word))
+            })
+        })
+        .min_by_key(|(start, _)| *start)
+}
+
+fn needs_source_navigation_separator(previous: &str, next: &str) -> bool {
+    let previous = previous.trim_end();
+    let next = next.trim_start();
+    if !next.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    ["page", "line"].iter().any(|word| previous.ends_with(word))
 }
 
 #[derive(Debug, Default)]
@@ -1913,6 +2210,7 @@ struct HarmonyFinalFilter {
     in_tool_call: Option<String>,
     analysis_needs_separator: bool,
     pending_analysis_separator: bool,
+    analysis_needs_source_navigation_separator: bool,
 }
 
 #[derive(Debug, Default)]
@@ -2013,7 +2311,7 @@ impl HarmonyFinalFilter {
             if self.in_final {
                 if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
                 {
-                    visible.push_str(&self.pending[..start]);
+                    push_harmony_final_visible(&mut visible, &self.pending[..start]);
                     self.pending.drain(..start + marker.len());
                     if HARMONY_FINAL_ENDS.contains(&marker) {
                         self.in_final = false;
@@ -2031,7 +2329,7 @@ impl HarmonyFinalFilter {
                 } else {
                     possible_marker_prefix_start(&self.pending, HARMONY_FINAL_BOUNDARIES)
                 };
-                visible.push_str(&self.pending[..keep_from]);
+                push_harmony_final_visible(&mut visible, &self.pending[..keep_from]);
                 self.pending.drain(..keep_from);
                 break;
             }
@@ -2144,13 +2442,20 @@ impl HarmonyFinalFilter {
             && text.chars().next().is_some_and(|ch| !ch.is_whitespace())
         {
             chunk.push(' ');
+        } else if self.analysis_needs_source_navigation_separator
+            && text.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+        {
+            chunk.push(' ');
         }
-        chunk.push_str(text);
+        let normalized = normalize_source_navigation_spacing(text);
+        chunk.push_str(&normalized);
         self.pending_analysis_separator = false;
-        self.analysis_needs_separator = text
+        self.analysis_needs_separator = normalized
             .chars()
             .next_back()
             .is_some_and(|ch| !ch.is_whitespace());
+        self.analysis_needs_source_navigation_separator =
+            needs_source_navigation_separator(&normalized, "0");
         analysis.push(chunk);
     }
 }
@@ -2164,6 +2469,7 @@ const HARMONY_FINAL_STARTS: &[&str] = &[
 const HARMONY_CHANNEL_STARTS: &[&str] = &[
     "analysis<|message|>",
     "final<|message|>",
+    "commentary<|message|>",
     "<|channel|>final<|message|>",
     "<|start|>assistant<|channel|>final<|message|>",
     "<|channel|>analysis<|message|>",
@@ -2178,6 +2484,7 @@ const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
     "<|start|>",
     "analysis<|message|>",
     "final<|message|>",
+    "commentary<|message|>",
     "<|channel|>final<|message|>",
     "<|start|>assistant<|channel|>final<|message|>",
     "<|channel|>analysis<|message|>",
@@ -2188,6 +2495,7 @@ const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|constrain|>", 
 const HARMONY_TOOL_CALL_ENDS: &[&str] = &[
     "commentaryanalysis<|message|>",
     "commentaryfinal<|message|>",
+    "commentary<|message|>",
     "commentary<|channel|>",
     "commentary<|start|>",
     "<|call|>",
@@ -2311,6 +2619,13 @@ fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)>
         })
 }
 
+fn push_harmony_final_visible(visible: &mut String, text: &str) {
+    if text.trim().is_empty() || is_harmony_terminal_filler(text) {
+        return;
+    }
+    visible.push_str(text);
+}
+
 fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
     (0..text.len())
         .find(|&index| {
@@ -2340,8 +2655,10 @@ fn is_harmony_terminal_filler(text: &str) -> bool {
         normalized.as_str(),
         "end"
             | "done"
+            | "finished"
             | "no output"
             | "no action"
+            | "no action required"
             | "no action needed"
             | "no action is needed"
             | "no further action"
@@ -2778,6 +3095,9 @@ fn looks_like_pete_will_source(source: &str) -> bool {
         "pause",
         "resume",
         "note",
+        "reportBug",
+        "reportFeatureRequest",
+        "reportIssue",
         "setStage",
         "setTopic",
         "startNewTopic",
@@ -3658,6 +3978,18 @@ enum TypeScriptAction {
     Note {
         text: String,
     },
+    SetCountenance {
+        emoji: String,
+        mood: Option<String>,
+        reason: Option<String>,
+    },
+    ReportIssue {
+        issue_type: String,
+        title: String,
+        details: Option<String>,
+        context: Option<String>,
+        severity: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3723,6 +4055,24 @@ impl TypeScriptAction {
                 .and_then(Value::as_str)
                 .is_some_and(meaningful_synthesis_text),
             _ => false,
+        }
+    }
+
+    fn graph_memory_update_label(&self) -> Option<String> {
+        match self {
+            Self::ExtractEntities { text } => Some(format!(
+                "extractEntities({})",
+                text.as_deref()
+                    .map(|text| compact_line(text, 80))
+                    .unwrap_or_else(|| "current text".to_string())
+            )),
+            Self::UpdateGraphNodeFields {
+                node_id, fields, ..
+            } => Some(format!(
+                "merge/update {node_id}: {}",
+                summarize_command_fields(fields)
+            )),
+            _ => None,
         }
     }
 
@@ -3964,6 +4314,32 @@ enum TypeScriptActionPayload {
     Note {
         text: String,
     },
+    #[serde(
+        alias = "set_mood",
+        alias = "setMood",
+        alias = "set_emotion",
+        alias = "setEmotion",
+        alias = "setCountenance",
+        alias = "emote"
+    )]
+    SetCountenance {
+        emoji: String,
+        #[serde(default)]
+        mood: Option<String>,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+    ReportIssue {
+        title: String,
+        #[serde(default, alias = "type", alias = "issueType")]
+        issue_type: Option<String>,
+        #[serde(default)]
+        details: Option<String>,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default)]
+        severity: Option<String>,
+    },
 }
 
 fn execute_typescript_actions(script: &str) -> Result<Vec<TypeScriptAction>> {
@@ -4027,6 +4403,12 @@ fn actions_from_harmony_tool_call(call: &HarmonyToolCall) -> Result<Vec<TypeScri
         .ok_or_else(|| anyhow::anyhow!("unsupported Harmony tool function {name}"))?;
     let mut arguments = parse_harmony_tool_arguments(&call.arguments)?;
     arguments.insert("kind".to_string(), Value::String(kind.to_string()));
+    if matches!(name, "report_feature_request" | "reportFeatureRequest") {
+        arguments.insert(
+            "issue_type".to_string(),
+            Value::String("feature_request".to_string()),
+        );
+    }
     parse_typescript_actions(Value::Object(arguments))
 }
 
@@ -4077,6 +4459,10 @@ fn harmony_tool_kind(name: &str) -> Option<&'static str> {
         "pause" => "pause",
         "resume" => "resume",
         "note" => "note",
+        "set_countenance" | "setCountenance" | "set_mood" | "setMood" | "emote" | "set_emotion"
+        | "setEmotion" => "set_countenance",
+        "report_bug" | "reportBug" | "report_issue" | "reportIssue" => "report_issue",
+        "report_feature_request" | "reportFeatureRequest" => "report_issue",
         "set_stage" | "setStage" => "set_stage",
         "set_topic" | "setTopic" => "set_topic",
         "start_new_topic" | "startNewTopic" => "start_new_topic",
@@ -4084,9 +4470,15 @@ fn harmony_tool_kind(name: &str) -> Option<&'static str> {
         "start_new_episode" | "startNewEpisode" | "newEpisodeStarted" => "start_new_episode",
         "sleeping" | "going_to_sleep" | "goingToSleep" | "go_to_sleep" | "goToSleep" => "sleeping",
         "extract_entities" | "extractEntities" => "extract_entities",
-        "update_graph_node_fields" | "updateGraphNodeFields" | "updateEntityFields" => {
-            "update_graph_node_fields"
-        }
+        "merge_graph_node"
+        | "mergeGraphNode"
+        | "upsert_graph_node"
+        | "upsertGraphNode"
+        | "add_graph_node"
+        | "addGraphNode"
+        | "update_graph_node_fields"
+        | "updateGraphNodeFields"
+        | "updateEntityFields" => "update_graph_node_fields",
         "search_graph_nodes" | "searchGraphNodes" | "searchEntities" => "search_graph_nodes",
         "query_memories" | "queryMemories" | "recall_memories" | "recallMemories" => {
             "query_memories"
@@ -4377,7 +4769,7 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
             non_empty_text(&target).and_then(|target| {
                 non_empty_text(&text).map(|text| TypeScriptAction::AddGoalNote {
                     target: target.to_string(),
-                    text: text.to_string(),
+                    text: normalize_source_navigation_spacing(text),
                 })
             })
         }
@@ -4403,9 +4795,31 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
         }),
         TypeScriptActionPayload::Note { text } => {
             non_empty_text(&text).map(|text| TypeScriptAction::Note {
-                text: text.to_string(),
+                text: normalize_source_navigation_spacing(text),
             })
         }
+        TypeScriptActionPayload::SetCountenance {
+            emoji,
+            mood,
+            reason,
+        } => normalize_countenance_emoji(&emoji).map(|emoji| TypeScriptAction::SetCountenance {
+            emoji,
+            mood: mood.and_then(|mood| non_empty_text(&mood).map(str::to_string)),
+            reason: reason.and_then(|reason| non_empty_text(&reason).map(str::to_string)),
+        }),
+        TypeScriptActionPayload::ReportIssue {
+            title,
+            issue_type,
+            details,
+            context,
+            severity,
+        } => non_empty_text(&title).map(|title| TypeScriptAction::ReportIssue {
+            issue_type: normalized_issue_type(issue_type.as_deref()).to_string(),
+            title: title.to_string(),
+            details: details.and_then(|details| non_empty_text(&details).map(str::to_string)),
+            context: context.and_then(|context| non_empty_text(&context).map(str::to_string)),
+            severity: severity.and_then(|severity| non_empty_text(&severity).map(str::to_string)),
+        }),
     }
 }
 
@@ -4414,7 +4828,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, shutup, pause, resume, note, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, updateGraphNodeFields, searchGraphNodes, queryMemories, recallMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, setSourcePageSize, createGoal, createTask, createChecklist, addGoalNote, logProgress, commentGoal, checkOff, completeItem, checkGoalStep, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
+        "import {{ say, shutup, pause, resume, note, setCountenance, setMood, emote, reportBug, reportFeatureRequest, reportIssue, setStage, setTopic, startNewTopic, topicChangedWhen, startNewEpisode, sleeping, goingToSleep, extractEntities, mergeGraphNode, upsertGraphNode, updateGraphNodeFields, searchGraphNodes, queryMemories, recallMemories, listFiles, readSourceFile, readFile, searchSource, grepSource, setSourcePageSize, createGoal, createTask, createChecklist, addGoalNote, logProgress, commentGoal, checkOff, completeItem, checkGoalStep, checkChecklistItem, updateItem, cancelItem, selectItem }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -4425,6 +4839,19 @@ fn go_typescript_module() -> InternalModule {
         .with_function("pause", ts_pause, 0)
         .with_function("resume", ts_resume, 0)
         .with_function("note", ts_note, 1)
+        .with_function("setCountenance", ts_set_countenance, 2)
+        .with_function("set_countenance", ts_set_countenance, 2)
+        .with_function("setMood", ts_set_countenance, 2)
+        .with_function("set_mood", ts_set_countenance, 2)
+        .with_function("setEmotion", ts_set_countenance, 2)
+        .with_function("set_emotion", ts_set_countenance, 2)
+        .with_function("emote", ts_set_countenance, 2)
+        .with_function("reportBug", ts_report_bug, 2)
+        .with_function("report_bug", ts_report_bug, 2)
+        .with_function("reportFeatureRequest", ts_report_feature_request, 2)
+        .with_function("report_feature_request", ts_report_feature_request, 2)
+        .with_function("reportIssue", ts_report_issue, 2)
+        .with_function("report_issue", ts_report_issue, 2)
         .with_function("setStage", ts_set_stage, 2)
         .with_function("set_stage", ts_set_stage, 2)
         .with_function("setTopic", ts_set_topic, 2)
@@ -4443,6 +4870,12 @@ fn go_typescript_module() -> InternalModule {
         .with_function("go_to_sleep", ts_sleeping, 1)
         .with_function("extractEntities", ts_extract_entities, 1)
         .with_function("extract_entities", ts_extract_entities, 1)
+        .with_function("mergeGraphNode", ts_update_graph_node_fields, 3)
+        .with_function("merge_graph_node", ts_update_graph_node_fields, 3)
+        .with_function("upsertGraphNode", ts_update_graph_node_fields, 3)
+        .with_function("upsert_graph_node", ts_update_graph_node_fields, 3)
+        .with_function("addGraphNode", ts_update_graph_node_fields, 3)
+        .with_function("add_graph_node", ts_update_graph_node_fields, 3)
         .with_function("updateGraphNodeFields", ts_update_graph_node_fields, 3)
         .with_function("update_graph_node_fields", ts_update_graph_node_fields, 3)
         .with_function("updateEntityFields", ts_update_graph_node_fields, 3)
@@ -4536,6 +4969,84 @@ fn ts_note(
     command_value(
         interp,
         json!({ "kind": "note", "text": string_arg(args, 0) }),
+    )
+}
+
+fn ts_set_countenance(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let first = string_arg(args, 0);
+    let option_emoji = optional_string_property_arg(args, 1, "emoji")
+        .or_else(|| optional_string_property_arg(args, 1, "face"))
+        .or_else(|| optional_string_property_arg(args, 1, "expression"));
+    let emoji = match args.first() {
+        Some(JsValue::Object(_)) => optional_string_property_arg(args, 0, "emoji")
+            .or_else(|| optional_string_property_arg(args, 0, "face"))
+            .or_else(|| optional_string_property_arg(args, 0, "expression"))
+            .unwrap_or_default(),
+        _ => option_emoji.clone().unwrap_or_else(|| first.clone()),
+    };
+    let first_is_mood = option_emoji.is_some() && normalize_countenance_emoji(&first).is_none();
+    command_value(
+        interp,
+        json!({
+            "kind": "set_countenance",
+            "emoji": emoji,
+            "mood": optional_string_property_arg(args, 1, "mood")
+                .or_else(|| optional_string_property_arg(args, 0, "mood"))
+                .or_else(|| first_is_mood.then_some(first)),
+            "reason": optional_string_property_arg(args, 1, "reason")
+                .or_else(|| optional_string_property_arg(args, 0, "reason")),
+        }),
+    )
+}
+
+fn ts_report_bug(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    report_issue_command(interp, args, "bug")
+}
+
+fn ts_report_feature_request(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    report_issue_command(interp, args, "feature_request")
+}
+
+fn ts_report_issue(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    let issue_type = optional_string_property_arg(args, 1, "type")
+        .or_else(|| optional_string_property_arg(args, 1, "issueType"))
+        .or_else(|| optional_string_property_arg(args, 1, "issue_type"))
+        .unwrap_or_else(|| "bug".to_string());
+    report_issue_command(interp, args, &issue_type)
+}
+
+fn report_issue_command(
+    interp: &mut Interpreter,
+    args: &[JsValue],
+    default_issue_type: &str,
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "report_issue",
+            "title": string_arg(args, 0),
+            "issue_type": default_issue_type,
+            "details": optional_string_property_arg(args, 1, "details"),
+            "context": optional_string_property_arg(args, 1, "context"),
+            "severity": optional_string_property_arg(args, 1, "severity")
+                .or_else(|| optional_string_property_arg(args, 1, "priority")),
+        }),
     )
 }
 
@@ -5206,8 +5717,43 @@ fn non_empty_text(text: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+fn graph_memory_text_has_cue(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase().replace(['\n', '\r', '\t'], " ");
+    [
+        "remember",
+        "my name is",
+        "name is",
+        "call me",
+        "i am ",
+        "i'm ",
+        "i prefer",
+        "my preference",
+        "i like",
+        "i don't like",
+        "i live",
+        "i work",
+        "my friend",
+        "my partner",
+        "my wife",
+        "my husband",
+        "my kid",
+        "my daughter",
+        "my son",
+        "correct",
+        "correction",
+        "actually",
+        "update my memory",
+        "update your memory",
+        "project",
+        "plan",
+        "meeting",
+    ]
+    .iter()
+    .any(|cue| normalized.contains(cue))
+}
+
 fn clean_optional_text(text: Option<String>) -> Option<String> {
-    text.and_then(|text| non_empty_text(&text).map(str::to_string))
+    text.and_then(|text| non_empty_text(&text).map(normalize_source_navigation_spacing))
 }
 
 fn meaningful_synthesis_text(text: &str) -> bool {
@@ -5289,6 +5835,7 @@ fn go_prompt_stops(format: GoPromptFormat) -> Vec<String> {
         GoPromptFormat::GptOssHarmony => vec![
             "<|return|>".to_string(),
             "<|call|>".to_string(),
+            "commentary<|message|>".to_string(),
             "<|start|>user".to_string(),
             "<|start|>system".to_string(),
             "<|start|>developer".to_string(),
@@ -5318,7 +5865,7 @@ fn initial_stream_prompt(
          Generate continuously. Plain text in raw stream mode, or Harmony analysis in Harmony mode, is private thought visible only as privileged debug stdout; generated thought remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
          Speak or act with the action surface described by the active prompt format: native commentary-channel functions in Harmony mode, or the plain-stream TypeScript runtime reference in plain mode. Keep inner speech in plain text or Harmony analysis.\n\
          The whole runtime prompt is inner speech. If Harmony role names appear, remember that user-role content is Pete's own body/runtime delivering sensory context and not a separate assistant-chat user. Do not emit tool-call JSON except as native Harmony function-call arguments; never emit to=container.exec, shell commands, markdown code fences, or stray channel markers.\n\
-         This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, goal steps, or goal running-log notes instead of only reading more.\n\
+         This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, countenance, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, countenance, goal steps, or goal running-log notes instead of only reading more. Emoji in say(...) changes countenance and is stripped before speech synthesis.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
          Plain-stream TypeScript runtime reference. Harmony tools mirror these actions, but Harmony mode should use native functions on commentary instead:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
@@ -5379,6 +5926,20 @@ fn compact_stream_prompt_for_budget(
     }
 }
 
+fn recent_events_with_current_countenance(
+    recent_events: &VecDeque<String>,
+    countenance: Option<&CountenanceState>,
+) -> VecDeque<String> {
+    let mut events = recent_events.clone();
+    if let Some(countenance) = countenance {
+        events.push_back(format!(
+            "Current countenance: {}",
+            countenance.prompt_summary()
+        ));
+    }
+    events
+}
+
 fn print_debug_block(label: &str, color: &str, body: &str) {
     println!("\n{ANSI_DIM}--- {label} ---{ANSI_RESET}");
     println!("{color}{body}{ANSI_RESET}");
@@ -5388,7 +5949,7 @@ fn print_debug_block(label: &str, color: &str, body: &str) {
 
 fn timeline_color(kind: &str) -> &'static str {
     match kind {
-        "action" | "speech" | "stage" | "note" => ANSI_ACTION,
+        "action" | "speech" | "stage" | "note" | "countenance" => ANSI_ACTION,
         "action_error" => ANSI_ERROR,
         _ => ANSI_TIMELINE,
     }
@@ -5441,6 +6002,36 @@ fn is_meaningful_thought(text: &str) -> bool {
 fn clean_spoken_text(text: &str) -> String {
     let text = strip_emoji(text);
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn last_emoji_sequence(text: &str) -> Option<String> {
+    extract_emoji_sequences(text).pop()
+}
+
+fn normalize_countenance_emoji(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    last_emoji_sequence(trimmed).or_else(|| {
+        (trimmed.chars().count() <= 8 && strip_emoji(trimmed).trim().is_empty())
+            .then(|| trimmed.to_string())
+    })
+}
+
+fn countenance_timeline_text(
+    emoji: &str,
+    mood: &Option<String>,
+    reason: &Option<String>,
+) -> String {
+    let mut text = format!("Face {emoji}");
+    if let Some(mood) = mood.as_deref() {
+        text.push_str(&format!(" mood={mood}"));
+    }
+    if let Some(reason) = reason.as_deref() {
+        text.push_str(&format!(" reason={}", compact_line(reason, 240)));
+    }
+    text
 }
 
 fn render_action_result_for_prompt(text: &str) -> String {
@@ -5850,6 +6441,77 @@ fn is_generation_not_found(error: &anyhow::Error) -> bool {
         .contains("generation not found")
 }
 
+fn append_issue_report(
+    issue_type: &str,
+    title: &str,
+    details: Option<&str>,
+    context: Option<&str>,
+    severity: Option<&str>,
+) -> Result<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(BUG_REPORT_PATH);
+    let entry = format_issue_report_entry(issue_type, title, details, context, severity);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    file.write_all(entry.as_bytes())
+        .with_context(|| format!("failed to append {}", path.display()))?;
+    Ok(format!(
+        "Reported {} in {}: {}",
+        issue_type_label(issue_type).to_ascii_lowercase(),
+        BUG_REPORT_PATH,
+        compact_line(title, 160)
+    ))
+}
+
+fn format_issue_report_entry(
+    issue_type: &str,
+    title: &str,
+    details: Option<&str>,
+    context: Option<&str>,
+    severity: Option<&str>,
+) -> String {
+    let mut entry = format!(
+        "\n## {} - {}\n\n- Title: {}\n",
+        Local::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        issue_type_label(issue_type),
+        title.trim()
+    );
+    if let Some(severity) = severity.and_then(non_empty_text) {
+        entry.push_str(&format!("- Severity: {}\n", severity));
+    }
+    if let Some(context) = context.and_then(non_empty_text) {
+        entry.push_str(&format!("- Context: {}\n", context));
+    }
+    if let Some(details) = details.and_then(non_empty_text) {
+        entry.push_str("\n");
+        entry.push_str(details);
+        entry.push_str("\n");
+    }
+    entry
+}
+
+fn normalized_issue_type(value: Option<&str>) -> &'static str {
+    match value
+        .unwrap_or("bug")
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '-'], "_")
+        .as_str()
+    {
+        "feature" | "feature_request" | "request" | "enhancement" => "feature_request",
+        _ => "bug",
+    }
+}
+
+fn issue_type_label(issue_type: &str) -> &'static str {
+    match normalized_issue_type(Some(issue_type)) {
+        "feature_request" => "Feature request",
+        _ => "Bug",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5870,8 +6532,11 @@ mod tests {
         let prompt = initial_stream_prompt("seed", "startup", None, None);
         assert!(prompt.contains("Frequently summarize what is going on"));
         assert!(prompt.contains("After source inspection results arrive"));
+        assert!(prompt.contains("Source notes are compression artifacts"));
+        assert!(prompt.contains("raw page may fall out of context"));
+        assert!(prompt.contains("modules, structs, traits, functions, constants"));
         assert!(prompt.contains("Do not silently chain source reads"));
-        assert!(prompt.contains("runtime blocks additional source inspection"));
+        assert!(prompt.contains("source inspection is allowed to continue"));
         assert!(prompt.contains("store durable user, project, and work context"));
         assert!(prompt.contains("goal running-log notes"));
         assert!(prompt.contains("note(text) stores vectorized private memory"));
@@ -5887,14 +6552,20 @@ mod tests {
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
         assert!(prompt.contains("runtime automatically imports the action functions"));
+        assert!(prompt.contains("reportBug(title, options?)"));
         assert!(prompt.contains("<ts>note(\"still observing\")</ts>"));
         assert!(!prompt.contains("peteWillBuilder"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("report bugs and feature requests"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Keep running logs on goals"));
         assert!(COMMAND_REMINDER_PROMPT.contains("write vectorized private memory"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is advisory-tracked"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("compress source information"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("not make them mere breadcrumbs"));
         assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection may continue without a note"));
         assert!(COMMAND_REMINDER_PROMPT.contains("synthesize when practical"));
+        assert!(COMPACT_STREAM_RULES.contains("thorough compact summaries"));
+        assert!(COMPACT_STREAM_RULES.contains("not terse breadcrumbs"));
         assert!(prompt.contains("After several source inspections"));
     }
 
@@ -5989,6 +6660,7 @@ mod tests {
         let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
         assert!(stops.iter().any(|stop| stop == "<|return|>"));
         assert!(stops.iter().any(|stop| stop == "<|call|>"));
+        assert!(stops.iter().any(|stop| stop == "commentary<|message|>"));
         assert!(!stops.iter().any(|stop| stop == "<|constrain|>"));
         assert!(!stops.iter().any(|stop| stop == "analysis<|message|>"));
         assert!(!stops.iter().any(|stop| stop == "final<|message|>"));
@@ -6098,6 +6770,53 @@ mod tests {
     }
 
     #[test]
+    fn go_harmony_filter_stops_tool_json_before_bare_commentary_marker() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "commentary to=functions.check_off <|constrain|>json<|message|>{\"target\":\"goal-14\",\"note\":\"Completed source inspection.\"}commentary<|message|>No further actions.".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+
+        assert!(output.analysis.is_empty());
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert_eq!(
+            output.tool_calls,
+            vec![HarmonyToolCall {
+                recipient: "functions.check_off".to_string(),
+                arguments: "{\"target\":\"goal-14\",\"note\":\"Completed source inspection.\"}"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_filter_drops_bare_commentary_terminal_filler() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "final<|message|>No action.commentary<|message|>No action required.commentary<|message|>Finished.commentary<|message|>END".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+
+        assert!(output.analysis.is_empty());
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert!(output.tool_calls.is_empty());
+    }
+
+    #[test]
     fn go_harmony_filter_extracts_bare_tool_json_envelope() {
         let mut filter = HarmonyFinalFilter::default();
         let output = filter.filter_events(&[
@@ -6186,6 +6905,22 @@ mod tests {
     }
 
     #[test]
+    fn go_harmony_native_function_call_normalizes_page_spacing_in_note() {
+        let actions = actions_from_harmony_tool_call(&HarmonyToolCall {
+            recipient: "functions.note".to_string(),
+            arguments: r#"{"text":"Observed page6; next page7."}"#.to_string(),
+        })
+        .expect("native harmony note should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::Note {
+                text: "Observed page 6; next page 7.".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn go_harmony_terminal_filler_tool_call_is_ignorable() {
         assert!(is_ignorable_harmony_tool_call(&HarmonyToolCall {
             recipient: "functions.note".to_string(),
@@ -6269,7 +7004,7 @@ mod tests {
         let first = filter.filter_events(&[LlmEvent::Token {
             text: "Then read page5.".to_string(),
         }]);
-        assert_eq!(first.analysis, vec!["Then read page5."]);
+        assert_eq!(first.analysis, vec!["Then read page 5."]);
 
         let second = filter.filter_events(&[LlmEvent::Token {
             text: "<|end|><|start|>assistant<|channel|>analysis<|message|>We need one action."
@@ -6277,6 +7012,20 @@ mod tests {
         }]);
         assert_eq!(second.analysis, vec![" We need one action."]);
         assert!(second.events.is_empty());
+    }
+
+    #[test]
+    fn go_harmony_analysis_preserves_space_between_page_and_split_number() {
+        let mut filter = HarmonyFinalFilter::for_analysis_prefill();
+        let first = filter.filter_events(&[LlmEvent::Token {
+            text: "Next read page".to_string(),
+        }]);
+        assert_eq!(first.analysis, vec!["Next read page"]);
+
+        let second = filter.filter_events(&[LlmEvent::Token {
+            text: "6.".to_string(),
+        }]);
+        assert_eq!(second.analysis, vec![" 6."]);
     }
 
     #[test]
@@ -6315,7 +7064,10 @@ mod tests {
             text: "We need to proceed listFiles page4. I will stop. This is impossible. No output."
                 .to_string(),
         }]);
-        assert_eq!(output.analysis, vec!["We need to proceed listFiles page4."]);
+        assert_eq!(
+            output.analysis,
+            vec!["We need to proceed listFiles page 4."]
+        );
         assert!(output.events.is_empty());
     }
 
@@ -6428,6 +7180,47 @@ mod tests {
                 workflow: SourceWorkflowUpdate::default(),
             }]
         );
+    }
+
+    #[test]
+    fn countenance_actions_parse_from_typescript() {
+        let actions = execute_typescript_actions(
+            r#"setCountenance("🙂", { mood: "curious", reason: "greeting" })"#,
+        )
+        .expect("setCountenance action should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::SetCountenance {
+                emoji: "🙂".to_string(),
+                mood: Some("curious".to_string()),
+                reason: Some("greeting".to_string()),
+            }]
+        );
+
+        let actions = execute_typescript_actions(r#"setMood("curious", { emoji: "🧐" })"#)
+            .expect("setMood action should parse");
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::SetCountenance {
+                emoji: "🧐".to_string(),
+                mood: Some("curious".to_string()),
+                reason: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn countenance_helpers_use_last_emoji_sequence() {
+        assert_eq!(
+            last_emoji_sequence("Hello 🙂 then 🧐"),
+            Some("🧐".to_string())
+        );
+        assert_eq!(
+            normalize_countenance_emoji("curious 🧐"),
+            Some("🧐".to_string())
+        );
+        assert_eq!(normalize_countenance_emoji("curious"), None);
     }
 
     #[test]
@@ -6713,18 +7506,25 @@ mod tests {
         let mut cleaner = GeneratedTextCleaner::new();
         assert_eq!(
             cleaner.push("Then read page5.<|end|><|start|>streamWe need one action."),
-            "Then read page5. We need one action."
+            "Then read page 5. We need one action."
         );
     }
 
     #[test]
     fn generated_text_cleaner_preserves_space_after_split_stripped_control_tags() {
         let mut cleaner = GeneratedTextCleaner::new();
-        assert_eq!(cleaner.push("Then read page5."), "Then read page5.");
+        assert_eq!(cleaner.push("Then read page5."), "Then read page 5.");
         assert_eq!(
             cleaner.push("<|end|><|start|>streamWe need one action."),
             " We need one action."
         );
+    }
+
+    #[test]
+    fn generated_text_cleaner_preserves_space_between_page_and_split_number() {
+        let mut cleaner = GeneratedTextCleaner::new();
+        assert_eq!(cleaner.push("Then read page"), "Then read page");
+        assert_eq!(cleaner.push("6."), " 6.");
     }
 
     #[test]
@@ -6787,6 +7587,9 @@ mod tests {
                 pause(),
                 resume(),
                 setStage("Setting: lab. Action: Pete listens.", { topic: "lab", summary: "Pete listens" }),
+                reportBug("mouth queue stalled", { details: "TTS stayed queued after interruption.", context: "runtime test", severity: "medium" }),
+                reportFeatureRequest("show VAD confidence", { details: "Useful for live tuning." }),
+                reportIssue("export work board", { type: "feature", details: "Useful after long sessions." }),
                 setTopic("debug loop"),
                 startNewTopic("lab", { topic: "source", instruction: "Pete inspects source." }),
                 topicChangedWhen("look at the source", { fromTopic: "lab", toTopic: "source" }),
@@ -6854,6 +7657,48 @@ mod tests {
                 .iter()
                 .any(|action| matches!(action, TypeScriptAction::SelectWorkItem { .. }))
         );
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TypeScriptAction::ReportIssue {
+                issue_type,
+                title,
+                ..
+            } if issue_type == "bug" && title == "mouth queue stalled"
+        )));
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            TypeScriptAction::ReportIssue {
+                issue_type,
+                title,
+                ..
+            } if issue_type == "feature_request" && title == "show VAD confidence"
+        )));
+    }
+
+    #[test]
+    fn issue_report_entry_formats_bug_and_feature_request_details() {
+        let bug = format_issue_report_entry(
+            "bug",
+            "Mouth queue stalled",
+            Some("Observed after interruption."),
+            Some("go runtime"),
+            Some("medium"),
+        );
+        assert!(bug.contains(" - Bug"));
+        assert!(bug.contains("- Title: Mouth queue stalled"));
+        assert!(bug.contains("- Severity: medium"));
+        assert!(bug.contains("- Context: go runtime"));
+        assert!(bug.contains("Observed after interruption."));
+
+        let feature = format_issue_report_entry(
+            "feature_request",
+            "Add VAD confidence meter",
+            None,
+            None,
+            None,
+        );
+        assert!(feature.contains(" - Feature request"));
+        assert!(feature.contains("- Title: Add VAD confidence meter"));
     }
 
     #[test]

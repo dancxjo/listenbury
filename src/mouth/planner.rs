@@ -14,6 +14,17 @@ pub fn strip_emoji(text: &str) -> String {
     result
 }
 
+/// Return all emoji sequences in a string in the order they appear.
+pub fn extract_emoji_sequences(text: &str) -> Vec<String> {
+    let mut emojis = Vec::new();
+    let mut remaining = text;
+    while let Some((start, end)) = find_first_emoji_sequence(remaining, true) {
+        emojis.push(remaining[start..end].to_string());
+        remaining = &remaining[end..];
+    }
+    emojis
+}
+
 /// Returns `true` if `ch` is a common base emoji character.
 ///
 /// This covers the most-used Unicode emoji ranges (emoticons, symbols,
@@ -1153,5 +1164,13 @@ mod tests {
     fn strip_emoji_removes_compound_emojis() {
         assert_eq!(strip_emoji("Hello 👨‍👩‍👧‍👦 world"), "Hello  world");
         assert_eq!(strip_emoji("Hi 👋🏽 there"), "Hi  there");
+    }
+
+    #[test]
+    fn extract_emoji_sequences_keeps_compound_emojis() {
+        assert_eq!(
+            extract_emoji_sequences("Hello 🙂 👨‍👩‍👧‍👦 hi 👋🏽"),
+            vec!["🙂", "👨‍👩‍👧‍👦", "👋🏽"]
+        );
     }
 }

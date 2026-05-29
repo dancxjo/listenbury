@@ -543,6 +543,31 @@ Runs a local LLM prompt using a Pete Listenbury interaction wrapper.
 listenbury ask "Can you hear me?"
 ```
 
+### `go`
+
+Runs Pete's continuous runtime. Pete can use TypeScript actions from the
+`pete:will` module; the runtime imports them automatically, so Pete should call
+them directly inside a `<ts>...</ts>` action block.
+
+To append a bug or feature request to the project-root `BUGS.md` file:
+
+```ts
+reportBug("Mouth worker stalls after interruption", {
+  details: "Observed after barge-in while TTS was queued.",
+  context: "listenbury go live session",
+  severity: "medium",
+})
+
+reportFeatureRequest("Add a visible VAD confidence meter", {
+  details: "Would help tune live sessions without reading logs.",
+})
+
+reportIssue("Support exporting current go work board", {
+  type: "feature",
+  details: "Useful when summarizing long autonomous sessions.",
+})
+```
+
 ### `complete`
 
 Runs raw local text completion.
