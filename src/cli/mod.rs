@@ -26,6 +26,8 @@ enum Command {
     Say(SayCommand),
     #[command(about = "Run Pete's continuous stream of consciousness")]
     Go(GoCommand),
+    #[command(name = "go1", about = "Run the previous continuous runtime")]
+    Go1(GoCommand),
     #[command(
         name = "harmony-go",
         alias = "go-harmony",
@@ -1255,6 +1257,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
         Command::Go(cmd) => commands::run_go(cmd),
+        Command::Go1(cmd) => commands::run_go1(cmd),
         Command::HarmonyGo(cmd) => commands::run_harmony_go(cmd),
         Command::MbrolaRender(cmd) => commands::run_mbrola_render(cmd),
         Command::Sing(cmd) => commands::run_sing_demo(cmd),

@@ -34,6 +34,28 @@ pub(crate) fn resolve_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     )
 }
 
+pub(crate) fn resolve_harmony_llm_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    let path = if let Some(path) = explicit {
+        path
+    } else if let Some(path) = std::env::var_os("LISTENBURY_HARMONY_LLM_MODEL") {
+        PathBuf::from(path)
+    } else if let Some(path) = std::env::var_os("LISTENBURY_LLM_MODEL") {
+        PathBuf::from(path)
+    } else {
+        resolve_model_path(
+            None,
+            "LISTENBURY_HARMONY_LLM_MODEL",
+            "Harmony GPT-OSS llama.cpp model",
+            "--llm-model",
+            Some("gpt-oss-20b-mxfp4"),
+            None,
+            is_harmony_llm_model,
+        )?
+    };
+    ensure_harmony_llm_model(&path)?;
+    Ok(path)
+}
+
 pub(crate) fn resolve_text_embedding_model(explicit: Option<PathBuf>) -> Result<PathBuf> {
     resolve_model_path(
         explicit,
@@ -79,6 +101,21 @@ pub(crate) fn llm_runtime_placement(
 
 fn llm_model_needs_cpu_runtime(model_path: &Path) -> bool {
     llm_model_filename(model_path).contains("gpt-oss")
+}
+
+fn ensure_harmony_llm_model(model_path: &Path) -> Result<()> {
+    if is_harmony_llm_model(model_path) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "harmony-go requires a GPT-OSS Harmony-capable GGUF model, got `{}`. Pass `--llm-model models/llama/gpt-oss-20b-mxfp4.gguf`, set LISTENBURY_HARMONY_LLM_MODEL, or run `listenbury models select llm gpt-oss`.",
+        model_path.display()
+    )
+}
+
+fn is_harmony_llm_model(model_path: &Path) -> bool {
+    model_path.extension().is_some_and(|ext| ext == "gguf")
+        && llm_model_filename(model_path).contains("gpt-oss")
 }
 
 fn llm_model_filename(model_path: &Path) -> String {
@@ -370,5 +407,11 @@ mod tests {
 
         assert_eq!(placement.gpu_layers, Some(999));
         assert!(!placement.cpu_only);
+    }
+
+    #[test]
+    fn harmony_llm_model_requires_gpt_oss() {
+        assert!(ensure_harmony_llm_model(Path::new("models/llama/gpt-oss-20b-mxfp4.gguf")).is_ok());
+        assert!(ensure_harmony_llm_model(Path::new("models/llama/llama-3.2.gguf")).is_err());
     }
 }
