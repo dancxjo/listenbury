@@ -6,6 +6,14 @@ Keep entries short, actionable, and dated when possible. Prefer preserving bugle
 
 ## Open bugs
 
+### Bug: Pete is prompted as an assistant/persona instead of narrated as an embodied character
+
+- **Severity:** high
+- **Area:** `go` prompt architecture, live runtime model contract
+- **Context:** Current prompt paths tend to ask the model to be Pete or to emit constrained assistant/tool-call responses. Harmony makes this especially visible: the model behaves like a clerk filling out protocol forms, producing sterile idle/status behavior instead of lived continuity.
+- **Risk:** Pete loses the older Daringsby/Earlingsworth feeling of occurring in the world. The runtime optimizes for helpful response shape, compliance, and tool syntax instead of scene continuity, interior movement, gesture, hesitation, memory, and action.
+- **Suggested fix:** Introduce a Narrator architecture. The LLM is the narrator of Pete's ongoing life, not Pete typing into a chat box. It emits typed narrative events such as `<notice>`, `<feel>`, `<say>`, `<act>`, `<recall>`, `<remember>`, and `<withhold>`. Pete is the protagonist being rendered by the model; strict protocols such as Harmony or JSON schema may exist only below the narrator as translators into validated runtime motors.
+
 ### Bug: `go` Harmony rendering/parsing is hand-rolled and fragile
 
 - **Severity:** high
