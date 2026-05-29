@@ -1767,6 +1767,8 @@ struct ParsedStreamOutput {
 #[derive(Debug, Default)]
 struct GeneratedTextCleaner {
     pending: String,
+    needs_separator: bool,
+    last_output_ended_non_whitespace: bool,
 }
 
 impl GeneratedTextCleaner {
@@ -1784,17 +1786,32 @@ impl GeneratedTextCleaner {
         loop {
             let Some(control_start) = first_generated_control_start(&self.pending) else {
                 let keep_from = possible_generated_control_prefix_start(&self.pending);
-                output.push_str(&self.pending[..keep_from]);
+                push_generated_text_preserving_separator(
+                    &mut output,
+                    &mut self.needs_separator,
+                    &mut self.last_output_ended_non_whitespace,
+                    &self.pending[..keep_from],
+                );
                 self.pending = self.pending[keep_from..].to_string();
                 break;
             };
 
-            output.push_str(&self.pending[..control_start]);
+            push_generated_text_preserving_separator(
+                &mut output,
+                &mut self.needs_separator,
+                &mut self.last_output_ended_non_whitespace,
+                &self.pending[..control_start],
+            );
             let control = &self.pending[control_start..];
             if control.starts_with("<|start|>ts>") {
                 let drain_to = control_start + "<|start|>ts>".len();
                 self.pending.drain(..drain_to);
-                output.push_str(TYPESCRIPT_START);
+                push_generated_text_preserving_separator(
+                    &mut output,
+                    &mut self.needs_separator,
+                    &mut self.last_output_ended_non_whitespace,
+                    TYPESCRIPT_START,
+                );
                 continue;
             }
             if control.starts_with("<|start|>ts") && control.len() < "<|start|>ts>".len() {
@@ -1804,6 +1821,7 @@ impl GeneratedTextCleaner {
             if let Some(drain_len) = generated_control_len(control) {
                 let drain_to = control_start + drain_len;
                 self.pending.drain(..drain_to);
+                self.needs_separator = self.last_output_ended_non_whitespace;
                 continue;
             }
 
@@ -1814,11 +1832,36 @@ impl GeneratedTextCleaner {
     }
 }
 
+fn push_generated_text_preserving_separator(
+    output: &mut String,
+    needs_separator: &mut bool,
+    last_output_ended_non_whitespace: &mut bool,
+    text: &str,
+) {
+    if text.is_empty() {
+        return;
+    }
+    if *needs_separator
+        && !text.starts_with(TYPESCRIPT_START)
+        && text.chars().next().is_some_and(|ch| !ch.is_whitespace())
+    {
+        output.push(' ');
+    }
+    output.push_str(text);
+    *needs_separator = false;
+    *last_output_ended_non_whitespace = text
+        .chars()
+        .next_back()
+        .is_some_and(|ch| !ch.is_whitespace());
+}
+
 #[derive(Debug, Default)]
 struct HarmonyFinalFilter {
     pending: String,
     in_final: bool,
     in_analysis: bool,
+    analysis_needs_separator: bool,
+    pending_analysis_separator: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1911,14 +1954,16 @@ impl HarmonyFinalFilter {
             if self.in_analysis {
                 if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
                 {
-                    let text = &self.pending[..start];
-                    if !text.trim().is_empty() && !is_harmony_terminal_filler(text) {
-                        analysis.push(text.to_string());
-                    }
+                    let text = self.pending[..start].to_string();
+                    self.push_analysis(&mut analysis, &text);
                     self.pending.drain(..start + marker.len());
                     if HARMONY_FINAL_ENDS.contains(&marker) {
+                        self.pending_analysis_separator = self.analysis_needs_separator;
+                        self.analysis_needs_separator = false;
                         self.in_analysis = false;
                     } else if HARMONY_FINAL_STARTS.contains(&marker) {
+                        self.pending_analysis_separator = false;
+                        self.analysis_needs_separator = false;
                         self.in_analysis = false;
                         self.in_final = true;
                     } else {
@@ -1927,18 +1972,14 @@ impl HarmonyFinalFilter {
                     continue;
                 }
                 if completed {
-                    let text = self.pending.as_str();
-                    if !text.trim().is_empty() && !is_harmony_terminal_filler(text) {
-                        analysis.push(text.to_string());
-                    }
+                    let text = self.pending.clone();
+                    self.push_analysis(&mut analysis, &text);
                     self.pending.clear();
                 } else {
                     let keep_from =
                         possible_marker_prefix_start(&self.pending, HARMONY_FINAL_BOUNDARIES);
-                    let text = &self.pending[..keep_from];
-                    if !text.trim().is_empty() && !is_harmony_terminal_filler(text) {
-                        analysis.push(text.to_string());
-                    }
+                    let text = self.pending[..keep_from].to_string();
+                    self.push_analysis(&mut analysis, &text);
                     self.pending.drain(..keep_from);
                 }
                 break;
@@ -1961,6 +2002,25 @@ impl HarmonyFinalFilter {
             break;
         }
         HarmonyFilterChunk { visible, analysis }
+    }
+
+    fn push_analysis(&mut self, analysis: &mut Vec<String>, text: &str) {
+        if text.trim().is_empty() || is_harmony_terminal_filler(text) {
+            return;
+        }
+        let mut chunk = String::new();
+        if self.pending_analysis_separator
+            && text.chars().next().is_some_and(|ch| !ch.is_whitespace())
+        {
+            chunk.push(' ');
+        }
+        chunk.push_str(text);
+        self.pending_analysis_separator = false;
+        self.analysis_needs_separator = text
+            .chars()
+            .next_back()
+            .is_some_and(|ch| !ch.is_whitespace());
+        analysis.push(chunk);
     }
 }
 
@@ -5436,6 +5496,22 @@ mod tests {
     }
 
     #[test]
+    fn go_harmony_analysis_preserves_space_across_stripped_channel_markers() {
+        let mut filter = HarmonyFinalFilter::for_analysis_prefill();
+        let first = filter.filter_events(&[LlmEvent::Token {
+            text: "Then read page5.".to_string(),
+        }]);
+        assert_eq!(first.analysis, vec!["Then read page5."]);
+
+        let second = filter.filter_events(&[LlmEvent::Token {
+            text: "<|end|><|start|>assistant<|channel|>analysis<|message|>We need one action."
+                .to_string(),
+        }]);
+        assert_eq!(second.analysis, vec![" We need one action."]);
+        assert!(second.events.is_empty());
+    }
+
+    #[test]
     fn go_harmony_analysis_memory_buffers_token_fragments() {
         let mut buffer = String::new();
         assert!(drain_harmony_analysis_memory(&mut buffer, "Let's", 80, false).is_empty());
@@ -5826,6 +5902,25 @@ mod tests {
         assert_eq!(
             cleaner.push("rt|>ts>say(\"Hi\")</ts>"),
             "<ts>say(\"Hi\")</ts>"
+        );
+    }
+
+    #[test]
+    fn generated_text_cleaner_preserves_space_across_stripped_control_tags() {
+        let mut cleaner = GeneratedTextCleaner::new();
+        assert_eq!(
+            cleaner.push("Then read page5.<|end|><|start|>streamWe need one action."),
+            "Then read page5. We need one action."
+        );
+    }
+
+    #[test]
+    fn generated_text_cleaner_preserves_space_after_split_stripped_control_tags() {
+        let mut cleaner = GeneratedTextCleaner::new();
+        assert_eq!(cleaner.push("Then read page5."), "Then read page5.");
+        assert_eq!(
+            cleaner.push("<|end|><|start|>streamWe need one action."),
+            " We need one action."
         );
     }
 
