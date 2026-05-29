@@ -706,9 +706,9 @@ fn run_harmony_completion(
                 outcome.acted = true;
                 outcome.tool_result = true;
                 break;
-            } else if !text.trim().is_empty() {
+            } else if let Some(text) = speakable_text(&text) {
                 let _ = runtime.execute_action(&PeteAction::Say {
-                    text: text.trim().to_string(),
+                    text: text.to_string(),
                 });
                 runtime.history.push(message);
                 outcome.acted = true;
@@ -2500,7 +2500,15 @@ impl HarmonyRuntime {
     fn execute_action(&mut self, action: &PeteAction) -> String {
         let result = match action {
             PeteAction::Say { text } => {
-                let text = text.trim();
+                let Some(text) = speakable_text(text) else {
+                    let result = json!({
+                        "ok": true,
+                        "result": "Speech suppressed because output was a non-spoken placeholder."
+                    })
+                    .to_string();
+                    self.timeline("tool_result", compact_line(&result, 500));
+                    return result;
+                };
                 self.timeline("speech", format!("Pete: {text}"));
                 match &self.mouth {
                     Some(mouth) => match mouth.speak(text.to_string()) {
@@ -2637,6 +2645,31 @@ fn visible_text_from_message(message: &Message) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn speakable_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || is_non_spoken_placeholder(trimmed) {
+        return None;
+    }
+    Some(trimmed)
+}
+
+fn is_non_spoken_placeholder(text: &str) -> bool {
+    matches!(
+        text.to_ascii_lowercase().as_str(),
+        "[no output]"
+            | "no output"
+            | "(no output)"
+            | "<no output>"
+            | "[no response]"
+            | "no response"
+            | "(no response)"
+            | "<no response>"
+            | "[silence]"
+            | "(silence)"
+            | "<silence>"
+    )
 }
 
 fn non_empty_text(text: &str) -> Option<&str> {
@@ -2852,6 +2885,37 @@ mod tests {
             visible_text_from_message(&message),
             Some("I can hear you.".to_string())
         );
+    }
+
+    #[test]
+    fn harmony_go_filters_non_spoken_output_placeholders() {
+        assert_eq!(speakable_text("[No output]"), None);
+        assert_eq!(speakable_text(" no response "), None);
+        assert_eq!(speakable_text("No outfit."), Some("No outfit."));
+        assert_eq!(speakable_text("I can hear you."), Some("I can hear you."));
+    }
+
+    #[test]
+    fn harmony_go_say_placeholder_does_not_queue_speech() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        let result = runtime.execute_action(&PeteAction::Say {
+            text: "[No output]".to_string(),
+        });
+
+        assert!(result.contains("\"ok\":true"));
+        assert!(result.contains("Speech suppressed"));
+        assert!(!result.contains("Queued speech"));
     }
 
     #[test]
