@@ -6739,7 +6739,9 @@ mod tests {
         assert!(prompt.contains("raw page may fall out of context"));
         assert!(prompt.contains("modules, structs, traits, functions, constants"));
         assert!(prompt.contains("Do not silently chain source reads"));
-        assert!(prompt.contains("source inspection is allowed to continue"));
+        assert!(prompt.contains("consume the knowledge before reading more"));
+        assert!(prompt.contains("record a substantive knowledge capture"));
+        assert!(prompt.contains("defers additional source inspection"));
         assert!(prompt.contains("store durable user, project, and work context"));
         assert!(prompt.contains("goal running-log notes"));
         assert!(prompt.contains("note(text) stores vectorized private memory"));
@@ -6762,13 +6764,14 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("Keep running logs on goals"));
         assert!(COMMAND_REMINDER_PROMPT.contains("write vectorized private memory"));
         assert!(COMMAND_REMINDER_PROMPT.contains("store durable facts or next steps"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is advisory-tracked"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection is consume-gated"));
         assert!(COMMAND_REMINDER_PROMPT.contains("compress source information"));
         assert!(COMMAND_REMINDER_PROMPT.contains("not make them mere breadcrumbs"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("Source inspection may continue without a note"));
-        assert!(COMMAND_REMINDER_PROMPT.contains("synthesize when practical"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("record a substantive knowledge capture"));
+        assert!(COMMAND_REMINDER_PROMPT.contains("synthesize with updateItem"));
         assert!(COMPACT_STREAM_RULES.contains("thorough compact summaries"));
         assert!(COMPACT_STREAM_RULES.contains("not terse breadcrumbs"));
+        assert!(COMPACT_STREAM_RULES.contains("curiosity, learning, maintenance"));
         assert!(prompt.contains("After several source inspections"));
     }
 
