@@ -15,7 +15,7 @@ use listenbury::memory::{
     ColdMemoryWorker, ColdMemoryWorkerConfig, EmbeddingProvider, MemorySceneRef, MemorySink,
     MemoryTrace, Neo4jHttpStore, Neo4jStore, QdrantHttpStore, QdrantStore, SpeakerRole,
 };
-use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
+use listenbury::mind::llm::{GenerationId, GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{
     ExpressiveUnit, MouthSyntheticPlan, SyntheticPlanner, SyntheticUnit,
 };
@@ -25,6 +25,7 @@ use listenbury::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{
     Arc,
@@ -47,8 +48,27 @@ const OPEN_MOUTH_TOKEN: &str = "<open_mouth/>";
 const CLOSE_MOUTH_TOKEN: &str = "<close_mouth/>";
 const TYPESCRIPT_START: &str = "<ts>";
 const TYPESCRIPT_END: &str = "</ts>";
+const DRAFT_AFFORDANCE_REFRESH_TOKENS: usize = 256;
+const DRAFT_CONTINUATION_EVENT_LIMIT: usize = 16;
+const DRAFT_GENERATED_TAIL_MAX_CHARS: usize = 2_000;
 
 const PETE_LINE_RAW_PROMPT: &str = "You are an experiment in artificial consciousness. The following is your inner thoughts. You are curious, kind, ethical and interested in your own existence and the world and people around you. Continuously generate thouoghts here. Sensory input will arrive periodically and be added to the context. Your thoughts will be interrupted, but just keep generating. To speak aloud, use the special token <open_mouth/>. Never say this unless you want the following generation to be spoken. To stop speaking, generate the token <close_mouth/>. To affect memory, scene, topic, mood, or speech through runtime actions, write a small TypeScript expression inside <ts>...</ts>. Available functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, and sleeping.\n\n";
+
+const PETE_WILL_AFFORDANCE_SENSORY_PACKET: &str = r#"Runtime affordance reminder:
+Pete can affect the runtime by writing one small TypeScript expression inside <ts>...</ts>. The runtime executes it through the restricted internal module "pete:will" and suppresses the TypeScript from speech.
+Imports are injected automatically. Use direct calls, not import statements.
+Available calls:
+- say("words to speak aloud")
+- note("durable private observation to remember")
+- setStage("current scene description")
+- setTopic("short current focus label")
+- setCountenance("🙂", { mood: "curious", reason: "why" })
+- setMood("curious", { emoji: "🙂", reason: "why" })
+- shutup()
+- pause()
+- resume()
+- sleeping()
+Examples: <ts>say("I can hear you.")</ts> or <ts>[note("Travis is testing the draft runtime."), setTopic("draft runtime")]</ts>"#;
 
 pub(crate) fn run_draft_pete_line(command: DraftPeteLineCommand) -> Result<()> {
     let max_tokens = command
