@@ -1950,14 +1950,13 @@ impl StreamOfConsciousness {
             self.remember_event(observation.memory_text());
         }
         print_debug_block("prompt delta", ANSI_PROMPT_DELTA, &prompt_text);
-        let append_text =
-            if self.config.prompt_format == GoPromptFormat::GptOssHarmony
-                && let Some(recipient) = self.active_harmony_tool_recipient.as_deref()
-            {
-                format_harmony_tool_result_append(recipient, &prompt_text)
-            } else {
-                format_go_prompt_append(self.config.prompt_format, &prompt_text)
-            };
+        let append_text = if self.config.prompt_format == GoPromptFormat::GptOssHarmony
+            && let Some(recipient) = self.active_harmony_tool_recipient.as_deref()
+        {
+            format_harmony_tool_result_append(recipient, &prompt_text)
+        } else {
+            format_go_prompt_append(self.config.prompt_format, &prompt_text)
+        };
         if self.should_restart_before_append(&append_text) {
             self.restart_generation()?;
         }
@@ -2418,7 +2417,8 @@ impl HarmonyFinalFilter {
             }
 
             if self.in_commentary {
-                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
+                if let Some((start, marker)) =
+                    first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
                 {
                     self.pending.drain(..start + marker.len());
                     self.transition_after_harmony_marker(marker);
@@ -2436,7 +2436,8 @@ impl HarmonyFinalFilter {
             }
 
             if self.in_final {
-                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
+                if let Some((start, marker)) =
+                    first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
                 {
                     push_harmony_final_visible(&mut visible, &self.pending[..start]);
                     self.pending.drain(..start + marker.len());
@@ -2454,7 +2455,8 @@ impl HarmonyFinalFilter {
             }
 
             if self.in_analysis {
-                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
+                if let Some((start, marker)) =
+                    first_marker(&self.pending, HARMONY_CHANNEL_BOUNDARIES)
                 {
                     let text = self.pending[..start].to_string();
                     self.push_analysis(&mut analysis, &text);
@@ -2634,8 +2636,13 @@ const HARMONY_CHANNEL_BOUNDARIES: &[&str] = &[
     "<|start|>assistant<|channel|>commentary<|message|>",
 ];
 
-const HARMONY_CHANNEL_ENDS: &[&str] =
-    &["<|end|>", "<|return|>", "<|constrain|>", "<|call|>", "<|start|>"];
+const HARMONY_CHANNEL_ENDS: &[&str] = &[
+    "<|end|>",
+    "<|return|>",
+    "<|constrain|>",
+    "<|call|>",
+    "<|start|>",
+];
 const HARMONY_TOOL_CALL_ENDS: &[&str] = &[
     "commentaryanalysis<|message|>",
     "commentaryfinal<|message|>",
@@ -6068,13 +6075,16 @@ fn harmony_prompt_body(prompt_body: &str) -> String {
         .strip_prefix(PETE_BEHAVIORAL_CONTRACT)
         .map(str::trim_start)
         .unwrap_or(body);
-    ["Plain-stream runtime reference", "Plain-stream TypeScript runtime reference"]
-        .iter()
-        .filter_map(|marker| body.find(marker))
-        .min()
-        .map(|start| body[..start].trim_end())
-        .unwrap_or(body)
-        .to_string()
+    [
+        "Plain-stream runtime reference",
+        "Plain-stream TypeScript runtime reference",
+    ]
+    .iter()
+    .filter_map(|marker| body.find(marker))
+    .min()
+    .map(|start| body[..start].trim_end())
+    .unwrap_or(body)
+    .to_string()
 }
 
 fn format_go_prompt_append(format: GoPromptFormat, text: &str) -> String {

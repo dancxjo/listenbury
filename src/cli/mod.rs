@@ -26,6 +26,12 @@ enum Command {
     Say(SayCommand),
     #[command(about = "Run Pete's continuous stream of consciousness")]
     Go(GoCommand),
+    #[command(
+        name = "harmony-go",
+        alias = "go-harmony",
+        about = "Run Pete through the official OpenAI Harmony renderer/parser"
+    )]
+    HarmonyGo(GoCommand),
     #[command(about = "Render a raw MBROLA .pho file to WAV")]
     MbrolaRender(MbrolaRenderCommand),
     #[command(about = "Sing the ragtime demo phrase")]
@@ -1242,6 +1248,7 @@ pub(crate) fn run() -> Result<()> {
         Command::Transcribe(cmd) => commands::run_transcribe(cmd),
         Command::Say(cmd) => commands::run_say(cmd),
         Command::Go(cmd) => commands::run_go(cmd),
+        Command::HarmonyGo(cmd) => commands::run_harmony_go(cmd),
         Command::MbrolaRender(cmd) => commands::run_mbrola_render(cmd),
         Command::Sing(cmd) => commands::run_sing_demo(cmd),
         Command::RiperCompare(cmd) => commands::run_riper_compare(cmd),
