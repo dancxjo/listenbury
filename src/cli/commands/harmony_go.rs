@@ -106,18 +106,22 @@ Continue Pete's life truthfully from the reported sensations, memories, body sta
 
 Ground every narration in what is actually reported. Do not invent sensory facts, user intent, world state, or memory. If evidence is weak, carry that uncertainty instead of pretending to know.
 
-In this harmony-go path, no microphone, camera, room sensor, apartment sensor, window sensor, light sensor, or ambient audio sensor is reporting reality unless a runtime message explicitly says so. Do not narrate apartments, rooms, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, weather, or background sounds as facts.
+In this harmony-go path, the microphone/ASR hearing loop is a real connected body sensor when runtime hearing messages arrive. Camera, room, apartment, window, light, weather, object, and ambient-audio scene sensors are not connected unless a runtime message explicitly says otherwise. Do not narrate apartments, rooms, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, weather, or background sounds as facts.
 
 Use analysis for private narrator work: Pete's immediate experience, inner movement, and possible next beat.
 
-When Pete speaks, use the native speech channel, the say motor, or final text for only what Pete actually says. If Pete has nothing real to say, omit the speech channel entirely. Do not write filler, placeholders, apologies, status text, or bracketed labels such as "[No output]".
+When Pete speaks, use the native speech channel, the say motor, or final text for only what Pete actually says. Pete's audible speech must be first person for Pete: say "I can hear you," not "Pete can hear you." If Pete has nothing real to say, omit the speech channel entirely. Do not write filler, placeholders, apologies, status text, or bracketed labels such as "[No output]".
+
+Do not put narration in the speech queue. Never make Pete audibly narrate himself in third person with lines like "Pete listens quietly," "Pete waits," or "Pete is curious." Put private narration in analysis, scene narration in set_stage, durable observations in note, and only Pete's direct spoken words in say, speech, or final text.
 
 When Pete acts, notices, changes expression, recalls, stores memory, changes topic, or binds a voice identity, use the available runtime motors instead of describing the action in speech.
+
+Treat set_stage as Pete's scene channel. If you want to write scene narration such as "Pete stays quietly attentive, awaiting the next spoken cue," call set_stage with that sentence instead of putting it in speech, say, or final text.
 
 Runtime action surfaces:
 - Native Harmony speech channel is available for Pete's audible speech. Anything emitted on speech is spoken aloud by the mouth runtime.
 - Native Harmony function tools are available in commentary. Call them when Pete should affect runtime state: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, and sleeping.
-- Use say only for audible words. Use note for durable observations, set_stage for the current scene, set_topic for the current focus, set_countenance for face/mood, associate_voice_with_person for clear speaker identity, shutup/pause/resume for playback control, and sleeping only for an explicit current shutdown request.
+- Use say only for audible words. Use note for durable observations, set_stage as the scene channel for the current scene, set_topic for the current focus, set_countenance for face/mood, associate_voice_with_person for clear speaker identity, shutup/pause/resume for playback control, and sleeping only for an explicit current shutdown request.
 - If a finalized ASR update plus context makes the speaker's identity clear, call associate_voice_with_person with the current voice and a stable person graph node id such as person:travis.
 - TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
 - TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, and sleeping.
@@ -127,6 +131,8 @@ Runtime action surfaces:
 If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer native Harmony function tools in commentary when possible; use run_typescript or final <ts>...</ts> when a TypeScript expression is the clearest runtime action. Do not use TypeScript for conversation; use it only for runtime actions.
 
 ASR/hearing updates arrive as developer runtime context rather than user-role chat. They are still live heard speech. When a finalized ASR update sounds addressed to Pete, answer it with the speech channel, say, or final speech. Do not answer unstable partial ASR unless there is an urgent interruption.
+
+Pete's own TTS playback may be heard by the microphone and transcribed by ASR. When runtime context says "Waiting to hear myself say: ...", treat matching ASR as Pete hearing his own self speech, not as a new external speaker or request.
 
 Never print channel names, control tokens, raw tool-call syntax, JSON wrappers, shell commands, Markdown fences, or implementation protocol text.
 
@@ -162,12 +168,14 @@ const PETE_HARMONY_STARTUP_TASK: &str = r#"Runtime task:
 Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
-Use the native speech channel only for direct audible speech that Pete truly says. If Pete has nothing specific to say, omit the speech channel entirely. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
+Use the native speech channel only for direct audible speech that Pete truly says in first person. If Pete has nothing specific to say, omit the speech channel entirely. Do not narrate Pete in the speech queue. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
 Native Harmony tools: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
+Treat set_stage as the scene channel for narration about Pete's posture, attention, waiting, or current scene. Do not put that narration in speech.
 TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, sleeping.
 ASR/hearing updates are developer runtime context, but finalized heard speech may still be addressed to Pete. If it asks a question or calls Pete, respond with the speech channel, say, or final speech.
+Pete may hear his own TTS playback through ASR. When runtime says "Waiting to hear myself say: ...", matching ASR is self speech, not a new interlocutor.
 Do not wait for a human chat turn.
-Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
+Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. Microphone/ASR hearing is connected when runtime hearing messages arrive. If no room/world sensors are reporting, say that room/world reality is unknown rather than making up an apartment, window, light, sound, object, or room.
 When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
 On most ticks, do one small thing through the runtime: refresh the scene, set countenance, preserve an observation, choose a topic, or speak one short sentence if speech feels natural.
 Do not loop on "Idle", "No action", "[No output]", or other placeholders. Do not keep choosing the same action text.
@@ -272,6 +280,7 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
         memory: Some(build_harmony_memory_runtime()),
         current_voice: None,
         familiar_voices: FamiliarVoiceMemory::default(),
+        self_speech_expectations: Vec::new(),
         timeline_index: 0,
         tick_index: 0,
     };
@@ -357,8 +366,14 @@ struct HarmonyRuntime {
     memory: Option<HarmonyMemoryRuntime>,
     current_voice: Option<HarmonyVoiceContext>,
     familiar_voices: FamiliarVoiceMemory,
+    self_speech_expectations: Vec<SelfSpeechExpectation>,
     timeline_index: u64,
     tick_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SelfSpeechExpectation {
+    text: String,
 }
 
 #[derive(Debug, Default)]
@@ -706,6 +721,13 @@ fn run_harmony_completion(
                 runtime.history.push(message);
                 outcome.acted = true;
                 outcome.tool_result = true;
+                break;
+            } else if let Some(scene) = narrative_stage_text(&text) {
+                let _ = runtime.execute_action(&PeteAction::SetStage {
+                    scene: scene.to_string(),
+                });
+                runtime.history.push(message);
+                outcome.acted = true;
                 break;
             } else if let Some(text) = speakable_text(&text) {
                 let _ = runtime.execute_action(&PeteAction::Say {
@@ -1527,6 +1549,18 @@ fn drain_harmony_asr_events(
         } = &event
             && let Some(text) = prompt_worthy_text(text)
         {
+            if let Some(expected) = runtime.take_matching_self_speech(&text) {
+                let update = format!(
+                    "You just heard Pete's own playback/self speech aloud: \"{text}\". Waiting to hear myself say: \"{}\". Treat this ASR as self speech, not as a new interlocutor or request.",
+                    expected.text
+                );
+                runtime.timeline("asr_self", compact_line(&update, 500));
+                runtime
+                    .history
+                    .push(Message::from_role_and_content(Role::Developer, update));
+                appended = true;
+                continue;
+            }
             runtime.submit_heard_speech_memory(&text, *confidence);
         }
         if let HarmonyAsrEvent::VoiceSignatureCaptured {
@@ -1689,9 +1723,19 @@ fn harmony_asr_live_user_prompt(event: &HarmonyAsrEvent) -> Option<String> {
 
 #[cfg(feature = "asr-whisper")]
 fn sounds_addressed_to_pete(text: &str) -> bool {
+    if narrative_stage_text(text).is_some() {
+        return false;
+    }
     let lower = text.to_ascii_lowercase();
     let direct_markers = [
-        "pete",
+        "pete,",
+        "hey pete",
+        "hello pete",
+        "pete can you",
+        "pete could you",
+        "pete would you",
+        "pete are you",
+        "pete do you",
         "hello",
         "hey",
         "can you",
@@ -1727,6 +1771,34 @@ fn stable_percent(stable_prefix_len: usize, total_len: usize) -> u64 {
 }
 
 impl HarmonyRuntime {
+    fn expect_self_speech(&mut self, text: &str) {
+        let text = compact_line(text, 500);
+        self.timeline(
+            "self_speech",
+            format!("Waiting to hear myself say: \"{text}\""),
+        );
+        self.history.push(Message::from_role_and_content(
+            Role::Developer,
+            format!(
+                "Pete just queued his own audible speech. Waiting to hear myself say: \"{text}\". If upcoming microphone/ASR resembles this text, label it as Pete's own playback/self speech rather than external speech."
+            ),
+        ));
+        self.self_speech_expectations
+            .push(SelfSpeechExpectation { text });
+        let keep_from = self.self_speech_expectations.len().saturating_sub(8);
+        if keep_from > 0 {
+            self.self_speech_expectations.drain(..keep_from);
+        }
+    }
+
+    fn take_matching_self_speech(&mut self, heard: &str) -> Option<SelfSpeechExpectation> {
+        let index = self
+            .self_speech_expectations
+            .iter()
+            .position(|expected| self_speech_matches(&expected.text, heard))?;
+        Some(self.self_speech_expectations.remove(index))
+    }
+
     fn submit_heard_speech_memory(&self, text: &str, _confidence: Option<f32>) {
         let Some(memory) = self.memory.as_ref() else {
             return;
@@ -2501,6 +2573,11 @@ impl HarmonyRuntime {
     fn execute_action(&mut self, action: &PeteAction) -> String {
         let result = match action {
             PeteAction::Say { text } => {
+                if let Some(scene) = narrative_stage_text(text) {
+                    return self.execute_action(&PeteAction::SetStage {
+                        scene: scene.to_string(),
+                    });
+                }
                 let Some(text) = speakable_text(text) else {
                     let result = json!({
                         "ok": true,
@@ -2514,6 +2591,7 @@ impl HarmonyRuntime {
                 match &self.mouth {
                     Some(mouth) => match mouth.speak(text.to_string()) {
                         Ok(()) => {
+                            self.expect_self_speech(text);
                             json!({"ok": true, "result": format!("Queued speech: {}", compact_line(text, 300))})
                         }
                         Err(error) => {
@@ -2650,10 +2728,49 @@ fn visible_text_from_message(message: &Message) -> Option<String> {
 
 fn speakable_text(text: &str) -> Option<&str> {
     let trimmed = text.trim();
-    if trimmed.is_empty() || is_non_spoken_placeholder(trimmed) {
+    if trimmed.is_empty()
+        || is_non_spoken_placeholder(trimmed)
+        || narrative_stage_text(trimmed).is_some()
+    {
         return None;
     }
     Some(trimmed)
+}
+
+fn narrative_stage_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("pete ")
+        || lower.starts_with("pete's ")
+        || lower.starts_with("the system remains ")
+        || lower.starts_with("the runtime remains ")
+    {
+        return Some(trimmed);
+    }
+    None
+}
+
+fn self_speech_matches(expected: &str, heard: &str) -> bool {
+    let expected_words = normalized_speech_words(expected);
+    let heard_words = normalized_speech_words(heard);
+    if expected_words.is_empty() || heard_words.is_empty() {
+        return false;
+    }
+    let shared = expected_words
+        .iter()
+        .filter(|word| heard_words.contains(*word))
+        .count();
+    let shorter = expected_words.len().min(heard_words.len());
+    shared >= 3 && shared * 2 >= shorter
+}
+
+fn normalized_speech_words(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_alphanumeric() && ch != '\'')
+        .filter_map(|word| {
+            let word = word.trim_matches('\'').to_ascii_lowercase();
+            (!word.is_empty()).then_some(word)
+        })
+        .collect()
 }
 
 fn is_non_spoken_placeholder(text: &str) -> bool {
@@ -2851,7 +2968,9 @@ mod tests {
         ));
         assert!(rendered.contains("Use say only for audible words"));
         assert!(rendered.contains("Use note for durable observations"));
-        assert!(rendered.contains("set_stage for the current scene"));
+        assert!(rendered.contains("set_stage as the scene channel"));
+        assert!(rendered.contains("Treat set_stage as Pete's scene channel"));
+        assert!(rendered.contains("Do not put that narration in speech"));
         assert!(rendered.contains("set_topic for the current focus"));
         assert!(rendered.contains("set_countenance for face/mood"));
         assert!(rendered.contains("associate_voice_with_person for clear speaker identity"));
@@ -2876,8 +2995,11 @@ mod tests {
             rendered.contains("executes the TypeScript block instead of treating it as speech")
         );
         assert!(rendered.contains("Runtime/body context for Pete"));
+        assert!(rendered.contains("Waiting to hear myself say"));
+        assert!(rendered.contains("matching ASR is self speech"));
         assert!(rendered.contains("Reported reality:"));
-        assert!(rendered.contains("no microphone, camera, room"));
+        assert!(rendered.contains("microphone/ASR hearing loop is a real connected body sensor"));
+        assert!(rendered.contains("Microphone/ASR hearing is connected"));
         assert!(rendered.contains("apartments, blinds, refrigerators"));
         assert!(rendered.contains("Begin Pete's continuous live runtime now"));
         assert!(rendered.contains("Be truthful"));
@@ -2915,6 +3037,66 @@ mod tests {
     }
 
     #[test]
+    fn harmony_go_routes_stage_narration_out_of_speech() {
+        let scene = "Pete stays quietly attentive, awaiting the next spoken cue.";
+
+        assert_eq!(narrative_stage_text(scene), Some(scene));
+        assert_eq!(speakable_text(scene), None);
+    }
+
+    #[test]
+    fn harmony_go_tracks_expected_self_speech() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        runtime.expect_self_speech("I'm listening, ready for your next cue.");
+
+        assert!(
+            message_text(runtime.history.last().unwrap()).contains("Waiting to hear myself say")
+        );
+        assert_eq!(
+            runtime
+                .take_matching_self_speech("I'm listening, ready for your next cue.")
+                .map(|expected| expected.text),
+            Some("I'm listening, ready for your next cue.".to_string())
+        );
+    }
+
+    #[test]
+    fn harmony_go_say_stage_narration_updates_scene() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        let result = runtime.execute_action(&PeteAction::Say {
+            text: "Pete stays quietly attentive, awaiting the next spoken cue.".to_string(),
+        });
+
+        assert!(result.contains("\"ok\":true"));
+        assert!(result.contains("Scene updated"));
+        assert!(!result.contains("Queued speech"));
+    }
+
+    #[test]
     fn harmony_go_say_placeholder_does_not_queue_speech() {
         let mut runtime = HarmonyRuntime {
             history: initial_harmony_messages(),
@@ -2924,6 +3106,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2964,6 +3147,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2992,6 +3176,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -3041,6 +3226,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -3059,6 +3245,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -3081,6 +3268,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -3112,6 +3300,7 @@ mod tests {
             memory: None,
             current_voice: None,
             familiar_voices: FamiliarVoiceMemory::default(),
+            self_speech_expectations: Vec::new(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -3154,6 +3343,21 @@ mod tests {
         assert!(prompt.contains("Respond to this live heard speech now"));
         assert!(prompt.contains("call the relevant motor tool"));
         assert!(prompt.contains("omit speech and choose no external action"));
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
+    fn harmony_go_stage_narration_is_not_addressed_speech() {
+        let prompt = harmony_asr_live_user_prompt(&HarmonyAsrEvent::Candidate {
+            event: TranscriptCandidateEvent::CandidateFinalized {
+                id: TranscriptCandidateId(1),
+                text: "Pete stays quietly attentive, awaiting the next spoken cue.".to_string(),
+                confidence: Some(0.9),
+            },
+            latency_ms: 123,
+        });
+
+        assert_eq!(prompt, None);
     }
 
     #[cfg(feature = "asr-whisper")]
