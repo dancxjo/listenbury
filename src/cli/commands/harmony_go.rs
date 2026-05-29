@@ -386,7 +386,7 @@ struct SelfSpeechExpectation {
 }
 
 #[derive(Debug, Default)]
-struct HarmonyAsrPromptState {
+pub(crate) struct HarmonyAsrPromptState {
     active_text: Option<String>,
     announced_text: bool,
 }
@@ -948,13 +948,13 @@ fn harmony_tts_for_command(command: &GoCommand) -> Result<PiperTextToSpeech> {
 }
 
 #[cfg(feature = "asr-whisper")]
-type HarmonyAsrReceiver = crossbeam_channel::Receiver<HarmonyAsrEvent>;
+pub(crate) type HarmonyAsrReceiver = crossbeam_channel::Receiver<HarmonyAsrEvent>;
 
 #[cfg(not(feature = "asr-whisper"))]
-type HarmonyAsrReceiver = ();
+pub(crate) type HarmonyAsrReceiver = ();
 
 #[cfg(feature = "asr-whisper")]
-struct HarmonyEar {
+pub(crate) struct HarmonyEar {
     stop: Arc<AtomicBool>,
     _stream: cpal::Stream,
     processor: Option<JoinHandle<()>>,
@@ -1043,8 +1043,21 @@ const MONO_CHANNELS: u16 = 1;
 
 #[cfg(feature = "asr-whisper")]
 fn start_harmony_asr(command: &GoCommand) -> Result<(Option<HarmonyEar>, HarmonyAsrReceiver)> {
-    let whisper_model = resolve_whisper_model(command.whisper_model.clone())?;
-    let vad_config = resolve_vad_config(command.vad, command.vad_profile.as_deref())?;
+    start_harmony_asr_for_config(
+        command.whisper_model.clone(),
+        command.vad,
+        command.vad_profile.clone(),
+    )
+}
+
+#[cfg(feature = "asr-whisper")]
+pub(crate) fn start_harmony_asr_for_config(
+    whisper_model: Option<std::path::PathBuf>,
+    vad: crate::cli::VadBackendOption,
+    vad_profile: Option<std::path::PathBuf>,
+) -> Result<(Option<HarmonyEar>, HarmonyAsrReceiver)> {
+    let whisper_model = resolve_whisper_model(whisper_model)?;
+    let vad_config = resolve_vad_config(vad, vad_profile.as_deref())?;
     let mut recognizer = WhisperSpeechRecognizer::new_quiet(&whisper_model).with_context(|| {
         format!(
             "failed to load Whisper model at {}",
@@ -1292,6 +1305,15 @@ fn start_harmony_asr(command: &GoCommand) -> Result<(Option<HarmonyEar>, Harmony
 
 #[cfg(not(feature = "asr-whisper"))]
 fn start_harmony_asr(_command: &GoCommand) -> Result<(Option<()>, HarmonyAsrReceiver)> {
+    Ok((None, ()))
+}
+
+#[cfg(not(feature = "asr-whisper"))]
+pub(crate) fn start_harmony_asr_for_config(
+    _whisper_model: Option<std::path::PathBuf>,
+    _vad: crate::cli::VadBackendOption,
+    _vad_profile: Option<std::path::PathBuf>,
+) -> Result<(Option<()>, HarmonyAsrReceiver)> {
     Ok((None, ()))
 }
 
@@ -1622,12 +1644,40 @@ fn drain_harmony_asr_events(
     Ok(appended)
 }
 
+#[cfg(feature = "asr-whisper")]
+pub(crate) fn drain_harmony_asr_text_updates(
+    ear_rx: &HarmonyAsrReceiver,
+    state: &mut HarmonyAsrPromptState,
+) -> Result<Vec<String>> {
+    let mut updates = Vec::new();
+    for event in ear_rx.try_iter() {
+        if let HarmonyAsrEvent::Error { message } = &event {
+            anyhow::bail!("harmony-go ASR failed: {message}");
+        }
+        if let Some(update) = harmony_asr_developer_update(&event, state) {
+            updates.push(update);
+        }
+        if let Some(prompt) = harmony_asr_live_user_prompt(&event) {
+            updates.push(prompt);
+        }
+    }
+    Ok(updates)
+}
+
 #[cfg(not(feature = "asr-whisper"))]
 fn drain_harmony_asr_events(
     _ear_rx: &HarmonyAsrReceiver,
     _runtime: &mut HarmonyRuntime,
 ) -> Result<bool> {
     Ok(false)
+}
+
+#[cfg(not(feature = "asr-whisper"))]
+pub(crate) fn drain_harmony_asr_text_updates(
+    _ear_rx: &HarmonyAsrReceiver,
+    _state: &mut HarmonyAsrPromptState,
+) -> Result<Vec<String>> {
+    Ok(Vec::new())
 }
 
 #[cfg(feature = "asr-whisper")]

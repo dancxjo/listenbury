@@ -57,6 +57,11 @@ enum Command {
     Ask(LlamaTurnCommand),
     #[command(about = "Run a raw local language model completion")]
     Complete(LlamaTurnCommand),
+    #[command(about = "Run raw local LLM experiments with optional TTS")]
+    Draft {
+        #[command(subcommand)]
+        command: DraftCommand,
+    },
     #[command(alias = "round-trip-wav", about = "Reply to a WAV file with speech")]
     Reply(RoundTripWavCommand),
     #[command(about = "Host the WaveDeck session viewer as a local web UI")]
@@ -137,6 +142,15 @@ enum DevCommand {
         about = "Audit a MBROLA voice database against a .pho plan: check diphone coverage and fallback strategies"
     )]
     MbrolaAudit(MbrolaAuditCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum DraftCommand {
+    #[command(
+        name = "pete-line",
+        about = "Run the raw consciousness prompt with open-mouth TTS control"
+    )]
+    PeteLine(DraftPeteLineCommand),
 }
 
 #[derive(Debug, Args)]
@@ -410,6 +424,35 @@ pub(crate) struct LlamaTurnCommand {
     pub(crate) max_tokens: u32,
     #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
     pub(crate) prompt: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DraftPeteLineCommand {
+    #[arg(long, alias = "model-path")]
+    pub(crate) llm_model: Option<PathBuf>,
+    /// Number of llama.cpp layers to offload to the GPU. Use 0 for CPU-only LLM inference.
+    #[arg(long)]
+    pub(crate) llm_gpu_layers: Option<u32>,
+    #[arg(long)]
+    pub(crate) piper_bin: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) piper_voice: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) whisper_model: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = VadBackendOption::WebRtc)]
+    pub(crate) vad: VadBackendOption,
+    /// TOML profile emitted by `listenbury vad calibrate-room --toml`.
+    #[arg(long)]
+    pub(crate) vad_profile: Option<PathBuf>,
+    /// Optional generated-token cap. By default, continue until Ctrl-C or context fills.
+    #[arg(long)]
+    pub(crate) max_tokens: Option<u32>,
+    /// llama.cpp context size for this raw completion.
+    #[arg(long, default_value_t = 8192)]
+    pub(crate) context_size: u32,
+    /// Record open-mouth chunks without synthesizing or playing audio.
+    #[arg(long)]
+    pub(crate) mock_mouth: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1269,6 +1312,9 @@ pub(crate) fn run() -> Result<()> {
             cmd.mode = PromptMode::Raw;
             commands::run_llama_turn(cmd)
         }
+        Command::Draft { command } => match command {
+            DraftCommand::PeteLine(cmd) => commands::run_draft_pete_line(cmd),
+        },
         Command::Reply(cmd) => commands::run_round_trip_wav(cmd),
         Command::Web(cmd) => commands::run_web(cmd),
         Command::Models { command } => commands::run_models(command),
@@ -3129,6 +3175,37 @@ mod tests {
         assert_eq!(command.llm_model, Some(PathBuf::from("models/pete.gguf")));
         assert_eq!(command.max_tokens, Some(64));
         assert_eq!(command.prompt, vec!["hello", "Pete"]);
+    }
+
+    #[test]
+    fn draft_pete_line_parses_go_llm_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "draft",
+            "pete-line",
+            "--llm-model",
+            "models/pete.gguf",
+            "--llm-gpu-layers",
+            "12",
+            "--max-tokens",
+            "64",
+            "--context-size",
+            "4096",
+            "--mock-mouth",
+        ])
+        .expect("draft pete-line should parse");
+
+        let Some(Command::Draft {
+            command: DraftCommand::PeteLine(command),
+        }) = cli.command
+        else {
+            panic!("expected draft pete-line command");
+        };
+        assert_eq!(command.llm_model, Some(PathBuf::from("models/pete.gguf")));
+        assert_eq!(command.llm_gpu_layers, Some(12));
+        assert_eq!(command.max_tokens, Some(64));
+        assert_eq!(command.context_size, 4096);
+        assert!(command.mock_mouth);
     }
 
     #[test]

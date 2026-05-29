@@ -576,6 +576,17 @@ Runs raw local text completion.
 listenbury complete "The next thing to say is"
 ```
 
+### `draft pete-line`
+
+Runs the hardcoded raw consciousness prompt through the same local LLM selection
+path used by `go`. Generated text is private thought by default; text between
+`<open_mouth/>` and `<close_mouth/>` is sent to TTS in sentence or clause
+chunks, pausing token generation while each chunk is spoken.
+
+```bash
+listenbury draft pete-line
+```
+
 ### `transcribe`
 
 Transcribes microphone audio or a WAV file using Whisper.
