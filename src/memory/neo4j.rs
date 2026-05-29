@@ -564,6 +564,30 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                     ("voice_node_id", json!(voice.voice_node_id.as_str())),
                     ("source", json!(voice.source.as_str())),
                     ("span_id", optional_u64(voice.span_id)),
+                    (
+                        "utterance_node_id",
+                        optional_string(voice.utterance_node_id.as_deref()),
+                    ),
+                    (
+                        "associated_person_node_id",
+                        optional_string(voice.associated_person_node_id.as_deref()),
+                    ),
+                    (
+                        "associated_person_label",
+                        optional_string(voice.associated_person_label.as_deref()),
+                    ),
+                    (
+                        "identity_confidence",
+                        optional_f32(voice.identity_confidence),
+                    ),
+                    (
+                        "nearest_voice_node_id",
+                        optional_string(voice.nearest_voice_node_id.as_deref()),
+                    ),
+                    (
+                        "nearest_voice_score",
+                        optional_f32(voice.nearest_voice_score),
+                    ),
                     ("confidence", json!(voice.confidence)),
                     ("captured_at", json!(captured_at)),
                 ]),
@@ -586,6 +610,89 @@ pub fn trace_write_for(trace: &MemoryTrace, sequence: u64) -> Neo4jTraceWrite {
                 kind: "SIGNATURE_OF".to_string(),
             });
             related_nodes.push(voice_node);
+            if let Some(utterance_node_id) = voice.utterance_node_id.as_ref() {
+                let utterance_node = Neo4jNode {
+                    logical_id: utterance_node_id.clone(),
+                    label: "Utterance".to_string(),
+                    properties: props([
+                        ("utterance_node_id", json!(utterance_node_id.as_str())),
+                        ("source", json!(voice.source.as_str())),
+                        ("span_id", optional_u64(voice.span_id)),
+                        ("text", optional_string(voice.utterance_text.as_deref())),
+                        ("last_observed_at", json!(captured_at)),
+                    ]),
+                };
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: signature_node.logical_id.clone(),
+                    to_logical_id: utterance_node.logical_id.clone(),
+                    kind: "HEARD_IN_UTTERANCE".to_string(),
+                });
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: utterance_node.logical_id.clone(),
+                    to_logical_id: signature_node.logical_id.clone(),
+                    kind: "HAS_VOICE_SIGNATURE".to_string(),
+                });
+                if let Some(person_node_id) = voice.associated_person_node_id.as_ref() {
+                    relationships.push(Neo4jRelationship {
+                        from_logical_id: utterance_node.logical_id.clone(),
+                        to_logical_id: person_node_id.clone(),
+                        kind: "SPOKEN_BY".to_string(),
+                    });
+                }
+                related_nodes.push(utterance_node);
+            }
+            if let Some(person_node_id) = voice.associated_person_node_id.as_ref() {
+                let person_node = Neo4jNode {
+                    logical_id: person_node_id.clone(),
+                    label: "Person".to_string(),
+                    properties: props([
+                        ("person_node_id", json!(person_node_id.as_str())),
+                        (
+                            "label",
+                            optional_string(voice.associated_person_label.as_deref()),
+                        ),
+                        ("last_voice_node_id", json!(voice.voice_node_id.as_str())),
+                        (
+                            "last_voice_signature_id",
+                            json!(voice.voice_signature_id.as_str()),
+                        ),
+                        (
+                            "voice_identity_confidence",
+                            optional_f32(voice.identity_confidence),
+                        ),
+                        ("last_heard_at", json!(captured_at)),
+                    ]),
+                };
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: voice.voice_node_id.clone(),
+                    to_logical_id: person_node_id.clone(),
+                    kind: "ASSOCIATED_WITH_PERSON".to_string(),
+                });
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: signature_node.logical_id.clone(),
+                    to_logical_id: person_node_id.clone(),
+                    kind: "ATTRIBUTED_TO_PERSON".to_string(),
+                });
+                related_nodes.push(person_node);
+            }
+            if let Some(nearest_voice_node_id) = voice.nearest_voice_node_id.as_ref()
+                && nearest_voice_node_id != &voice.voice_node_id
+            {
+                let nearest_voice_node = Neo4jNode {
+                    logical_id: nearest_voice_node_id.clone(),
+                    label: "Voice".to_string(),
+                    properties: props([
+                        ("voice_node_id", json!(nearest_voice_node_id.as_str())),
+                        ("last_matched_at", json!(captured_at)),
+                    ]),
+                };
+                relationships.push(Neo4jRelationship {
+                    from_logical_id: signature_node.logical_id.clone(),
+                    to_logical_id: nearest_voice_node_id.clone(),
+                    kind: "MATCHED_NEAREST_VOICE".to_string(),
+                });
+                related_nodes.push(nearest_voice_node);
+            }
             signature_node
         }
     };
@@ -734,6 +841,10 @@ fn optional_string(value: Option<&str>) -> Value {
     value.map_or(Value::Null, |value| json!(value))
 }
 
+fn optional_f32(value: Option<f32>) -> Value {
+    value.map_or(Value::Null, |value| json!(value))
+}
+
 fn vector_safe_id(value: &str) -> String {
     value
         .chars()
@@ -750,7 +861,7 @@ fn vector_safe_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::trace::{MemoryEntityMention, MemorySceneRef};
+    use crate::memory::trace::{MemoryEntityMention, MemorySceneRef, MemoryVoiceVector};
     use crate::time::ExactTimestamp;
 
     #[test]
@@ -895,6 +1006,52 @@ mod tests {
         );
         assert!(write.relationships.iter().any(|relationship| {
             relationship.kind == "UPDATES_NODE" && relationship.to_logical_id == "person:travis"
+        }));
+    }
+
+    #[test]
+    fn voice_vector_capture_links_signature_utterance_and_person() {
+        let trace = MemoryTrace::VoiceVectorCaptured {
+            voice: MemoryVoiceVector {
+                voice_signature_id: "voice-signature:abc".to_string(),
+                voice_node_id: "voice:abc".to_string(),
+                source: "harmony_go_mic".to_string(),
+                span_id: Some(9),
+                utterance_node_id: Some("utterance:harmony-go:9".to_string()),
+                utterance_text: Some("hello pete".to_string()),
+                associated_person_node_id: Some("person:travis".to_string()),
+                associated_person_label: Some("Travis".to_string()),
+                identity_confidence: Some(0.91),
+                nearest_voice_node_id: Some("voice:known".to_string()),
+                nearest_voice_score: Some(0.87),
+                vector: vec![0.1, 0.2],
+                confidence: 0.8,
+            },
+            captured_at: ExactTimestamp::now(),
+        };
+
+        let write = trace_write_for(&trace, 12);
+
+        assert_eq!(write.primary_node.label, "VoiceSignature");
+        assert!(write.related_nodes.iter().any(|node| {
+            node.logical_id == "utterance:harmony-go:9"
+                && node.properties.get("text").and_then(Value::as_str) == Some("hello pete")
+        }));
+        assert!(
+            write
+                .related_nodes
+                .iter()
+                .any(|node| { node.logical_id == "person:travis" && node.label == "Person" })
+        );
+        assert!(write.relationships.iter().any(|relationship| {
+            relationship.from_logical_id == "utterance:harmony-go:9"
+                && relationship.to_logical_id == "person:travis"
+                && relationship.kind == "SPOKEN_BY"
+        }));
+        assert!(write.relationships.iter().any(|relationship| {
+            relationship.from_logical_id == "voice-signature:abc"
+                && relationship.to_logical_id == "voice:known"
+                && relationship.kind == "MATCHED_NEAREST_VOICE"
         }));
     }
 }

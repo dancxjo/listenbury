@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::memory::neo4j::{Neo4jTraceWrite, Neo4jWriteResult, trace_write_for};
-use crate::memory::trace::MemoryTrace;
+use crate::memory::trace::{MemoryTrace, MemoryVoiceVector};
 
 pub const DEFAULT_QDRANT_COLLECTION: &str = "listenbury_memory";
 pub const PICTURE_QDRANT_COLLECTION: &str = "listenbury_picture_vectors";
@@ -537,19 +537,38 @@ pub fn vector_documents_for_trace(
                 ("voice_node_id", json!(voice.voice_node_id.as_str())),
                 ("source", json!(voice.source.as_str())),
                 ("span_id", optional_u64(voice.span_id)),
+                (
+                    "utterance_node_id",
+                    optional(voice.utterance_node_id.clone()),
+                ),
+                ("utterance_text", optional(voice.utterance_text.clone())),
+                (
+                    "associated_person_node_id",
+                    optional(voice.associated_person_node_id.clone()),
+                ),
+                (
+                    "associated_person_label",
+                    optional(voice.associated_person_label.clone()),
+                ),
+                (
+                    "identity_confidence",
+                    optional_f32(voice.identity_confidence),
+                ),
+                (
+                    "nearest_voice_node_id",
+                    optional(voice.nearest_voice_node_id.clone()),
+                ),
+                (
+                    "nearest_voice_score",
+                    optional_f32(voice.nearest_voice_score),
+                ),
                 ("confidence", json!(voice.confidence)),
                 ("neo4j_node_id", json!(voice.voice_node_id.as_str())),
                 ("graph_node_id", json!(voice.voice_node_id.as_str())),
                 ("vector_target", json!("referent")),
                 ("artifact_node_id", json!(voice.voice_signature_id.as_str())),
                 ("referent_node_id", json!(voice.voice_node_id.as_str())),
-                (
-                    "related_graph_node_ids",
-                    json!([
-                        voice.voice_signature_id.as_str(),
-                        voice.voice_node_id.as_str()
-                    ]),
-                ),
+                ("related_graph_node_ids", json!(voice_related_ids(voice))),
             ],
         )],
         _ => Vec::new(),
@@ -680,6 +699,10 @@ fn optional_u64(value: Option<u64>) -> Value {
     value.map_or(Value::Null, |value| json!(value))
 }
 
+fn optional_f32(value: Option<f32>) -> Value {
+    value.map_or(Value::Null, |value| json!(value))
+}
+
 fn image_related_ids(image_id: &str, content_node_id: Option<&str>) -> Vec<String> {
     let mut ids = vec![image_id.to_string()];
     if let Some(content_node_id) = content_node_id
@@ -687,6 +710,25 @@ fn image_related_ids(image_id: &str, content_node_id: Option<&str>) -> Vec<Strin
     {
         ids.push(content_node_id.to_string());
     }
+    ids
+}
+
+fn voice_related_ids(voice: &MemoryVoiceVector) -> Vec<String> {
+    let mut ids = vec![
+        voice.voice_signature_id.clone(),
+        voice.voice_node_id.clone(),
+    ];
+    if let Some(id) = voice.utterance_node_id.as_ref() {
+        ids.push(id.clone());
+    }
+    if let Some(id) = voice.associated_person_node_id.as_ref() {
+        ids.push(id.clone());
+    }
+    if let Some(id) = voice.nearest_voice_node_id.as_ref() {
+        ids.push(id.clone());
+    }
+    ids.sort();
+    ids.dedup();
     ids
 }
 
@@ -922,6 +964,13 @@ mod tests {
                 voice_node_id: "voice:sig-1".to_string(),
                 source: "native_mic".to_string(),
                 span_id: Some(7),
+                utterance_node_id: Some("utterance:test:7".to_string()),
+                utterance_text: Some("hello there".to_string()),
+                associated_person_node_id: Some("person:travis".to_string()),
+                associated_person_label: Some("Travis".to_string()),
+                identity_confidence: Some(0.92),
+                nearest_voice_node_id: Some("voice:known".to_string()),
+                nearest_voice_score: Some(0.88),
                 vector: vec![0.4, 0.5],
                 confidence: 0.8,
             },
@@ -945,6 +994,27 @@ mod tests {
                 .get("referent_node_id")
                 .and_then(Value::as_str),
             Some("voice:sig-1")
+        );
+        assert_eq!(
+            voice_document
+                .payload
+                .get("utterance_node_id")
+                .and_then(Value::as_str),
+            Some("utterance:test:7")
+        );
+        assert_eq!(
+            voice_document
+                .payload
+                .get("associated_person_node_id")
+                .and_then(Value::as_str),
+            Some("person:travis")
+        );
+        assert!(
+            voice_document
+                .payload
+                .get("related_graph_node_ids")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| ids.iter().any(|id| id == "person:travis"))
         );
     }
 }

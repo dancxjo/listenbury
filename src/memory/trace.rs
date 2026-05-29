@@ -46,6 +46,20 @@ pub struct MemoryVoiceVector {
     pub voice_node_id: String,
     pub source: String,
     pub span_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utterance_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utterance_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub associated_person_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub associated_person_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_confidence: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nearest_voice_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nearest_voice_score: Option<f32>,
     pub vector: Vec<f32>,
     pub confidence: f32,
 }

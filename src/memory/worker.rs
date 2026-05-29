@@ -43,6 +43,7 @@ pub struct ColdMemoryWorkerReport {
     pub vector_upserts_ok: usize,
     pub vector_upserts_failed: usize,
     pub embedding_failures: usize,
+    pub text_vector_skips_no_embedding: usize,
 }
 
 /// Background worker that drains [`MemoryTrace`] values from a channel.
@@ -130,7 +131,12 @@ fn process_trace(
             }
         } else {
             let Some(embedding_provider) = config.embeddings.as_ref() else {
-                tracing::warn!("cold-memory text vector skipped: no embedding provider configured");
+                if report.text_vector_skips_no_embedding == 0 {
+                    tracing::warn!(
+                        "cold-memory text vectors skipped: no embedding provider configured"
+                    );
+                }
+                report.text_vector_skips_no_embedding += 1;
                 continue;
             };
             match embedding_provider.embed(&document.text) {

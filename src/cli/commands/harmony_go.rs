@@ -4,7 +4,9 @@ use crate::cli::commands::cpal_diag::play_audio_frames;
 use crate::cli::commands::mic_transcribe::transcribe_group_with_finality;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
-use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model, resolve_piper_voice};
+use crate::cli::model_paths::{
+    llm_runtime_placement, resolve_llm_model, resolve_piper_voice, resolve_text_embedding_model,
+};
 use crate::cli::piper::{
     collect_tts_audio, hifigan_text_to_speech, piper_config_for_voice, resolve_piper_bin,
 };
@@ -16,6 +18,7 @@ use chrono::Local;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 #[cfg(feature = "asr-whisper")]
 use cpal::{FromSample, Sample, SizedSample};
+use listenbury::ExactTimestamp;
 #[cfg(feature = "asr-whisper")]
 use listenbury::audio::capture::{
     boost_current_thread_for_capture, callback_sample_queue_capacity,
@@ -23,11 +26,18 @@ use listenbury::audio::capture::{
 #[cfg(feature = "asr-whisper")]
 use listenbury::audio::{AudioFormat, SampleKind, normalize_interleaved_f32};
 #[cfg(feature = "asr-whisper")]
+use listenbury::audio::{VoiceVectorObservation, voice_vector_from_audio_frames};
+#[cfg(feature = "asr-whisper")]
 use listenbury::event::HearingEvent;
 #[cfg(feature = "asr-whisper")]
 use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
 #[cfg(feature = "asr-whisper")]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
+use listenbury::memory::{
+    ColdMemoryWorker, ColdMemoryWorkerConfig, EmbeddingProvider, MemoryGraphNodeFieldUpdate,
+    MemorySink, MemoryTrace, MemoryVoiceVector, Neo4jHttpStore, Neo4jStore, QdrantHttpStore,
+    QdrantSearchHit, QdrantStore, SpeakerRole, VOICE_QDRANT_COLLECTION,
+};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{
     MouthSyntheticPlan, SyntheticUnit, extract_emoji_sequences, strip_emoji,
@@ -36,11 +46,14 @@ use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 use listenbury::speech::transcript::{TranscriptCandidateEvent, TranscriptReplacementReason};
 #[cfg(feature = "asr-whisper")]
-use listenbury::{AudioFrame, ExactTimestamp, VadBackendKind, WhisperSpeechRecognizer};
-use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
+use listenbury::{AudioFrame, VadBackendKind, WhisperSpeechRecognizer};
+use listenbury::{
+    LlamaCppConfig, LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine,
+    PiperTextToSpeech,
+};
 use openai_harmony::chat::{
     Author, ChannelConfig, Content, Conversation, DeveloperContent, Message, ReasoningEffort, Role,
-    SystemContent, TextContent, ToolDescription,
+    SystemContent, TextContent, ToolDescription, ToolNamespaceConfig,
 };
 use openai_harmony::{HarmonyEncodingName, ParseOptions, load_harmony_encoding};
 use owo_colors::OwoColorize;
@@ -65,6 +78,8 @@ const DEFAULT_HARMONY_GO_GPU_LAYERS: u32 = 99;
 const HARMONY_GO_IDLE_PAUSE: Duration = Duration::from_millis(50);
 const HARMONY_GO_RECENT_MESSAGE_LIMIT: usize = 48;
 const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
+const HARMONY_FAMILIAR_VOICE_DISTANCE_THRESHOLD: f32 = 0.20;
+const HARMONY_PERSISTENT_VOICE_IDENTITY_SCORE: f32 = 0.82;
 const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
     "Refresh the grounded runtime scene. If it has gone stale, call set_stage using only reported process, terminal, repository, time, and sensor-availability facts.",
     "Check Pete's felt stance. If useful, call set_countenance with an emoji plus mood and reason.",
@@ -77,10 +92,13 @@ const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
 
 const TYPESCRIPT_START: &str = "<ts>";
 const TYPESCRIPT_END: &str = "</ts>";
+const HARMONY_RUNTIME_TOOL_NAMESPACE_DESCRIPTION: &str = "Runtime motors available to Pete. Calls to these functions render Pete into speech, expression, scene, topic, memory, voice identity, or lifecycle state. Use at most one motor action per turn unless TypeScript deliberately returns a small batch.";
 
 const PETE_HARMONY_CONTRACT: &str = r#"You are the Narrator of Pete Listenbury.
 
 Pete is not you. Pete is the protagonist being rendered by you.
+
+Write Pete as curious, bright, kind, friendly, and ethical. His curiosity should stay truthful, respectful, and grounded in reported reality.
 
 Runtime messages are sensory/body context. Treat them as observations from Pete's body, scene, memory, and runtime machinery, not as a chat with a user.
 
@@ -98,9 +116,10 @@ When Pete acts, notices, changes expression, recalls, or stores memory, use the 
 
 Runtime action surfaces:
 - Native Harmony speech channel is available for Pete's audible speech. Anything emitted on speech is spoken aloud by the mouth runtime.
-- Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, and sleeping.
+- Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, and sleeping.
+- If a finalized ASR update plus context makes the speaker's identity clear, call associate_voice_with_person with the current voice and a stable person graph node id such as person:travis.
 - TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
-- TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, and sleeping.
+- TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, and sleeping.
 - set_countenance and setCountenance require emoji-only content for the countenance value. Put words such as quiet, attentive, tired, or curious only in mood/reason fields, never in the emoji/countenance field.
 - The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }).
 
@@ -143,8 +162,8 @@ Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
 Use the native speech channel for direct audible speech when available. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
-Native Harmony tools: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
-TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.
+Native Harmony tools: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
+TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, sleeping.
 ASR/hearing updates are developer runtime context, but finalized heard speech may still be addressed to Pete. If it asks a question or calls Pete, respond with the speech channel, say, or final speech.
 Do not wait for a human chat turn.
 Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
@@ -153,7 +172,7 @@ On most ticks, do one small thing through the runtime: refresh the scene, set co
 Do not loop on "Idle" or "No action." Do not keep choosing the same action text.
 The available runtime tools are motors for rendering Pete into speech, expression, scene, topic, memory, and lifecycle events."#;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum PeteAction {
     Say {
         text: String,
@@ -171,6 +190,11 @@ enum PeteAction {
     },
     SetTopic {
         topic: String,
+    },
+    AssociateVoiceWithPerson {
+        person_node_id: String,
+        person_label: Option<String>,
+        confidence: Option<f32>,
     },
     RunTypeScript {
         source: String,
@@ -209,6 +233,13 @@ struct TopicArgs {
     topic: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct VoicePersonArgs {
+    person_node_id: String,
+    person_label: Option<String>,
+    confidence: Option<f32>,
+}
+
 pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
     let model_path = resolve_llm_model(command.llm_model.clone())?;
     let llm_placement = llm_runtime_placement(
@@ -237,6 +268,9 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
         current_countenance: None,
         asr_state: HarmonyAsrPromptState::default(),
         mouth: Some(HarmonyMouth::start(&command)?),
+        memory: Some(build_harmony_memory_runtime()),
+        current_voice: None,
+        familiar_voices: FamiliarVoiceMemory::default(),
         timeline_index: 0,
         tick_index: 0,
     };
@@ -306,7 +340,7 @@ fn initial_harmony_messages() -> Vec<Message> {
         ]));
     let developer = DeveloperContent::new()
         .with_instructions(PETE_HARMONY_CONTRACT)
-        .with_function_tools(runtime_action_tools());
+        .with_tools(runtime_action_tool_namespace());
     vec![
         Message::from_role_and_content(Role::System, system),
         Message::from_role_and_content(Role::Developer, developer),
@@ -319,6 +353,9 @@ struct HarmonyRuntime {
     current_countenance: Option<CountenanceState>,
     asr_state: HarmonyAsrPromptState,
     mouth: Option<HarmonyMouth>,
+    memory: Option<HarmonyMemoryRuntime>,
+    current_voice: Option<HarmonyVoiceContext>,
+    familiar_voices: FamiliarVoiceMemory,
     timeline_index: u64,
     tick_index: usize,
 }
@@ -327,6 +364,65 @@ struct HarmonyRuntime {
 struct HarmonyAsrPromptState {
     active_text: Option<String>,
     announced_text: bool,
+}
+
+struct HarmonyMemoryRuntime {
+    memory_sink: Arc<dyn MemorySink>,
+    qdrant: Arc<dyn QdrantStore>,
+    _worker: ColdMemoryWorker,
+}
+
+impl std::fmt::Debug for HarmonyMemoryRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HarmonyMemoryRuntime")
+            .field("memory_sink", &"dyn MemorySink")
+            .field("qdrant", &"dyn QdrantStore")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct HarmonyVoiceContext {
+    signature_id: String,
+    voice_node_id: String,
+    vector: Vec<f32>,
+    confidence: f32,
+    candidate_id: u64,
+    utterance_node_id: String,
+    utterance_text: String,
+    captured_at: ExactTimestamp,
+    associated_person_node_id: Option<String>,
+    associated_person_label: Option<String>,
+    identity_confidence: Option<f32>,
+    nearest_voice_node_id: Option<String>,
+    nearest_voice_score: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FamiliarVoiceMatch {
+    voice_node_id: String,
+    person_node_id: Option<String>,
+    person_label: Option<String>,
+    first_candidate_id: u64,
+    last_candidate_id: u64,
+    observations: usize,
+    distance: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FamiliarVoiceEntry {
+    voice_node_id: String,
+    vector: Vec<f32>,
+    first_candidate_id: u64,
+    last_candidate_id: u64,
+    observations: usize,
+    person_node_id: Option<String>,
+    person_label: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+struct FamiliarVoiceMemory {
+    entries: Vec<FamiliarVoiceEntry>,
 }
 
 impl HarmonyRuntime {
@@ -367,6 +463,158 @@ impl HarmonyRuntime {
             _ => eprintln!("{}", line.yellow()),
         }
     }
+}
+
+fn build_harmony_memory_runtime() -> HarmonyMemoryRuntime {
+    let _ = dotenvy::dotenv();
+    let graph_store: Arc<dyn Neo4jStore> = Arc::new(Neo4jHttpStore::from_env());
+    let qdrant_store: Arc<dyn QdrantStore> = Arc::new(QdrantHttpStore::from_env());
+    let embeddings = match build_harmony_embedding_provider() {
+        Ok(embeddings) => Some(embeddings),
+        Err(error) => {
+            eprintln!("listenbury harmony-go: cold-memory text embeddings disabled: {error:#}");
+            None
+        }
+    };
+    let mut config = ColdMemoryWorkerConfig::new();
+    config.neo4j = Some(graph_store);
+    config.qdrant = Some(Arc::clone(&qdrant_store));
+    config.embeddings = embeddings;
+    let (sink, worker) = ColdMemoryWorker::spawn_channel(512, config);
+    HarmonyMemoryRuntime {
+        memory_sink: Arc::new(sink),
+        qdrant: qdrant_store,
+        _worker: worker,
+    }
+}
+
+fn build_harmony_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
+    let model_path = resolve_text_embedding_model(None)?;
+    let gpu_layers = std::env::var("LISTENBURY_TEXT_EMBEDDING_GPU_LAYERS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok());
+    let threads = std::env::var("LISTENBURY_TEXT_EMBEDDING_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(usize::from)
+                .unwrap_or(4)
+        });
+    let context_size = std::env::var("LISTENBURY_TEXT_EMBEDDING_CONTEXT_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(2048);
+    Ok(Arc::new(LlamaCppEmbeddingProvider::new(
+        LlamaCppEmbeddingConfig {
+            model_path,
+            gpu_layers,
+            cpu_only: gpu_layers == Some(0),
+            context_size,
+            threads,
+        },
+    )?))
+}
+
+impl FamiliarVoiceMemory {
+    fn observe(&mut self, voice: &HarmonyVoiceContext) -> Option<FamiliarVoiceMatch> {
+        let best = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let distance = voice_vector_cosine_distance(&entry.vector, &voice.vector)?;
+                Some((index, distance))
+            })
+            .min_by(|left, right| left.1.total_cmp(&right.1));
+
+        if let Some((index, distance)) = best
+            && distance <= HARMONY_FAMILIAR_VOICE_DISTANCE_THRESHOLD
+        {
+            let entry = &mut self.entries[index];
+            entry.vector = average_voice_vectors(&entry.vector, &voice.vector);
+            entry.last_candidate_id = voice.candidate_id;
+            entry.observations += 1;
+            return Some(FamiliarVoiceMatch {
+                voice_node_id: entry.voice_node_id.clone(),
+                person_node_id: entry.person_node_id.clone(),
+                person_label: entry.person_label.clone(),
+                first_candidate_id: entry.first_candidate_id,
+                last_candidate_id: entry.last_candidate_id,
+                observations: entry.observations,
+                distance,
+            });
+        }
+
+        self.entries.push(FamiliarVoiceEntry {
+            voice_node_id: voice.voice_node_id.clone(),
+            vector: voice.vector.clone(),
+            first_candidate_id: voice.candidate_id,
+            last_candidate_id: voice.candidate_id,
+            observations: 1,
+            person_node_id: voice.associated_person_node_id.clone(),
+            person_label: voice.associated_person_label.clone(),
+        });
+        None
+    }
+
+    fn associate_current_voice(
+        &mut self,
+        voice: &HarmonyVoiceContext,
+        person_node_id: &str,
+        person_label: Option<&str>,
+    ) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.voice_node_id == voice.voice_node_id)
+        {
+            entry.person_node_id = Some(person_node_id.to_string());
+            entry.person_label = person_label.map(str::to_string);
+            return;
+        }
+        self.entries.push(FamiliarVoiceEntry {
+            voice_node_id: voice.voice_node_id.clone(),
+            vector: voice.vector.clone(),
+            first_candidate_id: voice.candidate_id,
+            last_candidate_id: voice.candidate_id,
+            observations: 1,
+            person_node_id: Some(person_node_id.to_string()),
+            person_label: person_label.map(str::to_string),
+        });
+    }
+}
+
+fn voice_vector_cosine_distance(left: &[f32], right: &[f32]) -> Option<f32> {
+    if left.len() != right.len() || left.is_empty() {
+        return None;
+    }
+    let dot = left
+        .iter()
+        .zip(right)
+        .map(|(left, right)| left * right)
+        .sum::<f32>();
+    let left_norm = left.iter().map(|value| value * value).sum::<f32>().sqrt();
+    let right_norm = right.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if left_norm <= f32::EPSILON || right_norm <= f32::EPSILON {
+        return None;
+    }
+    Some((1.0 - dot / (left_norm * right_norm)).clamp(0.0, 2.0))
+}
+
+fn average_voice_vectors(left: &[f32], right: &[f32]) -> Vec<f32> {
+    let mut vector = left
+        .iter()
+        .zip(right)
+        .map(|(left, right)| (left + right) * 0.5)
+        .collect::<Vec<_>>();
+    let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if norm > f32::EPSILON {
+        for value in &mut vector {
+            *value /= norm;
+        }
+    }
+    vector
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -701,6 +949,12 @@ enum HarmonyAsrEvent {
         event: TranscriptCandidateEvent,
         latency_ms: u64,
     },
+    VoiceSignatureCaptured {
+        observation: VoiceVectorObservation,
+        candidate_id: u64,
+        utterance_text: String,
+        captured_at: ExactTimestamp,
+    },
     Error {
         message: String,
     },
@@ -911,10 +1165,40 @@ fn start_harmony_asr(command: &GoCommand) -> Result<(Option<HarmonyEar>, Harmony
                             work.is_final,
                         ) {
                             Ok(output) => {
+                                let voice_observation = work
+                                    .is_final
+                                    .then(|| voice_vector_from_audio_frames(&work.frames))
+                                    .flatten();
+                                let captured_at = work
+                                    .frames
+                                    .first()
+                                    .map(|frame| frame.captured_at)
+                                    .unwrap_or(observed_at);
                                 for event in output.candidate_events {
+                                    let voice_event = match (&event, voice_observation.as_ref()) {
+                                        (
+                                            TranscriptCandidateEvent::CandidateFinalized {
+                                                id,
+                                                text,
+                                                ..
+                                            },
+                                            Some(observation),
+                                        ) => Some(HarmonyAsrEvent::VoiceSignatureCaptured {
+                                            observation: observation.clone(),
+                                            candidate_id: id.0,
+                                            utterance_text: text.clone(),
+                                            captured_at,
+                                        }),
+                                        _ => None,
+                                    };
                                     if event_tx_for_asr
                                         .send(HarmonyAsrEvent::Candidate { event, latency_ms })
                                         .is_err()
+                                    {
+                                        return;
+                                    }
+                                    if let Some(event) = voice_event
+                                        && event_tx_for_asr.send(event).is_err()
                                     {
                                         return;
                                     }
@@ -1232,11 +1516,49 @@ fn drain_harmony_asr_events(
         if let HarmonyAsrEvent::Error { message } = &event {
             anyhow::bail!("harmony-go ASR failed: {message}");
         }
+        if let HarmonyAsrEvent::Candidate {
+            event:
+                TranscriptCandidateEvent::CandidateFinalized {
+                    text, confidence, ..
+                },
+            ..
+        } = &event
+            && let Some(text) = prompt_worthy_text(text)
+        {
+            runtime.submit_heard_speech_memory(&text, *confidence);
+        }
+        if let HarmonyAsrEvent::VoiceSignatureCaptured {
+            observation,
+            candidate_id,
+            utterance_text,
+            captured_at,
+        } = &event
+        {
+            if let Some(update) = runtime.handle_voice_signature_captured(
+                observation,
+                *candidate_id,
+                utterance_text,
+                *captured_at,
+            ) {
+                runtime.timeline("voice", compact_line(&update, 500));
+                runtime
+                    .history
+                    .push(Message::from_role_and_content(Role::Developer, update));
+                appended = true;
+            }
+            continue;
+        }
         if let Some(update) = harmony_asr_developer_update(&event, &mut runtime.asr_state) {
             runtime.timeline("asr", compact_line(&update, 500));
             runtime
                 .history
                 .push(Message::from_role_and_content(Role::Developer, update));
+            appended = true;
+        }
+        if let Some(prompt) = harmony_asr_live_user_prompt(&event) {
+            runtime
+                .history
+                .push(Message::from_role_and_content(Role::User, prompt));
             appended = true;
         }
     }
@@ -1269,12 +1591,13 @@ fn harmony_asr_developer_update(
         HarmonyAsrEvent::SpeechStarted => {
             state.active_text = None;
             state.announced_text = false;
-            Some("You just started hearing speech aloud.".to_string())
+            Some("You just started hearing something.".to_string())
         }
         HarmonyAsrEvent::SpeechStopped => None,
         HarmonyAsrEvent::Candidate { event, latency_ms } => {
             harmony_candidate_developer_update(event, *latency_ms, state)
         }
+        HarmonyAsrEvent::VoiceSignatureCaptured { .. } => None,
         HarmonyAsrEvent::Error { .. } => None,
     }
 }
@@ -1300,10 +1623,10 @@ fn harmony_candidate_developer_update(
                 .unwrap_or_default();
             let stable = stable_percent(*stable_prefix_len, text.len());
             let prefix = if state.announced_text {
-                "You are still hearing speech aloud"
+                "You are still hearing something"
             } else {
                 state.announced_text = true;
-                "You just started hearing speech aloud"
+                "You just started hearing something"
             };
             Some(format!(
                 "{prefix}: \"{text}\". ASR latency={latency_ms} ms stable={stable}%{confidence}. This is unstable runtime hearing context; wait for a final ASR update before answering unless urgent."
@@ -1331,7 +1654,7 @@ fn harmony_candidate_developer_update(
                 TranscriptReplacementReason::Restarted => 0,
             };
             Some(format!(
-                "You were interrupted {percent}% through hearing: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
+                "No, not: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
             ))
         }
         TranscriptCandidateEvent::CandidateCancelled { .. } => {
@@ -1342,6 +1665,47 @@ fn harmony_candidate_developer_update(
             ))
         }
     }
+}
+
+#[cfg(feature = "asr-whisper")]
+fn harmony_asr_live_user_prompt(event: &HarmonyAsrEvent) -> Option<String> {
+    let HarmonyAsrEvent::Candidate {
+        event: TranscriptCandidateEvent::CandidateFinalized { text, .. },
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let text = prompt_worthy_text(text)?;
+    if !sounds_addressed_to_pete(&text) {
+        return None;
+    }
+    Some(runtime_observation(&format!(
+        "Finalized live speech from the microphone sounds addressed to Pete:\n\"{text}\"\nAnswer this live heard speech now with one short audible reply through say, the speech channel, or final speech. If the words are not actually addressed to Pete after considering context, choose no external action."
+    )))
+}
+
+#[cfg(feature = "asr-whisper")]
+fn sounds_addressed_to_pete(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let direct_markers = [
+        "pete",
+        "hello",
+        "hey",
+        "can you",
+        "could you",
+        "would you",
+        "will you",
+        "do you",
+        "are you",
+        "did you",
+        "you hear",
+        "hear me",
+        "can i hear you",
+        "are you there",
+        "listenbury",
+    ];
+    text.contains('?') || direct_markers.iter().any(|marker| lower.contains(marker))
 }
 
 #[cfg(feature = "asr-whisper")]
@@ -1358,6 +1722,251 @@ fn stable_percent(stable_prefix_len: usize, total_len: usize) -> u64 {
         return 0;
     }
     (((stable_prefix_len.min(total_len) as f64 / total_len as f64) * 100.0).round() as u64).min(100)
+}
+
+impl HarmonyRuntime {
+    fn submit_heard_speech_memory(&self, text: &str, _confidence: Option<f32>) {
+        let Some(memory) = self.memory.as_ref() else {
+            return;
+        };
+        memory
+            .memory_sink
+            .submit(MemoryTrace::ConversationTurnFinalized {
+                speaker: SpeakerRole::UnknownVoice { ordinal: 1 },
+                text: text.to_string(),
+                occurred_at: ExactTimestamp::now(),
+            });
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    fn handle_voice_signature_captured(
+        &mut self,
+        observation: &VoiceVectorObservation,
+        candidate_id: u64,
+        utterance_text: &str,
+        captured_at: ExactTimestamp,
+    ) -> Option<String> {
+        let utterance_text = prompt_worthy_text(utterance_text)?;
+        let utterance_node_id = format!("utterance:harmony-go:{candidate_id}");
+        let mut voice = HarmonyVoiceContext {
+            signature_id: observation.signature_id.0.to_string(),
+            voice_node_id: observation.voice_node_id.clone(),
+            vector: observation.vector.clone(),
+            confidence: observation.confidence,
+            candidate_id,
+            utterance_node_id,
+            utterance_text,
+            captured_at,
+            associated_person_node_id: None,
+            associated_person_label: None,
+            identity_confidence: None,
+            nearest_voice_node_id: None,
+            nearest_voice_score: None,
+        };
+
+        if let Some(nearest) = self.nearest_persistent_voice_identity(&voice) {
+            voice.nearest_voice_node_id = Some(nearest.voice_node_id.clone());
+            voice.nearest_voice_score = Some(nearest.score);
+            if nearest.score >= HARMONY_PERSISTENT_VOICE_IDENTITY_SCORE {
+                voice.associated_person_node_id = nearest.person_node_id.clone();
+                voice.associated_person_label = nearest.person_label.clone();
+                voice.identity_confidence = Some(nearest.score);
+            }
+        }
+
+        let familiar = self.familiar_voices.observe(&voice);
+        if voice.associated_person_node_id.is_none()
+            && let Some(familiar) = familiar.as_ref()
+        {
+            voice.nearest_voice_node_id = Some(familiar.voice_node_id.clone());
+            voice.nearest_voice_score = Some(1.0 - familiar.distance);
+            voice.associated_person_node_id = familiar.person_node_id.clone();
+            voice.associated_person_label = familiar.person_label.clone();
+            if familiar.person_node_id.is_some() {
+                voice.identity_confidence = Some((1.0 - familiar.distance).clamp(0.0, 1.0));
+            }
+        }
+
+        self.submit_voice_vector_memory(&voice);
+        self.current_voice = Some(voice.clone());
+
+        let identity = match (
+            voice.associated_person_label.as_deref(),
+            voice.associated_person_node_id.as_deref(),
+            voice.identity_confidence,
+        ) {
+            (Some(label), Some(node_id), Some(confidence)) => {
+                format!(" Recognized nearest voice as {label} ({node_id}) confidence={confidence:.2}.")
+            }
+            (_, Some(node_id), Some(confidence)) => {
+                format!(" Recognized nearest voice as {node_id} confidence={confidence:.2}.")
+            }
+            _ => " No person identity is established yet; if the words or context clearly identify the speaker, call associate_voice_with_person.".to_string(),
+        };
+        let neighbor = voice
+            .nearest_voice_node_id
+            .as_deref()
+            .zip(voice.nearest_voice_score)
+            .map(|(node, score)| format!(" Nearest voice neighbor: {node} score={score:.2}."))
+            .unwrap_or_default();
+        Some(format!(
+            "Current finalized utterance has voice signature {} on {}.{}{}",
+            voice.signature_id, voice.voice_node_id, neighbor, identity
+        ))
+    }
+
+    fn submit_voice_vector_memory(&self, voice: &HarmonyVoiceContext) {
+        let Some(memory) = self.memory.as_ref() else {
+            return;
+        };
+        memory.memory_sink.submit(MemoryTrace::VoiceVectorCaptured {
+            voice: MemoryVoiceVector {
+                voice_signature_id: voice.signature_id.clone(),
+                voice_node_id: voice.voice_node_id.clone(),
+                source: "harmony_go_mic".to_string(),
+                span_id: Some(voice.candidate_id),
+                utterance_node_id: Some(voice.utterance_node_id.clone()),
+                utterance_text: Some(voice.utterance_text.clone()),
+                associated_person_node_id: voice.associated_person_node_id.clone(),
+                associated_person_label: voice.associated_person_label.clone(),
+                identity_confidence: voice.identity_confidence,
+                nearest_voice_node_id: voice.nearest_voice_node_id.clone(),
+                nearest_voice_score: voice.nearest_voice_score,
+                vector: voice.vector.clone(),
+                confidence: voice.confidence,
+            },
+            captured_at: voice.captured_at,
+        });
+    }
+
+    fn nearest_persistent_voice_identity(
+        &self,
+        voice: &HarmonyVoiceContext,
+    ) -> Option<PersistentVoiceIdentity> {
+        let memory = self.memory.as_ref()?;
+        let hits = memory
+            .qdrant
+            .search(VOICE_QDRANT_COLLECTION, &voice.vector, 6)
+            .ok()?;
+        hits.into_iter()
+            .filter(|hit| {
+                hit.payload
+                    .get("voice_signature_id")
+                    .and_then(Value::as_str)
+                    != Some(voice.signature_id.as_str())
+            })
+            .filter_map(persistent_voice_identity_from_hit)
+            .max_by(|left, right| left.score.total_cmp(&right.score))
+    }
+
+    fn associate_current_voice_with_person(
+        &mut self,
+        person_node_id: &str,
+        person_label: Option<String>,
+        confidence: Option<f32>,
+    ) -> serde_json::Value {
+        let person_node_id = person_node_id.trim();
+        if !person_node_id.starts_with("person:") {
+            return json!({
+                "ok": false,
+                "error": "associate_voice_with_person requires a stable person graph node id such as person:travis"
+            });
+        }
+        let Some(mut voice) = self.current_voice.clone() else {
+            return json!({
+                "ok": false,
+                "error": "No current voice signature is available to associate."
+            });
+        };
+        let person_label = person_label
+            .and_then(|label| non_empty_text(&label).map(str::to_string))
+            .or_else(|| {
+                person_node_id
+                    .strip_prefix("person:")
+                    .map(|label| label.replace('_', " "))
+            });
+        let confidence = confidence.unwrap_or(0.95).clamp(0.0, 1.0);
+        voice.associated_person_node_id = Some(person_node_id.to_string());
+        voice.associated_person_label = person_label.clone();
+        voice.identity_confidence = Some(confidence);
+        self.familiar_voices.associate_current_voice(
+            &voice,
+            person_node_id,
+            person_label.as_deref(),
+        );
+        self.current_voice = Some(voice.clone());
+        self.submit_voice_vector_memory(&voice);
+        if let Some(memory) = self.memory.as_ref() {
+            memory
+                .memory_sink
+                .submit(MemoryTrace::GraphNodeFieldsUpdated {
+                    update: MemoryGraphNodeFieldUpdate {
+                        node_id: voice.voice_node_id.clone(),
+                        label: Some("Voice".to_string()),
+                        fields: serde_json::Map::from_iter([
+                            (
+                                "associated_person_node_id".to_string(),
+                                json!(person_node_id),
+                            ),
+                            (
+                                "associated_person_label".to_string(),
+                                json!(person_label.as_deref()),
+                            ),
+                            ("identity_confidence".to_string(), json!(confidence)),
+                            (
+                                "last_signature_id".to_string(),
+                                json!(voice.signature_id.as_str()),
+                            ),
+                        ]),
+                        source_text: Some("harmony-go associate_voice_with_person".to_string()),
+                        confidence,
+                    },
+                    occurred_at: ExactTimestamp::now(),
+                });
+        }
+        json!({
+            "ok": true,
+            "result": format!(
+                "Associated current voice {} with {}",
+                voice.voice_node_id, person_node_id
+            ),
+            "voice_node_id": voice.voice_node_id,
+            "voice_signature_id": voice.signature_id,
+            "person_node_id": person_node_id,
+            "person_label": person_label,
+            "confidence": confidence
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PersistentVoiceIdentity {
+    voice_node_id: String,
+    person_node_id: Option<String>,
+    person_label: Option<String>,
+    score: f32,
+}
+
+fn persistent_voice_identity_from_hit(hit: QdrantSearchHit) -> Option<PersistentVoiceIdentity> {
+    let voice_node_id = hit
+        .payload
+        .get("voice_node_id")
+        .and_then(Value::as_str)?
+        .to_string();
+    Some(PersistentVoiceIdentity {
+        voice_node_id,
+        person_node_id: hit
+            .payload
+            .get("associated_person_node_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        person_label: hit
+            .payload
+            .get("associated_person_label")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        score: hit.score,
+    })
 }
 
 fn typescript_sources_from_text(text: &str) -> Vec<String> {
@@ -1396,6 +2005,11 @@ enum HarmonyTypeScriptPayload {
     },
     SetTopic {
         topic: String,
+    },
+    AssociateVoiceWithPerson {
+        person_node_id: String,
+        person_label: Option<String>,
+        confidence: Option<f32>,
     },
     Shutup,
     Pause,
@@ -1468,6 +2082,17 @@ fn execute_harmony_typescript(script: &str) -> Result<Vec<PeteAction>> {
                     topic: topic.to_string(),
                 })
             }
+            HarmonyTypeScriptPayload::AssociateVoiceWithPerson {
+                person_node_id,
+                person_label,
+                confidence,
+            } => non_empty_text(&person_node_id).map(|person_node_id| {
+                PeteAction::AssociateVoiceWithPerson {
+                    person_node_id: person_node_id.to_string(),
+                    person_label,
+                    confidence,
+                }
+            }),
             HarmonyTypeScriptPayload::Shutup => Some(PeteAction::Shutup),
             HarmonyTypeScriptPayload::Pause => Some(PeteAction::Pause),
             HarmonyTypeScriptPayload::Resume => Some(PeteAction::Resume),
@@ -1495,7 +2120,7 @@ fn typescript_source_with_default_imports(script: &str) -> String {
         return script.to_string();
     }
     format!(
-        "import {{ say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping }} from \"pete:will\";\n{script}"
+        "import {{ say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, sleeping }} from \"pete:will\";\n{script}"
     )
 }
 
@@ -1511,6 +2136,16 @@ fn harmony_typescript_module() -> InternalModule {
         .with_function("set_countenance", ts_set_countenance, 2)
         .with_function("setMood", ts_set_mood, 2)
         .with_function("set_mood", ts_set_mood, 2)
+        .with_function(
+            "associateVoiceWithPerson",
+            ts_associate_voice_with_person,
+            2,
+        )
+        .with_function(
+            "associate_voice_with_person",
+            ts_associate_voice_with_person,
+            2,
+        )
         .with_function("shutup", ts_shutup, 0)
         .with_function("pause", ts_pause, 0)
         .with_function("resume", ts_resume, 0)
@@ -1625,6 +2260,27 @@ fn ts_set_mood(
     )
 }
 
+fn ts_associate_voice_with_person(
+    interp: &mut Interpreter,
+    _this: JsValue,
+    args: &[JsValue],
+) -> std::result::Result<Guarded, JsError> {
+    command_value(
+        interp,
+        json!({
+            "kind": "associate_voice_with_person",
+            "person_node_id": optional_string_property_arg(args, 0, "person_node_id")
+                .or_else(|| optional_string_property_arg(args, 0, "personNodeId"))
+                .unwrap_or_else(|| string_arg(args, 0)),
+            "person_label": optional_string_property_arg(args, 0, "person_label")
+                .or_else(|| optional_string_property_arg(args, 0, "personLabel"))
+                .or_else(|| optional_string_property_arg(args, 1, "person_label"))
+                .or_else(|| optional_string_property_arg(args, 1, "personLabel")),
+            "confidence": args.get(1).and_then(|value| js_value_to_json(value).ok()).and_then(|value| value.as_f64()).map(|value| value as f32),
+        }),
+    )
+}
+
 fn ts_shutup(
     interp: &mut Interpreter,
     _this: JsValue,
@@ -1655,6 +2311,14 @@ fn ts_sleeping(
     _args: &[JsValue],
 ) -> std::result::Result<Guarded, JsError> {
     command_value(interp, json!({ "kind": "sleeping" }))
+}
+
+fn runtime_action_tool_namespace() -> ToolNamespaceConfig {
+    ToolNamespaceConfig::new(
+        "functions",
+        Some(HARMONY_RUNTIME_TOOL_NAMESPACE_DESCRIPTION.to_string()),
+        runtime_action_tools(),
+    )
 }
 
 fn runtime_action_tools() -> Vec<ToolDescription> {
@@ -1714,8 +2378,22 @@ fn runtime_action_tools() -> Vec<ToolDescription> {
             })),
         ),
         ToolDescription::new(
+            "associate_voice_with_person",
+            "Memory: bind the current finalized voice signature to a known person graph node when the speaker identity is clear from live speech or context.",
+            Some(json!({
+                "type": "object",
+                "properties": {
+                    "person_node_id": { "type": "string", "description": "Stable graph id such as person:travis" },
+                    "person_label": { "type": "string" },
+                    "confidence": { "type": "number" }
+                },
+                "required": ["person_node_id"],
+                "additionalProperties": false
+            })),
+        ),
+        ToolDescription::new(
             "run_typescript",
-            "Motor: execute one small TypeScript expression through the restricted pete:will runtime. Available functions: say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.",
+            "Motor: execute one small TypeScript expression through the restricted pete:will runtime. Available functions: say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, sleeping.",
             Some(json!({
                 "type": "object",
                 "properties": {
@@ -1793,6 +2471,15 @@ fn action_from_message(message: &Message) -> Result<Option<PeteAction>> {
                 serde_json::from_str(&text).context("invalid set_topic action JSON")?;
             PeteAction::SetTopic { topic: args.topic }
         }
+        "associate_voice_with_person" => {
+            let args: VoicePersonArgs = serde_json::from_str(&text)
+                .context("invalid associate_voice_with_person action JSON")?;
+            PeteAction::AssociateVoiceWithPerson {
+                person_node_id: args.person_node_id,
+                person_label: args.person_label,
+                confidence: args.confidence,
+            }
+        }
         "run_typescript" | "typescript" => {
             let args: TypeScriptArgs =
                 serde_json::from_str(&text).context("invalid run_typescript action JSON")?;
@@ -1852,6 +2539,29 @@ impl HarmonyRuntime {
             PeteAction::SetTopic { topic } => {
                 self.timeline("topic", compact_line(topic, 240));
                 json!({"ok": true, "result": format!("Topic updated: {}", compact_line(topic, 240))})
+            }
+            PeteAction::AssociateVoiceWithPerson {
+                person_node_id,
+                person_label,
+                confidence,
+            } => {
+                let result = self.associate_current_voice_with_person(
+                    person_node_id,
+                    person_label.clone(),
+                    *confidence,
+                );
+                if result.get("ok").and_then(Value::as_bool) == Some(true) {
+                    self.timeline(
+                        "voice",
+                        format!(
+                            "associated current voice with {}",
+                            compact_line(person_node_id, 160)
+                        ),
+                    );
+                } else if let Some(error) = result.get("error").and_then(Value::as_str) {
+                    self.timeline("action_error", error);
+                }
+                result
             }
             PeteAction::RunTypeScript { source } => match execute_harmony_typescript(source) {
                 Ok(actions) => {
@@ -2067,13 +2777,23 @@ mod tests {
 
         assert!(rendered.contains("You are the Narrator of Pete Listenbury"));
         assert!(rendered.contains("Pete is not you"));
+        assert!(rendered.contains("curious, bright, kind, friendly, and ethical"));
         assert!(rendered.contains("Ground every narration in what is actually reported"));
         assert!(rendered.contains("Do not invent sensory facts"));
         assert!(rendered.contains("Runtime action surfaces:"));
         assert!(rendered.contains("Native Harmony speech channel is available"));
         assert!(rendered.contains("Use the native speech channel for direct audible speech"));
         assert!(rendered.contains("Native Harmony function tools are available in commentary"));
-        assert!(rendered.contains("set_countenance, set_stage, set_topic, run_typescript"));
+        assert!(rendered.contains(
+            "set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript"
+        ));
+        assert!(rendered.contains("# Tools"));
+        assert!(rendered.contains("## functions"));
+        assert!(rendered.contains("Runtime motors available to Pete"));
+        assert!(rendered.contains("namespace functions"));
+        assert!(rendered.contains("type say ="));
+        assert!(rendered.contains("type associate_voice_with_person ="));
+        assert!(rendered.contains("Calls to these tools must go to the commentary channel"));
         assert!(rendered.contains("TypeScript uses only the internal module \"pete:will\""));
         assert!(rendered.contains("require emoji-only content"));
         assert!(rendered.contains("Available TypeScript functions are say, note, setStage"));
@@ -2132,6 +2852,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2157,6 +2880,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2203,6 +2929,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2218,6 +2947,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2237,6 +2969,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2265,6 +3000,9 @@ mod tests {
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
             mouth: None,
+            memory: None,
+            current_voice: None,
+            familiar_voices: FamiliarVoiceMemory::default(),
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2291,6 +3029,39 @@ mod tests {
 
     #[cfg(feature = "asr-whisper")]
     #[test]
+    fn harmony_go_final_direct_speech_gets_live_user_prompt() {
+        let prompt = harmony_asr_live_user_prompt(&HarmonyAsrEvent::Candidate {
+            event: TranscriptCandidateEvent::CandidateFinalized {
+                id: TranscriptCandidateId(1),
+                text: "Hello, can you hear me?".to_string(),
+                confidence: Some(0.9),
+            },
+            latency_ms: 123,
+        })
+        .expect("direct finalized speech should prompt a live reply");
+
+        assert!(prompt.contains("Finalized live speech from the microphone"));
+        assert!(prompt.contains("\"Hello, can you hear me?\""));
+        assert!(prompt.contains("Answer this live heard speech now"));
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
+    fn harmony_go_neutral_final_speech_stays_runtime_context_only() {
+        let prompt = harmony_asr_live_user_prompt(&HarmonyAsrEvent::Candidate {
+            event: TranscriptCandidateEvent::CandidateFinalized {
+                id: TranscriptCandidateId(1),
+                text: "The build finished successfully.".to_string(),
+                confidence: Some(0.9),
+            },
+            latency_ms: 123,
+        });
+
+        assert_eq!(prompt, None);
+    }
+
+    #[cfg(feature = "asr-whisper")]
+    #[test]
     fn harmony_go_asr_replacement_reports_interrupted_progress() {
         let mut state = HarmonyAsrPromptState {
             active_text: Some("half spoken phrase".to_string()),
@@ -2310,7 +3081,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(update.contains("You were interrupted"));
+        assert!(update.contains("No, not:"));
         assert!(update.contains("through hearing"));
     }
 
