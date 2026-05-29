@@ -367,14 +367,13 @@ struct LiveMemoryRuntime {
 }
 
 #[cfg(feature = "asr-whisper")]
-fn build_live_memory_runtime(entity_extractor: Arc<dyn EntityExtractor>) -> LiveMemoryRuntime {
+fn build_live_memory_runtime(_entity_extractor: Arc<dyn EntityExtractor>) -> LiveMemoryRuntime {
     let _ = dotenvy::dotenv();
 
     let mut context_provider = EmbeddingRecallProvider::new(GraphNodeRef {
         id: DEFAULT_SELF_NODE_ID.to_string(),
         label: DEFAULT_SELF_NODE_LABEL.to_string(),
-    })
-    .with_entity_extractor(Arc::clone(&entity_extractor));
+    });
 
     let graph_store: Arc<dyn Neo4jStore> = Arc::new(Neo4jHttpStore::from_env());
     let qdrant_store: Arc<dyn QdrantStore> = Arc::new(QdrantHttpStore::from_env());
