@@ -3100,6 +3100,28 @@ mod tests {
     }
 
     #[test]
+    fn harmony_go_parses_go_options() {
+        let cli = Cli::try_parse_from([
+            "listenbury",
+            "harmony-go",
+            "--llm-model",
+            "models/pete.gguf",
+            "--max-tokens",
+            "64",
+            "hello",
+            "Pete",
+        ])
+        .expect("harmony-go should parse go-compatible options");
+
+        let Some(Command::HarmonyGo(command)) = cli.command else {
+            panic!("expected harmony-go command");
+        };
+        assert_eq!(command.llm_model, Some(PathBuf::from("models/pete.gguf")));
+        assert_eq!(command.max_tokens, Some(64));
+        assert_eq!(command.prompt, vec!["hello", "Pete"]);
+    }
+
+    #[test]
     fn top_level_help_keeps_diagnostics_hidden() {
         let mut command = Cli::command();
         let help = command.render_help().to_string();

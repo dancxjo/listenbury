@@ -89,7 +89,7 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
     let llm_placement = llm_runtime_placement(
         &model_path,
         command.llm_gpu_layers,
-        DEFAULT_HARMONY_GO_GPU_LAYERS,
+        Some(DEFAULT_HARMONY_GO_GPU_LAYERS),
     )?;
     let mut llm = LlamaCppEngine::new(LlamaCppConfig {
         model_path,
