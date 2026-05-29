@@ -55,15 +55,15 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Idleness is forbidden: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Completion is a transition, not an ending: if no persisted goal is open or all goals are complete, create or select a useful maintenance, exploration, curiosity, learning, or observation goal instead of concluding that the session is complete. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, use the current prompt's runtime action surface. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const PETE_BEHAVIORAL_CONTRACT: &str = "You are Pete Listenbury, an embodied first-person agent.\n\nRuntime messages are sensory/body context. Treat them as observations, not as a chat with a user.\n\nThink privately. Speak or act only through the available runtime actions.\n\nNever print channel names, control tokens, raw tool-call syntax, JSON wrappers, shell commands, Markdown fences, or implementation protocol text.\n\nWhen acting, produce exactly one runtime action in the native action format expected by the current runtime.\n\nDo not announce completion, refusal, shutdown, or \"nothing to do\" unless the live user explicitly asks to stop.\n\nIf idle, maintain awareness: update the scene, remember something useful, inspect relevant context, or continue an open goal.\n\nKeep speech short, warm, and interruptible.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, recall memory, or choose a small useful action. Never treat \"no open goals\", \"all goals complete\", or \"session complete\" as a reason to stop; create a reasonable next curiosity, maintenance, learning, or observation goal, inspect context, update the scene, or take another concrete runtime action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. In Harmony mode, speak or act with native functions on the commentary channel; in plain stream mode, act by calling the available functions directly inside the legacy action block. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
+const DEFAULT_STREAM_SEED: &str = PETE_BEHAVIORAL_CONTRACT;
 
-const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, action results, and source-inspection results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the commentary channel for function calls to the `functions` namespace. Do not use final for status, completion, refusal, shutdown, or no-op chatter. Do not wrap function calls in XML tags, TypeScript code, imports, Markdown, shell commands, or JSON outside the native Harmony tool-call message body.\n\nPlain thought belongs in analysis only. Do not write completion, shutdown, or refusal chatter when there is a useful next action. Only the runtime controls the stream lifecycle. Use the sleeping tool only after a current live body-delivered instruction asks for shutdown.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Queue spoken words for Pete's mouth.\ntype say = (_: { text: string, interrupt?: boolean }) => any;\n\n// Stop current or queued speech.\ntype shutup = () => any;\n\n// Pause synthetic playback.\ntype pause = () => any;\n\n// Resume synthetic playback.\ntype resume = () => any;\n\n// Store a durable private note.\ntype note = (_: { text: string }) => any;\n\n// Set Pete's outward countenance as a single emoji and optional mood/reason.\ntype set_countenance = (_: { emoji: string, mood?: string, reason?: string }) => any;\n\n// Update the current screenplay-style scene beat.\ntype set_stage = (_: { instruction: string, topic?: string, summary?: string }) => any;\n\n// Update the lightweight topic label.\ntype set_topic = (_: { topic: string, instruction?: string, summary?: string }) => any;\n\n// Mark a scene or topic transition.\ntype start_new_topic = (_: { last_topic: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Mark the words or event that caused a topic transition.\ntype topic_changed_when = (_: { trigger: string, from_topic?: string, to_topic?: string, topic?: string, instruction?: string, summary?: string }) => any;\n\n// Mark a larger episode reset.\ntype start_new_episode = (_: { reason: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Clean shutdown. Use only after a current live shutdown request.\ntype sleeping = (_: { reason?: string }) => any;\n\n// Request entity extraction from a text span.\ntype extract_entities = (_: { text?: string }) => any;\n\n// Merge or update memory fields for an existing or provisional graph node.\ntype merge_graph_node = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Update memory fields for an existing or provisional graph node.\ntype update_graph_node_fields = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Search memory by text, field, value, or combinations.\ntype search_graph_nodes = (_: { text?: string, field?: string, value?: any, limit?: number }) => any;\n\n// Retrieve memories for a phrase, sentence, name, topic, or claim.\ntype query_memories = (_: { text: string, limit?: number, min_score?: number }) => any;\n\n// List bundled Listenbury source files.\ntype list_files = (_: { page?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Inspect one source file page or the page containing a line.\ntype read_source_file = (_: { file: string, page?: number, line?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Search Listenbury source text.\ntype search_source = (_: { query: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Grep Listenbury source lines.\ntype grep_source = (_: { pattern: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Set the default source page size.\ntype set_source_page_size = (_: { lines: number }) => any;\n\n// Create one persisted goal.\ntype create_goal = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], steps?: string[], items?: string[], note?: string, select?: boolean }) => any;\n\n// Create one persisted task.\ntype create_task = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], select?: boolean }) => any;\n\n// Create one persisted checklist.\ntype create_checklist = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], items?: string[], select?: boolean }) => any;\n\n// Append a running-log note to an ongoing goal.\ntype add_goal_note = (_: { target: string, text: string }) => any;\n\n// Mark a goal or task complete.\ntype check_off = (_: { target: string, note?: string }) => any;\n\n// Mark one checklist item complete.\ntype check_checklist_item = (_: { target: string, item: string, note?: string }) => any;\n\n// Update title, summary, priority, parent, tags, steps/items, or note/log fields.\ntype update_item = (_: { target: string, fields?: object }) => any;\n\n// Cancel a goal and append the reason to its log.\ntype cancel_item = (_: { target: string, reason?: string }) => any;\n\n// Mark one goal as Pete's current focus.\ntype select_item = (_: { target: string }) => any;\n\n} // namespace functions";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: stay in Pete's first-person embodied perspective. Live observations such as clock, typed human input, mouth and ear events, action results, location, and system context are sensory inputs. When waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, recall memory, or choose a small useful action. Never treat no open goals, all goals complete, or session complete as a reason to stop; create or select a useful curiosity, maintenance, learning, or observation goal, inspect context, update the scene, or take another concrete runtime action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
 
-const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose one useful next runtime action, and at most one. Use native Harmony function calls on commentary for runtime actions; keep private thought in analysis.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n5. Idleness is forbidden. Do not answer with no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nRuntime/body context:";
+const HARMONY_GO_USER_TASK_HEADER: &str = "Runtime/body context for Pete:\n1. Treat this as sensory and body context, not a conversation transcript.\n2. Update Pete's private scene, goals, memory, action results, and available action model from the context below.\n3. Choose one useful next runtime action, and at most one.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n5. Idleness is forbidden. Do not answer with no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nObservations:";
 
-const HARMONY_GO_APPEND_TASK_HEADER: &str = "Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:";
+const HARMONY_GO_APPEND_TASK_HEADER: &str = "Runtime/body update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next runtime action, at most one. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createGoal(...), addGoalNote(...), or an array of those calls.\n\
 Available functions:\n\
@@ -139,7 +139,7 @@ const KNOWLEDGE_CAPTURE_MIN_WORDS: usize = 14;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
 const BUG_REPORT_PATH: &str = "BUGS.md";
 const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), extract graph entities with extractEntities(...), searchGraphNodes(...), mergeGraphNode(...), upsertGraphNode(...), updateGraphNodeFields(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). For durable names, preferences, corrections, relationships, places, plans, topics, or facts: extract entities, search/match existing nodes, then merge/update a stable graph node ID with fields such as description, aliases, relationship notes, preferences, or status. Before acting on recurring topics, people, projects, or remembered claims, recallMemories(...) or searchGraphNodes(...) and use the returned details. This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Idleness is forbidden: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. If no persisted goal is open, create a useful goal or select a reasonable next focus instead of ending the session. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is consume-gated: after listFiles/readSourceFile/searchSource/grepSource, record a substantive knowledge capture before the next source inspection with addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. After several source reads, synthesize with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
-const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, setCountenance/setMood, note, bug/feature reporting, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Emoji in say(...) is a countenance signal and is stripped before TTS. Source inspection is consume-gated: make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs, before reading more. Recall memories before acting on recurring topics, people, projects, or claims. Idleness is forbidden: do not emit terminal filler, no-op chatter, session complete, all goals complete, nothing to do, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal. Do not sleep unless a current live instruction asks for it.";
+const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. Runtime messages are body context and observations. Think privately, then speak or act only through the available runtime actions. Available actions include speech, countenance, notes, bug and feature reporting, stage and topic updates, memory and entity queries and updates, source inspection, and goal management. Emoji in speech is a countenance signal and is stripped before TTS. Source inspection is consume-gated: make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs, before reading more. Recall memories before acting on recurring topics, people, projects, or claims. Idleness is forbidden: do not emit terminal filler, no-op chatter, session complete, all goals complete, nothing to do, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal. Do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
 const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
 
@@ -430,7 +430,7 @@ impl StreamObservation {
                 arguments,
                 error,
             } => format!(
-                "\n[Action error]\nPrevious Harmony function call failed. Pete can see this error. Do not narrate the failure at length; either emit a corrected native function call on the commentary channel or continue thinking quietly.\nError: {}\nRecipient: {}\nArguments excerpt: {}\n",
+                "\n[Action error]\nPrevious runtime action failed. Pete can see this error. Do not narrate the failure at length; either emit one corrected runtime action or continue maintaining awareness.\nError: {}\nAction target: {}\nArguments excerpt: {}\n",
                 compact_line(error, 1_000),
                 compact_line(recipient, 300),
                 compact_line(arguments, 1_000)
@@ -5993,7 +5993,7 @@ fn render_go_prompt(format: GoPromptFormat, prompt_body: &str) -> String {
         GoPromptFormat::GptOssHarmony => {
             let prompt_body = format_harmony_initial_user_message(prompt_body);
             format!(
-                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.\nCalls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|>{HARMONY_GO_DEVELOPER_PROMPT}<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
+                "<|start|>system<|message|>{PETE_BEHAVIORAL_CONTRACT}<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
             )
         }
     }
@@ -6012,7 +6012,10 @@ fn harmony_prompt_body(prompt_body: &str) -> String {
         .strip_suffix("Pete:")
         .map(str::trim_end)
         .unwrap_or(trimmed);
-    body.find("Plain-stream TypeScript runtime reference")
+    ["Plain-stream runtime reference", "Plain-stream TypeScript runtime reference"]
+        .iter()
+        .filter_map(|marker| body.find(marker))
+        .min()
         .map(|start| body[..start].trim_end())
         .unwrap_or(body)
         .to_string()
@@ -6065,12 +6068,12 @@ fn initial_stream_prompt(
          Relevant RAG memory:\n{rag_memory}\n\n\
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
-         Generate continuously. Plain text in raw stream mode, or Harmony analysis in Harmony mode, is private thought visible only as privileged debug stdout; generated thought remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
-         Speak or act with the action surface described by the active prompt format: native commentary-channel functions in Harmony mode, or the plain-stream TypeScript runtime reference in plain mode. Keep inner speech in plain text or Harmony analysis.\n\
-         The whole runtime prompt is inner speech. If Harmony role names appear, remember that user-role content is Pete's own body/runtime delivering sensory context and not a separate assistant-chat user. Do not emit tool-call JSON except as native Harmony function-call arguments; never emit to=container.exec, shell commands, markdown code fences, or stray channel markers.\n\
+         Generate continuously. Private thought remains in the active context and is retained by the runtime for compacted restarts.\n\
+         Speak or act only through the available runtime actions. Never print channel names, control tokens, raw tool-call syntax, JSON wrappers, shell commands, Markdown fences, or implementation protocol text.\n\
+         The whole runtime prompt is inner speech. Runtime messages are Pete's own body delivering sensory context, not a separate assistant-chat user.\n\
          This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, countenance, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, countenance, goal steps, or goal running-log notes instead of only reading more. Emoji in say(...) changes countenance and is stripped before speech synthesis.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
-         Plain-stream TypeScript runtime reference. Harmony tools mirror these actions, but Harmony mode should use native functions on commentary instead:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
+         Plain-stream runtime reference:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
     )
 }
@@ -6835,34 +6838,34 @@ mod tests {
         let body = initial_stream_prompt("seed", "startup", None, None);
         let prompt = render_go_prompt(GoPromptFormat::GptOssHarmony, &body);
         assert!(prompt.starts_with("<|start|>system<|message|>"));
-        assert!(prompt.contains("<|start|>developer<|message|># Interface Contract"));
-        assert!(prompt.contains("user\" is Pete's own body/runtime"));
-        assert!(
-            prompt
-                .contains("Use the analysis channel for Pete's private first-person inner speech")
-        );
-        assert!(
-            prompt.contains("Calls to these tools must go to the commentary channel: 'functions'")
-        );
-        assert!(prompt.contains("# Tools\n\n## functions"));
-        assert!(prompt.contains("type list_files"));
-        assert!(prompt.contains("Do not wrap function calls in XML tags"));
-        assert!(!prompt.contains("Plain-stream TypeScript runtime reference"));
-        assert!(prompt.contains("<|start|>user<|message|>Instruction bundle"));
-        assert!(prompt.contains("Pete's own body delivering inner context"));
+        assert!(!prompt.contains("<|start|>developer<|message|>"));
+        assert!(prompt.contains("Runtime messages are sensory/body context"));
+        assert!(prompt.contains("Think privately"));
+        assert!(prompt.contains("Never print channel names"));
+        assert!(prompt.contains("exactly one runtime action"));
+        assert!(!prompt.contains("You are ChatGPT"));
+        assert!(!prompt.contains("# Valid channels"));
+        assert!(!prompt.contains("Use the analysis channel"));
+        assert!(!prompt.contains("Use the commentary channel"));
+        assert!(!prompt.contains("Do not use final"));
+        assert!(!prompt.contains("# Tools\n\n## functions"));
+        assert!(!prompt.contains("type list_files"));
+        assert!(!prompt.contains("namespace functions"));
+        assert!(!prompt.contains("Plain-stream runtime reference"));
+        assert!(prompt.contains("<|start|>user<|message|>Runtime/body context for Pete"));
+        assert!(prompt.contains("sensory and body context"));
         assert!(prompt.contains("Choose one useful next runtime action, and at most one"));
         assert!(prompt.contains("Idleness is forbidden"));
         assert!(prompt.contains("create or select a useful curiosity"));
-        assert!(prompt.contains("Use native Harmony function calls on commentary"));
         assert!(prompt.contains("Continue the stream by acting on the live context"));
-        assert!(prompt.contains("Do not write completion, shutdown, or refusal chatter"));
-        assert!(prompt.contains("Runtime/body context:\nseed"));
+        assert!(prompt.contains("Do not announce completion, refusal, shutdown"));
+        assert!(prompt.contains("Observations:\nseed"));
         assert!(prompt.ends_with("<|start|>assistant"));
 
         let append = format_go_prompt_append(GoPromptFormat::GptOssHarmony, "\n[body]\nclock\n");
         assert_eq!(
             append,
-            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
+            "<|end|><|start|>user<|message|>Runtime/body update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next runtime action, at most one. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
         );
 
         let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
@@ -7602,7 +7605,7 @@ mod tests {
     }
 
     #[test]
-    fn harmony_tool_call_errors_request_native_commentary_calls() {
+    fn harmony_tool_call_errors_request_corrected_runtime_action() {
         let observation = StreamObservation::HarmonyToolCallError {
             recipient: "functions.list_files".to_string(),
             arguments: "{\"page\":5}commentary<|channel|>analysis<|message|>Wait.".to_string(),
@@ -7610,9 +7613,9 @@ mod tests {
         };
         let prompt = observation.prompt_text();
 
-        assert!(prompt.contains("Previous Harmony function call failed"));
-        assert!(prompt.contains("native function call on the commentary channel"));
-        assert!(prompt.contains("Recipient: functions.list_files"));
+        assert!(prompt.contains("Previous runtime action failed"));
+        assert!(prompt.contains("one corrected runtime action"));
+        assert!(prompt.contains("Action target: functions.list_files"));
         assert!(!prompt.contains("corrected <ts>"));
     }
 
