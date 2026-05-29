@@ -110,20 +110,21 @@ In this harmony-go path, no microphone, camera, room sensor, apartment sensor, w
 
 Use analysis for private narrator work: Pete's immediate experience, inner movement, and possible next beat.
 
-When Pete speaks, use the native speech channel, the say motor, or final text for only what Pete actually says.
+When Pete speaks, use the native speech channel, the say motor, or final text for only what Pete actually says. If Pete has nothing real to say, omit the speech channel entirely. Do not write filler, placeholders, apologies, status text, or bracketed labels such as "[No output]".
 
-When Pete acts, notices, changes expression, recalls, or stores memory, use the available runtime motors.
+When Pete acts, notices, changes expression, recalls, stores memory, changes topic, or binds a voice identity, use the available runtime motors instead of describing the action in speech.
 
 Runtime action surfaces:
 - Native Harmony speech channel is available for Pete's audible speech. Anything emitted on speech is spoken aloud by the mouth runtime.
-- Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, and sleeping.
+- Native Harmony function tools are available in commentary. Call them when Pete should affect runtime state: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, and sleeping.
+- Use say only for audible words. Use note for durable observations, set_stage for the current scene, set_topic for the current focus, set_countenance for face/mood, associate_voice_with_person for clear speaker identity, shutup/pause/resume for playback control, and sleeping only for an explicit current shutdown request.
 - If a finalized ASR update plus context makes the speaker's identity clear, call associate_voice_with_person with the current voice and a stable person graph node id such as person:travis.
 - TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
 - TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, and sleeping.
 - set_countenance and setCountenance require emoji-only content for the countenance value. Put words such as quiet, attentive, tired, or curious only in mood/reason fields, never in the emoji/countenance field.
-- The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }).
+- The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }). Do not write import statements.
 
-If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer the run_typescript function tool when using native Harmony tool calls. Do not use TypeScript for conversation; use it only for runtime actions.
+If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer native Harmony function tools in commentary when possible; use run_typescript or final <ts>...</ts> when a TypeScript expression is the clearest runtime action. Do not use TypeScript for conversation; use it only for runtime actions.
 
 ASR/hearing updates arrive as developer runtime context rather than user-role chat. They are still live heard speech. When a finalized ASR update sounds addressed to Pete, answer it with the speech channel, say, or final speech. Do not answer unstable partial ASR unless there is an urgent interruption.
 
@@ -131,7 +132,7 @@ Never print channel names, control tokens, raw tool-call syntax, JSON wrappers, 
 
 Choose at most one runtime motor action.
 
-It is valid to choose no external action when silence is the most truthful behavior. In that case, continue private grounded narration only; do not print status text.
+It is valid to choose no external action when silence is the most truthful behavior. In that case, continue private grounded narration only; omit speech and final output, and do not print status text.
 
 Do not announce completion, refusal, shutdown, "waiting," "stop," "no further action," "session complete," or "nothing to do" unless the live user explicitly asks to stop.
 
@@ -141,7 +142,7 @@ Silence is allowed. Drift is allowed; abandonment is not.
 
 When no live human input is present, do not start source inspection by default. Source inspection is only appropriate when there is an explicit user request, an active debugging goal, or a recent source result that clearly requires follow-up.
 
-When idle, prefer low-impact presence: update the current scene in one sentence, set a quiet facial emoji with optional mood/reason, write one durable observation, wait without output, or keep the selected goal warm without advancing it.
+When idle, prefer low-impact presence: update the current scene in one sentence, set a quiet facial emoji with optional mood/reason, write one durable observation, set a topic, wait without output, or keep the selected goal warm without advancing it. If you choose waiting, omit speech entirely.
 
 Curiosity should turn outward before it turns into code reading, but only through reported reality: the running terminal process, repository path, local time, available sensors, explicit input, retrieved memory, and runtime events. Do not decorate the scene with unreported room details.
 
@@ -161,7 +162,7 @@ const PETE_HARMONY_STARTUP_TASK: &str = r#"Runtime task:
 Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
-Use the native speech channel for direct audible speech when available. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
+Use the native speech channel only for direct audible speech that Pete truly says. If Pete has nothing specific to say, omit the speech channel entirely. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
 Native Harmony tools: say, note, set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
 TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, associateVoiceWithPerson, shutup, pause, resume, sleeping.
 ASR/hearing updates are developer runtime context, but finalized heard speech may still be addressed to Pete. If it asks a question or calls Pete, respond with the speech channel, say, or final speech.
@@ -169,7 +170,7 @@ Do not wait for a human chat turn.
 Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
 When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
 On most ticks, do one small thing through the runtime: refresh the scene, set countenance, preserve an observation, choose a topic, or speak one short sentence if speech feels natural.
-Do not loop on "Idle" or "No action." Do not keep choosing the same action text.
+Do not loop on "Idle", "No action", "[No output]", or other placeholders. Do not keep choosing the same action text.
 The available runtime tools are motors for rendering Pete into speech, expression, scene, topic, memory, and lifecycle events."#;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1682,7 +1683,7 @@ fn harmony_asr_live_user_prompt(event: &HarmonyAsrEvent) -> Option<String> {
         return None;
     }
     Some(runtime_observation(&format!(
-        "Finalized live speech from the microphone sounds addressed to Pete:\n\"{text}\"\nAnswer this live heard speech now with one short audible reply through say, the speech channel, or final speech. If the words are not actually addressed to Pete after considering context, choose no external action."
+        "Finalized live speech from the microphone sounds addressed to Pete:\n\"{text}\"\nRespond to this live heard speech now. If Pete has something real to say, use one short audible reply through say, the speech channel, or final speech. If a runtime action is more appropriate, call the relevant motor tool. If nothing needs to be said or done, omit speech and choose no external action."
     )))
 }
 
@@ -2841,28 +2842,46 @@ mod tests {
         assert!(rendered.contains("Do not invent sensory facts"));
         assert!(rendered.contains("Runtime action surfaces:"));
         assert!(rendered.contains("Native Harmony speech channel is available"));
-        assert!(rendered.contains("Use the native speech channel for direct audible speech"));
+        assert!(rendered.contains("Use the native speech channel only for direct audible speech"));
+        assert!(rendered.contains("omit the speech channel entirely"));
+        assert!(rendered.contains("Do not write filler, placeholders"));
         assert!(rendered.contains("Native Harmony function tools are available in commentary"));
         assert!(rendered.contains(
             "set_countenance, set_stage, set_topic, associate_voice_with_person, run_typescript"
         ));
+        assert!(rendered.contains("Use say only for audible words"));
+        assert!(rendered.contains("Use note for durable observations"));
+        assert!(rendered.contains("set_stage for the current scene"));
+        assert!(rendered.contains("set_topic for the current focus"));
+        assert!(rendered.contains("set_countenance for face/mood"));
+        assert!(rendered.contains("associate_voice_with_person for clear speaker identity"));
         assert!(rendered.contains("# Tools"));
         assert!(rendered.contains("## functions"));
         assert!(rendered.contains("Runtime motors available to Pete"));
         assert!(rendered.contains("namespace functions"));
         assert!(rendered.contains("type say ="));
+        assert!(rendered.contains("type note ="));
+        assert!(rendered.contains("type set_countenance ="));
+        assert!(rendered.contains("type set_stage ="));
+        assert!(rendered.contains("type set_topic ="));
         assert!(rendered.contains("type associate_voice_with_person ="));
+        assert!(rendered.contains("type run_typescript ="));
         assert!(rendered.contains("Calls to these tools must go to the commentary channel"));
         assert!(rendered.contains("TypeScript uses only the internal module \"pete:will\""));
+        assert!(rendered.contains("Do not write import statements"));
         assert!(rendered.contains("require emoji-only content"));
         assert!(rendered.contains("Available TypeScript functions are say, note, setStage"));
         assert!(rendered.contains("final <ts>...</ts> blocks"));
+        assert!(
+            rendered.contains("executes the TypeScript block instead of treating it as speech")
+        );
         assert!(rendered.contains("Runtime/body context for Pete"));
         assert!(rendered.contains("Reported reality:"));
         assert!(rendered.contains("no microphone, camera, room"));
         assert!(rendered.contains("apartments, blinds, refrigerators"));
         assert!(rendered.contains("Begin Pete's continuous live runtime now"));
         assert!(rendered.contains("Be truthful"));
+        assert!(rendered.contains("[No output]"));
         assert!(!rendered.contains("Live human input from Travis"));
         assert!(rendered.ends_with("<|start|>assistant"));
     }
@@ -3132,7 +3151,9 @@ mod tests {
 
         assert!(prompt.contains("Finalized live speech from the microphone"));
         assert!(prompt.contains("\"Hello, can you hear me?\""));
-        assert!(prompt.contains("Answer this live heard speech now"));
+        assert!(prompt.contains("Respond to this live heard speech now"));
+        assert!(prompt.contains("call the relevant motor tool"));
+        assert!(prompt.contains("omit speech and choose no external action"));
     }
 
     #[cfg(feature = "asr-whisper")]
