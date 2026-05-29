@@ -29,7 +29,7 @@ enum Command {
     #[command(
         name = "harmony-go",
         alias = "go-harmony",
-        about = "Run Pete through the official OpenAI Harmony renderer/parser"
+        about = "Run Pete's continuous runtime through the clean Harmony renderer/parser"
     )]
     HarmonyGo(GoCommand),
     #[command(about = "Render a raw MBROLA .pho file to WAV")]

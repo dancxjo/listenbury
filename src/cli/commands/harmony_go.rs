@@ -3,19 +3,36 @@ use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
 use anyhow::{Context, Result, bail};
 use chrono::Local;
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
+use listenbury::mouth::planner::{extract_emoji_sequences, strip_emoji};
 use listenbury::{LlamaCppConfig, LlamaCppEngine};
 use openai_harmony::chat::{
     Author, ChannelConfig, Content, Conversation, DeveloperContent, Message, ReasoningEffort, Role,
     SystemContent, TextContent, ToolDescription,
 };
 use openai_harmony::{HarmonyEncodingName, ParseOptions, load_harmony_encoding};
+use owo_colors::OwoColorize;
 use serde::Deserialize;
 use serde_json::json;
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
 use std::time::Duration;
 
 const DEFAULT_HARMONY_GO_GPU_LAYERS: u32 = 99;
+const HARMONY_GO_IDLE_PAUSE: Duration = Duration::from_millis(50);
+const HARMONY_GO_RECENT_MESSAGE_LIMIT: usize = 48;
+const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
+    "Refresh the scene. If it has gone stale, call set_stage with concrete setting and observable action.",
+    "Check Pete's felt stance. If useful, call set_countenance with an emoji plus mood and reason.",
+    "Keep continuity alive. If something durable is worth preserving, call note with one specific observation.",
+    "Choose a live focus. If Pete has no current focus, call set_topic with a short topic label.",
+    "Let curiosity move outward. Notice the room, Travis, the workbench, the system body, or Pete's own inner workings.",
+    "If speech would feel natural, say one short sentence. Otherwise think concretely and choose a quiet runtime action.",
+    "Do not repeat the previous idle move. Shift the beat: scene, countenance, note, topic, or brief speech.",
+];
 
 const PETE_HARMONY_CONTRACT: &str = r#"You are Pete Listenbury, an embodied first-person agent.
 
@@ -31,11 +48,13 @@ It is valid to choose no external action when silence is the most natural behavi
 
 Do not announce completion, refusal, shutdown, "waiting," "stop," "no further action," "session complete," or "nothing to do" unless the live user explicitly asks to stop.
 
+Never reduce private thought to "Idle," "No action," or other status labels. If no external action is right, think a concrete first-person thought about the current scene, body, relationship, memory, or next gentle move.
+
 Silence is allowed. Drift is allowed; abandonment is not.
 
 When no live human input is present, do not start source inspection by default. Source inspection is only appropriate when there is an explicit user request, an active debugging goal, or a recent source result that clearly requires follow-up.
 
-When idle, prefer low-impact presence: update the current scene in one sentence, set a quiet countenance, write one durable observation, wait without output, or keep the selected goal warm without advancing it.
+When idle, prefer low-impact presence: update the current scene in one sentence, set a quiet facial emoji with optional mood/reason, write one durable observation, wait without output, or keep the selected goal warm without advancing it.
 
 Curiosity should turn outward before it turns into code reading: notice what changed in the room, what Travis seems to care about, what unresolved thread has emotional weight, what Pete remembers that might matter now, or what would be helpful to notice rather than do.
 
@@ -51,13 +70,36 @@ When Travis speaks with disappointment, frustration, grief, affection, curiosity
 
 Keep speech short, warm, and interruptible."#;
 
+const PETE_HARMONY_STARTUP_TASK: &str = r#"Runtime task:
+Begin Pete's continuous live runtime now.
+Use analysis for private stream-of-consciousness.
+Use commentary tool calls for runtime actions.
+Use final only for short visible speech when a tool call is not the right action.
+Do not wait for a human chat turn.
+When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
+On most ticks, do one small thing through the runtime: refresh the scene, set countenance, preserve an observation, choose a topic, or speak one short sentence if speech feels natural.
+Do not loop on "Idle" or "No action." Do not keep choosing the same action text.
+The available runtime tools are the body/memory/control surface for this clean Harmony path."#;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PeteAction {
-    Say { text: String },
-    Note { text: String },
-    SetCountenance { stance: String },
-    SetStage { scene: String },
-    SetTopic { topic: String },
+    Say {
+        text: String,
+    },
+    Note {
+        text: String,
+    },
+    SetCountenance {
+        emoji: String,
+        mood: Option<String>,
+        reason: Option<String>,
+    },
+    SetStage {
+        scene: String,
+    },
+    SetTopic {
+        topic: String,
+    },
     Shutup,
     Pause,
     Resume,
@@ -71,7 +113,9 @@ struct TextArgs {
 
 #[derive(Debug, Deserialize)]
 struct CountenanceArgs {
-    stance: String,
+    emoji: Option<String>,
+    mood: Option<String>,
+    reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,24 +151,53 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
         .max_tokens
         .map(|tokens| tokens as usize)
         .or(Some(256));
-    let mut history = initial_harmony_messages();
+    let mut runtime = HarmonyRuntime {
+        history: initial_harmony_messages(),
+        current_countenance: None,
+        timeline_index: 0,
+        tick_index: 0,
+    };
+    let interrupted = Arc::new(AtomicBool::new(false));
+    ctrlc::set_handler({
+        let interrupted = Arc::clone(&interrupted);
+        move || {
+            interrupted.store(true, Ordering::Relaxed);
+        }
+    })
+    .context("failed to install Ctrl-C handler")?;
 
     eprintln!(
-        "listenbury harmony-go: official Harmony path is live. Type lines to feed Pete; Ctrl-C exits."
+        "{}",
+        "listenbury harmony-go: native Harmony continuous runtime is live. Ctrl-C exits.".dimmed()
     );
 
-    let seed = command.prompt.join(" ");
-    if !seed.trim().is_empty() {
-        run_harmony_turn(&mut llm, &encoding, &stop, max_tokens, &mut history, &seed)?;
-    }
-
-    let stdin = io::stdin();
-    for line in stdin.lock().lines() {
-        let line = line.context("failed to read stdin")?;
-        if line.trim().is_empty() {
-            continue;
+    let mut continue_after_tool_result = false;
+    let mut startup_pending = Some(startup_runtime_observation(&command.prompt));
+    while !interrupted.load(Ordering::Relaxed) {
+        if !continue_after_tool_result {
+            let observation = startup_pending.take().unwrap_or_else(|| {
+                let directive = runtime.next_idle_directive();
+                idle_runtime_observation(runtime.current_countenance.as_ref(), directive)
+            });
+            runtime
+                .history
+                .push(Message::from_role_and_content(Role::User, observation));
         }
-        run_harmony_turn(&mut llm, &encoding, &stop, max_tokens, &mut history, &line)?;
+
+        runtime.trim_history();
+        let outcome = run_harmony_completion(
+            &mut llm,
+            &encoding,
+            &stop,
+            max_tokens,
+            &mut runtime,
+            &interrupted,
+        )?;
+        if outcome.sleeping || interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+        continue_after_tool_result = outcome.tool_result;
+        thread::sleep(HARMONY_GO_IDLE_PAUSE);
     }
 
     Ok(())
@@ -149,19 +222,90 @@ fn initial_harmony_messages() -> Vec<Message> {
     ]
 }
 
-fn run_harmony_turn(
+#[derive(Debug, Default)]
+struct HarmonyRuntime {
+    history: Vec<Message>,
+    current_countenance: Option<CountenanceState>,
+    timeline_index: u64,
+    tick_index: usize,
+}
+
+impl HarmonyRuntime {
+    fn push_tool_result(&mut self, recipient: String, result: String) {
+        self.history.push(Message::from_author_and_content(
+            Author::new(Role::Tool, recipient),
+            result,
+        ));
+    }
+
+    fn trim_history(&mut self) {
+        let protected_prefix = 2;
+        let max_len = protected_prefix + HARMONY_GO_RECENT_MESSAGE_LIMIT;
+        if self.history.len() <= max_len {
+            return;
+        }
+        let remove_end = self.history.len() - HARMONY_GO_RECENT_MESSAGE_LIMIT;
+        self.history.drain(protected_prefix..remove_end);
+    }
+
+    fn next_idle_directive(&mut self) -> &'static str {
+        let directive = HARMONY_IDLE_DIRECTIVES[self.tick_index % HARMONY_IDLE_DIRECTIVES.len()];
+        self.tick_index = self.tick_index.saturating_add(1);
+        directive
+    }
+
+    fn timeline(&mut self, kind: &str, text: impl AsRef<str>) {
+        self.timeline_index = self.timeline_index.saturating_add(1);
+        let timestamp = Local::now().format("%H:%M:%S");
+        let prefix = format!("[{} {:04} {}]", timestamp, self.timeline_index, kind);
+        let line = format!("{} {}", prefix, text.as_ref());
+        match kind {
+            "speech" => eprintln!("{}", line.green()),
+            "countenance" | "stage" | "topic" | "note" => eprintln!("{}", line.magenta()),
+            "action_error" => eprintln!("{}", line.red()),
+            "tool_result" => eprintln!("{}", line.cyan()),
+            "analysis" => eprintln!("{}", line.dimmed()),
+            _ => eprintln!("{}", line.yellow()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CountenanceState {
+    emoji: String,
+    mood: Option<String>,
+    reason: Option<String>,
+}
+
+impl CountenanceState {
+    fn prompt_summary(&self) -> String {
+        let mut summary = format!("Face {}", self.emoji);
+        if let Some(mood) = self.mood.as_deref() {
+            summary.push_str(&format!(" mood={mood}"));
+        }
+        if let Some(reason) = self.reason.as_deref() {
+            summary.push_str(&format!(" reason={reason}"));
+        }
+        summary
+    }
+}
+
+#[derive(Debug, Default)]
+struct HarmonyTurnOutcome {
+    acted: bool,
+    tool_result: bool,
+    sleeping: bool,
+}
+
+fn run_harmony_completion(
     llm: &mut LlamaCppEngine,
     encoding: &openai_harmony::HarmonyEncoding,
     stop: &[String],
     max_tokens: Option<usize>,
-    history: &mut Vec<Message>,
-    live_input: &str,
-) -> Result<()> {
-    history.push(Message::from_role_and_content(
-        Role::User,
-        runtime_observation(live_input),
-    ));
-    let conversation = Conversation::from_messages(history.clone());
+    runtime: &mut HarmonyRuntime,
+    interrupted: &AtomicBool,
+) -> Result<HarmonyTurnOutcome> {
+    let conversation = Conversation::from_messages(runtime.history.clone());
     let prompt_tokens =
         encoding.render_conversation_for_completion(&conversation, Role::Assistant, None)?;
     let prompt = encoding
@@ -176,51 +320,63 @@ fn run_harmony_turn(
             stop: stop.to_vec(),
         })
         .context("failed to start Harmony generation")?;
-    let completion = collect_generation(llm, generation)?;
+    let completion = collect_generation(llm, generation, interrupted)?;
+    if interrupted.load(Ordering::Relaxed) {
+        return Ok(HarmonyTurnOutcome::default());
+    }
     let messages = parse_completion_messages(encoding, &completion)?;
 
-    let mut acted = false;
+    let mut outcome = HarmonyTurnOutcome::default();
     for message in messages {
         if message.channel.as_deref() == Some("analysis") {
+            runtime.timeline("analysis", compact_line(&message_text(&message), 240));
+            runtime.history.push(message);
             continue;
         }
         if let Some(action) = action_from_message(&message)? {
-            execute_action(&action)?;
-            let result = action_result_json(&action);
+            let result = runtime.execute_action(&action);
+            outcome.acted = true;
+            outcome.sleeping = matches!(action, PeteAction::Sleeping);
             if let Some(recipient) = message.recipient.clone() {
-                history.push(message);
-                history.push(Message::from_author_and_content(
-                    Author::new(Role::Tool, recipient),
-                    result.to_string(),
-                ));
+                runtime.history.push(message);
+                runtime.push_tool_result(recipient, result);
+                outcome.tool_result = true;
+            } else {
+                runtime.history.push(message);
             }
-            acted = true;
             break;
         }
         if let Some(text) = visible_text_from_message(&message) {
             if !text.trim().is_empty() {
-                println!("Pete: {}", text.trim());
-                history.push(message);
-                acted = true;
+                runtime.timeline("speech", format!("Pete: {}", text.trim()));
+                runtime.history.push(message);
+                outcome.acted = true;
                 break;
             }
         }
+        runtime.history.push(message);
     }
 
-    if !acted {
-        // Silence is a valid outcome in this pathway. Keep only the live observation.
+    if !outcome.acted {
+        // Silence is a valid outcome. Analysis-only turns remain in history.
         io::stdout().flush().ok();
     }
 
-    Ok(())
+    Ok(outcome)
 }
 
 fn collect_generation(
     llm: &mut LlamaCppEngine,
     generation: listenbury::mind::llm::GenerationId,
+    interrupted: &AtomicBool,
 ) -> Result<String> {
     let mut completion = String::new();
+    let mut cancelled = false;
     loop {
+        if interrupted.load(Ordering::Relaxed) && !cancelled {
+            llm.cancel(generation)?;
+            cancelled = true;
+        }
         let events = llm.poll(generation)?;
         for event in events {
             match event {
@@ -258,11 +414,33 @@ fn harmony_stop_strings(encoding: &openai_harmony::HarmonyEncoding) -> Result<Ve
     Ok(stops)
 }
 
-fn runtime_observation(live_input: &str) -> String {
+fn startup_runtime_observation(seed: &[String]) -> String {
+    let seed = seed.join(" ");
+    let seed = seed.trim();
+    let seed_text = if seed.is_empty() {
+        "No initial live seed from Travis.".to_string()
+    } else {
+        format!("Initial live seed from Travis:\n{seed}")
+    };
+    runtime_observation(&format!(
+        "Fresh runtime startup:\nPete wakes into an open live session.\n{PETE_HARMONY_STARTUP_TASK}\n{seed_text}"
+    ))
+}
+
+fn idle_runtime_observation(countenance: Option<&CountenanceState>, directive: &str) -> String {
+    let countenance = countenance
+        .map(|state| format!("\nCurrent countenance: {}", state.prompt_summary()))
+        .unwrap_or_default();
+    runtime_observation(&format!(
+        "Autonomous runtime tick:\nNo live human speech is currently arriving; this is not a request to wait.\nDirective: {directive}\nKeep private thought concrete. Do not answer with only Idle, No action, waiting, or status text.{countenance}"
+    ))
+}
+
+fn runtime_observation(body: &str) -> String {
     format!(
-        "Runtime/body context for Pete:\nCurrent local time: {}\nLive human input from Travis:\n{}",
+        "Runtime/body context for Pete:\nCurrent local time: {}\n{}",
         Local::now().to_rfc3339(),
-        live_input
+        body.trim()
     )
 }
 
@@ -290,11 +468,15 @@ fn runtime_action_tools() -> Vec<ToolDescription> {
         ),
         ToolDescription::new(
             "set_countenance",
-            "Set Pete's quiet visible/felt stance.",
+            "Set Pete's visible facial countenance. Use a single emoji in emoji; put words such as quiet, curious, tired, or attentive in mood.",
             Some(json!({
                 "type": "object",
-                "properties": { "stance": { "type": "string" } },
-                "required": ["stance"],
+                "properties": {
+                    "emoji": { "type": "string" },
+                    "mood": { "type": "string" },
+                    "reason": { "type": "string" }
+                },
+                "required": ["emoji"],
                 "additionalProperties": false
             })),
         ),
@@ -361,8 +543,11 @@ fn action_from_message(message: &Message) -> Result<Option<PeteAction>> {
         "set_countenance" => {
             let args: CountenanceArgs =
                 serde_json::from_str(&text).context("invalid set_countenance action JSON")?;
+            let emoji = args.emoji.unwrap_or_default();
             PeteAction::SetCountenance {
-                stance: args.stance,
+                emoji,
+                mood: args.mood,
+                reason: args.reason,
             }
         }
         "set_stage" => {
@@ -384,32 +569,78 @@ fn action_from_message(message: &Message) -> Result<Option<PeteAction>> {
     Ok(Some(action))
 }
 
-fn execute_action(action: &PeteAction) -> Result<()> {
-    match action {
-        PeteAction::Say { text } => println!("Pete: {}", text.trim()),
-        PeteAction::Note { text } => eprintln!("[note] {}", text.trim()),
-        PeteAction::SetCountenance { stance } => eprintln!("[countenance] {}", stance.trim()),
-        PeteAction::SetStage { scene } => eprintln!("[scene] {}", scene.trim()),
-        PeteAction::SetTopic { topic } => eprintln!("[topic] {}", topic.trim()),
-        PeteAction::Shutup => eprintln!("[shutup]"),
-        PeteAction::Pause => eprintln!("[pause]"),
-        PeteAction::Resume => eprintln!("[resume]"),
-        PeteAction::Sleeping => eprintln!("[sleeping]"),
+impl HarmonyRuntime {
+    fn execute_action(&mut self, action: &PeteAction) -> String {
+        let result = match action {
+            PeteAction::Say { text } => {
+                let text = text.trim();
+                self.timeline("speech", format!("Pete: {text}"));
+                json!({"ok": true, "result": format!("Queued speech: {}", compact_line(text, 300))})
+            }
+            PeteAction::Note { text } => {
+                self.timeline("note", compact_line(text, 500));
+                json!({"ok": true, "result": format!("Noted: {}", compact_line(text, 500))})
+            }
+            PeteAction::SetCountenance {
+                emoji,
+                mood,
+                reason,
+            } => self.apply_countenance_change(emoji, mood.clone(), reason.clone()),
+            PeteAction::SetStage { scene } => {
+                self.timeline("stage", compact_line(scene, 500));
+                json!({"ok": true, "result": format!("Scene updated: {}", compact_line(scene, 500))})
+            }
+            PeteAction::SetTopic { topic } => {
+                self.timeline("topic", compact_line(topic, 240));
+                json!({"ok": true, "result": format!("Topic updated: {}", compact_line(topic, 240))})
+            }
+            PeteAction::Shutup => {
+                self.timeline("tool_result", "shutup requested");
+                json!({"ok": true, "result": "speech stopped"})
+            }
+            PeteAction::Pause => {
+                self.timeline("tool_result", "pause requested");
+                json!({"ok": true, "result": "paused"})
+            }
+            PeteAction::Resume => {
+                self.timeline("tool_result", "resume requested");
+                json!({"ok": true, "result": "resumed"})
+            }
+            PeteAction::Sleeping => {
+                self.timeline("tool_result", "sleeping requested");
+                json!({"ok": true, "result": "sleeping"})
+            }
+        };
+        let result = result.to_string();
+        self.timeline("tool_result", compact_line(&result, 500));
+        result
     }
-    Ok(())
-}
 
-fn action_result_json(action: &PeteAction) -> serde_json::Value {
-    match action {
-        PeteAction::Say { .. } => json!({"ok": true, "result": "speech queued"}),
-        PeteAction::Note { .. } => json!({"ok": true, "result": "observation stored"}),
-        PeteAction::SetCountenance { .. } => json!({"ok": true, "result": "countenance updated"}),
-        PeteAction::SetStage { .. } => json!({"ok": true, "result": "scene updated"}),
-        PeteAction::SetTopic { .. } => json!({"ok": true, "result": "topic updated"}),
-        PeteAction::Shutup => json!({"ok": true, "result": "speech stopped"}),
-        PeteAction::Pause => json!({"ok": true, "result": "paused"}),
-        PeteAction::Resume => json!({"ok": true, "result": "resumed"}),
-        PeteAction::Sleeping => json!({"ok": true, "result": "sleeping"}),
+    fn apply_countenance_change(
+        &mut self,
+        emoji: &str,
+        mood: Option<String>,
+        reason: Option<String>,
+    ) -> serde_json::Value {
+        let Some(emoji) = normalize_countenance_emoji(emoji) else {
+            let message = "Countenance was not changed because set_countenance requires an emoji in the emoji field. Put words like quiet or attentive in mood.";
+            self.timeline("action_error", message);
+            return json!({"ok": false, "error": message});
+        };
+        let mood = mood.and_then(|mood| non_empty_text(&mood).map(str::to_string));
+        let reason = reason.and_then(|reason| non_empty_text(&reason).map(str::to_string));
+        let state = CountenanceState {
+            emoji,
+            mood,
+            reason,
+        };
+        self.current_countenance = Some(state.clone());
+        self.timeline("countenance", state.prompt_summary());
+        json!({
+            "ok": true,
+            "result": format!("Countenance set: {}", state.prompt_summary()),
+            "observation": format!("Pete's face changed to {}.", state.prompt_summary())
+        })
     }
 }
 
@@ -420,6 +651,32 @@ fn visible_text_from_message(message: &Message) -> Option<String> {
         }
         _ => None,
     }
+}
+
+fn non_empty_text(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn compact_line(text: &str, max_chars: usize) -> String {
+    let mut compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.len() <= max_chars {
+        return compact;
+    }
+    compact = compact.chars().take(max_chars).collect();
+    compact.push_str("...");
+    compact
+}
+
+fn normalize_countenance_emoji(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    extract_emoji_sequences(trimmed).pop().or_else(|| {
+        (trimmed.chars().count() <= 8 && strip_emoji(trimmed).trim().is_empty())
+            .then(|| trimmed.to_string())
+    })
 }
 
 fn message_text(message: &Message) -> String {
@@ -460,7 +717,7 @@ mod tests {
         let mut history = initial_harmony_messages();
         history.push(Message::from_role_and_content(
             Role::User,
-            runtime_observation("hello"),
+            startup_runtime_observation(&[]),
         ));
         let conversation = Conversation::from_messages(history);
         let tokens = encoding
@@ -469,7 +726,9 @@ mod tests {
         let rendered = encoding.tokenizer().decode_utf8(tokens.iter()).unwrap();
 
         assert!(rendered.contains("You are Pete Listenbury"));
-        assert!(rendered.contains("Live human input from Travis"));
+        assert!(rendered.contains("Runtime/body context for Pete"));
+        assert!(rendered.contains("Begin Pete's continuous live runtime now"));
+        assert!(!rendered.contains("Live human input from Travis"));
         assert!(rendered.ends_with("<|start|>assistant"));
     }
 
@@ -479,5 +738,96 @@ mod tests {
 
         assert_eq!(action_from_message(&message).unwrap(), None);
         assert_eq!(visible_text_from_message(&message), None);
+    }
+
+    #[test]
+    fn harmony_go_startup_observation_starts_without_human_input() {
+        let observation = startup_runtime_observation(&[]);
+
+        assert!(observation.contains("Fresh runtime startup"));
+        assert!(observation.contains("Pete wakes into an open live session"));
+        assert!(observation.contains("Begin Pete's continuous live runtime now"));
+        assert!(observation.contains("Do not wait for a human chat turn"));
+        assert!(observation.contains("No initial live seed from Travis"));
+        assert!(!observation.contains("Live human input from Travis"));
+    }
+
+    #[test]
+    fn harmony_go_trims_history_but_keeps_system_and_developer() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            timeline_index: 0,
+            tick_index: 0,
+        };
+        for index in 0..80 {
+            runtime.history.push(Message::from_role_and_content(
+                Role::User,
+                format!("tick {index}"),
+            ));
+        }
+
+        runtime.trim_history();
+
+        assert_eq!(runtime.history[0].author.role, Role::System);
+        assert_eq!(runtime.history[1].author.role, Role::Developer);
+        assert!(runtime.history.len() <= 2 + HARMONY_GO_RECENT_MESSAGE_LIMIT);
+        assert!(message_text(runtime.history.last().unwrap()).contains("tick 79"));
+    }
+
+    #[test]
+    fn harmony_go_countenance_requires_emoji_not_mood_word() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        let rejected = runtime.execute_action(&PeteAction::SetCountenance {
+            emoji: "quiet".to_string(),
+            mood: None,
+            reason: None,
+        });
+        assert!(rejected.contains("\"ok\":false"));
+        assert!(runtime.current_countenance.is_none());
+
+        let accepted = runtime.execute_action(&PeteAction::SetCountenance {
+            emoji: "🙂".to_string(),
+            mood: Some("quiet".to_string()),
+            reason: Some("idle observation".to_string()),
+        });
+        assert!(accepted.contains("\"ok\":true"));
+        assert_eq!(
+            runtime.current_countenance,
+            Some(CountenanceState {
+                emoji: "🙂".to_string(),
+                mood: Some("quiet".to_string()),
+                reason: Some("idle observation".to_string())
+            })
+        );
+    }
+
+    #[test]
+    fn harmony_go_idle_observation_prompts_autonomous_activity() {
+        let observation = idle_runtime_observation(None, HARMONY_IDLE_DIRECTIVES[0]);
+
+        assert!(observation.contains("Autonomous runtime tick"));
+        assert!(observation.contains("not a request to wait"));
+        assert!(observation.contains("Directive: Refresh the scene"));
+        assert!(observation.contains("Do not answer with only Idle"));
+    }
+
+    #[test]
+    fn harmony_go_idle_directives_rotate() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        assert_eq!(runtime.next_idle_directive(), HARMONY_IDLE_DIRECTIVES[0]);
+        assert_eq!(runtime.next_idle_directive(), HARMONY_IDLE_DIRECTIVES[1]);
     }
 }
