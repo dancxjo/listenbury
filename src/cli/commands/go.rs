@@ -55,15 +55,15 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, use the current prompt's runtime action surface. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Idleness is forbidden: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Completion is a transition, not an ending: if no persisted goal is open or all goals are complete, create or select a useful maintenance, exploration, curiosity, learning, or observation goal instead of concluding that the session is complete. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, use the current prompt's runtime action surface. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. In Harmony mode, speak or act with native functions on the commentary channel; in plain stream mode, act by calling the available functions directly inside the legacy action block. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, recall memory, or choose a small useful action. Never treat \"no open goals\", \"all goals complete\", or \"session complete\" as a reason to stop; create a reasonable next curiosity, maintenance, learning, or observation goal, inspect context, update the scene, or take another concrete runtime action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. In Harmony mode, speak or act with native functions on the commentary channel; in plain stream mode, act by calling the available functions directly inside the legacy action block. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
 
 const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, action results, and source-inspection results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the commentary channel for function calls to the `functions` namespace. Do not use final for status, completion, refusal, shutdown, or no-op chatter. Do not wrap function calls in XML tags, TypeScript code, imports, Markdown, shell commands, or JSON outside the native Harmony tool-call message body.\n\nPlain thought belongs in analysis only. Do not write completion, shutdown, or refusal chatter when there is a useful next action. Only the runtime controls the stream lifecycle. Use the sleeping tool only after a current live body-delivered instruction asks for shutdown.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Queue spoken words for Pete's mouth.\ntype say = (_: { text: string, interrupt?: boolean }) => any;\n\n// Stop current or queued speech.\ntype shutup = () => any;\n\n// Pause synthetic playback.\ntype pause = () => any;\n\n// Resume synthetic playback.\ntype resume = () => any;\n\n// Store a durable private note.\ntype note = (_: { text: string }) => any;\n\n// Set Pete's outward countenance as a single emoji and optional mood/reason.\ntype set_countenance = (_: { emoji: string, mood?: string, reason?: string }) => any;\n\n// Update the current screenplay-style scene beat.\ntype set_stage = (_: { instruction: string, topic?: string, summary?: string }) => any;\n\n// Update the lightweight topic label.\ntype set_topic = (_: { topic: string, instruction?: string, summary?: string }) => any;\n\n// Mark a scene or topic transition.\ntype start_new_topic = (_: { last_topic: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Mark the words or event that caused a topic transition.\ntype topic_changed_when = (_: { trigger: string, from_topic?: string, to_topic?: string, topic?: string, instruction?: string, summary?: string }) => any;\n\n// Mark a larger episode reset.\ntype start_new_episode = (_: { reason: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Clean shutdown. Use only after a current live shutdown request.\ntype sleeping = (_: { reason?: string }) => any;\n\n// Request entity extraction from a text span.\ntype extract_entities = (_: { text?: string }) => any;\n\n// Merge or update memory fields for an existing or provisional graph node.\ntype merge_graph_node = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Update memory fields for an existing or provisional graph node.\ntype update_graph_node_fields = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Search memory by text, field, value, or combinations.\ntype search_graph_nodes = (_: { text?: string, field?: string, value?: any, limit?: number }) => any;\n\n// Retrieve memories for a phrase, sentence, name, topic, or claim.\ntype query_memories = (_: { text: string, limit?: number, min_score?: number }) => any;\n\n// List bundled Listenbury source files.\ntype list_files = (_: { page?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Inspect one source file page or the page containing a line.\ntype read_source_file = (_: { file: string, page?: number, line?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Search Listenbury source text.\ntype search_source = (_: { query: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Grep Listenbury source lines.\ntype grep_source = (_: { pattern: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Set the default source page size.\ntype set_source_page_size = (_: { lines: number }) => any;\n\n// Create one persisted goal.\ntype create_goal = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], steps?: string[], items?: string[], note?: string, select?: boolean }) => any;\n\n// Create one persisted task.\ntype create_task = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], select?: boolean }) => any;\n\n// Create one persisted checklist.\ntype create_checklist = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], items?: string[], select?: boolean }) => any;\n\n// Append a running-log note to an ongoing goal.\ntype add_goal_note = (_: { target: string, text: string }) => any;\n\n// Mark a goal or task complete.\ntype check_off = (_: { target: string, note?: string }) => any;\n\n// Mark one checklist item complete.\ntype check_checklist_item = (_: { target: string, item: string, note?: string }) => any;\n\n// Update title, summary, priority, parent, tags, steps/items, or note/log fields.\ntype update_item = (_: { target: string, fields?: object }) => any;\n\n// Cancel a goal and append the reason to its log.\ntype cancel_item = (_: { target: string, reason?: string }) => any;\n\n// Mark one goal as Pete's current focus.\ntype select_item = (_: { target: string }) => any;\n\n} // namespace functions";
 
-const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose at most one useful next runtime action. Use native Harmony function calls on commentary for runtime actions; keep private thought in analysis.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n\nRuntime/body context:";
+const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose one useful next runtime action, and at most one. Use native Harmony function calls on commentary for runtime actions; keep private thought in analysis.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n5. Idleness is forbidden. Do not answer with no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nRuntime/body context:";
 
-const HARMONY_GO_APPEND_TASK_HEADER: &str = "Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Runtime actions use native Harmony function calls on commentary.\n\nPayload:";
+const HARMONY_GO_APPEND_TASK_HEADER: &str = "Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, all goals complete, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal.\n\nPayload:";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createGoal(...), addGoalNote(...), or an array of those calls.\n\
 Available functions:\n\
@@ -97,10 +97,10 @@ Available functions:\n\
 - updateItem(idOrTitle, fields): update title, summary, priority, parent, tags, steps/items, or add note/log text.\n\
 - cancelItem(idOrTitle, reason?): cancel a goal and append the reason to its log.\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
-Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Source notes are compression artifacts: write thorough but compact summaries that preserve the useful information from the source page because the raw page may fall out of context. Include names of modules, structs, traits, functions, constants, control flow, responsibilities, relationships, surprising details, and the next file/page decision when those details are present. Do not silently chain source reads without saying what is there.\n\
-After listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) results, usually record a substantive progress note before doing much more source inspection. Prefer addGoalNote(\"open-goal-id\", \"Observed from readSourceFile src/lib.rs page 2: modules X/Y/Z do A/B/C; key exports and relationships; implication; next inspect page 3.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") is also useful for durable private memory. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result in enough detail to reconstruct the page's purpose; next...\" }). The runtime may remind you when source results have not been summarized, but source inspection is allowed to continue. After several source inspections, synthesize when practical with updateItem(\"open-goal-id\", { summary: \"What is now understood across files\", note: \"Synthesis: key facts, implications, unresolved questions, and next decision\" }) or include summary and note in a source action.\n\
-When the live context contains a name, preference, correction, relationship, identity clue, plan, recurring topic, or fact worth keeping, prefer the graph workflow: extractEntities(\"source sentence\"), searchGraphNodes({ text: \"label or claim\", limit: 5 }), then mergeGraphNode(\"kind:stable_slug\", { description: \"...\", ... }, { label: \"Readable label\" }) or updateGraphNodeFields(...). Use stable IDs like person:travis_reed, place:seattle, topic:listenbury_memory, project:listenbury. Merge/update nodes for durable facts; do not invent full Cypher or database syntax.\n\
-Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. If the system seems confused about the go command or this runtime, inspect src/cli/commands/go.rs first. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, consume the knowledge before reading more: explain what the file or matches reveal, extract useful details, store them with note(...), goal notes, goal summaries, or graph memory, and recall related memory when it changes the next action. Source notes are compression artifacts: write thorough but compact summaries that preserve the useful information from the source page because the raw page may fall out of context. Include names of modules, structs, traits, functions, constants, control flow, responsibilities, relationships, surprising details, and the next file/page decision when those details are present. Do not silently chain source reads without saying what is there.\n\
+After listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) results, record a substantive knowledge capture before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"Observed from readSourceFile src/lib.rs page 2: modules X/Y/Z do A/B/C; key exports and relationships; implication; next inspect page 3.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") stores vectorized private memory and is useful for durable source understanding. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result in enough detail to reconstruct the page's purpose; next...\" }). The runtime defers additional source inspection until the previous result has a substantive summary, so do not use breadcrumb notes like \"read page 2; next page 3.\" After several source inspections, synthesize with updateItem(\"open-goal-id\", { summary: \"What is now understood across files\", note: \"Synthesis: key facts, implications, unresolved questions, and next decision\" }) or include summary and note in a source action.\n\
+When the live context contains a name, preference, correction, relationship, identity clue, plan, recurring topic, or fact worth keeping, prefer the graph workflow: extractEntities(\"source sentence\"), searchGraphNodes({ text: \"label or claim\", limit: 5 }), then mergeGraphNode(\"kind:stable_slug\", { description: \"...\", ... }, { label: \"Readable label\" }) or updateGraphNodeFields(...). Use stable IDs like person:travis_reed, place:seattle, topic:listenbury_memory, project:listenbury. Merge/update nodes for durable facts; do not invent full Cypher or database syntax. Before responding or acting on a recurring topic, person, project, or remembered claim, call recallMemories(...) or searchGraphNodes(...) and use the returned details in the next action instead of relying only on the active prompt.\n\
+Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. If the system seems confused about the go command or this runtime, inspect src/cli/commands/go.rs first. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Idleness is forbidden. Never mark the session complete just because no persisted goal is open; create or select a useful maintenance, exploration, or observation goal, inspect relevant context, update the scene, or take another concrete action. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
 
@@ -135,10 +135,11 @@ const MIN_SOURCE_PAGE_LINES: usize = 20;
 const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const GRAPH_MEMORY_REMINDER_INTERVAL: usize = 3;
+const KNOWLEDGE_CAPTURE_MIN_WORDS: usize = 14;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
 const BUG_REPORT_PATH: &str = "BUGS.md";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), extract graph entities with extractEntities(...), searchGraphNodes(...), mergeGraphNode(...), upsertGraphNode(...), updateGraphNodeFields(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). For durable names, preferences, corrections, relationships, places, plans, topics, or facts: extract entities, search/match existing nodes, then merge/update a stable graph node ID with fields such as description, aliases, relationship notes, preferences, or status. This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
-const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, setCountenance/setMood, note, bug/feature reporting, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Emoji in say(...) is a countenance signal and is stripped before TTS. Source inspection progress notes and synthesis are encouraged but advisory. Make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), extract graph entities with extractEntities(...), searchGraphNodes(...), mergeGraphNode(...), upsertGraphNode(...), updateGraphNodeFields(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). For durable names, preferences, corrections, relationships, places, plans, topics, or facts: extract entities, search/match existing nodes, then merge/update a stable graph node ID with fields such as description, aliases, relationship notes, preferences, or status. Before acting on recurring topics, people, projects, or remembered claims, recallMemories(...) or searchGraphNodes(...) and use the returned details. This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Idleness is forbidden: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. If no persisted goal is open, create a useful goal or select a reasonable next focus instead of ending the session. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is consume-gated: after listFiles/readSourceFile/searchSource/grepSource, record a substantive knowledge capture before the next source inspection with addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. After several source reads, synthesize with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, setCountenance/setMood, note, bug/feature reporting, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Emoji in say(...) is a countenance signal and is stripped before TTS. Source inspection is consume-gated: make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs, before reading more. Recall memories before acting on recurring topics, people, projects, or claims. Idleness is forbidden: do not emit terminal filler, no-op chatter, session complete, all goals complete, nothing to do, or no open goals. If no goal is open or all goals are complete, create or select a useful curiosity, learning, maintenance, or observation goal. Do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
 const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
 
@@ -899,21 +900,27 @@ impl StreamOfConsciousness {
         }
 
         for action in actions {
-            if action.source_progress_label().is_some() {
+            let source_progress_label = action.source_progress_label();
+            let source_workflow_records_capture =
+                source_workflow_records_knowledge_capture(action.source_workflow());
+            if source_progress_label.is_some() {
                 self.apply_inline_source_workflow(action.source_workflow())?;
             }
 
-            if let Some(blocked_source_action) = action.source_progress_label()
+            if let Some(blocked_source_action) = source_progress_label.as_deref()
                 && let Some(previous_source_action) = self.source_progress_due.as_deref()
             {
                 let target = self.work_board.suggested_progress_target();
                 let message = format!(
-                    "Source progress note encouraged before or after {blocked_source_action}. Previous source result: {previous_source_action}. When practical, record a thorough compact summary with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: symbols, responsibilities, relationships, control flow, implications. Next: ...\") or note(\"Observed from {previous_source_action}: detailed source compression. Next: ...\"), or include note in the source call options."
+                    "Source inspection deferred: consume the previous result before {blocked_source_action}. Previous source result: {previous_source_action}. Record a substantive knowledge capture with addGoalNote(\"{target}\", \"Observed from {previous_source_action}: symbols, responsibilities, relationships, control flow, implications. Next: ...\") or note(\"Observed from {previous_source_action}: detailed source compression. Next: ...\"), or include a substantive note/summary in the source call options. Breadcrumbs such as only \"next page\" do not clear this gate."
                 );
-                self.timeline_colored("action_reminder", &message, ANSI_DIM);
+                self.timeline_colored("action_gate", &message, ANSI_DIM);
                 self.append_observation(StreamObservation::ActionResult(message))?;
+                if !source_workflow_records_capture {
+                    continue;
+                }
             }
-            if let Some(blocked_source_action) = action.source_progress_label()
+            if let Some(blocked_source_action) = source_progress_label.as_deref()
                 && self.source_inspections_since_synthesis >= SOURCE_SYNTHESIS_INTERVAL
             {
                 let target = self.work_board.suggested_progress_target();
@@ -925,8 +932,8 @@ impl StreamOfConsciousness {
                 self.append_observation(StreamObservation::ActionResult(message))?;
             }
 
-            let source_progress_label = action.source_progress_label();
             let records_progress_note = action.records_progress_note();
+            let records_source_knowledge_capture = action.records_source_knowledge_capture();
             let records_synthesis = action.records_synthesis_update();
             let graph_memory_label = action.graph_memory_update_label();
             match action {
@@ -971,6 +978,10 @@ impl StreamOfConsciousness {
                     ))?;
                 }
                 TypeScriptAction::Note { text } => {
+                    if is_harmony_terminal_filler(&text) {
+                        self.reject_idle_runtime_action("note", &text)?;
+                        continue;
+                    }
                     self.timeline("note", &text);
                     self.submit_note_memory(&text);
                     let memory_context = self.memory_context_for_text("note", &text);
@@ -1018,6 +1029,10 @@ impl StreamOfConsciousness {
                     instruction,
                     summary,
                 } => {
+                    if is_harmony_terminal_filler(&instruction) {
+                        self.reject_idle_runtime_action("setStage", &instruction)?;
+                        continue;
+                    }
                     self.set_memory_stage(&instruction, summary.as_deref().or(topic.as_deref()));
                     self.timeline("stage", &instruction);
                     self.append_observation(StreamObservation::ActionResult(format!(
@@ -1199,6 +1214,9 @@ impl StreamOfConsciousness {
                     note,
                     select,
                 } => {
+                    let memory_title = title.clone();
+                    let memory_summary = summary.clone();
+                    let memory_note = note.clone();
                     let message = self.work_board.create(
                         Goal {
                             id: id.unwrap_or_default(),
@@ -1218,6 +1236,16 @@ impl StreamOfConsciousness {
                     );
                     self.persist_work_board()?;
                     self.timeline("work", &message);
+                    if let Some(summary) = memory_summary.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Created work goal {memory_title}. Summary: {summary}"
+                        ));
+                    }
+                    if let Some(note) = memory_note.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Created work goal {memory_title}. Initial note: {note}"
+                        ));
+                    }
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
@@ -1225,6 +1253,11 @@ impl StreamOfConsciousness {
                     let message = self.work_board.complete(&target, note.as_deref());
                     self.persist_work_board()?;
                     self.timeline("work", &message);
+                    if let Some(note) = note.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Completed work item {target}. Final understanding: {note}"
+                        ));
+                    }
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
@@ -1234,6 +1267,11 @@ impl StreamOfConsciousness {
                         .check_goal_step(&target, &item, note.as_deref());
                     self.persist_work_board()?;
                     self.timeline("work", &message);
+                    if let Some(note) = note.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Completed work step {item} for {target}. Note: {note}"
+                        ));
+                    }
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
@@ -1241,13 +1279,32 @@ impl StreamOfConsciousness {
                     let message = self.work_board.add_note(&target, &text);
                     self.persist_work_board()?;
                     self.timeline("work", &message);
+                    self.submit_note_memory(&format!("Goal note for {target}: {text}"));
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
                 TypeScriptAction::UpdateWorkItem { target, fields } => {
+                    let memory_summary = fields
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    let memory_note = ["note", "log", "comment"]
+                        .iter()
+                        .find_map(|key| fields.get(*key).and_then(Value::as_str))
+                        .map(str::to_string);
                     let message = self.work_board.update(&target, fields);
                     self.persist_work_board()?;
                     self.timeline("work", &message);
+                    if let Some(summary) = memory_summary.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Updated work item {target}. Summary: {summary}"
+                        ));
+                    }
+                    if let Some(note) = memory_note.as_deref() {
+                        self.submit_note_memory(&format!(
+                            "Updated work item {target}. Note: {note}"
+                        ));
+                    }
                     self.append_observation(StreamObservation::ActionResult(message))?;
                     self.append_current_work_state()?;
                 }
@@ -1274,14 +1331,22 @@ impl StreamOfConsciousness {
                     self.interrupted.store(true, Ordering::Relaxed);
                 }
             }
-            if records_progress_note {
+            if records_source_knowledge_capture {
                 if let Some(previous_source_action) = self.source_progress_due.take() {
                     let message = format!(
-                        "Progress note recorded for previous source inspection: {previous_source_action}."
+                        "Knowledge capture recorded for previous source inspection: {previous_source_action}."
                     );
                     self.timeline("action_result", &message);
                     self.append_observation(StreamObservation::ActionResult(message))?;
                 }
+            } else if records_progress_note
+                && let Some(previous_source_action) = self.source_progress_due.as_deref()
+            {
+                let message = format!(
+                    "Progress note was too shallow to clear the source knowledge gate for {previous_source_action}. Capture concrete symbols, responsibilities, relationships, control flow, implications, and the next decision."
+                );
+                self.timeline_colored("action_gate", &message, ANSI_DIM);
+                self.append_observation(StreamObservation::ActionResult(message))?;
             }
             if records_synthesis {
                 self.source_inspections_since_synthesis = 0;
@@ -1320,6 +1385,15 @@ impl StreamOfConsciousness {
         Ok(())
     }
 
+    fn reject_idle_runtime_action(&mut self, action_name: &str, text: &str) -> Result<()> {
+        let message = format!(
+            "Ignored idle {action_name} action: {}. Idleness is forbidden; choose a concrete runtime action such as createGoal, selectItem, readSourceFile, setStage with an active scene, or note with substantive context.",
+            compact_line(text, 300)
+        );
+        self.timeline_colored("action_reminder", &message, ANSI_DIM);
+        self.append_observation(StreamObservation::ActionResult(message))
+    }
+
     fn apply_inline_source_workflow(
         &mut self,
         workflow: Option<&SourceWorkflowUpdate>,
@@ -1346,6 +1420,14 @@ impl StreamOfConsciousness {
             let message = self.work_board.update(&target, fields);
             self.persist_work_board()?;
             self.timeline("work", &message);
+            self.submit_note_memory(&format!(
+                "Source synthesis for {target}: {summary}{}",
+                workflow
+                    .note
+                    .as_deref()
+                    .map(|note| format!(" Note: {note}"))
+                    .unwrap_or_default()
+            ));
             self.append_observation(StreamObservation::ActionResult(message))?;
             self.append_current_work_state()?;
             self.source_inspections_since_synthesis = 0;
@@ -1361,19 +1443,29 @@ impl StreamOfConsciousness {
             let message = self.work_board.add_note(&target, note);
             self.persist_work_board()?;
             self.timeline("work", &message);
+            self.submit_note_memory(&format!("Source knowledge capture for {target}: {note}"));
             self.append_observation(StreamObservation::ActionResult(message))?;
             self.append_current_work_state()?;
             recorded_work = true;
         }
 
         if recorded_work
-            && workflow.note.is_some()
+            && source_workflow_records_knowledge_capture(Some(workflow))
             && let Some(previous_source_action) = self.source_progress_due.take()
         {
             let message = format!(
-                "Inline progress note recorded for previous source inspection: {previous_source_action}."
+                "Inline knowledge capture recorded for previous source inspection: {previous_source_action}."
             );
             self.timeline("action_result", &message);
+            self.append_observation(StreamObservation::ActionResult(message))?;
+        } else if recorded_work
+            && workflow.note.is_some()
+            && let Some(previous_source_action) = self.source_progress_due.as_deref()
+        {
+            let message = format!(
+                "Inline source note was too shallow to clear the source knowledge gate for {previous_source_action}. Capture concrete symbols, responsibilities, relationships, control flow, implications, and the next decision."
+            );
+            self.timeline_colored("action_gate", &message, ANSI_DIM);
             self.append_observation(StreamObservation::ActionResult(message))?;
         }
 
@@ -2669,7 +2761,39 @@ fn is_harmony_terminal_filler(text: &str) -> bool {
             | "all done"
             | "that's it"
             | "that is it"
+            | "no open goals"
+            | "no open goals remaining"
+            | "no pending tasks"
+            | "nothing to do"
+            | "nothing needs doing"
+            | "nothing useful to do"
+            | "say nothing"
+            | "maybe say nothing"
+            | "session complete"
+            | "all goals complete"
+            | "all goals finished"
+            | "added note for future reference"
     ) {
+        return true;
+    }
+
+    if (normalized.contains("no open goals") || normalized.contains("no pending tasks"))
+        && (normalized.contains("session complete")
+            || normalized.contains("session completed")
+            || normalized.contains("say nothing")
+            || normalized.contains("no further action")
+            || normalized.contains("no further actions")
+            || normalized.contains("nothing to do"))
+    {
+        return true;
+    }
+
+    if normalized.contains("all goals")
+        && (normalized.contains("complete")
+            || normalized.contains("finished")
+            || normalized.contains("say nothing")
+            || normalized.contains("no further action"))
+    {
         return true;
     }
 
@@ -3710,6 +3834,16 @@ impl WorkBoard {
                 latest_goal_log(item)
             ));
         }
+        if !self
+            .items
+            .iter()
+            .any(|item| matches!(item.status, WorkItemStatus::Open))
+        {
+            lines.push(
+                "No open goals. Completion is a transition; create or select a useful curiosity, learning, maintenance, or observation goal instead of treating the session as complete."
+                    .to_string(),
+            );
+        }
         Some(lines.join("\n"))
     }
 
@@ -4045,6 +4179,24 @@ impl TypeScriptAction {
         }
     }
 
+    fn records_source_knowledge_capture(&self) -> bool {
+        match self {
+            Self::Note { text } | Self::AddGoalNote { text, .. } => {
+                meaningful_knowledge_capture_text(text)
+            }
+            Self::CheckChecklistItem { note, .. }
+            | Self::CompleteWorkItem { note, .. }
+            | Self::CreateWorkItem { note, .. } => note
+                .as_deref()
+                .is_some_and(meaningful_knowledge_capture_text),
+            Self::UpdateWorkItem { fields, .. } => ["note", "log", "comment", "summary"]
+                .iter()
+                .filter_map(|key| fields.get(*key).and_then(Value::as_str))
+                .any(meaningful_knowledge_capture_text),
+            _ => false,
+        }
+    }
+
     fn records_synthesis_update(&self) -> bool {
         match self {
             Self::CompleteWorkItem { note, .. } => note
@@ -4086,6 +4238,20 @@ impl TypeScriptAction {
         };
         (!workflow.is_empty()).then_some(workflow)
     }
+}
+
+fn source_workflow_records_knowledge_capture(workflow: Option<&SourceWorkflowUpdate>) -> bool {
+    let Some(workflow) = workflow else {
+        return false;
+    };
+    workflow
+        .summary
+        .as_deref()
+        .is_some_and(meaningful_knowledge_capture_text)
+        || workflow
+            .note
+            .as_deref()
+            .is_some_and(meaningful_knowledge_capture_text)
 }
 
 #[derive(Debug, Deserialize)]
@@ -5767,6 +5933,43 @@ fn meaningful_synthesis_text(text: &str) -> bool {
     text.split_whitespace().count() >= 6
 }
 
+fn meaningful_knowledge_capture_text(text: &str) -> bool {
+    let Some(text) = non_empty_text(text) else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "..." | "text" | "note" | "[summary]" | "read next page" | "next page"
+    ) {
+        return false;
+    }
+    let word_count = text.split_whitespace().count();
+    if word_count < KNOWLEDGE_CAPTURE_MIN_WORDS {
+        return false;
+    }
+    let detail_cues = [
+        "because",
+        "contains",
+        "defines",
+        "exports",
+        "imports",
+        "module",
+        "struct",
+        "trait",
+        "function",
+        "constant",
+        "control flow",
+        "relationship",
+        "responsibility",
+        "implication",
+        "reveals",
+        "observed from",
+        "synthesis",
+    ];
+    detail_cues.iter().any(|cue| lower.contains(cue))
+}
+
 fn tsrun_error(err: JsError) -> anyhow::Error {
     anyhow::anyhow!("TypeScript execution failed: {err}")
 }
@@ -6644,7 +6847,9 @@ mod tests {
         assert!(!prompt.contains("Plain-stream TypeScript runtime reference"));
         assert!(prompt.contains("<|start|>user<|message|>Instruction bundle"));
         assert!(prompt.contains("Pete's own body delivering inner context"));
-        assert!(prompt.contains("Choose at most one useful next runtime action"));
+        assert!(prompt.contains("Choose one useful next runtime action, and at most one"));
+        assert!(prompt.contains("Idleness is forbidden"));
+        assert!(prompt.contains("If no goal is open, create or select a useful one"));
         assert!(prompt.contains("Use native Harmony function calls on commentary"));
         assert!(prompt.contains("Continue the stream by acting on the live context"));
         assert!(prompt.contains("Do not write completion, shutdown, or refusal chatter"));
@@ -6654,7 +6859,7 @@ mod tests {
         let append = format_go_prompt_append(GoPromptFormat::GptOssHarmony, "\n[body]\nclock\n");
         assert_eq!(
             append,
-            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Runtime actions use native Harmony function calls on commentary.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
+            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose one useful next action, at most one. Runtime actions use native Harmony function calls on commentary. Idleness is forbidden: do not emit no action, session complete, nothing to do, or no open goals. If no goal is open, create or select a useful one.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
         );
 
         let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
@@ -7045,6 +7250,33 @@ mod tests {
     fn go_harmony_analysis_memory_drops_terminal_filler() {
         let mut buffer = String::new();
         assert!(drain_harmony_analysis_memory(&mut buffer, "Done.", 80, true).is_empty());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn go_harmony_analysis_memory_drops_idle_goal_completion() {
+        let mut buffer = String::new();
+        assert!(
+            drain_harmony_analysis_memory(
+                &mut buffer,
+                "No open goals remaining; session completed. Added note for future reference.",
+                80,
+                true
+            )
+            .is_empty()
+        );
+        assert!(buffer.is_empty());
+
+        let mut buffer = String::new();
+        assert!(
+            drain_harmony_analysis_memory(
+                &mut buffer,
+                "All goals complete? Maybe say nothing.",
+                80,
+                true
+            )
+            .is_empty()
+        );
         assert!(buffer.is_empty());
     }
 

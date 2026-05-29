@@ -3629,11 +3629,69 @@
         {
           "text": "Read src/audio/mod.rs page 1: module declarations and realtime rule comment.",
           "at": "2026-05-28T18:35:49-07:00"
+        },
+        {
+          "text": "Completed: Completed inspection of src/audio/mod.rs, all pages read and noted.",
+          "at": "2026-05-28T18:36:00-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "goal-24",
+      "title": "Explore repository structure",
+      "summary": "What is now understood across the inspected source",
+      "parent": null,
+      "priority": null,
+      "tags": [
+        "exploration",
+        "repository"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Synthesis: key findings include a clear separation of concerns, with voice refinement modules handling cross-boundary articulation. Unresolved: how runtime and event modules interact with these passes. Next: inspect src/runtime/mod.rs for runtime orchestration.",
+          "at": "2026-05-28T18:38:22-07:00"
+        },
+        {
+          "text": "Synthesis: compressed key findings, symbol relationships, implications, unresolved questions, and next decision.",
+          "at": "2026-05-28T18:39:39-07:00"
+        }
+      ],
+      "status": "complete"
+    },
+    {
+      "id": "goal-25",
+      "title": "Inspect source files",
+      "summary": "Inspected 10 pages of source files covering core synthesis, prosody, segmentation, soundscape, speech pipeline, and runtime modules. Key themes: modular speech synthesis pipeline, prosody planning, phonotactics, segmentation, soundscape modeling, and runtime event handling.",
+      "parent": null,
+      "priority": "medium",
+      "tags": [
+        "exploration",
+        "source"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Observed from listFiles page 5: files span hearing, linguistic, lib, and core modules. Notable modules include audition, breath, environment, mod, sound_classify, suppression, utterance, vad, and core lib.rs. Linguistic subpackages cover arpabet, cmudict, environment, inventory, language_pack, rules, variety, orthography, phone, phoneme, and other language utilities. Next: page 6 lists phonology, pronounce, realization, rule_registry, service, sound_it_out, variety, and various src files including live_trace, loop_trace, main.rs, memory, mind, and context modules.",
+          "at": "2026-05-28T18:39:52-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 6: core src files include phonology, pronounce, realization, rule_registry, service, sound_it_out, variety, live_trace, loop_trace, main.rs, memory modules, mind modules, and context. Next: page 7 lists mind controller, entity, episodic, llama_cpp, llm, mod, prompt, turn, models, mouth modules.",
+          "at": "2026-05-28T18:39:56-07:00"
+        },
+        {
+          "text": "Observed from listFiles page 8: source files include mouth/riper modules (config, echo, encoder, evidence, g2p, mod, morphophonology, phoneme, prosody audit, prosody controls, prosody planner, sentence analysis, text, tts), perception.rs, playback_check.rs, prosody midi, prosody mod, note_target, prosody phonotactics english, and more. These files cover speech synthesis pipeline, prosody handling, and perception utilities. Next: page 9 lists prosody phonotactics modules, pitch_curve, singing, syllabification, syllable, vibrato, runtime, event, segmentation modules, soundscape attribution, criteria, debug, etc.",
+          "at": "2026-05-28T18:40:07-07:00"
+        },
+        {
+          "text": "Synthesis: source files collectively implement a flexible, modular speech synthesis and perception system with clear separation of concerns among synthesis, prosody, segmentation, soundscape, and runtime. Unresolved: integration points between modules, performance characteristics, and external dependencies.",
+          "at": "2026-05-28T18:40:12-07:00"
         }
       ],
       "status": "open"
     }
   ],
-  "selected_id": "goal-23",
-  "next_id": 24
+  "selected_id": "goal-25",
+  "next_id": 26
 }
