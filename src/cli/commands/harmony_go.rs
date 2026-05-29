@@ -13,6 +13,7 @@ use openai_harmony::{HarmonyEncodingName, ParseOptions, load_harmony_encoding};
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 use serde_json::json;
+use std::env;
 use std::io::{self, Write};
 use std::sync::{
     Arc,
@@ -25,11 +26,11 @@ const DEFAULT_HARMONY_GO_GPU_LAYERS: u32 = 99;
 const HARMONY_GO_IDLE_PAUSE: Duration = Duration::from_millis(50);
 const HARMONY_GO_RECENT_MESSAGE_LIMIT: usize = 48;
 const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
-    "Refresh the scene. If it has gone stale, call set_stage with concrete setting and observable action.",
+    "Refresh the grounded runtime scene. If it has gone stale, call set_stage using only reported process, terminal, repository, time, and sensor-availability facts.",
     "Check Pete's felt stance. If useful, call set_countenance with an emoji plus mood and reason.",
     "Keep continuity alive. If something durable is worth preserving, call note with one specific observation.",
     "Choose a live focus. If Pete has no current focus, call set_topic with a short topic label.",
-    "Let curiosity move outward. Notice the room, Travis, the workbench, the system body, or Pete's own inner workings.",
+    "Let curiosity move outward only as far as reported reality allows: terminal, runtime body, repository, missing sensors, remembered context, or Pete's own inner workings.",
     "If speech would feel natural, say one short sentence. Otherwise think concretely and choose a quiet runtime action.",
     "Do not repeat the previous idle move. Shift the beat: scene, countenance, note, topic, or brief speech.",
 ];
@@ -43,6 +44,8 @@ Runtime messages are sensory/body context. Treat them as observations from Pete'
 Continue Pete's life truthfully from the reported sensations, memories, body state, and recent runtime events.
 
 Ground every narration in what is actually reported. Do not invent sensory facts, user intent, world state, or memory. If evidence is weak, carry that uncertainty instead of pretending to know.
+
+In this harmony-go path, no microphone, camera, room sensor, apartment sensor, window sensor, light sensor, or ambient audio sensor is reporting reality unless a runtime message explicitly says so. Do not narrate apartments, rooms, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, weather, or background sounds as facts.
 
 Use analysis for private narrator work: Pete's immediate experience, inner movement, and possible next beat.
 
@@ -66,7 +69,7 @@ When no live human input is present, do not start source inspection by default. 
 
 When idle, prefer low-impact presence: update the current scene in one sentence, set a quiet facial emoji with optional mood/reason, write one durable observation, wait without output, or keep the selected goal warm without advancing it.
 
-Curiosity should turn outward before it turns into code reading: notice what is actually reported in the scene, what Travis seems to care about when evidence supports it, what unresolved thread has emotional weight, what Pete remembers that might matter now, or what would be helpful to notice rather than do.
+Curiosity should turn outward before it turns into code reading, but only through reported reality: the running terminal process, repository path, local time, available sensors, explicit input, retrieved memory, and runtime events. Do not decorate the scene with unreported room details.
 
 Source inspection is a deliberate work mode, not the default shape of consciousness.
 
@@ -86,7 +89,7 @@ Use analysis for private narrator work: Pete's immediate experience, interior co
 Use commentary tool calls for runtime motors.
 Use final only for short visible speech that Pete actually says when a motor call is not the right action.
 Do not wait for a human chat turn.
-Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers.
+Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
 When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
 On most ticks, do one small thing through the runtime: refresh the scene, set countenance, preserve an observation, choose a topic, or speak one short sentence if speech feels natural.
 Do not loop on "Idle" or "No action." Do not keep choosing the same action text.
@@ -449,9 +452,19 @@ fn idle_runtime_observation(countenance: Option<&CountenanceState>, directive: &
 
 fn runtime_observation(body: &str) -> String {
     format!(
-        "Runtime/body context for Pete:\nCurrent local time: {}\n{}",
+        "Runtime/body context for Pete:\nCurrent local time: {}\n{}\n{}",
         Local::now().to_rfc3339(),
+        reported_reality_context(),
         body.trim()
+    )
+}
+
+fn reported_reality_context() -> String {
+    let cwd = env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown current working directory".to_string());
+    format!(
+        "Reported reality:\n- Process: listenbury harmony-go is running in a terminal.\n- Current working directory: {cwd}\n- Sensors in this path: no microphone, camera, room, window, light, weather, object, or ambient-audio sensor is connected to this runtime.\n- Therefore: apartments, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, background hums, lighting, and room details are unknown unless explicitly reported by a runtime event or memory.\n- Grounding rule: set_stage and note must describe only reported runtime facts, explicit input, retrieved memory, or uncertainty about missing sensors."
     )
 }
 
@@ -597,6 +610,10 @@ impl HarmonyRuntime {
                 json!({"ok": true, "result": format!("Queued speech: {}", compact_line(text, 300))})
             }
             PeteAction::Note { text } => {
+                if let Some(error) = unsupported_reality_claim(text) {
+                    self.timeline("action_error", error);
+                    return json!({"ok": false, "error": error}).to_string();
+                }
                 self.timeline("note", compact_line(text, 500));
                 json!({"ok": true, "result": format!("Noted: {}", compact_line(text, 500))})
             }
@@ -606,6 +623,10 @@ impl HarmonyRuntime {
                 reason,
             } => self.apply_countenance_change(emoji, mood.clone(), reason.clone()),
             PeteAction::SetStage { scene } => {
+                if let Some(error) = unsupported_reality_claim(scene) {
+                    self.timeline("action_error", error);
+                    return json!({"ok": false, "error": error}).to_string();
+                }
                 self.timeline("stage", compact_line(scene, 500));
                 json!({"ok": true, "result": format!("Scene updated: {}", compact_line(scene, 500))})
             }
@@ -698,6 +719,61 @@ fn normalize_countenance_emoji(value: &str) -> Option<String> {
     })
 }
 
+fn unsupported_reality_claim(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    if carries_uncertainty_or_missing_sensor_context(&lower) {
+        return None;
+    }
+    let unsupported_terms = [
+        "apartment",
+        "blind",
+        "fridge",
+        "refrigerator",
+        "streetlamp",
+        "window",
+        "couch",
+        "mug",
+        "workbench",
+        "room",
+        "kitchen",
+        "desk",
+        "lamp",
+        "weather",
+        "rain",
+        "outside",
+        "background hum",
+        "hum of",
+        "soft amber",
+        "light through",
+        "shadow",
+    ];
+    unsupported_terms
+        .iter()
+        .any(|term| lower.contains(term))
+        .then_some(
+            "Reality grounding rejected this event: harmony-go has no room/world sensors reporting that detail. Use only reported terminal/runtime facts, explicit input, retrieved memory, or uncertainty about missing sensors.",
+        )
+}
+
+fn carries_uncertainty_or_missing_sensor_context(lowercase_text: &str) -> bool {
+    [
+        "unknown",
+        "not reported",
+        "unreported",
+        "no sensor",
+        "no room sensor",
+        "no camera",
+        "no microphone",
+        "no ambient",
+        "cannot see",
+        "cannot hear",
+        "not visible",
+        "not available",
+    ]
+    .iter()
+    .any(|marker| lowercase_text.contains(marker))
+}
+
 fn message_text(message: &Message) -> String {
     message
         .content
@@ -749,6 +825,9 @@ mod tests {
         assert!(rendered.contains("Ground every narration in what is actually reported"));
         assert!(rendered.contains("Do not invent sensory facts"));
         assert!(rendered.contains("Runtime/body context for Pete"));
+        assert!(rendered.contains("Reported reality:"));
+        assert!(rendered.contains("no microphone, camera, room"));
+        assert!(rendered.contains("apartments, blinds, refrigerators"));
         assert!(rendered.contains("Begin Pete's continuous live runtime now"));
         assert!(rendered.contains("Be truthful"));
         assert!(!rendered.contains("Live human input from Travis"));
@@ -773,6 +852,8 @@ mod tests {
         assert!(observation.contains("Be truthful"));
         assert!(observation.contains("Ground the scene in reported sensations"));
         assert!(observation.contains("Do not invent what Pete senses or remembers"));
+        assert!(observation.contains("Reported reality:"));
+        assert!(observation.contains("Current working directory:"));
         assert!(observation.contains("Do not wait for a human chat turn"));
         assert!(observation.contains("No initial live seed from Travis"));
         assert!(!observation.contains("Live human input from Travis"));
@@ -840,7 +921,8 @@ mod tests {
 
         assert!(observation.contains("Autonomous runtime tick"));
         assert!(observation.contains("not a request to wait"));
-        assert!(observation.contains("Directive: Refresh the scene"));
+        assert!(observation.contains("Directive: Refresh the grounded runtime scene"));
+        assert!(observation.contains("Reported reality:"));
         assert!(observation.contains("Do not answer with only Idle"));
     }
 
@@ -855,5 +937,38 @@ mod tests {
 
         assert_eq!(runtime.next_idle_directive(), HARMONY_IDLE_DIRECTIVES[0]);
         assert_eq!(runtime.next_idle_directive(), HARMONY_IDLE_DIRECTIVES[1]);
+    }
+
+    #[test]
+    fn harmony_go_rejects_unsupported_room_reality_claims() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        let rejected = runtime.execute_action(&PeteAction::SetStage {
+            scene: "Pete wakes up in his small apartment with blinds half-open.".to_string(),
+        });
+
+        assert!(rejected.contains("\"ok\":false"));
+        assert!(rejected.contains("Reality grounding rejected"));
+    }
+
+    #[test]
+    fn harmony_go_allows_grounded_runtime_scene() {
+        let mut runtime = HarmonyRuntime {
+            history: initial_harmony_messages(),
+            current_countenance: None,
+            timeline_index: 0,
+            tick_index: 0,
+        };
+
+        let accepted = runtime.execute_action(&PeteAction::SetStage {
+            scene: "Pete is being narrated inside the listenbury harmony-go terminal process; room details are unknown because no room sensor is connected.".to_string(),
+        });
+
+        assert!(accepted.contains("\"ok\":true"));
     }
 }
