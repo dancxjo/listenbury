@@ -1,9 +1,13 @@
 use crate::cli::GoCommand;
+use crate::cli::commands::cpal_diag::play_audio_frames;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::commands::mic_transcribe::transcribe_group_with_finality;
 #[cfg(feature = "asr-whisper")]
 use crate::cli::model_paths::resolve_whisper_model;
-use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model};
+use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model, resolve_piper_voice};
+use crate::cli::piper::{
+    collect_tts_audio, hifigan_text_to_speech, piper_config_for_voice, resolve_piper_bin,
+};
 #[cfg(feature = "asr-whisper")]
 use crate::cli::resolve_vad_config;
 use anyhow::{Context, Result, bail};
@@ -25,12 +29,15 @@ use listenbury::hearing::breath::{BreathGroupId, BreathGroupSegmenter};
 #[cfg(feature = "asr-whisper")]
 use listenbury::hearing::vad::{VoiceActivityDetector, create_vad_backend_with_profile};
 use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
-use listenbury::mouth::planner::{extract_emoji_sequences, strip_emoji};
+use listenbury::mouth::planner::{
+    MouthSyntheticPlan, SyntheticUnit, extract_emoji_sequences, strip_emoji,
+};
+use listenbury::mouth::tts::TextToSpeech;
 #[cfg(feature = "asr-whisper")]
 use listenbury::speech::transcript::{TranscriptCandidateEvent, TranscriptReplacementReason};
 #[cfg(feature = "asr-whisper")]
 use listenbury::{AudioFrame, ExactTimestamp, VadBackendKind, WhisperSpeechRecognizer};
-use listenbury::{LlamaCppConfig, LlamaCppEngine};
+use listenbury::{LlamaCppConfig, LlamaCppEngine, PiperTextToSpeech};
 use openai_harmony::chat::{
     Author, ChannelConfig, Content, Conversation, DeveloperContent, Message, ReasoningEffort, Role,
     SystemContent, TextContent, ToolDescription,
@@ -47,9 +54,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::thread;
-#[cfg(feature = "asr-whisper")]
-use std::thread::JoinHandle;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use tsrun::{
     Guarded, InternalModule, Interpreter, InterpreterConfig, JsError, JsValue, StepResult, api,
@@ -59,6 +64,7 @@ use tsrun::{
 const DEFAULT_HARMONY_GO_GPU_LAYERS: u32 = 99;
 const HARMONY_GO_IDLE_PAUSE: Duration = Duration::from_millis(50);
 const HARMONY_GO_RECENT_MESSAGE_LIMIT: usize = 48;
+const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
 const HARMONY_IDLE_DIRECTIVES: &[&str] = &[
     "Refresh the grounded runtime scene. If it has gone stale, call set_stage using only reported process, terminal, repository, time, and sensor-availability facts.",
     "Check Pete's felt stance. If useful, call set_countenance with an emoji plus mood and reason.",
@@ -94,6 +100,7 @@ Runtime action surfaces:
 - Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, and sleeping.
 - TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
 - TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, and sleeping.
+- set_countenance and setCountenance require emoji-only content for the countenance value. Put words such as quiet, attentive, tired, or curious only in mood/reason fields, never in the emoji/countenance field.
 - The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }).
 
 If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer the run_typescript function tool when using native Harmony tool calls. Do not use TypeScript for conversation; use it only for runtime actions.
@@ -133,7 +140,7 @@ Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
 Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
-Native Harmony tools: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, sleeping.
+Native Harmony tools: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
 TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.
 Do not wait for a human chat turn.
 Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
@@ -225,6 +232,7 @@ pub(crate) fn run_harmony_go(command: GoCommand) -> Result<()> {
         history: initial_harmony_messages(),
         current_countenance: None,
         asr_state: HarmonyAsrPromptState::default(),
+        mouth: Some(HarmonyMouth::start(&command)?),
         timeline_index: 0,
         tick_index: 0,
     };
@@ -305,6 +313,7 @@ struct HarmonyRuntime {
     history: Vec<Message>,
     current_countenance: Option<CountenanceState>,
     asr_state: HarmonyAsrPromptState,
+    mouth: Option<HarmonyMouth>,
     timeline_index: u64,
     tick_index: usize,
 }
@@ -445,7 +454,9 @@ fn run_harmony_completion(
                 outcome.tool_result = true;
                 break;
             } else if !text.trim().is_empty() {
-                runtime.timeline("speech", format!("Pete: {}", text.trim()));
+                let _ = runtime.execute_action(&PeteAction::Say {
+                    text: text.trim().to_string(),
+                });
                 runtime.history.push(message);
                 outcome.acted = true;
                 break;
@@ -549,6 +560,98 @@ fn reported_reality_context() -> String {
     format!(
         "Reported reality:\n- Process: listenbury harmony-go is running in a terminal.\n- Current working directory: {cwd}\n- Sensors in this path: microphone/ASR facts are available only when a developer runtime event explicitly reports them; no camera, room, window, light, weather, object, or ambient-audio scene sensor is connected to this runtime.\n- Therefore: apartments, blinds, refrigerators, streetlamps, couches, mugs, workbenches, windows, background hums, lighting, and room details are unknown unless explicitly reported by a runtime event or memory.\n- Grounding rule: set_stage and note must describe only reported runtime facts, explicit input, retrieved memory, or uncertainty about missing sensors."
     )
+}
+
+#[derive(Debug)]
+struct HarmonyMouth {
+    tx: crossbeam_channel::Sender<HarmonyMouthCommand>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl HarmonyMouth {
+    fn start(command: &GoCommand) -> Result<Self> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let worker = if command.mock_mouth {
+            thread::Builder::new()
+                .name("listenbury-harmony-go-mock-mouth".to_string())
+                .spawn(move || run_harmony_mock_mouth(rx))
+                .context("failed to spawn harmony-go mock mouth")?
+        } else {
+            let tts = harmony_tts_for_command(command)?;
+            thread::Builder::new()
+                .name("listenbury-harmony-go-mouth".to_string())
+                .spawn(move || run_harmony_mouth(tts, rx))
+                .context("failed to spawn harmony-go mouth")?
+        };
+        Ok(Self {
+            tx,
+            worker: Some(worker),
+        })
+    }
+
+    fn speak(&self, text: String) -> Result<()> {
+        self.tx
+            .send(HarmonyMouthCommand::Speak { text })
+            .context("failed to queue speech for harmony-go mouth")
+    }
+}
+
+impl Drop for HarmonyMouth {
+    fn drop(&mut self) {
+        let _ = self.tx.send(HarmonyMouthCommand::Shutdown);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Debug)]
+enum HarmonyMouthCommand {
+    Speak { text: String },
+    Shutdown,
+}
+
+fn run_harmony_mock_mouth(rx: crossbeam_channel::Receiver<HarmonyMouthCommand>) {
+    for command in rx {
+        match command {
+            HarmonyMouthCommand::Speak { text: _ } => {}
+            HarmonyMouthCommand::Shutdown => return,
+        }
+    }
+}
+
+fn run_harmony_mouth(
+    mut tts: PiperTextToSpeech,
+    rx: crossbeam_channel::Receiver<HarmonyMouthCommand>,
+) {
+    for command in rx {
+        match command {
+            HarmonyMouthCommand::Speak { text } => {
+                let plan = MouthSyntheticPlan::new(SyntheticUnit::CompleteClause(text.clone()));
+                let result = tts
+                    .enqueue(plan)
+                    .and_then(|_| collect_tts_audio(&mut tts, MAX_TTS_TIMEOUT))
+                    .and_then(|frames| play_audio_frames(&frames, "harmony-go mouth"));
+                if let Err(error) = result {
+                    eprintln!("harmony-go mouth error: {error:#}");
+                }
+            }
+            HarmonyMouthCommand::Shutdown => return,
+        }
+    }
+}
+
+fn harmony_tts_for_command(command: &GoCommand) -> Result<PiperTextToSpeech> {
+    if command.hifigan {
+        return hifigan_text_to_speech(command.hifigan_model.clone(), command.skip_gan);
+    }
+
+    let piper_bin = resolve_piper_bin(command.piper_bin.clone())?;
+    let piper_voice = resolve_piper_voice(command.piper_voice.clone())?;
+    Ok(PiperTextToSpeech::new(piper_config_for_voice(
+        piper_bin,
+        piper_voice,
+    )?))
 }
 
 #[cfg(feature = "asr-whisper")]
@@ -1223,14 +1326,14 @@ fn harmony_candidate_developer_update(
                 TranscriptReplacementReason::Restarted => 0,
             };
             Some(format!(
-                "You were interrupted {percent}% through hearing: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
+                "No, not: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
             ))
         }
         TranscriptCandidateEvent::CandidateCancelled { .. } => {
             let old_text = state.active_text.take()?;
             state.announced_text = false;
             Some(format!(
-                "You were interrupted before finishing hearing: \"{old_text}\". The ASR candidate was cancelled."
+                "No, not: \"{old_text}\". The ASR candidate was cancelled."
             ))
         }
     }
@@ -1706,7 +1809,19 @@ impl HarmonyRuntime {
             PeteAction::Say { text } => {
                 let text = text.trim();
                 self.timeline("speech", format!("Pete: {text}"));
-                json!({"ok": true, "result": format!("Queued speech: {}", compact_line(text, 300))})
+                match &self.mouth {
+                    Some(mouth) => match mouth.speak(text.to_string()) {
+                        Ok(()) => {
+                            json!({"ok": true, "result": format!("Queued speech: {}", compact_line(text, 300))})
+                        }
+                        Err(error) => {
+                            json!({"ok": false, "error": format!("failed to queue speech: {error:#}")})
+                        }
+                    },
+                    None => {
+                        json!({"ok": true, "result": format!("Recorded speech without mouth runtime: {}", compact_line(text, 300))})
+                    }
+                }
             }
             PeteAction::Note { text } => {
                 if let Some(error) = unsupported_reality_claim(text) {
@@ -1776,7 +1891,7 @@ impl HarmonyRuntime {
         reason: Option<String>,
     ) -> serde_json::Value {
         let Some(emoji) = normalize_countenance_emoji(emoji) else {
-            let message = "Countenance was not changed because set_countenance requires an emoji in the emoji field. Put words like quiet or attentive in mood.";
+            let message = "Countenance was not changed because set_countenance requires emoji-only content in the emoji field. Put words like quiet or attentive in mood.";
             self.timeline("action_error", message);
             return json!({"ok": false, "error": message});
         };
@@ -1874,7 +1989,15 @@ fn carries_uncertainty_or_missing_sensor_context(lowercase_text: &str) -> bool {
         "not reported",
         "unreported",
         "no sensor",
+        "no sensors",
+        "no external sensor",
+        "no external sensors",
+        "no room",
         "no room sensor",
+        "no room sensors",
+        "no room/world",
+        "no world sensor",
+        "no world sensors",
         "no camera",
         "no microphone",
         "no ambient",
@@ -1943,6 +2066,7 @@ mod tests {
         assert!(rendered.contains("Native Harmony function tools are available in commentary"));
         assert!(rendered.contains("set_countenance, set_stage, set_topic, run_typescript"));
         assert!(rendered.contains("TypeScript uses only the internal module \"pete:will\""));
+        assert!(rendered.contains("require emoji-only content"));
         assert!(rendered.contains("Available TypeScript functions are say, note, setStage"));
         assert!(rendered.contains("final <ts>...</ts> blocks"));
         assert!(rendered.contains("Runtime/body context for Pete"));
@@ -1986,6 +2110,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2010,6 +2135,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2055,6 +2181,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2069,6 +2196,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2087,6 +2215,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
@@ -2098,6 +2227,15 @@ mod tests {
         assert!(accepted.contains("\"ok\":true"));
     }
 
+    #[test]
+    fn harmony_go_allows_no_room_world_sensor_scene() {
+        let accepted = unsupported_reality_claim(
+            "Running listenbury harmony-go in terminal; no room/world sensors are reporting.",
+        );
+
+        assert_eq!(accepted, None);
+    }
+
     #[cfg(feature = "asr-whisper")]
     #[test]
     fn harmony_go_asr_updates_are_developer_runtime_context() {
@@ -2105,6 +2243,7 @@ mod tests {
             history: initial_harmony_messages(),
             current_countenance: None,
             asr_state: HarmonyAsrPromptState::default(),
+            mouth: None,
             timeline_index: 0,
             tick_index: 0,
         };
