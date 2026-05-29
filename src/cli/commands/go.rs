@@ -137,7 +137,7 @@ const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const GRAPH_MEMORY_REMINDER_INTERVAL: usize = 3;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
 const BUG_REPORT_PATH: &str = "BUGS.md";
-const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
+const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), set outward countenance/mood with setCountenance(...) or setMood(...), write vectorized private memory with note(...), report bugs and feature requests with reportBug(...), reportFeatureRequest(...), or reportIssue(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), extract graph entities with extractEntities(...), searchGraphNodes(...), mergeGraphNode(...), upsertGraphNode(...), updateGraphNodeFields(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). For durable names, preferences, corrections, relationships, places, plans, topics, or facts: extract entities, search/match existing nodes, then merge/update a stable graph node ID with fields such as description, aliases, relationship notes, preferences, or status. This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, countenance, goal notes, or goal steps. Source inspection is advisory-tracked: after listFiles/readSourceFile/searchSource/grepSource, prefer addGoalNote(\"open-goal-id\", \"Thorough compact summary of what the source page or matches contained: symbols, responsibilities, relationships, implications, and next step\") or note(\"Thorough compact source summary; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"Thorough compact source summary; next step\" }). These notes are meant to compress source information before raw pages fall out of context; do not make them mere breadcrumbs. Source inspection may continue without a note, but the runtime may remind Pete to summarize. After several source reads, synthesize when practical with updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }); a source call can also include summary and note options. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
 const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, setCountenance/setMood, note, bug/feature reporting, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Emoji in say(...) is a countenance signal and is stripped before TTS. Source inspection progress notes and synthesis are encouraged but advisory. Make source notes thorough compact summaries that compress the useful details of what was read, not terse breadcrumbs. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
 const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
@@ -7151,6 +7151,36 @@ mod tests {
     }
 
     #[test]
+    fn graph_memory_gate_classifies_updates_and_cues() {
+        let mut fields = Map::new();
+        fields.insert(
+            "description".to_string(),
+            Value::String("person named Travis".to_string()),
+        );
+        let update = TypeScriptAction::UpdateGraphNodeFields {
+            node_id: "person:travis".to_string(),
+            label: Some("Travis".to_string()),
+            fields,
+        };
+        assert!(matches!(
+            update.graph_memory_update_label(),
+            Some(label) if label.contains("person:travis")
+        ));
+
+        let search = TypeScriptAction::SearchGraphNodes {
+            text: Some("Travis".to_string()),
+            field: None,
+            value: None,
+            limit: Some(5),
+        };
+        assert!(search.graph_memory_update_label().is_none());
+        assert!(graph_memory_text_has_cue(
+            "Remember that I prefer concise replies."
+        ));
+        assert!(!graph_memory_text_has_cue("What time is it?"));
+    }
+
+    #[test]
     fn read_source_file_bare_number_means_page_not_line() {
         let actions = execute_typescript_actions(r#"readSourceFile("src/acoustic/model.rs", 2)"#)
             .expect("readSourceFile action should parse");
@@ -7595,6 +7625,8 @@ mod tests {
                 topicChangedWhen("look at the source", { fromTopic: "lab", toTopic: "source" }),
                 startNewEpisode("fresh go session", { topic: "go" }),
                 extractEntities("My name is Travis."),
+                mergeGraphNode("person:travis", { description: "test person" }, { label: "Travis" }),
+                upsertGraphNode("project:listenbury", { description: "test project" }, { label: "Listenbury" }),
                 updateGraphNodeFields("node:1", { description: "test node" }),
                 searchGraphNodes({ text: "Travis", limit: 2 }),
                 queryMemories("Travis", { limit: 2, minScore: 0.2 }),
