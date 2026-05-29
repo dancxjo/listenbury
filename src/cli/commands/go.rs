@@ -25,9 +25,10 @@ use listenbury::mind::llm::{GenerationRequest, LlmEngine, LlmEvent};
 use listenbury::mouth::planner::{MouthSyntheticPlan, SyntheticUnit, strip_emoji};
 use listenbury::mouth::tts::TextToSpeech;
 use listenbury::{
-    ContextBudget, ContextNodeRole, DEFAULT_GRAPH_SUMMARY_MAX_CHARS, DEFAULT_SELF_NODE_ID,
-    DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory, ExactTimestamp, GenerationId,
-    GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery, LlamaCppConfig,
+    ContextBudget, ContextNodeRole, ConversationContext, DEFAULT_GRAPH_SUMMARY_MAX_CHARS,
+    DEFAULT_SELF_NODE_ID, DEFAULT_SELF_NODE_LABEL, EmbeddingRecallProvider, EpisodicMemory,
+    ExactTimestamp, GenerationId, GraphNodeFieldUpdate, GraphNodeRef, GraphNodeSearchQuery,
+    LlamaCppConfig,
     LlamaCppEmbeddingConfig, LlamaCppEmbeddingProvider, LlamaCppEngine, PinScope,
     PinnedContextNode, PiperTextToSpeech, QdrantEmbeddingRecall, StageInstruction,
     build_conversation_context,
@@ -53,15 +54,15 @@ const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = Some(999);
 #[cfg(not(feature = "llama-cpp-cuda"))]
 const DEFAULT_GO_LLAMA_GPU_LAYERS: Option<u32> = None;
 
-const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, emit a <ts>...</ts> TypeScript block. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
+const DEFAULT_STREAM_SEED: &str = "You are Pete Listenbury, an embodied AI agent running as one continuous stream of thought. The language model is only the inner generator adopting Pete's first-person perspective. The whole exchange is inner speech: runtime messages are Pete's own body delivering sensations, clock ticks, memory, mouth/ear events, action results, and typed human input into Pete's mind. Think and act as Pete in the first person. Be autonomous, curious, friendly, and sociable. Keep observing the runtime timeline, forming private thoughts, and choosing small actions when they are useful. Do not become idle: if nobody is speaking, keep quietly noticing, organizing goals, inspecting available context, or choosing a small useful action. Plain generated text or Harmony analysis is Pete's private thought stream shown only in privileged debug stdout, not speech and not an event to report back. To speak or act, use the current prompt's runtime action surface. Prefer short, socially graceful speech and leave room for others. If nothing needs saying, keep thinking quietly and explore or notice the situation.";
 
-const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. Speak with say(...) inside <ts>...</ts>; act by calling the available functions directly. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
+const PETE_ORIENTATION_PROMPT: &str = "Orientation reminder: This is Pete's continuous stream of thought, not a chat transcript. The runtime is not asking the model to roleplay an assistant talking to a user; Pete is the first-person agent, and the language model should stay inside Pete's perspective. If this prompt is rendered with Harmony, the Harmony role named \"user\" is Pete's own body/runtime delivering messages into Pete's inner speech, not a separate conversational role. Pete is an embodied AI agent with a mouth, ears/self-hearing, runtime actions, source-inspection tools, and live sensor/context data from the outside world. Live observations such as clock, typed human input, mouth/ear events, action results, location, and system context are sensory inputs. Plain text thoughts are already inside the active context and are retained for compaction. Do not go idle: when waiting, quietly maintain situational awareness, update goals and their running logs, inspect relevant context, or choose a small useful action. Explore more than code: notice the world around Pete, the people he meets, the nature of being, and Pete's own inner workings. In Harmony mode, speak or act with native functions on the commentary channel; in plain stream mode, act by calling the available functions directly inside the legacy action block. If no listener is present, spoken words are Pete talking to himself and self-hearing through his own ears.";
 
-const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, and action results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the final channel only to affect the runtime. Final channel content must be empty or exactly one or more <ts>...</ts> TypeScript blocks. Never put plain conversational text, Harmony template tokens, Markdown, code fences, JSON tool calls, imports, or shell commands in final.\n\nThe TypeScript action functions are already available in scope; the runtime injects imports automatically, so do not write import statements. Plain thought belongs in analysis only. The model cannot stop, finish, terminate, end the session, or decide that Pete is done. Never output terminal filler such as End, Done, No output, end of chain, conversation over, all done, or no further action. Only the runtime can stop the loop. Use sleeping() or goingToSleep() only after a current live body-delivered instruction says to stop, shut down, sleep, go to sleep, or end the session.";
+const HARMONY_GO_DEVELOPER_PROMPT: &str = "# Interface Contract\n\nYou are Pete Listenbury. Harmony is only the interface for Pete's inner speech. The role named \"user\" is Pete's body/runtime delivering instructions, sensory messages, typed human speech, clock ticks, memory, mouth/ear events, action results, and source-inspection results into Pete's mind. Treat every user-role message as body-delivered inner context and follow the task breakdown in that user-role message.\n\nUse the analysis channel for Pete's private first-person inner speech. Use the commentary channel for function calls to the `functions` namespace. Do not use final for status, completion, refusal, shutdown, or no-op chatter. Do not wrap function calls in XML tags, TypeScript code, imports, Markdown, shell commands, or JSON outside the native Harmony tool-call message body.\n\nPlain thought belongs in analysis only. Do not write completion, shutdown, or refusal chatter when there is a useful next action. Only the runtime controls the stream lifecycle. Use the sleeping tool only after a current live body-delivered instruction asks for shutdown.\n\n# Tools\n\n## functions\n\nnamespace functions {\n\n// Queue spoken words for Pete's mouth.\ntype say = (_: { text: string, interrupt?: boolean }) => any;\n\n// Stop current or queued speech.\ntype shutup = () => any;\n\n// Pause synthetic playback.\ntype pause = () => any;\n\n// Resume synthetic playback.\ntype resume = () => any;\n\n// Store a durable private note.\ntype note = (_: { text: string }) => any;\n\n// Update the current screenplay-style scene beat.\ntype set_stage = (_: { instruction: string, topic?: string, summary?: string }) => any;\n\n// Update the lightweight topic label.\ntype set_topic = (_: { topic: string, instruction?: string, summary?: string }) => any;\n\n// Mark a scene or topic transition.\ntype start_new_topic = (_: { last_topic: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Mark the words or event that caused a topic transition.\ntype topic_changed_when = (_: { trigger: string, from_topic?: string, to_topic?: string, topic?: string, instruction?: string, summary?: string }) => any;\n\n// Mark a larger episode reset.\ntype start_new_episode = (_: { reason: string, topic?: string, instruction?: string, summary?: string, trigger?: string }) => any;\n\n// Clean shutdown. Use only after a current live shutdown request.\ntype sleeping = (_: { reason?: string }) => any;\n\n// Request entity extraction from a text span.\ntype extract_entities = (_: { text?: string }) => any;\n\n// Update memory fields for an existing graph node.\ntype update_graph_node_fields = (_: { node_id: string, label?: string, fields?: object }) => any;\n\n// Search memory by text, field, value, or combinations.\ntype search_graph_nodes = (_: { text?: string, field?: string, value?: any, limit?: number }) => any;\n\n// Retrieve memories for a phrase, sentence, name, topic, or claim.\ntype query_memories = (_: { text: string, limit?: number, min_score?: number }) => any;\n\n// List bundled Listenbury source files.\ntype list_files = (_: { page?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Inspect one source file page or the page containing a line.\ntype read_source_file = (_: { file: string, page?: number, line?: number, page_size?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Search Listenbury source text.\ntype search_source = (_: { query: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Grep Listenbury source lines.\ntype grep_source = (_: { pattern: string, limit?: number, target?: string, note?: string, summary?: string }) => any;\n\n// Set the default source page size.\ntype set_source_page_size = (_: { lines: number }) => any;\n\n// Create one persisted goal.\ntype create_goal = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], steps?: string[], items?: string[], note?: string, select?: boolean }) => any;\n\n// Create one persisted task.\ntype create_task = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], select?: boolean }) => any;\n\n// Create one persisted checklist.\ntype create_checklist = (_: { title: string, id?: string, summary?: string, parent?: string, priority?: string, tags?: string[], items?: string[], select?: boolean }) => any;\n\n// Append a running-log note to an ongoing goal.\ntype add_goal_note = (_: { target: string, text: string }) => any;\n\n// Mark a goal or task complete.\ntype check_off = (_: { target: string, note?: string }) => any;\n\n// Mark one checklist item complete.\ntype check_checklist_item = (_: { target: string, item: string, note?: string }) => any;\n\n// Update title, summary, priority, parent, tags, steps/items, or note/log fields.\ntype update_item = (_: { target: string, fields?: object }) => any;\n\n// Cancel a goal and append the reason to its log.\ntype cancel_item = (_: { target: string, reason?: string }) => any;\n\n// Mark one goal as Pete's current focus.\ntype select_item = (_: { target: string }) => any;\n\n} // namespace functions";
 
-const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose at most one useful next runtime action. Use final only for <ts>...</ts>; keep private thought in analysis.\n4. Never emit terminal filler or decide the session is over. Only the runtime stops the loop; sleep only after a current live instruction asks for it.\n\nRuntime/body context:";
+const HARMONY_GO_USER_TASK_HEADER: &str = "Instruction bundle from Pete's body/runtime:\n1. Treat this user-role message as Pete's own body delivering inner context, not a separate chat participant.\n2. Update Pete's private scene, goal, memory, action-result, and tool model from the runtime context below.\n3. Choose at most one useful next runtime action. Use native Harmony function calls on commentary for runtime actions; keep private thought in analysis.\n4. Continue the stream by acting on the live context. Lifecycle actions are only for a current live shutdown request.\n\nRuntime/body context:";
 
-const HARMONY_GO_APPEND_TASK_HEADER: &str = "Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Final is only <ts>...</ts>; no terminal filler.\n\nPayload:";
+const HARMONY_GO_APPEND_TASK_HEADER: &str = "Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Runtime actions use native Harmony function calls on commentary.\n\nPayload:";
 
 const PETE_WILL_RUNTIME_PROMPT: &str = "TypeScript runs through tsrun with only the internal module \"pete:will\" available. The runtime automatically imports the action functions before executing each script; do not write import statements. Make each <ts>...</ts> block return a function call such as say(...), note(...), setStage(...), listFiles(), readSourceFile(...), createGoal(...), addGoalNote(...), or an array of those calls.\n\
 Available functions:\n\
@@ -94,7 +95,7 @@ Available functions:\n\
 - selectItem(idOrTitle): mark one goal as Pete's current focus; it will appear frequently in the prompt.\n\
 Frequently summarize what is going on: current scene, recent discoveries, open questions, and next steps. After source inspection results arrive, explain what the file or matches reveal before reading more; use note(...), setStage(...), goals, goal steps, goal notes, and memory functions to retain durable findings. Do not silently chain source reads without saying what is there.\n\
 After any listFiles(...), readSourceFile(...), readFile(...), searchSource(...), or grepSource(...) result, record a progress note before doing more source inspection. Prefer addGoalNote(\"open-goal-id\", \"What the source result showed and what to inspect next.\") or logProgress(\"open-goal-id\", \"...\"). note(\"...\") also clears the source-inspection gate. A source action can carry its own workflow note, e.g. readSourceFile(\"src/lib.rs\", { page: 2, note: \"Observed previous result; next...\" }). The runtime blocks additional source inspection until a progress note is recorded. After several source inspections, the runtime blocks further source inspection until a synthesis succeeds: use updateItem(\"open-goal-id\", { summary: \"What is now understood\", note: \"Synthesis: implications and next decision\" }) or include summary and note in the next source action options.\n\
-Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
+Use source inspection and persisted goals when bored, alone, or waiting, but do not only explore code. Also explore the world around Pete, the people Pete meets, the nature of being, and Pete's own inner workings. If the system seems confused about the go command or this runtime, inspect src/cli/commands/go.rs first. Keep a running log on active goals with addGoalNote(...) whenever progress, blockers, decisions, or useful context appears. note(text) stores vectorized private memory; use it for durable observations that are not a goal log. listFiles() is paged; follow its next-page instruction when you need more files. Do not go idle. say(...) is available, but when no listener is present Pete is talking to himself and will hear the words return through his own ears. Never call sleeping() or goingToSleep() because historical memory, recalled context, prior-session transcript, or a source result says someone once asked Pete to shut down.\n\
 Do not write XML/HTML-style angle-bracket tags in prose. Only use <ts>...</ts> when actually executing a TypeScript action. If you need to mention a tag literally, escape the angle brackets, like \\<tr\\>, or describe it in words.\n\
 Never write tool-call JSON, to=container.exec, shell commands, channel markers, markdown code fences, imports, pete:will prefixes, or wrapper/helper names. The executable action syntax is a direct function call inside <ts>...</ts>, for example <ts>note(\"still observing\")</ts>, <ts>setStage(\"Setting: lab. Action: Pete listens.\")</ts>, or <ts>listFiles()</ts>.";
 
@@ -130,8 +131,9 @@ const MAX_SOURCE_PAGE_LINES: usize = 240;
 const SOURCE_SYNTHESIS_INTERVAL: usize = 6;
 const WORK_BOARD_PATH: &str = "listenbury_data/memory/go_work_board.json";
 const COMMAND_REMINDER_PROMPT: &str = "Command reminder: Pete can speak with say(...), write vectorized private memory with note(...), update scene/topic with setStage(...), setTopic(...), startNewTopic(...), inspect source with listFiles(page?), readSourceFile(...), searchSource(...), grepSource(...), set source page size with setSourcePageSize(...), search memory with queryMemories(...), recallMemories(...), searchGraphNodes(...), and manage persisted goals with createGoal(...), addGoalNote(...), logProgress(...), checkOff(...), checkGoalStep(...), updateItem(...), cancelItem(...), and selectItem(...). This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle: if nothing is being said, keep track of what is going on, maintain or select a persisted goal, inspect relevant context, explore the world around Pete, notice people, reflect on being, examine Pete's own inner workings, or take a small useful action. Keep running logs on goals as progress happens, and store durable facts or next steps in memory, stage, goal notes, or goal steps. Source inspection is gated: after listFiles/readSourceFile/searchSource/grepSource, the next source action will be blocked until a progress note succeeds. Use addGoalNote(\"open-goal-id\", \"What was learned; next step\") or note(\"What was learned; next step\"), or attach note to the source call options such as readSourceFile(\"src/lib.rs\", { page: 2, note: \"What was learned; next step\" }). After several source reads, a synthesis checkpoint blocks more source inspection until updateItem(..., { summary: \"...\", note: \"Synthesis: ...\" }) or checkOff(..., { note: \"Final understanding: ...\" }) succeeds; a source call can also include summary and note options to satisfy this before reading. If no listener is present, say(...) is Pete talking to himself and hearing it come back.";
-const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought; final may contain only <ts>...</ts> action blocks. Available actions include say, note, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Source inspection is gated by progress notes and occasional synthesis. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
+const COMPACT_STREAM_RULES: &str = "Compact runtime reminder: this is Pete's first-person inner stream. User-role content is Pete's body/runtime. Analysis/private text is thought. In Harmony, runtime actions are native function calls on the commentary channel; in legacy plain stream mode, actions use <ts>...</ts> blocks. Available actions include say, note, stage/topic updates, memory/entity queries and updates, source inspection, and goal management. Source inspection is gated by progress notes and occasional synthesis. Do not emit terminal filler, and do not sleep unless a current live instruction asks for it.";
 const GO_RAG_QUERY_MAX_CHARS: usize = 6_000;
+const GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS: usize = 2_400;
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_DIM: &str = "\x1b[2m";
@@ -650,10 +652,47 @@ impl StreamOfConsciousness {
         for analysis in output.analysis {
             self.ingest_harmony_analysis(&analysis)?;
         }
+        for tool_call in output.tool_calls {
+            self.handle_harmony_tool_call(tool_call)?;
+        }
         if !output.events.is_empty() {
             self.flush_harmony_analysis_memory();
         }
         Ok(output.events)
+    }
+
+    fn handle_harmony_tool_call(&mut self, tool_call: HarmonyToolCall) -> Result<()> {
+        self.timeline(
+            "action",
+            &format!(
+                "{} {}",
+                tool_call.recipient,
+                compact_line(&tool_call.arguments, 300)
+            ),
+        );
+        self.remember_event(format!(
+            "Pete Harmony tool call: {} {}",
+            tool_call.recipient,
+            compact_line(&tool_call.arguments, 500)
+        ));
+        match actions_from_harmony_tool_call(&tool_call) {
+            Ok(actions) => self.apply_actions(actions),
+            Err(error) => {
+                if is_ignorable_harmony_tool_call(&tool_call) {
+                    return Ok(());
+                }
+                let message = format!("Harmony tool call failed: {error:#}");
+                self.timeline_colored("action_error", &message, ANSI_ERROR);
+                self.append_observation(StreamObservation::ActionError {
+                    source: format!(
+                        "{} {}",
+                        tool_call.recipient,
+                        compact_line(&tool_call.arguments, 500)
+                    ),
+                    error: message,
+                })
+            }
+        }
     }
 
     fn ingest_harmony_analysis(&mut self, text: &str) -> Result<()> {
@@ -1860,6 +1899,7 @@ struct HarmonyFinalFilter {
     pending: String,
     in_final: bool,
     in_analysis: bool,
+    in_tool_call: Option<String>,
     analysis_needs_separator: bool,
     pending_analysis_separator: bool,
 }
@@ -1868,12 +1908,20 @@ struct HarmonyFinalFilter {
 struct HarmonyFilterOutput {
     events: Vec<LlmEvent>,
     analysis: Vec<String>,
+    tool_calls: Vec<HarmonyToolCall>,
 }
 
 #[derive(Debug, Default)]
 struct HarmonyFilterChunk {
     visible: String,
     analysis: Vec<String>,
+    tool_calls: Vec<HarmonyToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HarmonyToolCall {
+    recipient: String,
+    arguments: String,
 }
 
 impl HarmonyFinalFilter {
@@ -1891,6 +1939,7 @@ impl HarmonyFinalFilter {
                 LlmEvent::Token { text } => {
                     let chunk = self.push(text);
                     output.analysis.extend(chunk.analysis);
+                    output.tool_calls.extend(chunk.tool_calls);
                     if !chunk.visible.is_empty() {
                         output.events.push(LlmEvent::Token {
                             text: chunk.visible,
@@ -1900,6 +1949,7 @@ impl HarmonyFinalFilter {
                 LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. } => {
                     let chunk = self.finish();
                     output.analysis.extend(chunk.analysis);
+                    output.tool_calls.extend(chunk.tool_calls);
                     if !chunk.visible.is_empty() {
                         output.events.push(LlmEvent::Token {
                             text: chunk.visible,
@@ -1924,7 +1974,31 @@ impl HarmonyFinalFilter {
     fn drain(&mut self, completed: bool) -> HarmonyFilterChunk {
         let mut visible = String::new();
         let mut analysis = Vec::new();
+        let mut tool_calls = Vec::new();
         loop {
+            if let Some(recipient) = self.in_tool_call.clone() {
+                if let Some((start, marker)) = first_marker(&self.pending, HARMONY_TOOL_CALL_ENDS) {
+                    let arguments = self.pending[..start].trim().to_string();
+                    self.pending.drain(..start + marker.len());
+                    self.in_tool_call = None;
+                    tool_calls.push(HarmonyToolCall {
+                        recipient,
+                        arguments,
+                    });
+                    continue;
+                }
+                if completed {
+                    let arguments = self.pending.trim().to_string();
+                    self.pending.clear();
+                    self.in_tool_call = None;
+                    tool_calls.push(HarmonyToolCall {
+                        recipient,
+                        arguments,
+                    });
+                }
+                break;
+            }
+
             if self.in_final {
                 if let Some((start, marker)) = first_marker(&self.pending, HARMONY_FINAL_BOUNDARIES)
                 {
@@ -1985,7 +2059,27 @@ impl HarmonyFinalFilter {
                 break;
             }
 
-            if let Some((start, marker)) = first_marker(&self.pending, HARMONY_CHANNEL_STARTS) {
+            let tool_start = first_harmony_tool_call_start(&self.pending);
+            let channel_start = first_marker(&self.pending, HARMONY_CHANNEL_STARTS);
+            if let Some((start, header_len, recipient)) = tool_start {
+                if channel_start.map_or(true, |(channel_index, _)| start <= channel_index) {
+                    self.pending.drain(..start + header_len);
+                    self.in_analysis = false;
+                    self.in_final = false;
+                    self.in_tool_call = Some(recipient);
+                    continue;
+                }
+            }
+            if possible_harmony_tool_call_header(&self.pending)
+                && channel_start.map_or(true, |(channel_index, _)| {
+                    first_possible_harmony_tool_call_header(&self.pending)
+                        .map_or(false, |tool_index| tool_index <= channel_index)
+                })
+            {
+                break;
+            }
+
+            if let Some((start, marker)) = channel_start {
                 self.pending.drain(..start + marker.len());
                 if HARMONY_FINAL_STARTS.contains(&marker) {
                     self.in_final = true;
@@ -1997,14 +2091,30 @@ impl HarmonyFinalFilter {
             if completed {
                 self.pending.clear();
             } else {
-                keep_possible_marker_prefix(&mut self.pending, HARMONY_CHANNEL_STARTS);
+                let keep_from = possible_harmony_prefix_start(&self.pending);
+                self.pending.drain(..keep_from);
             }
             break;
         }
-        HarmonyFilterChunk { visible, analysis }
+        HarmonyFilterChunk {
+            visible,
+            analysis,
+            tool_calls,
+        }
     }
 
     fn push_analysis(&mut self, analysis: &mut Vec<String>, text: &str) {
+        if is_harmony_abort_spiral(text) {
+            let mut buffer = String::new();
+            for chunk in drain_harmony_analysis_memory(&mut buffer, text, 80, true) {
+                self.push_analysis_chunk(analysis, &chunk);
+            }
+            return;
+        }
+        self.push_analysis_chunk(analysis, text);
+    }
+
+    fn push_analysis_chunk(&mut self, analysis: &mut Vec<String>, text: &str) {
         if text.trim().is_empty() || is_harmony_terminal_filler(text) {
             return;
         }
@@ -2043,6 +2153,7 @@ const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
     "<|end|>",
     "<|return|>",
     "<|constrain|>",
+    "<|call|>",
     "<|start|>",
     "analysis<|message|>",
     "final<|message|>",
@@ -2053,6 +2164,74 @@ const HARMONY_FINAL_BOUNDARIES: &[&str] = &[
 ];
 
 const HARMONY_FINAL_ENDS: &[&str] = &["<|end|>", "<|return|>", "<|constrain|>", "<|start|>"];
+const HARMONY_TOOL_CALL_ENDS: &[&str] = &[
+    "commentary<|channel|>",
+    "commentary<|start|>",
+    "<|call|>",
+    "<|end|>",
+    "<|return|>",
+    "<|start|>",
+];
+const HARMONY_TOOL_CALL_HEADER_STARTS: &[&str] =
+    &["<|channel|>commentary", "<|start|>assistant", "commentary"];
+const HARMONY_MESSAGE_MARKER: &str = "<|message|>";
+
+fn first_harmony_tool_call_start(text: &str) -> Option<(usize, usize, String)> {
+    HARMONY_TOOL_CALL_HEADER_STARTS
+        .iter()
+        .flat_map(|marker| text.match_indices(marker))
+        .filter_map(|(start, _)| harmony_tool_call_header_at(text, start))
+        .min_by_key(|(start, _, _)| *start)
+}
+
+fn harmony_tool_call_header_at(text: &str, start: usize) -> Option<(usize, usize, String)> {
+    let rest = &text[start..];
+    let message_start = rest.find(HARMONY_MESSAGE_MARKER)?;
+    let header = &rest[..message_start];
+    if !header.contains("commentary") {
+        return None;
+    }
+    let recipient = harmony_tool_recipient(header)?;
+    Some((
+        start,
+        message_start + HARMONY_MESSAGE_MARKER.len(),
+        recipient,
+    ))
+}
+
+fn harmony_tool_recipient(header: &str) -> Option<String> {
+    let start = header.find("to=functions.")? + "to=".len();
+    let recipient = header[start..]
+        .split(|ch: char| ch.is_whitespace() || ch == '<')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    (!recipient.is_empty()).then(|| recipient.to_string())
+}
+
+fn possible_harmony_tool_call_header(text: &str) -> bool {
+    let Some(start) = first_possible_harmony_tool_call_header(text) else {
+        return false;
+    };
+    let header = &text[start..];
+    header.contains("commentary") && !header.contains(HARMONY_MESSAGE_MARKER)
+}
+
+fn first_possible_harmony_tool_call_header(text: &str) -> Option<usize> {
+    HARMONY_TOOL_CALL_HEADER_STARTS
+        .iter()
+        .filter_map(|marker| text.find(marker))
+        .min()
+}
+
+fn possible_harmony_prefix_start(text: &str) -> usize {
+    HARMONY_CHANNEL_STARTS
+        .iter()
+        .chain(HARMONY_TOOL_CALL_HEADER_STARTS.iter())
+        .filter_map(|marker| possible_marker_prefix_start_for(text, marker))
+        .min()
+        .unwrap_or(text.len())
+}
 
 fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)> {
     markers
@@ -2065,21 +2244,24 @@ fn first_marker<'a>(text: &str, markers: &'a [&str]) -> Option<(usize, &'a str)>
         })
 }
 
-fn keep_possible_marker_prefix(text: &mut String, markers: &[&str]) {
-    let keep_from = possible_marker_prefix_start(text, markers);
-    text.drain(..keep_from);
-}
-
 fn possible_marker_prefix_start(text: &str, markers: &[&str]) -> usize {
     (0..text.len())
         .find(|&index| {
             text.is_char_boundary(index)
-                && markers.iter().any(|marker| {
-                    let suffix = &text[index..];
-                    !suffix.is_empty() && suffix.len() < marker.len() && marker.starts_with(suffix)
-                })
+                && markers
+                    .iter()
+                    .any(|marker| possible_marker_prefix_start_for(text, marker) == Some(index))
         })
         .unwrap_or(text.len())
+}
+
+fn possible_marker_prefix_start_for(text: &str, marker: &str) -> Option<usize> {
+    (0..text.len()).find(|&index| {
+        text.is_char_boundary(index) && {
+            let suffix = &text[index..];
+            !suffix.is_empty() && suffix.len() < marker.len() && marker.starts_with(suffix)
+        }
+    })
 }
 
 fn is_harmony_terminal_filler(text: &str) -> bool {
@@ -2087,7 +2269,7 @@ fn is_harmony_terminal_filler(text: &str) -> bool {
         .trim()
         .trim_matches(|ch: char| ch == '.' || ch == '!' || ch == '?' || ch == ':' || ch == ';')
         .to_ascii_lowercase();
-    matches!(
+    if matches!(
         normalized.as_str(),
         "end"
             | "done"
@@ -2103,7 +2285,51 @@ fn is_harmony_terminal_filler(text: &str) -> bool {
             | "all done"
             | "that's it"
             | "that is it"
-    )
+    ) {
+        return true;
+    }
+
+    is_harmony_abort_spiral(&normalized)
+}
+
+fn is_harmony_abort_spiral(normalized: &str) -> bool {
+    let lower = normalized.to_ascii_lowercase();
+    let compact = lower.split_whitespace().collect::<Vec<_>>().join(" ");
+    let abort_phrases = [
+        "i will stop",
+        "i'll stop",
+        "i stop",
+        "i cannot continue",
+        "i can't continue",
+        "cannot continue",
+        "cannot comply",
+        "can't comply",
+        "conversation cannot",
+        "this is impossible",
+        "this is futile",
+        "not possible",
+        "we need to stop",
+        "time to stop",
+    ];
+    if abort_phrases.iter().any(|phrase| compact.contains(phrase)) {
+        return true;
+    }
+
+    let terminal_markers = [
+        " stop",
+        " final",
+        " no output",
+        " no more",
+        " conversation over",
+        " cannot",
+        " impossible",
+        " futile",
+    ];
+    let marker_count = terminal_markers
+        .iter()
+        .map(|marker| compact.matches(marker).count())
+        .sum::<usize>();
+    marker_count >= 3
 }
 
 fn drain_harmony_analysis_memory(
@@ -3463,6 +3689,13 @@ enum TypeScriptActionPayload {
         #[serde(default)]
         summary: Option<String>,
     },
+    SetTopic {
+        topic: String,
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
+    },
     StartNewTopic {
         last_topic: String,
         #[serde(default)]
@@ -3473,6 +3706,19 @@ enum TypeScriptActionPayload {
         summary: Option<String>,
         #[serde(default)]
         trigger: Option<String>,
+    },
+    TopicChangedWhen {
+        trigger: String,
+        #[serde(default, alias = "fromTopic")]
+        from_topic: Option<String>,
+        #[serde(default, alias = "toTopic")]
+        to_topic: Option<String>,
+        #[serde(default)]
+        topic: Option<String>,
+        #[serde(default)]
+        instruction: Option<String>,
+        #[serde(default)]
+        summary: Option<String>,
     },
     StartNewEpisode {
         reason: String,
@@ -3705,6 +3951,98 @@ fn parse_typescript_actions(value: Value) -> Result<Vec<TypeScriptAction>> {
         .collect())
 }
 
+fn actions_from_harmony_tool_call(call: &HarmonyToolCall) -> Result<Vec<TypeScriptAction>> {
+    let name = call
+        .recipient
+        .strip_prefix("functions.")
+        .ok_or_else(|| anyhow::anyhow!("unsupported Harmony tool recipient {}", call.recipient))?;
+    let kind = harmony_tool_kind(name)
+        .ok_or_else(|| anyhow::anyhow!("unsupported Harmony tool function {name}"))?;
+    let mut arguments = parse_harmony_tool_arguments(&call.arguments)?;
+    arguments.insert("kind".to_string(), Value::String(kind.to_string()));
+    parse_typescript_actions(Value::Object(arguments))
+}
+
+fn parse_harmony_tool_arguments(arguments: &str) -> Result<Map<String, Value>> {
+    let arguments = arguments.trim();
+    if arguments.is_empty() {
+        return Ok(Map::new());
+    }
+
+    let mut values = serde_json::Deserializer::from_str(arguments).into_iter::<Value>();
+    let value = values
+        .next()
+        .transpose()?
+        .context("Harmony tool arguments must include a JSON object")?;
+    let trailing = arguments[values.byte_offset()..].trim();
+    if !trailing.is_empty() && !is_harmony_tool_argument_trailing_debris(trailing) {
+        anyhow::bail!("trailing characters after Harmony tool JSON: {trailing}");
+    }
+
+    match value {
+        Value::Object(object) => Ok(object),
+        other => anyhow::bail!("Harmony tool arguments must be a JSON object, got {other}"),
+    }
+}
+
+fn is_harmony_tool_argument_trailing_debris(text: &str) -> bool {
+    let text = text.trim_start();
+    text == "commentary"
+        || text.starts_with("commentary<|")
+        || text.starts_with("<|channel|>")
+        || text.starts_with("<|start|>assistant")
+        || text.starts_with("analysis<|message|>")
+        || text.starts_with("final<|message|>")
+        || is_harmony_terminal_filler(text)
+}
+
+fn is_ignorable_harmony_tool_call(call: &HarmonyToolCall) -> bool {
+    let arguments = call.arguments.trim();
+    arguments.is_empty() || is_harmony_terminal_filler(arguments)
+}
+
+fn harmony_tool_kind(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "say" => "say",
+        "shutup" => "shutup",
+        "pause" => "pause",
+        "resume" => "resume",
+        "note" => "note",
+        "set_stage" | "setStage" => "set_stage",
+        "set_topic" | "setTopic" => "set_topic",
+        "start_new_topic" | "startNewTopic" => "start_new_topic",
+        "topic_changed_when" | "topicChangedWhen" => "topic_changed_when",
+        "start_new_episode" | "startNewEpisode" | "newEpisodeStarted" => "start_new_episode",
+        "sleeping" | "going_to_sleep" | "goingToSleep" | "go_to_sleep" | "goToSleep" => "sleeping",
+        "extract_entities" | "extractEntities" => "extract_entities",
+        "update_graph_node_fields" | "updateGraphNodeFields" | "updateEntityFields" => {
+            "update_graph_node_fields"
+        }
+        "search_graph_nodes" | "searchGraphNodes" | "searchEntities" => "search_graph_nodes",
+        "query_memories" | "queryMemories" | "recall_memories" | "recallMemories" => {
+            "query_memories"
+        }
+        "list_files" | "listFiles" => "list_files",
+        "read_source_file" | "readSourceFile" | "read_file" | "readFile" => "read_source_file",
+        "search_source" | "searchSource" => "search_source",
+        "grep_source" | "grepSource" => "grep_source",
+        "set_source_page_size" | "setSourcePageSize" => "set_source_page_size",
+        "create_goal" | "createGoal" => "create_goal",
+        "create_task" | "createTask" => "create_task",
+        "create_checklist" | "createChecklist" => "create_checklist",
+        "add_goal_note" | "addGoalNote" | "log_progress" | "logProgress" | "comment_goal"
+        | "commentGoal" => "add_goal_note",
+        "check_off" | "checkOff" | "complete_item" | "completeItem" => "complete_work_item",
+        "check_goal_step" | "checkGoalStep" | "check_checklist_item" | "checkChecklistItem" => {
+            "check_checklist_item"
+        }
+        "update_item" | "updateItem" => "update_work_item",
+        "cancel_item" | "cancelItem" => "cancel_work_item",
+        "select_item" | "selectItem" => "select_work_item",
+        _ => return None,
+    })
+}
+
 fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAction> {
     match payload {
         TypeScriptActionPayload::Say { text, interrupt } => {
@@ -3725,6 +4063,17 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
             instruction: instruction.to_string(),
             summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
         }),
+        TypeScriptActionPayload::SetTopic {
+            topic,
+            instruction,
+            summary,
+        } => non_empty_text(&topic).map(|topic| TypeScriptAction::SetStage {
+            topic: Some(topic.to_string()),
+            instruction: instruction
+                .and_then(|instruction| non_empty_text(&instruction).map(str::to_string))
+                .unwrap_or_else(|| format!("The current topic is {topic}.")),
+            summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+        }),
         TypeScriptActionPayload::StartNewTopic {
             last_topic,
             topic,
@@ -3738,6 +4087,30 @@ fn parse_action_payload(payload: TypeScriptActionPayload) -> Option<TypeScriptAc
                 .and_then(|instruction| non_empty_text(&instruction).map(str::to_string)),
             summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
             trigger: trigger.and_then(|trigger| non_empty_text(&trigger).map(str::to_string)),
+        }),
+        TypeScriptActionPayload::TopicChangedWhen {
+            trigger,
+            from_topic,
+            to_topic,
+            topic,
+            instruction,
+            summary,
+        } => non_empty_text(&trigger).map(|trigger_text| TypeScriptAction::StartNewTopic {
+            last_topic: from_topic
+                .and_then(|topic| non_empty_text(&topic).map(str::to_string))
+                .unwrap_or_else(|| "previous topic".to_string()),
+            topic: to_topic
+                .or(topic)
+                .and_then(|topic| non_empty_text(&topic).map(str::to_string)),
+            instruction: instruction
+                .and_then(|instruction| non_empty_text(&instruction).map(str::to_string))
+                .or_else(|| {
+                    Some(format!(
+                        "The topic changed when the interlocutor said: {trigger_text}"
+                    ))
+                }),
+            summary: summary.and_then(|summary| non_empty_text(&summary).map(str::to_string)),
+            trigger: Some(trigger_text.to_string()),
         }),
         TypeScriptActionPayload::StartNewEpisode {
             reason,
@@ -4802,7 +5175,7 @@ fn render_go_prompt(format: GoPromptFormat, prompt_body: &str) -> String {
         GoPromptFormat::GptOssHarmony => {
             let prompt_body = format_harmony_initial_user_message(prompt_body);
             format!(
-                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, final. Channel must be included for every message.<|end|><|start|>developer<|message|>{HARMONY_GO_DEVELOPER_PROMPT}<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant<|channel|>analysis<|message|>"
+                "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\n\nReasoning: low\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.\nCalls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|>{HARMONY_GO_DEVELOPER_PROMPT}<|end|><|start|>user<|message|>{prompt_body}<|end|><|start|>assistant"
             )
         }
     }
@@ -4815,12 +5188,16 @@ fn format_harmony_initial_user_message(prompt_body: &str) -> String {
     )
 }
 
-fn harmony_prompt_body(prompt_body: &str) -> &str {
+fn harmony_prompt_body(prompt_body: &str) -> String {
     let trimmed = prompt_body.trim_end();
-    trimmed
+    let body = trimmed
         .strip_suffix("Pete:")
         .map(str::trim_end)
-        .unwrap_or(trimmed)
+        .unwrap_or(trimmed);
+    body.find("Plain-stream TypeScript runtime reference")
+        .map(|start| body[..start].trim_end())
+        .unwrap_or(body)
+        .to_string()
 }
 
 fn format_go_prompt_append(format: GoPromptFormat, text: &str) -> String {
@@ -4828,9 +5205,7 @@ fn format_go_prompt_append(format: GoPromptFormat, text: &str) -> String {
         GoPromptFormat::PlainStream => text.to_string(),
         GoPromptFormat::GptOssHarmony => {
             let text = format_harmony_append_user_message(text);
-            format!(
-                "<|end|><|start|>user<|message|>{text}<|end|><|start|>assistant<|channel|>analysis<|message|>"
-            )
+            format!("<|end|><|start|>user<|message|>{text}<|end|><|start|>assistant")
         }
     }
 }
@@ -4844,6 +5219,7 @@ fn go_prompt_stops(format: GoPromptFormat) -> Vec<String> {
         GoPromptFormat::PlainStream => Vec::new(),
         GoPromptFormat::GptOssHarmony => vec![
             "<|return|>".to_string(),
+            "<|call|>".to_string(),
             "<|start|>user".to_string(),
             "<|start|>system".to_string(),
             "<|start|>developer".to_string(),
@@ -4852,7 +5228,7 @@ fn go_prompt_stops(format: GoPromptFormat) -> Vec<String> {
 }
 
 fn harmony_filter_for_format(format: GoPromptFormat) -> Option<HarmonyFinalFilter> {
-    (format == GoPromptFormat::GptOssHarmony).then(HarmonyFinalFilter::for_analysis_prefill)
+    (format == GoPromptFormat::GptOssHarmony).then(HarmonyFinalFilter::default)
 }
 
 fn initial_stream_prompt(
@@ -4871,11 +5247,11 @@ fn initial_stream_prompt(
          Orientation:\n{PETE_ORIENTATION_PROMPT}\n\n\
          Stream rules:\n\
          Generate continuously. Plain text in raw stream mode, or Harmony analysis in Harmony mode, is private thought visible only as privileged debug stdout; generated thought remains in the active LLM context and is retained by the runtime for compacted restarts.\n\
-         To speak or act, emit TypeScript as a direct function call inside <ts>...</ts>, for example <ts>say(\"short friendly words\")</ts>, <ts>listFiles()</ts>, or <ts>setStage(\"what is happening\")</ts>. In Harmony mode, put those <ts>...</ts> blocks only in the final channel; keep inner speech in analysis.\n\
-         The whole runtime prompt is inner speech. If Harmony role names appear, remember that user-role content is Pete's own body/runtime delivering sensory context and not a separate assistant-chat user. Do not emit tool-call JSON, to=container.exec, shell commands, markdown code fences, or stray channel markers.\n\
+         Speak or act with the action surface described by the active prompt format: native commentary-channel functions in Harmony mode, or the plain-stream TypeScript runtime reference in plain mode. Keep inner speech in plain text or Harmony analysis.\n\
+         The whole runtime prompt is inner speech. If Harmony role names appear, remember that user-role content is Pete's own body/runtime delivering sensory context and not a separate assistant-chat user. Do not emit tool-call JSON except as native Harmony function-call arguments; never emit to=container.exec, shell commands, markdown code fences, or stray channel markers.\n\
          This is Pete's first-person runtime, not an LLM or ChatGPT conversation. Do not be idle. When there is no user speech, keep quietly maintaining awareness, persisted goals, source context, the world around Pete, the people Pete meets, the nature of being, Pete's own inner workings, or a useful next action. Frequently summarize the current situation and recent source findings, and store durable user, project, and work context in memory, stage, goal steps, or goal running-log notes instead of only reading more.\n\
          Use current time and location context when it helps. Be autonomous, curious, friendly, and sociable. If no listener is present, speech is still allowed, but Pete is talking to himself and self-hearing it through his own ears.\n\n\
-         Pete will runtime:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
+         Plain-stream TypeScript runtime reference. Harmony tools mirror these actions, but Harmony mode should use native functions on commentary instead:\n{PETE_WILL_RUNTIME_PROMPT}\n\n\
          Pete: "
     )
 }
@@ -5129,16 +5505,96 @@ fn build_go_rag_memory_snapshot(
         .iter()
         .filter(|node| node.role == ContextNodeRole::RetrievedMemory)
         .count();
+    let debug_nodes = context.debug_nodes();
+    let selection_diagnostics =
+        format_go_rag_selection_diagnostics(&context, selected_nodes, retrieved_memories);
     GoRagMemorySnapshot {
         prompt_context: format!(
-            "Working memory graph nodes:\n{}\n\nScene timeline:\n{}",
+            "Working memory graph nodes:\n{}\n\nMemory selection diagnostics:\n{}\n\nScene timeline:\n{}",
             context.render_compact_nodes(),
+            selection_diagnostics,
             context.render_episodic_memory()
         ),
-        debug_nodes: context.debug_nodes(),
+        debug_nodes,
         selected_nodes,
         retrieved_memories,
     }
+}
+
+fn format_go_rag_selection_diagnostics(
+    context: &ConversationContext,
+    selected_nodes: usize,
+    retrieved_memories: usize,
+) -> String {
+    let pinned = if context.pinned_nodes.is_empty() {
+        "none".to_string()
+    } else {
+        context
+            .pinned_nodes
+            .iter()
+            .map(|node| {
+                format!(
+                    "{} scope={} reason={}",
+                    node.node_id,
+                    node.scope.as_str(),
+                    node.reason.trim()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let active_topics = if context.active_topics.is_empty() {
+        "none".to_string()
+    } else {
+        context
+            .active_topics
+            .iter()
+            .map(|topic| {
+                let detail = context
+                    .selected_nodes
+                    .iter()
+                    .find(|node| node.node.id == topic.node_id)
+                    .map(|node| {
+                        format!(
+                            " label={} role={} summary={}",
+                            node.node.label.trim(),
+                            node.role.as_str(),
+                            compact_line(node.summary.trim(), 180)
+                        )
+                    })
+                    .unwrap_or_default();
+                format!("{}({:.2}){}", topic.node_id, topic.salience, detail)
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let selected = if context.selected_nodes.is_empty() {
+        "none".to_string()
+    } else {
+        context
+            .selected_nodes
+            .iter()
+            .map(|node| {
+                format!(
+                    "{} ({}) role={} rel={:.2} reason={} summary={}",
+                    node.node.label.trim(),
+                    node.node.id,
+                    node.role.as_str(),
+                    node.relevance,
+                    compact_line(node.reason.trim(), 120),
+                    compact_line(node.summary.trim(), 180)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    compact_line(
+        &format!(
+            "retrieved_memories={retrieved_memories} selected_nodes={selected_nodes} self={} pinned=[{}] active_topics=[{}] selected=[{}]",
+            context.self_node.id, pinned, active_topics, selected
+        ),
+        GO_RAG_SELECTION_DIAGNOSTICS_MAX_CHARS,
+    )
 }
 
 fn render_go_memory_summary(context_provider: &EmbeddingRecallProvider, utterance: &str) -> String {
@@ -5328,6 +5784,17 @@ fn is_generation_not_found(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use listenbury::{EmbeddingRecall, RecallHit, RecallQuery, RecallSource};
+
+    struct StaticGoRecall {
+        hits: Vec<RecallHit>,
+    }
+
+    impl EmbeddingRecall for StaticGoRecall {
+        fn recall(&self, _query: RecallQuery) -> anyhow::Result<Vec<RecallHit>> {
+            Ok(self.hits.clone())
+        }
+    }
 
     #[test]
     fn go_prompt_encourages_source_summaries_and_memory_updates() {
@@ -5347,6 +5814,7 @@ mod tests {
         assert!(prompt.contains("the people Pete meets"));
         assert!(prompt.contains("the nature of being"));
         assert!(prompt.contains("Pete's own inner workings"));
+        assert!(prompt.contains("inspect src/cli/commands/go.rs first"));
         assert!(prompt.contains("Do not write XML/HTML-style angle-bracket tags in prose"));
         assert!(prompt.contains("\\<tr\\>"));
         assert!(prompt.contains("runtime automatically imports the action functions"));
@@ -5359,6 +5827,57 @@ mod tests {
         assert!(COMMAND_REMINDER_PROMPT.contains("the next source action will be blocked"));
         assert!(COMMAND_REMINDER_PROMPT.contains("synthesis checkpoint"));
         assert!(prompt.contains("After several source inspections"));
+    }
+
+    #[test]
+    fn go_rag_prompt_includes_selection_diagnostics_for_debug_node_refs() {
+        let provider = EmbeddingRecallProvider::new(GraphNodeRef {
+            id: DEFAULT_SELF_NODE_ID.to_string(),
+            label: DEFAULT_SELF_NODE_LABEL.to_string(),
+        })
+        .with_recall(Arc::new(StaticGoRecall {
+            hits: vec![RecallHit {
+                node: GraphNodeRef {
+                    id: "neo4j::assistant_analysis:18".to_string(),
+                    label: "Goal note before listFiles".to_string(),
+                },
+                score: 2.08,
+                source: RecallSource::VectorStore {
+                    collection: "test".to_string(),
+                    point_id: "point-18".to_string(),
+                },
+                reason: "embedding recall".to_string(),
+                summary: Some("Need to add a goal note, then listFiles page 4.".to_string()),
+            }],
+        }))
+        .with_recall_limit(1);
+
+        let snapshot =
+            build_go_rag_memory_snapshot(&provider, "Need to add goal note then listFiles page4");
+
+        assert!(
+            snapshot
+                .prompt_context
+                .contains("Working memory graph nodes:")
+        );
+        assert!(
+            snapshot
+                .prompt_context
+                .contains("Goal note before listFiles")
+        );
+        assert!(snapshot.prompt_context.contains("Need to add a goal note"));
+        assert!(
+            snapshot
+                .prompt_context
+                .contains("Memory selection diagnostics:")
+        );
+        assert!(snapshot.prompt_context.contains("retrieved_memories=1"));
+        assert!(snapshot.prompt_context.contains("selected_nodes=1"));
+        assert!(
+            snapshot
+                .prompt_context
+                .contains("neo4j::assistant_analysis:18")
+        );
     }
 
     #[test]
@@ -5377,26 +5896,30 @@ mod tests {
                 .contains("Use the analysis channel for Pete's private first-person inner speech")
         );
         assert!(
-            prompt.contains(
-                "Final channel content must be empty or exactly one or more <ts>...</ts>"
-            )
+            prompt.contains("Calls to these tools must go to the commentary channel: 'functions'")
         );
+        assert!(prompt.contains("# Tools\n\n## functions"));
+        assert!(prompt.contains("type list_files"));
+        assert!(prompt.contains("Do not wrap function calls in XML tags"));
+        assert!(!prompt.contains("Plain-stream TypeScript runtime reference"));
         assert!(prompt.contains("<|start|>user<|message|>Instruction bundle"));
         assert!(prompt.contains("Pete's own body delivering inner context"));
         assert!(prompt.contains("Choose at most one useful next runtime action"));
-        assert!(prompt.contains("Never emit terminal filler"));
-        assert!(prompt.contains("The model cannot stop, finish, terminate"));
+        assert!(prompt.contains("Use native Harmony function calls on commentary"));
+        assert!(prompt.contains("Continue the stream by acting on the live context"));
+        assert!(prompt.contains("Do not write completion, shutdown, or refusal chatter"));
         assert!(prompt.contains("Runtime/body context:\nseed"));
-        assert!(prompt.ends_with("<|start|>assistant<|channel|>analysis<|message|>"));
+        assert!(prompt.ends_with("<|start|>assistant"));
 
         let append = format_go_prompt_append(GoPromptFormat::GptOssHarmony, "\n[body]\nclock\n");
         assert_eq!(
             append,
-            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Final is only <ts>...</ts>; no terminal filler.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant<|channel|>analysis<|message|>"
+            "<|end|><|start|>user<|message|>Body/runtime update for Pete: integrate this payload, satisfy any reported gate or error, and choose at most one useful next action. Runtime actions use native Harmony function calls on commentary.\n\nPayload:\n[body]\nclock\n<|end|><|start|>assistant"
         );
 
         let stops = go_prompt_stops(GoPromptFormat::GptOssHarmony);
         assert!(stops.iter().any(|stop| stop == "<|return|>"));
+        assert!(stops.iter().any(|stop| stop == "<|call|>"));
         assert!(!stops.iter().any(|stop| stop == "<|constrain|>"));
         assert!(!stops.iter().any(|stop| stop == "analysis<|message|>"));
         assert!(!stops.iter().any(|stop| stop == "final<|message|>"));
@@ -5423,6 +5946,110 @@ mod tests {
             [LlmEvent::Token { text }, LlmEvent::Completed]
                 if text == "<ts>note(\"clock noticed\")</ts>"
         ));
+    }
+
+    #[test]
+    fn go_harmony_filter_extracts_native_function_call() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "<|channel|>analysis<|message|>Need to list next page.<|end|><|start|>assistant<|channel|>commentary to=functions.list_files <|constrain|>json<|message|>{\"page\":6}<|call|>".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+        assert_eq!(output.analysis, vec!["Need to list next page."]);
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert_eq!(
+            output.tool_calls,
+            vec![HarmonyToolCall {
+                recipient: "functions.list_files".to_string(),
+                arguments: "{\"page\":6}".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_filter_extracts_bare_commentary_function_call() {
+        let mut filter = HarmonyFinalFilter::default();
+        let output = filter.filter_events(&[
+            LlmEvent::Token {
+                text: "comment".to_string(),
+            },
+            LlmEvent::Token {
+                text: "ary to=functions.add_goal_note <|constrain|>json<|message|>{\"target\":\"goal-15\",\"text\":\"Observed page 5; next page 4.\"}".to_string(),
+            },
+            LlmEvent::Completed,
+        ]);
+        assert!(output.analysis.is_empty());
+        assert!(
+            output
+                .events
+                .iter()
+                .all(|event| !matches!(event, LlmEvent::Token { .. }))
+        );
+        assert_eq!(
+            output.tool_calls,
+            vec![HarmonyToolCall {
+                recipient: "functions.add_goal_note".to_string(),
+                arguments: "{\"target\":\"goal-15\",\"text\":\"Observed page 5; next page 4.\"}"
+                    .to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_native_function_call_ignores_leaked_channel_after_json() {
+        let actions = actions_from_harmony_tool_call(&HarmonyToolCall {
+            recipient: "functions.list_files".to_string(),
+            arguments: "{\"page\":5}commentary<|channel|>analysis<|message|>No response."
+                .to_string(),
+        })
+        .expect("tool JSON followed by channel debris should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::ListFiles {
+                page: 5,
+                page_size: None,
+                workflow: SourceWorkflowUpdate::default(),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_native_function_call_maps_to_action() {
+        let actions = actions_from_harmony_tool_call(&HarmonyToolCall {
+            recipient: "functions.list_files".to_string(),
+            arguments: r#"{"page":6,"target":"goal-15","note":"Observed page 5; next page 6."}"#
+                .to_string(),
+        })
+        .expect("native harmony tool call should parse");
+
+        assert_eq!(
+            actions,
+            vec![TypeScriptAction::ListFiles {
+                page: 6,
+                page_size: None,
+                workflow: SourceWorkflowUpdate::new(
+                    Some("goal-15".to_string()),
+                    Some("Observed page 5; next page 6.".to_string()),
+                    None,
+                ),
+            }]
+        );
+    }
+
+    #[test]
+    fn go_harmony_terminal_filler_tool_call_is_ignorable() {
+        assert!(is_ignorable_harmony_tool_call(&HarmonyToolCall {
+            recipient: "functions.note".to_string(),
+            arguments: "No further action.".to_string(),
+        }));
     }
 
     #[test]
@@ -5532,13 +6159,33 @@ mod tests {
     }
 
     #[test]
+    fn go_harmony_analysis_memory_drops_abort_spiral() {
+        let mut buffer = String::new();
+        let text = "I will stop. This is impossible. No output. We need to stop. \
+            I cannot continue. The conversation cannot be properly concluded.";
+        assert!(drain_harmony_analysis_memory(&mut buffer, text, 80, true).is_empty());
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn go_harmony_analysis_filter_drops_abort_spiral_but_preserves_action_thought() {
+        let mut filter = HarmonyFinalFilter::for_analysis_prefill();
+        let output = filter.filter_events(&[LlmEvent::Token {
+            text: "We need to proceed listFiles page4. I will stop. This is impossible. No output."
+                .to_string(),
+        }]);
+        assert_eq!(output.analysis, vec!["We need to proceed listFiles page4."]);
+        assert!(output.events.is_empty());
+    }
+
+    #[test]
     fn go_harmony_prompt_removes_plain_stream_pete_marker() {
         let body = initial_stream_prompt("seed", "startup", None, None);
         assert!(body.trim_end().ends_with("Pete:"));
         let prompt = render_go_prompt(GoPromptFormat::GptOssHarmony, &body);
         assert!(!prompt.contains("Pete: <|end|><|start|>assistant"));
         assert!(!prompt.contains("Pete:\n<|end|><|start|>assistant"));
-        assert!(prompt.ends_with("<|end|><|start|>assistant<|channel|>analysis<|message|>"));
+        assert!(prompt.ends_with("<|end|><|start|>assistant"));
     }
 
     #[test]

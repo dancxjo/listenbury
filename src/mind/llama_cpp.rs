@@ -7,6 +7,7 @@ use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, unbounded};
+use llama_cpp_2::TokenToStringError;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::{LlamaAttentionType, LlamaContextParams, LlamaPoolingType};
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -492,11 +493,7 @@ impl LlamaGenerationWorker {
                 continue;
             }
 
-            let text = self
-                .model
-                .token_to_piece(token, &mut decoder, true, None)
-                .context("failed to decode llama.cpp token")?;
-            if !text.is_empty() {
+            if let Some(text) = decode_sampled_token_text(&self.model, token, &mut decoder)? {
                 let outcome = stop_detector.push(&text);
                 if !outcome.text.is_empty()
                     && sender.send(LlmEvent::Token { text: outcome.text }).is_err()
@@ -518,6 +515,19 @@ impl LlamaGenerationWorker {
         }
 
         Ok(GenerationOutcome::Completed)
+    }
+}
+
+fn decode_sampled_token_text(
+    model: &LlamaModel,
+    token: llama_cpp_2::token::LlamaToken,
+    decoder: &mut encoding_rs::Decoder,
+) -> Result<Option<String>> {
+    match model.token_to_piece(token, decoder, true, None) {
+        Ok(text) if text.is_empty() => Ok(None),
+        Ok(text) => Ok(Some(text)),
+        Err(TokenToStringError::UnknownTokenType) => Ok(None),
+        Err(error) => Err(error).context("failed to decode llama.cpp token"),
     }
 }
 
