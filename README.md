@@ -582,6 +582,9 @@ Runs the hardcoded raw consciousness prompt through the same local LLM selection
 path used by `go`. Generated text is private thought by default; text between
 `<open_mouth/>` and `<close_mouth/>` is sent to TTS in sentence or clause
 chunks, pausing token generation while each chunk is spoken.
+`<ts>...</ts>` blocks run through the restricted `pete:will` TypeScript action
+runtime, and microphone ASR updates are appended into the raw generation context
+as sensory input.
 
 ```bash
 listenbury draft pete-line

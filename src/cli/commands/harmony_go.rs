@@ -976,7 +976,7 @@ impl Drop for HarmonyEar {
 
 #[cfg(feature = "asr-whisper")]
 #[derive(Debug, Clone)]
-enum HarmonyAsrEvent {
+pub(crate) enum HarmonyAsrEvent {
     ListeningStarted {
         device: String,
         sample_rate_hz: u32,

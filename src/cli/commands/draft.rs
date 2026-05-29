@@ -4,7 +4,9 @@ use crate::cli::commands::harmony_go::{
     HarmonyAsrPromptState, drain_harmony_asr_text_updates, start_harmony_asr_for_config,
 };
 use crate::cli::model_paths::resolve_piper_voice;
-use crate::cli::model_paths::{llm_runtime_placement, resolve_llm_model, resolve_text_embedding_model};
+use crate::cli::model_paths::{
+    llm_runtime_placement, resolve_llm_model, resolve_text_embedding_model,
+};
 use crate::cli::piper::{collect_tts_audio, piper_config_for_voice, resolve_piper_bin};
 use anyhow::{Context, Result, bail};
 use listenbury::ExactTimestamp;
@@ -219,10 +221,18 @@ fn speak_chunk(
 
 #[derive(Debug, Clone, PartialEq)]
 enum DraftAction {
-    Say { text: String },
-    Note { text: String },
-    SetStage { scene: String },
-    SetTopic { topic: String },
+    Say {
+        text: String,
+    },
+    Note {
+        text: String,
+    },
+    SetStage {
+        scene: String,
+    },
+    SetTopic {
+        topic: String,
+    },
     SetCountenance {
         emoji: String,
         mood: Option<String>,
@@ -243,14 +253,9 @@ fn execute_draft_action(
     pause_generation: bool,
 ) -> Result<()> {
     match action {
-        DraftAction::Say { text } => speak_chunk(
-            llm,
-            generation,
-            mouth,
-            memory,
-            &text,
-            pause_generation,
-        ),
+        DraftAction::Say { text } => {
+            speak_chunk(llm, generation, mouth, memory, &text, pause_generation)
+        }
         DraftAction::Note { text } => {
             if let Some(memory) = memory {
                 memory.submit_note(&text);
@@ -353,26 +358,26 @@ fn execute_draft_typescript(script: &str) -> Result<Vec<DraftAction>> {
     Ok(payloads
         .into_iter()
         .filter_map(|payload| match payload {
-            DraftTypeScriptPayload::Say { text } => non_empty_text(&text).map(|text| {
-                DraftAction::Say {
+            DraftTypeScriptPayload::Say { text } => {
+                non_empty_text(&text).map(|text| DraftAction::Say {
                     text: text.to_string(),
-                }
-            }),
-            DraftTypeScriptPayload::Note { text } => non_empty_text(&text).map(|text| {
-                DraftAction::Note {
+                })
+            }
+            DraftTypeScriptPayload::Note { text } => {
+                non_empty_text(&text).map(|text| DraftAction::Note {
                     text: text.to_string(),
-                }
-            }),
-            DraftTypeScriptPayload::SetStage { scene } => non_empty_text(&scene).map(|scene| {
-                DraftAction::SetStage {
+                })
+            }
+            DraftTypeScriptPayload::SetStage { scene } => {
+                non_empty_text(&scene).map(|scene| DraftAction::SetStage {
                     scene: scene.to_string(),
-                }
-            }),
-            DraftTypeScriptPayload::SetTopic { topic } => non_empty_text(&topic).map(|topic| {
-                DraftAction::SetTopic {
+                })
+            }
+            DraftTypeScriptPayload::SetTopic { topic } => {
+                non_empty_text(&topic).map(|topic| DraftAction::SetTopic {
                     topic: topic.to_string(),
-                }
-            }),
+                })
+            }
             DraftTypeScriptPayload::SetCountenance {
                 emoji,
                 mood,
@@ -676,19 +681,21 @@ fn build_draft_embedding_provider() -> Result<Arc<dyn EmbeddingProvider>> {
 
 impl DraftMemoryRuntime {
     fn submit_pete_speech(&self, text: &str) {
-        self.memory_sink.submit(MemoryTrace::ConversationTurnFinalized {
-            speaker: SpeakerRole::Pete,
-            text: text.to_string(),
-            occurred_at: ExactTimestamp::now(),
-        });
+        self.memory_sink
+            .submit(MemoryTrace::ConversationTurnFinalized {
+                speaker: SpeakerRole::Pete,
+                text: text.to_string(),
+                occurred_at: ExactTimestamp::now(),
+            });
     }
 
     fn submit_observation(&self, text: &str) {
-        self.memory_sink.submit(MemoryTrace::AuditorySceneObservation {
-            description: text.to_string(),
-            salience: 0.7,
-            occurred_at: ExactTimestamp::now(),
-        });
+        self.memory_sink
+            .submit(MemoryTrace::AuditorySceneObservation {
+                description: text.to_string(),
+                salience: 0.7,
+                occurred_at: ExactTimestamp::now(),
+            });
     }
 
     fn submit_note(&self, text: &str) {
@@ -1011,7 +1018,10 @@ mod tests {
         assert!(router.push("private thought ").unwrap().is_empty());
         assert!(router.push("<open").unwrap().is_empty());
         assert!(router.push("_mouth/>Hello").unwrap().is_empty());
-        assert_eq!(speech_outputs(router.push(" there.").unwrap()), ["Hello there."]);
+        assert_eq!(
+            speech_outputs(router.push(" there.").unwrap()),
+            ["Hello there."]
+        );
         assert!(
             router
                 .push("<close_mouth/> private again.")
