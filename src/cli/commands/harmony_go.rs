@@ -92,11 +92,12 @@ In this harmony-go path, no microphone, camera, room sensor, apartment sensor, w
 
 Use analysis for private narrator work: Pete's immediate experience, inner movement, and possible next beat.
 
-When Pete speaks, use the say motor or final text for only what Pete actually says.
+When Pete speaks, use the native speech channel, the say motor, or final text for only what Pete actually says.
 
 When Pete acts, notices, changes expression, recalls, or stores memory, use the available runtime motors.
 
 Runtime action surfaces:
+- Native Harmony speech channel is available for Pete's audible speech. Anything emitted on speech is spoken aloud by the mouth runtime.
 - Native Harmony function tools are available in commentary: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, and sleeping.
 - TypeScript is available through run_typescript({source: "..."}) or through final <ts>...</ts> blocks.
 - TypeScript uses only the internal module "pete:will"; available functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, and sleeping.
@@ -104,6 +105,8 @@ Runtime action surfaces:
 - The runtime injects TypeScript imports automatically, so write direct expressions like say("I can hear you."), note("still observing"), setTopic("runtime"), or setCountenance("🙂", { mood: "attentive" }).
 
 If you emit final text containing <ts>...</ts>, the runtime executes the TypeScript block instead of treating it as speech. Prefer the run_typescript function tool when using native Harmony tool calls. Do not use TypeScript for conversation; use it only for runtime actions.
+
+ASR/hearing updates arrive as developer runtime context rather than user-role chat. They are still live heard speech. When a finalized ASR update sounds addressed to Pete, answer it with the speech channel, say, or final speech. Do not answer unstable partial ASR unless there is an urgent interruption.
 
 Never print channel names, control tokens, raw tool-call syntax, JSON wrappers, shell commands, Markdown fences, or implementation protocol text.
 
@@ -139,9 +142,10 @@ const PETE_HARMONY_STARTUP_TASK: &str = r#"Runtime task:
 Begin Pete's continuous live runtime now.
 Use analysis for private narrator work: Pete's immediate experience, interior continuity, and next possible beat.
 Use commentary tool calls for runtime motors.
-Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
+Use the native speech channel for direct audible speech when available. Use final only for short visible speech that Pete actually says when a motor call is not the right action, or for <ts>...</ts> blocks that execute runtime actions.
 Native Harmony tools: say, note, set_countenance, set_stage, set_topic, run_typescript, shutup, pause, resume, sleeping. set_countenance requires emoji-only content in emoji.
 TypeScript runtime: use run_typescript({source: "say(\"...\")"}) or final <ts>...</ts> blocks. Available TypeScript functions are say, note, setStage, setTopic, setCountenance, setMood, shutup, pause, resume, sleeping.
+ASR/hearing updates are developer runtime context, but finalized heard speech may still be addressed to Pete. If it asks a question or calls Pete, respond with the speech channel, say, or final speech.
 Do not wait for a human chat turn.
 Be truthful. Ground the scene in reported sensations, memory, body state, and runtime events. Do not invent what Pete senses or remembers. If no room/world sensors are reporting, say that reality is unknown rather than making up an apartment, window, light, sound, object, or room.
 When no live human input is present, continue private thought and keep Pete's autonomous runtime alive.
@@ -297,6 +301,7 @@ fn initial_harmony_messages() -> Vec<Message> {
         .with_channel_config(ChannelConfig::require_channels([
             "analysis",
             "commentary",
+            "speech",
             "final",
         ]));
     let developer = DeveloperContent::new()
@@ -1301,7 +1306,7 @@ fn harmony_candidate_developer_update(
                 "You just started hearing speech aloud"
             };
             Some(format!(
-                "{prefix}: \"{text}\". ASR latency={latency_ms} ms stable={stable}%{confidence}. This is body/runtime context, not a conversation turn."
+                "{prefix}: \"{text}\". ASR latency={latency_ms} ms stable={stable}%{confidence}. This is unstable runtime hearing context; wait for a final ASR update before answering unless urgent."
             ))
         }
         TranscriptCandidateEvent::CandidateFinalized {
@@ -1314,7 +1319,7 @@ fn harmony_candidate_developer_update(
                 .map(|value| format!(" confidence={value:.2}"))
                 .unwrap_or_default();
             Some(format!(
-                "You just heard aloud: \"{text}\". ASR latency={latency_ms} ms{confidence}. This is body/runtime context, not a conversation turn."
+                "You just heard finalized speech aloud: \"{text}\". ASR latency={latency_ms} ms{confidence}. This is live hearing context, not user-role chat; if it sounds addressed to Pete, respond through the speech channel, say, or final speech."
             ))
         }
         TranscriptCandidateEvent::CandidateReplaced { reason, .. } => {
@@ -1326,7 +1331,7 @@ fn harmony_candidate_developer_update(
                 TranscriptReplacementReason::Restarted => 0,
             };
             Some(format!(
-                "No, not: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
+                "You were interrupted {percent}% through hearing: \"{old_text}\". The ASR hypothesis restarted; wait for the next ASR update before treating the words as final."
             ))
         }
         TranscriptCandidateEvent::CandidateCancelled { .. } => {
@@ -1914,7 +1919,9 @@ impl HarmonyRuntime {
 
 fn visible_text_from_message(message: &Message) -> Option<String> {
     match message.channel.as_deref() {
-        Some("final") | Some("commentary") | None if message.recipient.is_none() => {
+        Some("final") | Some("commentary") | Some("speech") | None
+            if message.recipient.is_none() =>
+        {
             Some(message_text(message))
         }
         _ => None,
@@ -2063,6 +2070,8 @@ mod tests {
         assert!(rendered.contains("Ground every narration in what is actually reported"));
         assert!(rendered.contains("Do not invent sensory facts"));
         assert!(rendered.contains("Runtime action surfaces:"));
+        assert!(rendered.contains("Native Harmony speech channel is available"));
+        assert!(rendered.contains("Use the native speech channel for direct audible speech"));
         assert!(rendered.contains("Native Harmony function tools are available in commentary"));
         assert!(rendered.contains("set_countenance, set_stage, set_topic, run_typescript"));
         assert!(rendered.contains("TypeScript uses only the internal module \"pete:will\""));
@@ -2085,6 +2094,18 @@ mod tests {
 
         assert_eq!(action_from_message(&message).unwrap(), None);
         assert_eq!(visible_text_from_message(&message), None);
+    }
+
+    #[test]
+    fn harmony_go_native_speech_channel_is_visible_speech() {
+        let message = Message::from_role_and_content(Role::Assistant, "I can hear you.")
+            .with_channel("speech");
+
+        assert_eq!(action_from_message(&message).unwrap(), None);
+        assert_eq!(
+            visible_text_from_message(&message),
+            Some("I can hear you.".to_string())
+        );
     }
 
     #[test]
@@ -2264,8 +2285,8 @@ mod tests {
 
         let message = runtime.history.last().unwrap();
         assert_eq!(message.author.role, Role::Developer);
-        assert!(message_text(message).contains("You just heard aloud"));
-        assert!(message_text(message).contains("not a conversation turn"));
+        assert!(message_text(message).contains("You just heard finalized speech aloud"));
+        assert!(message_text(message).contains("if it sounds addressed to Pete"));
     }
 
     #[cfg(feature = "asr-whisper")]
