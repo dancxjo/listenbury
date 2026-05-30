@@ -137,7 +137,7 @@ pub(crate) struct GoCommand {
     /// Debug the mel path with the non-neural mel debug renderer instead of HiFi-GAN.
     #[arg(long, alias = "hifigan-fallback", requires = "hifigan")]
     pub(crate) skip_gan: bool,
-    /// Optional generated-token cap. By default, continue until Ctrl-C or context fills.
+    /// Optional generated-token cap per draft generation. By default, each generation continues until Ctrl-C or context fills.
     #[arg(long)]
     pub(crate) max_tokens: Option<u32>,
     /// llama.cpp context size for the live stream.

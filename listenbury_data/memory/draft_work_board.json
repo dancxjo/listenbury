@@ -78,8 +78,24 @@
       "steps": [],
       "log": [],
       "status": "Open"
+    },
+    {
+      "id": "goal-5",
+      "title": "Summarize runtime components",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
+      "log": [
+        {
+          "text": "Start with identifying system parts.",
+          "at": "2026-05-30T10:27:39-07:00"
+        }
+      ],
+      "status": "Open"
     }
   ],
-  "selected_id": "goal-4",
-  "next_id": 5
+  "selected_id": "goal-5",
+  "next_id": 6
 }

@@ -270,10 +270,14 @@ fn print_draft_llm_token(text: &str) -> Result<()> {
 
 fn format_draft_typescript_error_context(source: &str, error: &anyhow::Error) -> String {
     format!(
-        "Runtime TypeScript error:\nThe generated <ts> block failed and was not executed.\nCode that failed:\n<ts>\n{}\n</ts>\nError:\n{:#}\nContinue generating. Do not repeat the same malformed TypeScript. Use complete direct pete:will calls such as <ts>say(\"I can hear you.\")</ts> or <ts>note(\"short observation\")</ts>.",
-        source.trim(),
-        error
+        "Runtime TypeScript action error:\nThe generated action body failed and was not executed.\nCode that failed, with angle brackets escaped:\n{}\nError:\n{}\nContinue generating. Do not repeat that malformed action. Use one direct pete:will expression such as say(\"I can hear you.\"), note(\"short observation\"), or [say(\"first\"), say(\"second\")].",
+        escape_runtime_markup_for_prompt(source.trim()),
+        escape_runtime_markup_for_prompt(&format!("{error:#}"))
     )
+}
+
+fn escape_runtime_markup_for_prompt(text: &str) -> String {
+    text.replace('<', "&lt;").replace('>', "&gt;")
 }
 
 fn format_draft_speech_error_context(text: &str, error: &anyhow::Error) -> String {
@@ -1093,12 +1097,8 @@ pub(crate) fn run_draft_pete_line(command: DraftPeteLineCommand) -> Result<()> {
             }
         }
 
-        if events.iter().any(|event| {
-            matches!(
-                event,
-                LlmEvent::Completed | LlmEvent::Cancelled | LlmEvent::Error { .. }
-            )
-        }) {
+        let terminal = draft_terminal_event(&events);
+        if terminal.is_some() {
             for output in router.finish()? {
                 handle_router_output(
                     &mut llm,
@@ -1113,9 +1113,46 @@ pub(crate) fn run_draft_pete_line(command: DraftPeteLineCommand) -> Result<()> {
                 )?;
             }
             println!();
-            return Ok(());
+            match terminal {
+                Some(DraftTerminalEvent::Completed) => {
+                    continuation.remember_sensory(
+                        "LLM generation completed; runtime started a new generation from the continuation summary.",
+                    );
+                    generation = start_draft_generation(
+                        &mut llm,
+                        max_tokens,
+                        Some(&continuation),
+                        goal_board.prompt_summary().as_deref(),
+                    )?;
+                    router = DraftMouthTokenRouter::new();
+                    sentence_boundary = DraftSentenceBoundaryTracker::default();
+                    tokens_since_affordance = 0;
+                    continue 'runtime;
+                }
+                Some(DraftTerminalEvent::Cancelled) => return Ok(()),
+                None => {}
+            }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DraftTerminalEvent {
+    Completed,
+    Cancelled,
+}
+
+fn draft_terminal_event(events: &[LlmEvent]) -> Option<DraftTerminalEvent> {
+    if events
+        .iter()
+        .any(|event| matches!(event, LlmEvent::Cancelled))
+    {
+        return Some(DraftTerminalEvent::Cancelled);
+    }
+    events
+        .iter()
+        .any(|event| matches!(event, LlmEvent::Completed))
+        .then_some(DraftTerminalEvent::Completed)
 }
 
 fn handle_router_output(
@@ -2023,11 +2060,16 @@ fn parse_draft_typescript_payloads(value: Value) -> Result<Vec<DraftTypeScriptPa
 }
 
 fn normalize_draft_typescript_source(script: &str) -> String {
-    let mut source = script.trim();
+    let mut source = script.trim().to_string();
     if source.is_empty() {
         return String::new();
     }
 
+    if let Some(recovered) = recover_embedded_draft_typescript_body(&source) {
+        source = recovered;
+    }
+
+    let mut source = source.trim();
     if let Some(stripped) = source.strip_prefix(TYPESCRIPT_START) {
         source = stripped.trim_start();
     }
@@ -2055,11 +2097,207 @@ fn normalize_draft_typescript_source(script: &str) -> String {
     }
 
     source = source.trim_end_matches(';').trim_end();
-    if looks_like_bare_object_literal(source) {
+    if let Some(array_source) = semicolon_separated_direct_calls_as_array(source) {
+        array_source
+    } else if looks_like_bare_object_literal(source) {
         format!("({source})")
     } else {
         source.to_string()
     }
+}
+
+fn recover_embedded_draft_typescript_body(source: &str) -> Option<String> {
+    let trimmed = source.trim().trim_end_matches(';').trim_end();
+    if looks_like_direct_call(trimmed)
+        || looks_like_bare_object_literal(trimmed)
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        return None;
+    }
+
+    let start = source.rfind(TYPESCRIPT_START)?;
+    let body_start = start + TYPESCRIPT_START.len();
+    let body = &source[body_start..];
+    let body = find_token_outside_strings(body, TYPESCRIPT_END)
+        .into_iter()
+        .next()
+        .map(|end| &body[..end])
+        .unwrap_or(body);
+    Some(body.trim().to_string())
+}
+
+fn find_token_outside_strings(source: &str, token: &str) -> Vec<usize> {
+    let mut matches = Vec::new();
+    let mut string_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (index, ch) in source.char_indices() {
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => string_quote = Some(ch),
+            _ if source[index..].starts_with(token) => matches.push(index),
+            _ => {}
+        }
+    }
+
+    matches
+}
+
+fn semicolon_separated_direct_calls_as_array(source: &str) -> Option<String> {
+    let segments = split_top_level_semicolon_segments(source);
+    if segments.len() < 2 {
+        return None;
+    }
+    if !segments
+        .iter()
+        .all(|segment| looks_like_direct_call(segment))
+    {
+        return None;
+    }
+    Some(format!("[{}]", segments.join(", ")))
+}
+
+fn split_top_level_semicolon_segments(source: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut segment_start = 0usize;
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut string_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (index, ch) in source.char_indices() {
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => string_quote = Some(ch),
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            ';' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                let segment = source[segment_start..index].trim();
+                if !segment.is_empty() {
+                    segments.push(segment.to_string());
+                }
+                segment_start = index + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+
+    let segment = source[segment_start..].trim();
+    if !segment.is_empty() {
+        segments.push(segment.to_string());
+    }
+    segments
+}
+
+fn looks_like_direct_call(source: &str) -> bool {
+    let Some(open_paren) = source.find('(') else {
+        return false;
+    };
+    let name = source[..open_paren].trim();
+    matches!(
+        name,
+        "say"
+            | "note"
+            | "setStage"
+            | "setTopic"
+            | "setCountenance"
+            | "setMood"
+            | "listFiles"
+            | "readSourceFile"
+            | "readFile"
+            | "searchSource"
+            | "grepSource"
+            | "setSourcePageSize"
+            | "createGoal"
+            | "createTask"
+            | "createChecklist"
+            | "addGoalNote"
+            | "logProgress"
+            | "commentGoal"
+            | "checkOff"
+            | "completeItem"
+            | "checkGoalStep"
+            | "checkChecklistItem"
+            | "updateItem"
+            | "cancelItem"
+            | "selectItem"
+            | "shutup"
+            | "pause"
+            | "resume"
+            | "sleeping"
+    ) && balanced_enclosing_call(source[open_paren..].trim())
+}
+
+fn balanced_enclosing_call(source: &str) -> bool {
+    let mut chars = source.char_indices().peekable();
+    let Some((_, '(')) = chars.next() else {
+        return false;
+    };
+    let mut paren_depth = 1usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut string_quote: Option<char> = None;
+    let mut escaped = false;
+    let mut last_closing = None;
+
+    while let Some((index, ch)) = chars.next() {
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => string_quote = Some(ch),
+            '(' => paren_depth += 1,
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 {
+                    last_closing = Some(index);
+                    if chars.peek().is_some() {
+                        return false;
+                    }
+                }
+            }
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            '{' => brace_depth += 1,
+            '}' => brace_depth = brace_depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
+    paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 && last_closing.is_some()
 }
 
 fn looks_like_bare_object_literal(source: &str) -> bool {
@@ -2996,11 +3234,13 @@ fn earliest_typescript_start(text: &str) -> Option<RouterTokenMatch> {
 
 fn earliest_harmony_prefixed_typescript_start(text: &str) -> Option<RouterTokenMatch> {
     text.match_indices("<|").find_map(|(start, _)| {
-        text[start + 2..].find("|>ts>").map(|end_rel| RouterTokenMatch {
-            start,
-            end: start + 2 + end_rel + "|>ts>".len(),
-            kind: RouterTokenKind::TypeScriptStart,
-        })
+        text[start + 2..]
+            .find("|>ts>")
+            .map(|end_rel| RouterTokenMatch {
+                start,
+                end: start + 2 + end_rel + "|>ts>".len(),
+                kind: RouterTokenKind::TypeScriptStart,
+            })
     })
 }
 
@@ -3269,14 +3509,40 @@ mod tests {
     }
 
     #[test]
+    fn draft_terminal_event_restarts_only_on_completed() {
+        assert_eq!(
+            draft_terminal_event(&[LlmEvent::Completed]),
+            Some(DraftTerminalEvent::Completed)
+        );
+        assert_eq!(
+            draft_terminal_event(&[
+                LlmEvent::Token {
+                    text: "tail".to_string()
+                },
+                LlmEvent::Completed,
+            ]),
+            Some(DraftTerminalEvent::Completed)
+        );
+        assert_eq!(
+            draft_terminal_event(&[LlmEvent::Completed, LlmEvent::Cancelled]),
+            Some(DraftTerminalEvent::Cancelled)
+        );
+        assert_eq!(draft_terminal_event(&[]), None);
+    }
+
+    #[test]
     fn draft_typescript_error_context_includes_code_and_error() {
         let error = anyhow::anyhow!("TypeScript execution failed: SyntaxError: Unexpected input");
-        let report = format_draft_typescript_error_context(r#"say("unterminated"#, &error);
+        let report =
+            format_draft_typescript_error_context(r#"<ts>say("unterminated"</ts>"#, &error);
 
-        assert!(report.contains("Runtime TypeScript error"));
+        assert!(report.contains("Runtime TypeScript action error"));
         assert!(report.contains(r#"say("unterminated"#));
+        assert!(!report.contains("<ts>"));
+        assert!(!report.contains("</ts>"));
+        assert!(report.contains("&lt;ts&gt;"));
         assert!(report.contains("SyntaxError"));
-        assert!(report.contains("Do not repeat the same malformed TypeScript"));
+        assert!(report.contains("Do not repeat that malformed action"));
     }
 
     #[test]
@@ -3451,6 +3717,59 @@ mod tests {
                     text: "clock".to_string()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn draft_typescript_runtime_accepts_semicolon_separated_direct_calls() {
+        let actions = execute_draft_typescript(r#"say("Hello."); say("Second; still spoken.")"#)
+            .expect("semicolon-separated draft TypeScript calls should execute");
+        assert_eq!(
+            actions,
+            [
+                DraftAction::Say {
+                    text: "Hello.".to_string()
+                },
+                DraftAction::Say {
+                    text: "Second; still spoken.".to_string()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn draft_typescript_runtime_recovers_copied_prose_before_nested_action() {
+        let actions = execute_draft_typescript(
+            r#"block. We should produce complete direct calls.
+We'll produce:
+<ts>
+say("I hear your question about TypeScript errors.");
+say("Could you provide more details or context?");
+"#,
+        )
+        .expect("draft TypeScript should recover the nested copied action");
+        assert_eq!(
+            actions,
+            [
+                DraftAction::Say {
+                    text: "I hear your question about TypeScript errors.".to_string()
+                },
+                DraftAction::Say {
+                    text: "Could you provide more details or context?".to_string()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn draft_typescript_runtime_keeps_literal_action_tag_inside_string() {
+        let actions = execute_draft_typescript(r#"note("literal <ts> tag")"#)
+            .expect("literal tag text inside strings should not be treated as markup");
+        assert_eq!(
+            actions,
+            [DraftAction::Note {
+                text: "literal <ts> tag".to_string()
+            }]
         );
     }
 
