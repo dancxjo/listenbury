@@ -1,0 +1,65 @@
+{
+  "items": [
+    {
+      "id": "goal-1",
+      "title": "Understand self and environment",
+      "summary": "Explore my current state and surroundings",
+      "parent": null,
+      "priority": "high",
+      "tags": [
+        "self-knowledge",
+        "environment"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Observed project structure: Rust-based audio processing and command-line tools.",
+          "at": "2026-05-29T16:42:52-07:00"
+        },
+        {
+          "text": "Config includes VAD and breath group settings; system listens for voice activity.",
+          "at": "2026-05-29T16:42:54-07:00"
+        },
+        {
+          "text": "Observed project structure and config; VAD and breath group present.",
+          "at": "2026-05-29T16:42:56-07:00"
+        }
+      ],
+      "status": "Open"
+    },
+    {
+      "id": "goal-2",
+      "title": "Explore runtime state",
+      "summary": "Investigate system status, audio capture, configuration, and active modules.",
+      "parent": null,
+      "priority": "medium",
+      "tags": [
+        "runtime",
+        "status"
+      ],
+      "steps": [],
+      "log": [
+        {
+          "text": "Capture module sets priority boost on Linux and calculates queue capacity based on sample rate and channels.",
+          "at": "2026-05-29T16:43:01-07:00"
+        }
+      ],
+      "status": "Open"
+    },
+    {
+      "id": "goal-3",
+      "title": "Summarize runtime components",
+      "summary": "Identify primary modules: capture, acoustic, lattice, voice_vector, streaming prosody, etc.",
+      "parent": null,
+      "priority": "high",
+      "tags": [
+        "analysis"
+      ],
+      "steps": [],
+      "log": [],
+      "status": "Open"
+    }
+  ],
+  "selected_id": "goal-3",
+  "next_id": 4
+}
