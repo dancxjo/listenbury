@@ -53,6 +53,7 @@ const MAX_TTS_TIMEOUT: Duration = Duration::from_secs(30);
 const OPEN_MOUTH_TOKEN: &str = "<open_mouth/>";
 const CLOSE_MOUTH_TOKEN: &str = "<close_mouth/>";
 const TYPESCRIPT_START: &str = "<ts>";
+const TYPESCRIPT_START_MISSING_LESS_THAN: &str = "ts>";
 const TYPESCRIPT_END: &str = "</ts>";
 const DRAFT_AFFORDANCE_REFRESH_TOKENS: usize = 256;
 const DRAFT_CONTINUATION_EVENT_LIMIT: usize = 16;
@@ -2253,6 +2254,10 @@ fn looks_like_direct_call(source: &str) -> bool {
     ) && balanced_enclosing_call(source[open_paren..].trim())
 }
 
+fn looks_like_direct_call_or_array(source: &str) -> bool {
+    looks_like_direct_call(source) || (source.starts_with('[') && source.ends_with(']'))
+}
+
 fn balanced_enclosing_call(source: &str) -> bool {
     let mut chars = source.char_indices().peekable();
     let Some((_, '(')) = chars.next() else {
@@ -3220,16 +3225,11 @@ fn earliest_typescript_start(text: &str) -> Option<RouterTokenMatch> {
         kind: RouterTokenKind::TypeScriptStart,
     });
     let prefixed = earliest_harmony_prefixed_typescript_start(text);
-    match (plain, prefixed) {
-        (Some(plain), Some(prefixed)) => Some(if plain.start <= prefixed.start {
-            plain
-        } else {
-            prefixed
-        }),
-        (Some(plain), None) => Some(plain),
-        (None, Some(prefixed)) => Some(prefixed),
-        (None, None) => None,
-    }
+    let missing_less_than = earliest_missing_less_than_typescript_start(text);
+    [plain, prefixed, missing_less_than]
+        .into_iter()
+        .flatten()
+        .min_by_key(|token| token.start)
 }
 
 fn earliest_harmony_prefixed_typescript_start(text: &str) -> Option<RouterTokenMatch> {
@@ -3242,6 +3242,33 @@ fn earliest_harmony_prefixed_typescript_start(text: &str) -> Option<RouterTokenM
                 kind: RouterTokenKind::TypeScriptStart,
             })
     })
+}
+
+fn earliest_missing_less_than_typescript_start(text: &str) -> Option<RouterTokenMatch> {
+    text.match_indices(TYPESCRIPT_START_MISSING_LESS_THAN)
+        .find_map(|(start, _)| {
+            is_recoverable_missing_less_than_typescript_start(text, start).then_some(
+                RouterTokenMatch {
+                    start,
+                    end: start + TYPESCRIPT_START_MISSING_LESS_THAN.len(),
+                    kind: RouterTokenKind::TypeScriptStart,
+                },
+            )
+        })
+}
+
+fn is_recoverable_missing_less_than_typescript_start(text: &str, start: usize) -> bool {
+    if text[..start]
+        .chars()
+        .next_back()
+        .is_some_and(|ch| ch == '<' || ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return false;
+    }
+    let body_start = start + TYPESCRIPT_START_MISSING_LESS_THAN.len();
+    text[body_start..]
+        .find(TYPESCRIPT_END)
+        .is_some_and(|end| looks_like_direct_call_or_array(text[body_start..body_start + end].trim()))
 }
 
 fn earliest_control_token(text: &str) -> Option<ControlTokenMatch> {
@@ -3276,6 +3303,7 @@ fn router_token_prefix_suffix_len(text: &str) -> usize {
                 .find(|len| text.ends_with(&token[..*len]))
         })
         .chain(harmony_prefixed_typescript_prefix_suffix_len(text))
+        .chain(missing_less_than_typescript_prefix_suffix_len(text))
         .max()
         .unwrap_or(0)
 }
@@ -3296,6 +3324,18 @@ fn harmony_prefixed_typescript_prefix_suffix_len(text: &str) -> Option<usize> {
         }
         None => Some(suffix.len()),
     }
+}
+
+fn missing_less_than_typescript_prefix_suffix_len(text: &str) -> Option<usize> {
+    let start = text.rfind(char::is_whitespace)?;
+    let suffix = &text[start..];
+    let after_whitespace = suffix.trim_start();
+    if after_whitespace.is_empty() {
+        return Some(suffix.len());
+    }
+    TYPESCRIPT_START_MISSING_LESS_THAN
+        .starts_with(after_whitespace)
+        .then_some(suffix.len())
 }
 
 #[derive(Debug)]
@@ -3699,6 +3739,50 @@ mod tests {
         assert_eq!(
             router.push("s>note(\"clock\")</ts> more").unwrap(),
             [DraftRouterOutput::TypeScript("note(\"clock\")".to_string())]
+        );
+        assert!(router.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mouth_router_recovers_whitespace_prefixed_ts_start() {
+        let mut router = DraftMouthTokenRouter::new();
+
+        assert_eq!(
+            router
+                .push(r#"assistant ts>readSourceFile("Cargo.toml")</ts> assistant"#)
+                .unwrap(),
+            [DraftRouterOutput::TypeScript(
+                r#"readSourceFile("Cargo.toml")"#.to_string()
+            )]
+        );
+        assert!(router.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mouth_router_recovers_split_whitespace_prefixed_ts_start() {
+        let mut router = DraftMouthTokenRouter::new();
+
+        assert!(router.push("assistant ").unwrap().is_empty());
+        assert_eq!(
+            router
+                .push(r#"ts>readSourceFile("src/audio/capture.rs")</ts>"#)
+                .unwrap(),
+            [DraftRouterOutput::TypeScript(
+                r#"readSourceFile("src/audio/capture.rs")"#.to_string()
+            )]
+        );
+        assert!(router.finish().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mouth_router_does_not_treat_word_suffix_as_ts_start() {
+        let mut router = DraftMouthTokenRouter::new();
+
+        assert!(
+            router
+                .push(r#"Plain text mentions outputs> without a command."#)
+                .unwrap()
+                .is_empty()
         );
         assert!(router.finish().unwrap().is_empty());
     }
