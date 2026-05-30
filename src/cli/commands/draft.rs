@@ -1789,10 +1789,11 @@ enum DraftTypeScriptPayload {
 }
 
 fn execute_draft_typescript(script: &str) -> Result<Vec<DraftAction>> {
-    if script.trim().is_empty() {
+    let script = normalize_draft_typescript_source(script);
+    if script.is_empty() {
         return Ok(Vec::new());
     }
-    let script = draft_typescript_source_with_default_imports(script);
+    let script = draft_typescript_source_with_default_imports(&script);
     let config = InterpreterConfig {
         internal_modules: vec![draft_typescript_module()],
         ..Default::default()
@@ -2019,6 +2020,91 @@ fn parse_draft_typescript_payloads(value: Value) -> Result<Vec<DraftTypeScriptPa
         Value::Object(_) => Ok(vec![serde_json::from_value(value)?]),
         other => anyhow::bail!("TypeScript must return a command object or array, got {other}"),
     }
+}
+
+fn normalize_draft_typescript_source(script: &str) -> String {
+    let mut source = script.trim();
+    if source.is_empty() {
+        return String::new();
+    }
+
+    if let Some(stripped) = source.strip_prefix(TYPESCRIPT_START) {
+        source = stripped.trim_start();
+    }
+    if let Some(stripped) = source.strip_suffix(TYPESCRIPT_END) {
+        source = stripped.trim_end();
+    }
+    if let Some(stripped) = source.strip_prefix("```") {
+        source = stripped.trim_start();
+        if let Some(after_language) = source
+            .strip_prefix("typescript")
+            .or_else(|| source.strip_prefix("ts"))
+        {
+            source = after_language.trim_start();
+        }
+        if let Some(stripped) = source.strip_suffix("```") {
+            source = stripped.trim_end();
+        }
+    }
+
+    if let Some(returned) = source
+        .strip_prefix("return ")
+        .or_else(|| source.strip_prefix("return\n"))
+    {
+        source = returned.trim_start();
+    }
+
+    source = source.trim_end_matches(';').trim_end();
+    if looks_like_bare_object_literal(source) {
+        format!("({source})")
+    } else {
+        source.to_string()
+    }
+}
+
+fn looks_like_bare_object_literal(source: &str) -> bool {
+    source.starts_with('{') && source.ends_with('}') && balanced_enclosing_braces(source)
+}
+
+fn balanced_enclosing_braces(source: &str) -> bool {
+    let mut chars = source.char_indices().peekable();
+    let Some((_, '{')) = chars.next() else {
+        return false;
+    };
+    let mut depth = 1usize;
+    let mut string_quote: Option<char> = None;
+    let mut escaped = false;
+    let mut last_closing = None;
+
+    while let Some((index, ch)) = chars.next() {
+        if let Some(quote) = string_quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                string_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => string_quote = Some(ch),
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    last_closing = Some(index);
+                    if chars.peek().is_some() {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    depth == 0 && last_closing.is_some()
 }
 
 fn draft_typescript_source_with_default_imports(script: &str) -> String {
@@ -2788,14 +2874,14 @@ impl DraftMouthTokenRouter {
                 }
                 Some(RouterTokenMatch {
                     start,
+                    end,
                     kind: RouterTokenKind::TypeScriptStart,
-                    ..
                 }) => {
                     self.emit_visible_prefix(start, &mut chunks)?;
                     if start > 0 {
                         self.scanner.drain(..start);
                     }
-                    let body_start = TYPESCRIPT_START.len();
+                    let body_start = end - start;
                     let Some(end) = self.scanner[body_start..].find(TYPESCRIPT_END) else {
                         break;
                     };
@@ -2876,11 +2962,7 @@ fn earliest_router_token(text: &str) -> Option<RouterTokenMatch> {
         end: token.end,
         kind: RouterTokenKind::Mouth(token.kind),
     });
-    let typescript = text.find(TYPESCRIPT_START).map(|start| RouterTokenMatch {
-        start,
-        end: start + TYPESCRIPT_START.len(),
-        kind: RouterTokenKind::TypeScriptStart,
-    });
+    let typescript = earliest_typescript_start(text);
     match (mouth, typescript) {
         (Some(mouth), Some(typescript)) => Some(if mouth.start <= typescript.start {
             mouth
@@ -2891,6 +2973,35 @@ fn earliest_router_token(text: &str) -> Option<RouterTokenMatch> {
         (None, Some(typescript)) => Some(typescript),
         (None, None) => None,
     }
+}
+
+fn earliest_typescript_start(text: &str) -> Option<RouterTokenMatch> {
+    let plain = text.find(TYPESCRIPT_START).map(|start| RouterTokenMatch {
+        start,
+        end: start + TYPESCRIPT_START.len(),
+        kind: RouterTokenKind::TypeScriptStart,
+    });
+    let prefixed = earliest_harmony_prefixed_typescript_start(text);
+    match (plain, prefixed) {
+        (Some(plain), Some(prefixed)) => Some(if plain.start <= prefixed.start {
+            plain
+        } else {
+            prefixed
+        }),
+        (Some(plain), None) => Some(plain),
+        (None, Some(prefixed)) => Some(prefixed),
+        (None, None) => None,
+    }
+}
+
+fn earliest_harmony_prefixed_typescript_start(text: &str) -> Option<RouterTokenMatch> {
+    text.match_indices("<|").find_map(|(start, _)| {
+        text[start + 2..].find("|>ts>").map(|end_rel| RouterTokenMatch {
+            start,
+            end: start + 2 + end_rel + "|>ts>".len(),
+            kind: RouterTokenKind::TypeScriptStart,
+        })
+    })
 }
 
 fn earliest_control_token(text: &str) -> Option<ControlTokenMatch> {
@@ -2924,8 +3035,27 @@ fn router_token_prefix_suffix_len(text: &str) -> usize {
                 .rev()
                 .find(|len| text.ends_with(&token[..*len]))
         })
+        .chain(harmony_prefixed_typescript_prefix_suffix_len(text))
         .max()
         .unwrap_or(0)
+}
+
+fn harmony_prefixed_typescript_prefix_suffix_len(text: &str) -> Option<usize> {
+    if text.ends_with('<') {
+        return Some(1);
+    }
+    let start = text.rfind("<|")?;
+    let suffix = &text[start..];
+    if earliest_harmony_prefixed_typescript_start(suffix).is_some() {
+        return None;
+    }
+    match suffix.find("|>") {
+        Some(end) => {
+            let after = &suffix[end + 2..];
+            "ts>".starts_with(after).then_some(suffix.len())
+        }
+        None => Some(suffix.len()),
+    }
 }
 
 #[derive(Debug)]
@@ -3295,6 +3425,19 @@ mod tests {
     }
 
     #[test]
+    fn mouth_router_treats_harmony_prefixed_ts_as_typescript_start() {
+        let mut router = DraftMouthTokenRouter::new();
+
+        assert!(router.push("thinking <|assistant").unwrap().is_empty());
+        assert!(router.push("|>t").unwrap().is_empty());
+        assert_eq!(
+            router.push("s>note(\"clock\")</ts> more").unwrap(),
+            [DraftRouterOutput::TypeScript("note(\"clock\")".to_string())]
+        );
+        assert!(router.finish().unwrap().is_empty());
+    }
+
+    #[test]
     fn draft_typescript_runtime_accepts_say_and_note() {
         let actions = execute_draft_typescript(r#"[say("Hello."), note("clock")]"#)
             .expect("draft TypeScript should execute");
@@ -3308,6 +3451,31 @@ mod tests {
                     text: "clock".to_string()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn draft_typescript_runtime_accepts_common_block_wrappers() {
+        let actions = execute_draft_typescript(r#"<ts>return note("clock");</ts>"#)
+            .expect("draft TypeScript return wrapper should execute");
+        assert_eq!(
+            actions,
+            [DraftAction::Note {
+                text: "clock".to_string()
+            }]
+        );
+
+        let actions = execute_draft_typescript(
+            r#"```typescript
+{ kind: "note", text: "bare object payload" }
+```"#,
+        )
+        .expect("draft TypeScript bare object should execute");
+        assert_eq!(
+            actions,
+            [DraftAction::Note {
+                text: "bare object payload".to_string()
+            }]
         );
     }
 

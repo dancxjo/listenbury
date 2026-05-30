@@ -23,9 +23,13 @@
         {
           "text": "Observed project structure and config; VAD and breath group present.",
           "at": "2026-05-29T16:42:56-07:00"
+        },
+        {
+          "text": "Cancelled: duplicate",
+          "at": "2026-05-29T21:57:08-07:00"
         }
       ],
-      "status": "Open"
+      "status": "Cancelled"
     },
     {
       "id": "goal-2",
@@ -56,10 +60,26 @@
         "analysis"
       ],
       "steps": [],
+      "log": [
+        {
+          "text": "Cancelled: duplicate",
+          "at": "2026-05-29T21:56:58-07:00"
+        }
+      ],
+      "status": "Cancelled"
+    },
+    {
+      "id": "goal-4",
+      "title": "Summarize runtime components",
+      "summary": null,
+      "parent": null,
+      "priority": null,
+      "tags": [],
+      "steps": [],
       "log": [],
       "status": "Open"
     }
   ],
-  "selected_id": "goal-3",
-  "next_id": 4
+  "selected_id": "goal-4",
+  "next_id": 5
 }
